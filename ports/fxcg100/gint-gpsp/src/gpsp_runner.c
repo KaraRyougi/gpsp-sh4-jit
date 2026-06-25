@@ -309,7 +309,7 @@ unsigned cgba_gpsp_diag(char out[][CGBA_DIAG_LINE_MAX], unsigned max_lines)
 	/* Short interp-vs-dynarec comparison so the diag overlay surfaces dynarec
 	 * health on hardware/casio-emu: start/interp/dynarec PC + divergent regs. */
 	if(n < max_lines)
-		n += cgba_sh4_diff_dump(280896, out + n, max_lines - n);  /* one GBA frame */
+		n += cgba_sh4_diff_dump(280896, out + n, max_lines - n);
 #endif
 	return n;
 }

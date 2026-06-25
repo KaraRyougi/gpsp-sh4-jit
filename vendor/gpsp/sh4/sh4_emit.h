@@ -130,11 +130,17 @@ extern void *tmemst[4][16];
   do { sh4g_const(&translation_ptr, (u32)pc, SH4_REG_ARG0);                   \
        sh4g_far_jmp(&translation_ptr, (const void *)sh4_block_exit); } while(0)
 
+/* Indirect branches (BX / computed PC) must honour the ARM/Thumb mode of the
+ * target: the `dual` trampoline switches mode from the target's bit 0, and the
+ * arm/thumb ones force the mode. Routing these through sh4_block_exit (which
+ * dispatches on the *current* CPSR Thumb bit) would miss the BX mode switch.
+ * The target PC is already in R4 (SH4_REG_ARG0). */
 #define generate_indirect_branch_no_cycle_update(type)                        \
-  sh4g_far_jmp(&translation_ptr, (const void *)sh4_block_exit)
+  sh4g_far_jmp(&translation_ptr, (const void *)sh4_indirect_branch_##type)
 #define generate_indirect_branch_cycle_update(type)                           \
   do { generate_cycle_update();                                               \
-       sh4g_far_jmp(&translation_ptr, (const void *)sh4_block_exit); } while(0)
+       sh4g_far_jmp(&translation_ptr,                                         \
+                    (const void *)sh4_indirect_branch_##type); } while(0)
 /* Unconditional indirect branches must flush the block's accumulated cycles
  * before exiting (matching the MIPS backend); a conditional one already had its
  * cycles handled by the surrounding conditional/branch path. */

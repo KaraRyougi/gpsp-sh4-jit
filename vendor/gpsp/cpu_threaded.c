@@ -3169,6 +3169,12 @@ bool translate_block_arm(u32 pc, bool ram_region)
   else
     rom_translation_ptr = translation_ptr;
 
+#ifdef SH4_ARCH
+  /* Single-block diff mode: skip external-branch resolution to avoid gpSP's
+     recursive translate-the-whole-reachable-graph cascade; unresolved exits
+     simply redispatch through sh4_block_exit. */
+  if (!cgba_dynarec_single_block)
+#endif
   for(i = 0; i < external_block_exit_position; i++)
   {
     branch_target = external_block_exits[i].branch_target;
@@ -3326,6 +3332,11 @@ bool translate_block_thumb(u32 pc, bool ram_region)
   else
     rom_translation_ptr = translation_ptr;
 
+#ifdef SH4_ARCH
+  /* See translate_block_arm: skip external-branch resolution in single-block
+     diff mode so we translate only the entered block. */
+  if (!cgba_dynarec_single_block)
+#endif
   for(i = 0; i < external_block_exit_position; i++)
   {
     branch_target = external_block_exits[i].branch_target;
