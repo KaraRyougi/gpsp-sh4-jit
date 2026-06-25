@@ -105,40 +105,10 @@ uint32_t fxcg100_poll_app_keys(void)
 		keys |= FXCG100_APPKEY_RIGHT;
 	if(fxcg100_key_down(68))
 		keys |= FXCG100_APPKEY_BACK;
+	if(fxcg100_key_down(FXCG100_PHYSKEY_ON))
+		keys |= FXCG100_APPKEY_ON;
 
 	return keys;
-}
-
-uint32_t fxcg100_poll_gba_buttons(void)
-{
-	uint32_t buttons = FXCG100_GBA_BUTTON_NONE;
-
-	clearevents();
-
-	if(fxcg100_key_down(49))
-		buttons |= FXCG100_GBA_BUTTON_UP;
-	if(fxcg100_key_down(47))
-		buttons |= FXCG100_GBA_BUTTON_DOWN;
-	if(fxcg100_key_down(58))
-		buttons |= FXCG100_GBA_BUTTON_LEFT;
-	if(fxcg100_key_down(38))
-		buttons |= FXCG100_GBA_BUTTON_RIGHT;
-
-	if(fxcg100_key_down(31) || fxcg100_key_down(48))
-		buttons |= FXCG100_GBA_BUTTON_A;
-	if(fxcg100_key_down(68) || fxcg100_key_down(34))
-		buttons |= FXCG100_GBA_BUTTON_B;
-
-	if(fxcg100_key_down(29))
-		buttons |= FXCG100_GBA_BUTTON_START;
-	if(fxcg100_key_down(69))
-		buttons |= FXCG100_GBA_BUTTON_SELECT;
-	if(fxcg100_key_down(59))
-		buttons |= FXCG100_GBA_BUTTON_L;
-	if(fxcg100_key_down(39))
-		buttons |= FXCG100_GBA_BUTTON_R;
-
-	return buttons;
 }
 
 void fxcg100_lcd_init(void)

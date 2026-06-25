@@ -19,6 +19,9 @@ void fxcg100_panic(const char *text);
 #define FXCG100_APPKEY_LEFT   (1u << 7)
 #define FXCG100_APPKEY_RIGHT  (1u << 8)
 #define FXCG100_APPKEY_BACK   (1u << 9)
+#define FXCG100_APPKEY_ON     (1u << 10)
+
+#define FXCG100_PHYSKEY_ON 79u
 
 #define FXCG100_GBA_BUTTON_L      0x200u
 #define FXCG100_GBA_BUTTON_R      0x100u
@@ -31,6 +34,31 @@ void fxcg100_panic(const char *text);
 #define FXCG100_GBA_BUTTON_B      0x002u
 #define FXCG100_GBA_BUTTON_A      0x001u
 #define FXCG100_GBA_BUTTON_NONE   0x000u
+
+typedef enum fxcg100_gba_key {
+  FXCG100_GBA_KEY_A = 0,
+  FXCG100_GBA_KEY_B,
+  FXCG100_GBA_KEY_SELECT,
+  FXCG100_GBA_KEY_START,
+  FXCG100_GBA_KEY_RIGHT,
+  FXCG100_GBA_KEY_LEFT,
+  FXCG100_GBA_KEY_UP,
+  FXCG100_GBA_KEY_DOWN,
+  FXCG100_GBA_KEY_L,
+  FXCG100_GBA_KEY_R,
+  FXCG100_GBA_KEY_COUNT
+} fxcg100_gba_key;
+
+typedef enum fxcg100_hotkey {
+  FXCG100_HOTKEY_FAST_FORWARD = 0,
+  FXCG100_HOTKEY_LOAD_STATE,
+  FXCG100_HOTKEY_SAVE_STATE,
+  FXCG100_HOTKEY_SAVE_EXIT,
+  FXCG100_HOTKEY_DISPLAY_FPS,
+  FXCG100_HOTKEY_COUNT
+} fxcg100_hotkey;
+
+#define FXCG100_HOTKEY_BIT(index) (1u << (index))
 
 typedef enum fxcg100_menu_result {
   FXCG100_MENU_CONTINUE = 0,
@@ -53,6 +81,8 @@ typedef struct fxcg100_menu_state {
   uint32_t quick_save_slot;
   uint32_t backup_update;
   uint32_t show_fps;
+  uint16_t keymap[FXCG100_GBA_KEY_COUNT];
+  uint16_t hotkey_map[FXCG100_HOTKEY_COUNT];
   uint32_t cheat_active[10];
   uint32_t selected[4];
   uint32_t scroll[4];
@@ -61,7 +91,21 @@ typedef struct fxcg100_menu_state {
 
 int fxcg100_key_down(int basic_keycode);
 uint32_t fxcg100_poll_app_keys(void);
+uint16_t fxcg100_poll_physical_key(void);
 uint32_t fxcg100_poll_gba_buttons(void);
+uint32_t fxcg100_poll_gba_buttons_mapped(const uint16_t *keymap);
+uint32_t fxcg100_poll_hotkeys_mapped(const uint16_t *hotkey_map);
+void fxcg100_keymap_defaults(uint16_t *keymap);
+void fxcg100_hotkey_defaults(uint16_t *hotkey_map);
+int fxcg100_keymap_valid(const uint16_t *keymap);
+int fxcg100_hotkey_map_valid(const uint16_t *hotkey_map);
+int fxcg100_key_bindable(uint16_t key);
+const char *fxcg100_key_label(uint16_t key);
+const char *fxcg100_gba_key_label(uint32_t index);
+const char *fxcg100_hotkey_label(uint32_t index);
+
+int fxcg100_config_load(fxcg100_menu_state *state);
+int fxcg100_config_save(const fxcg100_menu_state *state);
 
 void fxcg100_menu_init(fxcg100_menu_state *state);
 fxcg100_menu_result fxcg100_menu_run(fxcg100_menu_state *state,

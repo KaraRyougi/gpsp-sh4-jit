@@ -22,6 +22,8 @@ set(PORT_SOURCES
   src/gpsp_runner.c
   src/frame_pacing.c
   src/no_osheap.c
+  ${FXCG100}/fxcg100_keys.c
+  ${FXCG100}/fxcg100_config.c
   ${FXCG100}/fxcg100_menu.c
   ${FXCG100}/fxcg100_gpsp_stubs.c
   ${FXCG100}/fxcg100_sound_stub.c

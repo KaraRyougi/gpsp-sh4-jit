@@ -16,6 +16,8 @@ void gpsp_set_input_state_bits(u32 gba_buttons);
 #define CGBA_FULL_GPSP 0
 #endif
 
+#define CGBA_FAST_FORWARD_RENDER_PERIOD 8u
+
 #if CGBA_FULL_GPSP
 static uint16_t fxcg100_framebuffer[GBA_SCREEN_PITCH * (GBA_SCREEN_HEIGHT + 1)]
     __attribute__((aligned(32)));
@@ -26,11 +28,6 @@ static void print_hex_line(const char *label, uint32_t value)
   fxcg100_debug_puts(label);
   fxcg100_debug_hex32(value);
   fxcg100_debug_puts("\n");
-}
-
-static int app_chord(uint32_t keys, uint32_t chord)
-{
-  return (keys & chord) == chord;
 }
 
 static unsigned app_popcount(uint32_t value)
@@ -86,8 +83,8 @@ static void draw_safe_boot_screen(uint32_t keys, uint32_t ticks)
   fxcg100_lcd_status("CGBA SAFE BOOT");
   fxcg100_lcd_draw_text(12, 34, "PHYSICAL SMOKE BUILD", accent, bg);
   fxcg100_lcd_draw_text(12, 50, "GPSP CORE NOT STARTED", text, bg);
-  fxcg100_lcd_draw_text(12, 66, "TOOLS MENU", text, bg);
-  fxcg100_lcd_draw_text(12, 82, "SHIFT+HOME RETURN AFTER BOOT", text, bg);
+  fxcg100_lcd_draw_text(12, 66, "ON SETTINGS", text, bg);
+  fxcg100_lcd_draw_text(12, 82, "HOME RETURN AFTER BOOT", text, bg);
 
   snprintf(line, sizeof(line), "SP:%08x", (unsigned)read_stack_pointer());
   fxcg100_lcd_draw_text(12, 112, line, dim, bg);
@@ -130,13 +127,10 @@ static int run_safe_boot_app(void)
     uint32_t raw_app_keys = fxcg100_poll_app_keys();
     uint32_t app_keys = app_keys_plausible(raw_app_keys) ? raw_app_keys : 0;
     int menu_open_edge =
-      ((app_keys & FXCG100_APPKEY_MENU) &&
-       !(previous_app_keys & FXCG100_APPKEY_MENU)) ||
-      (app_chord(app_keys, FXCG100_APPKEY_SHIFT | FXCG100_APPKEY_EXE) &&
-       !app_chord(previous_app_keys, FXCG100_APPKEY_SHIFT | FXCG100_APPKEY_EXE));
+      (app_keys & FXCG100_APPKEY_ON) &&
+      !(previous_app_keys & FXCG100_APPKEY_ON);
 
-    if (ticks > 256 &&
-        app_chord(app_keys, FXCG100_APPKEY_SHIFT | FXCG100_APPKEY_HOME)) {
+    if (ticks > 256 && (app_keys & FXCG100_APPKEY_HOME)) {
       fxcg100_debug_puts("[cgba] safe boot return requested\n");
       break;
     }
@@ -187,6 +181,7 @@ int emain(void)
 #else
   uint32_t last_hash = 0;
   uint32_t previous_app_keys = 0;
+  uint32_t previous_hotkeys = 0;
   fxcg100_menu_state menu_state;
   char status[64];
   unsigned frame;
@@ -237,30 +232,17 @@ int emain(void)
 
   fxcg100_debug_puts("[cgba] interpreter start\n");
   fxcg100_lcd_status("CGBA INT RUN");
+  previous_hotkeys = fxcg100_poll_hotkeys_mapped(menu_state.hotkey_map);
 
   for (frame = 1;; frame++) {
     uint32_t app_keys = fxcg100_poll_app_keys();
+    uint32_t hotkeys = fxcg100_poll_hotkeys_mapped(menu_state.hotkey_map);
+    uint32_t hotkey_edge = hotkeys & ~previous_hotkeys;
     uint32_t gba_buttons = FXCG100_GBA_BUTTON_NONE;
+    int render_video;
     int menu_open_edge =
-      ((app_keys & FXCG100_APPKEY_MENU) &&
-       !(previous_app_keys & FXCG100_APPKEY_MENU)) ||
-      (app_chord(app_keys, FXCG100_APPKEY_SHIFT | FXCG100_APPKEY_EXE) &&
-       !app_chord(previous_app_keys, FXCG100_APPKEY_SHIFT | FXCG100_APPKEY_EXE));
-
-    if (app_chord(app_keys, FXCG100_APPKEY_SHIFT | FXCG100_APPKEY_HOME)) {
-      fxcg100_debug_puts("[cgba] exit requested\n");
-      break;
-    }
-
-    if (app_chord(app_keys, FXCG100_APPKEY_SHIFT | FXCG100_APPKEY_AC) &&
-        !app_chord(previous_app_keys, FXCG100_APPKEY_SHIFT | FXCG100_APPKEY_AC)) {
-      reset_gba();
-      frame = 0;
-      fxcg100_lcd_status("CGBA RESET");
-      fxcg100_debug_puts("[cgba] reset requested\n");
-      previous_app_keys = app_keys;
-      continue;
-    }
+      (app_keys & FXCG100_APPKEY_ON) &&
+      !(previous_app_keys & FXCG100_APPKEY_ON);
 
     if (menu_open_edge) {
       fxcg100_menu_result menu_result;
@@ -268,6 +250,7 @@ int emain(void)
       fxcg100_debug_puts("[cgba] menu open\n");
       menu_result = fxcg100_menu_run(&menu_state, frame, last_hash);
       previous_app_keys = fxcg100_poll_app_keys();
+      previous_hotkeys = fxcg100_poll_hotkeys_mapped(menu_state.hotkey_map);
       fxcg100_lcd_clear(0);
 
       if (menu_result == FXCG100_MENU_QUIT) {
@@ -287,14 +270,31 @@ int emain(void)
       continue;
     }
 
-    if ((app_keys & FXCG100_APPKEY_SHIFT) == 0)
-      gba_buttons = fxcg100_poll_gba_buttons();
+    if (hotkey_edge & FXCG100_HOTKEY_BIT(FXCG100_HOTKEY_DISPLAY_FPS)) {
+      menu_state.show_fps = menu_state.show_fps ? 0 : 1;
+      fxcg100_lcd_status(menu_state.show_fps ? "CGBA FPS ON" :
+                         "CGBA FPS OFF");
+    }
+    if (hotkey_edge & FXCG100_HOTKEY_BIT(FXCG100_HOTKEY_LOAD_STATE))
+      fxcg100_lcd_status("CGBA LOAD STATE TODO");
+    if (hotkey_edge & FXCG100_HOTKEY_BIT(FXCG100_HOTKEY_SAVE_STATE))
+      fxcg100_lcd_status("CGBA SAVE STATE TODO");
+    if (hotkey_edge & FXCG100_HOTKEY_BIT(FXCG100_HOTKEY_SAVE_EXIT))
+      fxcg100_lcd_status("CGBA SAVE+EXIT TODO");
+
+    gba_buttons = fxcg100_poll_gba_buttons_mapped(menu_state.keymap);
 
     previous_app_keys = app_keys;
     run_one_frame(gba_buttons);
     last_hash = fxcg100_frame_hash(gba_screen_pixels);
-    if (fxcg100_menu_should_blit(&menu_state, frame))
+    if (hotkeys & FXCG100_HOTKEY_BIT(FXCG100_HOTKEY_FAST_FORWARD))
+      render_video = frame == 1 ||
+        (frame % CGBA_FAST_FORWARD_RENDER_PERIOD) == 0;
+    else
+      render_video = fxcg100_menu_should_blit(&menu_state, frame);
+    if (render_video)
       fxcg100_lcd_blit_gba(gba_screen_pixels);
+    previous_hotkeys = hotkeys;
 
     if (frame == 1) {
       print_hex_line("[cgba] frame1 hash ", last_hash);

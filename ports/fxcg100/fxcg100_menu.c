@@ -7,8 +7,10 @@
 #define LCD_W 384
 #define LCD_H 216
 #define MENU_TOP 28
+#define MENU_MAIN_TOP 50
 #define MENU_ROW_H 10
 #define MENU_VISIBLE_ROWS 15
+#define MENU_MAIN_VISIBLE_ROWS 13
 
 #define RGB565(r, g, b) \
   (uint16_t)((((r) & 0x1f) << 11) | (((g) & 0x3f) << 5) | ((b) & 0x1f))
@@ -39,6 +41,8 @@ typedef enum menu_item_kind {
   MENU_ITEM_CHOICE,
   MENU_ITEM_NUMBER,
   MENU_ITEM_NUMBER_ACTION,
+  MENU_ITEM_GBA_KEY,
+  MENU_ITEM_HOTKEY,
   MENU_ITEM_INFO
 } menu_item_kind;
 
@@ -51,7 +55,9 @@ typedef enum menu_action_id {
   MENU_ACTION_LOAD_STATE,
   MENU_ACTION_SAVE_STATE,
   MENU_ACTION_LOAD_GAME,
-  MENU_ACTION_REMAP,
+  MENU_ACTION_RESET_KEYS,
+  MENU_ACTION_SAVE_CONFIG,
+  MENU_ACTION_LOAD_CONFIG,
   MENU_ACTION_CHEAT
 } menu_action_id;
 
@@ -126,6 +132,10 @@ static const menu_item main_items[] = {
     MENU_PAGE_MAIN, MENU_VALUE_SAVE_SLOT, NULL, 10, NULL },
   { "CONFIGURE GAMEPAD INPUT", MENU_ITEM_SUBMENU, MENU_ACTION_NONE,
     MENU_PAGE_GAMEPAD, MENU_VALUE_NONE, NULL, 0, NULL },
+  { "SAVE CONFIG", MENU_ITEM_ACTION, MENU_ACTION_SAVE_CONFIG,
+    MENU_PAGE_MAIN, MENU_VALUE_NONE, NULL, 0, NULL },
+  { "LOAD CONFIG", MENU_ITEM_ACTION, MENU_ACTION_LOAD_CONFIG,
+    MENU_PAGE_MAIN, MENU_VALUE_NONE, NULL, 0, NULL },
   { "CHEATS AND MISC OPTIONS", MENU_ITEM_SUBMENU, MENU_ACTION_NONE,
     MENU_PAGE_CHEATS, MENU_VALUE_NONE, NULL, 0, NULL },
   { "LOAD NEW GAME", MENU_ITEM_ACTION, MENU_ACTION_LOAD_GAME,
@@ -155,36 +165,45 @@ static const menu_item graphics_items[] = {
 };
 
 static const menu_item gamepad_items[] = {
-  { "D-PAD UP", MENU_ITEM_INFO, MENU_ACTION_REMAP,
-    MENU_PAGE_GAMEPAD, MENU_VALUE_NONE, NULL, 0, "UP" },
-  { "D-PAD DOWN", MENU_ITEM_INFO, MENU_ACTION_REMAP,
-    MENU_PAGE_GAMEPAD, MENU_VALUE_NONE, NULL, 0, "DOWN" },
-  { "D-PAD LEFT", MENU_ITEM_INFO, MENU_ACTION_REMAP,
-    MENU_PAGE_GAMEPAD, MENU_VALUE_NONE, NULL, 0, "LEFT" },
-  { "D-PAD RIGHT", MENU_ITEM_INFO, MENU_ACTION_REMAP,
-    MENU_PAGE_GAMEPAD, MENU_VALUE_NONE, NULL, 0, "RIGHT" },
-  { "A", MENU_ITEM_INFO, MENU_ACTION_REMAP,
-    MENU_PAGE_GAMEPAD, MENU_VALUE_NONE, NULL, 0, "EXE OR OK" },
-  { "B", MENU_ITEM_INFO, MENU_ACTION_REMAP,
-    MENU_PAGE_GAMEPAD, MENU_VALUE_NONE, NULL, 0, "ALPHA OR AC" },
-  { "LEFT TRIGGER", MENU_ITEM_INFO, MENU_ACTION_REMAP,
-    MENU_PAGE_GAMEPAD, MENU_VALUE_NONE, NULL, 0, "BEGIN" },
-  { "RIGHT TRIGGER", MENU_ITEM_INFO, MENU_ACTION_REMAP,
-    MENU_PAGE_GAMEPAD, MENU_VALUE_NONE, NULL, 0, "END" },
-  { "START", MENU_ITEM_INFO, MENU_ACTION_REMAP,
-    MENU_PAGE_GAMEPAD, MENU_VALUE_NONE, NULL, 0, "PGUP" },
-  { "SELECT", MENU_ITEM_INFO, MENU_ACTION_REMAP,
-    MENU_PAGE_GAMEPAD, MENU_VALUE_NONE, NULL, 0, "HOME" },
-  { "MENU", MENU_ITEM_INFO, MENU_ACTION_REMAP,
-    MENU_PAGE_GAMEPAD, MENU_VALUE_NONE, NULL, 0, "TOOLS" },
-  { "FAST FORWARD", MENU_ITEM_INFO, MENU_ACTION_REMAP,
-    MENU_PAGE_GAMEPAD, MENU_VALUE_NONE, NULL, 0, "TODO" },
-  { "LOAD STATE", MENU_ITEM_INFO, MENU_ACTION_REMAP,
-    MENU_PAGE_GAMEPAD, MENU_VALUE_NONE, NULL, 0, "TODO" },
-  { "SAVE STATE", MENU_ITEM_INFO, MENU_ACTION_REMAP,
-    MENU_PAGE_GAMEPAD, MENU_VALUE_NONE, NULL, 0, "TODO" },
-  { "SAVE+EXIT", MENU_ITEM_INFO, MENU_ACTION_REMAP,
-    MENU_PAGE_GAMEPAD, MENU_VALUE_NONE, NULL, 0, "TODO" },
+  { "MENU", MENU_ITEM_INFO, MENU_ACTION_NONE,
+    MENU_PAGE_GAMEPAD, MENU_VALUE_NONE, NULL, 0, "ON" },
+  { "GBA A", MENU_ITEM_GBA_KEY, MENU_ACTION_NONE,
+    MENU_PAGE_GAMEPAD, MENU_VALUE_NONE, NULL, FXCG100_GBA_KEY_A, NULL },
+  { "GBA B", MENU_ITEM_GBA_KEY, MENU_ACTION_NONE,
+    MENU_PAGE_GAMEPAD, MENU_VALUE_NONE, NULL, FXCG100_GBA_KEY_B, NULL },
+  { "GBA SELECT", MENU_ITEM_GBA_KEY, MENU_ACTION_NONE,
+    MENU_PAGE_GAMEPAD, MENU_VALUE_NONE, NULL, FXCG100_GBA_KEY_SELECT, NULL },
+  { "GBA START", MENU_ITEM_GBA_KEY, MENU_ACTION_NONE,
+    MENU_PAGE_GAMEPAD, MENU_VALUE_NONE, NULL, FXCG100_GBA_KEY_START, NULL },
+  { "GBA RIGHT", MENU_ITEM_GBA_KEY, MENU_ACTION_NONE,
+    MENU_PAGE_GAMEPAD, MENU_VALUE_NONE, NULL, FXCG100_GBA_KEY_RIGHT, NULL },
+  { "GBA LEFT", MENU_ITEM_GBA_KEY, MENU_ACTION_NONE,
+    MENU_PAGE_GAMEPAD, MENU_VALUE_NONE, NULL, FXCG100_GBA_KEY_LEFT, NULL },
+  { "GBA UP", MENU_ITEM_GBA_KEY, MENU_ACTION_NONE,
+    MENU_PAGE_GAMEPAD, MENU_VALUE_NONE, NULL, FXCG100_GBA_KEY_UP, NULL },
+  { "GBA DOWN", MENU_ITEM_GBA_KEY, MENU_ACTION_NONE,
+    MENU_PAGE_GAMEPAD, MENU_VALUE_NONE, NULL, FXCG100_GBA_KEY_DOWN, NULL },
+  { "GBA L", MENU_ITEM_GBA_KEY, MENU_ACTION_NONE,
+    MENU_PAGE_GAMEPAD, MENU_VALUE_NONE, NULL, FXCG100_GBA_KEY_L, NULL },
+  { "GBA R", MENU_ITEM_GBA_KEY, MENU_ACTION_NONE,
+    MENU_PAGE_GAMEPAD, MENU_VALUE_NONE, NULL, FXCG100_GBA_KEY_R, NULL },
+  { "FAST FORWARD", MENU_ITEM_HOTKEY, MENU_ACTION_NONE,
+    MENU_PAGE_GAMEPAD, MENU_VALUE_NONE, NULL,
+    FXCG100_HOTKEY_FAST_FORWARD, NULL },
+  { "LOAD STATE", MENU_ITEM_HOTKEY, MENU_ACTION_NONE,
+    MENU_PAGE_GAMEPAD, MENU_VALUE_NONE, NULL,
+    FXCG100_HOTKEY_LOAD_STATE, NULL },
+  { "SAVE STATE", MENU_ITEM_HOTKEY, MENU_ACTION_NONE,
+    MENU_PAGE_GAMEPAD, MENU_VALUE_NONE, NULL,
+    FXCG100_HOTKEY_SAVE_STATE, NULL },
+  { "SAVE+EXIT", MENU_ITEM_HOTKEY, MENU_ACTION_NONE,
+    MENU_PAGE_GAMEPAD, MENU_VALUE_NONE, NULL,
+    FXCG100_HOTKEY_SAVE_EXIT, NULL },
+  { "DISPLAY FPS", MENU_ITEM_HOTKEY, MENU_ACTION_NONE,
+    MENU_PAGE_GAMEPAD, MENU_VALUE_NONE, NULL,
+    FXCG100_HOTKEY_DISPLAY_FPS, NULL },
+  { "RESET DEFAULT KEYS", MENU_ITEM_ACTION, MENU_ACTION_RESET_KEYS,
+    MENU_PAGE_GAMEPAD, MENU_VALUE_NONE, NULL, 0, NULL },
   { "BACK", MENU_ITEM_ACTION, MENU_ACTION_BACK,
     MENU_PAGE_MAIN, MENU_VALUE_NONE, NULL, 0, NULL }
 };
@@ -266,7 +285,7 @@ static const menu_item *menu_page_items(menu_page_id page, size_t *count,
     return graphics_items;
   case MENU_PAGE_GAMEPAD:
     *count = sizeof(gamepad_items) / sizeof(gamepad_items[0]);
-    *title = "CONFIGURE GAMEPAD INPUT";
+    *title = "MAP GAMEPAD INPUT";
     return gamepad_items;
   case MENU_PAGE_CHEATS:
     *count = sizeof(cheats_items) / sizeof(cheats_items[0]);
@@ -275,9 +294,19 @@ static const menu_item *menu_page_items(menu_page_id page, size_t *count,
   case MENU_PAGE_MAIN:
   default:
     *count = sizeof(main_items) / sizeof(main_items[0]);
-    *title = "GPSP MAIN MENU";
+    *title = "CGBA SETTINGS";
     return main_items;
   }
+}
+
+static uint32_t menu_visible_rows(menu_page_id page)
+{
+  return page == MENU_PAGE_MAIN ? MENU_MAIN_VISIBLE_ROWS : MENU_VISIBLE_ROWS;
+}
+
+static uint32_t menu_top(menu_page_id page)
+{
+  return page == MENU_PAGE_MAIN ? MENU_MAIN_TOP : MENU_TOP;
 }
 
 static void menu_delay(void)
@@ -304,11 +333,32 @@ static uint32_t menu_wait_edge(uint32_t *previous, uint32_t *edge_out)
   }
 }
 
+static void menu_wait_no_physical_keys(void)
+{
+  for (;;) {
+    if (fxcg100_poll_physical_key() == 0)
+      return;
+    menu_delay();
+  }
+}
+
+static uint16_t menu_wait_physical_key(void)
+{
+  for (;;) {
+    uint16_t key = fxcg100_poll_physical_key();
+
+    if (key)
+      return key;
+    menu_delay();
+  }
+}
+
 static void menu_clamp_cursor(fxcg100_menu_state *state, menu_page_id page,
                               size_t count)
 {
   uint32_t *selected = &state->selected[page];
   uint32_t *scroll = &state->scroll[page];
+  uint32_t visible_rows = menu_visible_rows(page);
 
   if (count == 0) {
     *selected = 0;
@@ -320,12 +370,12 @@ static void menu_clamp_cursor(fxcg100_menu_state *state, menu_page_id page,
     *selected = (uint32_t)count - 1;
   if (*selected < *scroll)
     *scroll = *selected;
-  if (*selected >= *scroll + MENU_VISIBLE_ROWS)
-    *scroll = *selected - MENU_VISIBLE_ROWS + 1;
-  if (count <= MENU_VISIBLE_ROWS)
+  if (*selected >= *scroll + visible_rows)
+    *scroll = *selected - visible_rows + 1;
+  if (count <= visible_rows)
     *scroll = 0;
-  else if (*scroll + MENU_VISIBLE_ROWS > count)
-    *scroll = (uint32_t)count - MENU_VISIBLE_ROWS;
+  else if (*scroll + visible_rows > count)
+    *scroll = (uint32_t)count - visible_rows;
 }
 
 static void menu_adjust_value(fxcg100_menu_state *state, const menu_item *item,
@@ -363,6 +413,20 @@ static void menu_format_item(fxcg100_menu_state *state, const menu_item *item,
     snprintf(line, line_size, "%s: %u", item->label,
              value ? (unsigned)(*value % item->count) : 0);
     break;
+  case MENU_ITEM_GBA_KEY:
+    if (item->count < FXCG100_GBA_KEY_COUNT)
+      snprintf(line, line_size, "%s: %s", item->label,
+               fxcg100_key_label(state->keymap[item->count]));
+    else
+      snprintf(line, line_size, "%s: ?", item->label);
+    break;
+  case MENU_ITEM_HOTKEY:
+    if (item->count < FXCG100_HOTKEY_COUNT)
+      snprintf(line, line_size, "%s: %s", item->label,
+               fxcg100_key_label(state->hotkey_map[item->count]));
+    else
+      snprintf(line, line_size, "%s: ?", item->label);
+    break;
   case MENU_ITEM_INFO:
     snprintf(line, line_size, "%s: %s", item->label,
              item->info ? item->info : "");
@@ -387,6 +451,8 @@ static void menu_draw(fxcg100_menu_state *state, menu_page_id page,
   size_t count;
   uint32_t selected;
   uint32_t scroll;
+  uint32_t top;
+  uint32_t visible_rows;
   char line[96];
   unsigned row;
 
@@ -394,18 +460,30 @@ static void menu_draw(fxcg100_menu_state *state, menu_page_id page,
   menu_clamp_cursor(state, page, count);
   selected = state->selected[page];
   scroll = state->scroll[page];
+  top = menu_top(page);
+  visible_rows = menu_visible_rows(page);
 
   fxcg100_lcd_clear(bg);
   fxcg100_lcd_fill_rect(0, 0, LCD_W, 18, panel);
-  fxcg100_lcd_draw_text(4, 5, "CGBA GPSP", text, panel);
+  fxcg100_lcd_draw_text(4, 5, "CGBA", text, panel);
   snprintf(line, sizeof(line), "F:%06u H:%08x",
            (unsigned)frame, (unsigned)last_hash);
   fxcg100_lcd_draw_text(246, 5, line, dim, panel);
-  fxcg100_lcd_draw_text(8, 20, title, accent, bg);
+  if (page == MENU_PAGE_MAIN) {
+    fxcg100_lcd_draw_text(8, 20, "C", RGB565(31, 4, 4), bg);
+    fxcg100_lcd_draw_text(14, 20, "G", RGB565(31, 26, 0), bg);
+    fxcg100_lcd_draw_text(20, 20, "B", RGB565(0, 26, 8), bg);
+    fxcg100_lcd_draw_text(26, 20, "A", RGB565(5, 14, 31), bg);
+    fxcg100_lcd_draw_text(8, 34,
+                          "a gpSP port for CASIO fx-CG calculators",
+                          text, bg);
+  } else {
+    fxcg100_lcd_draw_text(8, 20, title, accent, bg);
+  }
 
-  for (row = 0; row < MENU_VISIBLE_ROWS; row++) {
+  for (row = 0; row < visible_rows; row++) {
     uint32_t item_index = scroll + row;
-    unsigned y = MENU_TOP + row * MENU_ROW_H;
+    unsigned y = top + row * MENU_ROW_H;
     uint16_t row_bg = item_index == selected ? selected_bg : bg;
 
     if (item_index >= count)
@@ -420,11 +498,54 @@ static void menu_draw(fxcg100_menu_state *state, menu_page_id page,
   fxcg100_lcd_fill_rect(0, 180, LCD_W, 36, bg);
   if (message && message[0])
     fxcg100_lcd_draw_text(8, 184, message, accent, bg);
-  else
-  fxcg100_lcd_draw_text(8, 184, "NSPIRE STYLE MENU OPTIONS", dim, bg);
   fxcg100_lcd_draw_text(8, 198, "UP/DOWN MOVE  LEFT/RIGHT CHANGE", dim, bg);
-  fxcg100_lcd_draw_text(8, 208, "EXE SELECT  MENU/BACK RETURN", dim, bg);
+  fxcg100_lcd_draw_text(8, 208, "EXE SELECT  BACK RETURN  HOME EXIT", dim, bg);
   fxcg100_lcd_update();
+}
+
+static void menu_draw_capture(const char *target, const char *message)
+{
+  const uint16_t bg = RGB565(1, 2, 4);
+  const uint16_t panel = RGB565(3, 6, 10);
+  const uint16_t text = RGB565(30, 58, 31);
+  const uint16_t dim = RGB565(17, 32, 22);
+  const uint16_t accent = RGB565(31, 48, 12);
+
+  fxcg100_lcd_clear(bg);
+  fxcg100_lcd_fill_rect(0, 0, LCD_W, 18, panel);
+  fxcg100_lcd_draw_text(4, 5, "CGBA GPSP", text, panel);
+  fxcg100_lcd_draw_text(8, 28, "MAP INPUT", accent, bg);
+  fxcg100_lcd_draw_text(8, 58, "PRESS KEY FOR", text, bg);
+  fxcg100_lcd_draw_text(8, 76, target ? target : "?", accent, bg);
+  fxcg100_lcd_draw_text(8, 118, "PRESS ON TO CANCEL", dim, bg);
+  if (message && message[0])
+    fxcg100_lcd_draw_text(8, 148, message, accent, bg);
+  fxcg100_lcd_update();
+}
+
+static int menu_capture_binding(const char *target, uint16_t *binding)
+{
+  if (!binding)
+    return 0;
+  menu_wait_no_physical_keys();
+
+  for (;;) {
+    uint16_t key;
+
+    menu_draw_capture(target, "");
+    key = menu_wait_physical_key();
+    if (key == FXCG100_PHYSKEY_ON) {
+      menu_wait_no_physical_keys();
+      return 0;
+    }
+    if (fxcg100_key_bindable(key)) {
+      *binding = key;
+      menu_wait_no_physical_keys();
+      return 1;
+    }
+    menu_draw_capture(target, "ON IS THE MENU KEY");
+    menu_wait_no_physical_keys();
+  }
 }
 
 static fxcg100_menu_result menu_activate_item(fxcg100_menu_state *state,
@@ -444,6 +565,20 @@ static fxcg100_menu_result menu_activate_item(fxcg100_menu_state *state,
     return FXCG100_MENU_CONTINUE;
   case MENU_ITEM_NUMBER_ACTION:
     break;
+  case MENU_ITEM_GBA_KEY:
+    if (item->count < FXCG100_GBA_KEY_COUNT &&
+        menu_capture_binding(item->label, &state->keymap[item->count]))
+      *message = "KEY MAPPING APPLIED";
+    else
+      *message = "KEY MAPPING CANCELLED";
+    return FXCG100_MENU_CONTINUE;
+  case MENU_ITEM_HOTKEY:
+    if (item->count < FXCG100_HOTKEY_COUNT &&
+        menu_capture_binding(item->label, &state->hotkey_map[item->count]))
+      *message = "HOTKEY MAPPING APPLIED";
+    else
+      *message = "HOTKEY MAPPING CANCELLED";
+    return FXCG100_MENU_CONTINUE;
   case MENU_ITEM_INFO:
     break;
   default:
@@ -469,8 +604,18 @@ static fxcg100_menu_result menu_activate_item(fxcg100_menu_state *state,
     return FXCG100_MENU_SAVE_STATE;
   case MENU_ACTION_LOAD_GAME:
     return FXCG100_MENU_LOAD_GAME;
-  case MENU_ACTION_REMAP:
-    *message = "REMAP PERSISTENCE TODO";
+  case MENU_ACTION_RESET_KEYS:
+    fxcg100_keymap_defaults(state->keymap);
+    fxcg100_hotkey_defaults(state->hotkey_map);
+    *message = "DEFAULT KEYS RESTORED";
+    return FXCG100_MENU_CONTINUE;
+  case MENU_ACTION_SAVE_CONFIG:
+    *message = fxcg100_config_save(state) ?
+      "CONFIG SAVED" : "CONFIG SAVE FAILED";
+    return FXCG100_MENU_CONTINUE;
+  case MENU_ACTION_LOAD_CONFIG:
+    *message = fxcg100_config_load(state) ?
+      "CONFIG LOADED" : "NO SAVED CONFIG";
     return FXCG100_MENU_CONTINUE;
   case MENU_ACTION_CHEAT:
     *message = "CHEAT LOADER TODO";
@@ -490,7 +635,11 @@ void fxcg100_menu_init(fxcg100_menu_state *state)
   state->frameskip_value = 1;
   state->frameskip_variation = 0;
   state->backup_update = 0;
+  state->show_fps = 0;
+  fxcg100_keymap_defaults(state->keymap);
+  fxcg100_hotkey_defaults(state->hotkey_map);
   state->random_lfsr = 0x00c6ba5eu;
+  fxcg100_config_load(state);
 }
 
 fxcg100_menu_result fxcg100_menu_run(fxcg100_menu_state *state,
@@ -505,7 +654,6 @@ fxcg100_menu_result fxcg100_menu_run(fxcg100_menu_state *state,
     const char *title;
     size_t count;
     uint32_t selected;
-    uint32_t keys;
     uint32_t edge;
 
     menu_draw(state, page, message, frame, last_hash);
@@ -514,14 +662,7 @@ fxcg100_menu_result fxcg100_menu_run(fxcg100_menu_state *state,
     menu_clamp_cursor(state, page, count);
     selected = state->selected[page];
 
-    keys = menu_wait_edge(&previous, &edge);
-
-    if ((keys & (FXCG100_APPKEY_SHIFT | FXCG100_APPKEY_HOME)) ==
-        (FXCG100_APPKEY_SHIFT | FXCG100_APPKEY_HOME))
-      return FXCG100_MENU_QUIT;
-    if ((keys & (FXCG100_APPKEY_SHIFT | FXCG100_APPKEY_AC)) ==
-        (FXCG100_APPKEY_SHIFT | FXCG100_APPKEY_AC))
-      return FXCG100_MENU_RESET;
+    menu_wait_edge(&previous, &edge);
 
     if (edge & FXCG100_APPKEY_UP) {
       state->selected[page] = selected == 0 ? (uint32_t)count - 1 : selected - 1;
@@ -535,10 +676,11 @@ fxcg100_menu_result fxcg100_menu_run(fxcg100_menu_state *state,
     } else if (edge & FXCG100_APPKEY_RIGHT) {
       menu_adjust_value(state, &items[selected], 1);
       message = "";
-    } else if (edge & (FXCG100_APPKEY_MENU | FXCG100_APPKEY_BACK |
-                       FXCG100_APPKEY_AC)) {
+    } else if (edge & FXCG100_APPKEY_HOME) {
+      return FXCG100_MENU_QUIT;
+    } else if (edge & FXCG100_APPKEY_BACK) {
       if (page == MENU_PAGE_MAIN)
-        return FXCG100_MENU_CONTINUE;
+        return FXCG100_MENU_RETURN;
       page = MENU_PAGE_MAIN;
       message = "";
     } else if (edge & FXCG100_APPKEY_EXE) {

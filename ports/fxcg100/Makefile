@@ -49,6 +49,8 @@ PORT_C := \
   fxcg100_runtime.c \
   fxcg100_video.c \
   fxcg100_input.c \
+  fxcg100_keys.c \
+  fxcg100_config.c \
   fxcg100_menu.c \
   jit_probe.c
 

@@ -80,10 +80,10 @@ Runtime shape:
 - Uses stock gint startup and hardware detection, matching the physical-safe
   `gint-smoke` path
 - Uses gint display calls for all calculator LCD output
-- Opens the Nspire-style gpSP menu as the first screen; `TOOLS`/MENU or
-  `SHIFT+EXE` reopens it after returning to the game
-- Polls fx-CG100 matrix-style key codes through gint for menu navigation and
-  basic GBA button mapping
+- Opens the settings menu as the first screen; physical `ON` reopens it after
+  returning to the game
+- Reserves only `ON` during gameplay; all other fx-CG100 keys are bindable as
+  GBA inputs or gpSP hotkeys through the settings menu
 - Keeps gpSP's large GBA memories, framebuffer, and embedded smoke ROM buffer in
   `.cgba.highbss` at `0x8c200000`
 - Refuses to clear/run the gpSP high arena if the linked range falls outside
@@ -102,11 +102,15 @@ Runtime shape:
 - Video: direct R61524 GRAM writes
 - Input: raw fx-CG100 KEYSC reads are used only for the smoke UI; implausible
   all-set scans are ignored
-- App shell: `TOOLS` opens the menu after the startup grace period,
-  `SHIFT` + `EXE` is a fallback, `SHIFT` + `HOME` returns through the loader
-- Menu: Nspire-style gpSP options for graphics/frameskip, load/save state slot,
-  gamepad mapping, cheats/misc, load/restart/return/quit. Manual frameskip is
-  wired to skip LCD blits; storage-backed items currently show TODO markers.
+- App shell: `ON` opens the menu after the startup grace period; `HOME` returns
+  through the loader on the safe-boot screen
+- Menu: settings for graphics/frameskip/FPS display, load/save state slot,
+  gpSP-style per-action key mapping, config save/load, cheats/misc,
+  load/restart/return/quit. Defaults are `A=SHIFT`, `B=ALPHA`, `SELECT=VAR`,
+  `START=EXE`, D-pad arrows, `L=BEGIN`, and `R=END`; gpSP hotkeys default to
+  `NONE`; saved settings live at `\\fls0\\CGBA.CFG`. Manual frameskip is wired
+  to skip LCD blits; game save/state storage-backed items currently show TODO
+  markers.
 - Full gpSP path: embedded `test_rom/mode3_smoke.h` and
   `test_rom/input_probe.h`, plus a NOR root-file source for
   `test_rom/CGBAINP.GBA`; interpreter only, audio disabled,
