@@ -49,18 +49,41 @@ These are deliberately the simplest correct choices; the speed work
 (resident regs, lazy/dead flags, inline memory, block chaining, idle-loop emit)
 layers on top — see the optimization plan.
 
+## Dynarec bring-up — DONE (compiles, links, runs the control-flow skeleton)
+
+The three bring-up tasks are complete at the build/link level (runtime
+correctness is now the differential harness's job):
+
+| Task | Status | Artifact |
+|---|---|---|
+| **1. Executable JIT cache** | DONE | The translation caches are placed in the `.cgba.highbss` arena (P1 `0x8c2…`, cached + **executable**) via [sh4_dynarec_state.c](../ports/fxcg100/sh4/sh4_dynarec_state.c), not the no-execute `0x081…` add-in alias. `platform_cache_sync` gains an `SH4_ARCH` branch ([cpu_threaded.c](../vendor/gpsp/cpu_threaded.c)) calling the `OCBWB→SYNCO→ICBI` sequence. Verified: `nm` shows `rom_translation_cache @ 0x8c4cede0`. |
+| **2. Differential interp-vs-dynarec harness** | DONE | [sh4_diff_harness.c](../ports/fxcg100/sh4/sh4_diff_harness.c) snapshots reg[]+memory, runs the same window under `execute_arm` and `execute_arm_translate`, and reports the first divergent register/region (interpreter = oracle). `cgba_gpsp_run_frame` dispatches on the live `dynarec_enable` toggle. |
+| **3. `sh4_emit.h` glue until `-DSH4_ARCH` links** | DONE | The full 45-macro host-emitter contract is implemented in [sh4_emit.h](../vendor/gpsp/sh4/sh4_emit.h) + [sh4_emit_glue.h](../ports/fxcg100/sh4/sh4_emit_glue.h); `sh-elf-gcc -DSH4_ARCH -c cpu_threaded.c` compiles clean and the whole `CGBA_DYNAREC=ON` add-in links into `CGBA-GPSP.g3a`. |
+
+Build it: `cmake -B build-cg -DCGBA_DYNAREC=ON && cmake --build build-cg`
+(the default `OFF` build stays interpreter-only and is the shipping target).
+
+**Bring-up design choices (correctness deferred to the harness):**
+- Self-contained inline literals (`MOV.L @(disp,PC)` + branch-over) for every
+  constant/far target — no deferred pool, nothing range-limited, zero-size
+  block prologue. All block exits funnel through one `sh4_block_exit` stub entry.
+- Thumb data-proc / immediate-shifts / branches / conditions / cycle counter
+  emit real SH4; memory, block transfers, register-amount shifts, ARM
+  data-proc, multiply(-long), PSR, SWAP route to C helpers
+  ([sh4_interp_helpers.c](../ports/fxcg100/sh4/sh4_interp_helpers.c), correct by
+  reuse of `read_memory`/`write_memory`).
+- **Known-incorrect until follow-up** (the harness exists to drive these): C/V
+  flags + C/V-dependent conditions, SWI/BIOS HLE (stubbed), SMC RAM-code
+  invalidation on stores, PC-write redispatch edge cases. On-device / casio-emu
+  runtime validation is still pending.
+
 ## Remaining (next milestones)
 
-1. **Complete the gpSP emitter macro contract** (the "REMAINING CONTRACT"
-   checklist in [sh4_emit.h](../vendor/gpsp/sh4/sh4_emit.h)) until
-   `sh-elf-gcc -DSH4_ARCH -c cpu_threaded.c` compiles and links with the stub.
-   This is the bulk of the dynarec and needs runtime validation.
-2. **Wire a dynarec build target** for the calculator (add `cpu_threaded.c`,
-   define `SH4_ARCH` + `MMAP_JIT_CACHE`, allocate an executable code cache via
-   `kmalloc_max`, shrink the translation caches per the plan's RAM budget).
-3. **Differential-test** the dynarec against the interpreter on the same ROM
-   (keep `dynarec_enable` togglable), then validate on hardware / casio-emu.
-4. **Idle-loop emit path** (Part B) — already wired in the interpreter; emit the
-   cycle-zeroing skip in the SH4 branch path.
-5. **Optimize**: resident hot registers, lazy/dead-flag elimination, inline
-   memory fast paths, block chaining.
+1. **Run the differential harness** on casio-emu / hardware and close the
+   known-incorrect gaps it surfaces (C/V flags first — they break ~10/14
+   conditions and the carry-dependent ALU ops).
+2. **SWI / BIOS HLE** and **SMC RAM-code invalidation** in the store path.
+3. **Idle-loop emit path** (Part B) — already wired in the interpreter; emit the
+   cycle-zeroing skip in the SH4 branch path when `pc == idle_loop_target_pc`.
+4. **Optimize**: resident hot registers, lazy/dead-flag elimination, inline
+   memory fast paths, real block chaining (replace the C-helper handlers).

@@ -211,11 +211,41 @@ void cgba_gpsp_run_frame(uint32_t gba_buttons, int render_video)
 	update_input();
 	skip_next_frame = render_video ? 0 : 1;
 	clear_gamepak_stickybits();
-	execute_arm(execute_cycles);
+#ifdef CGBA_DYNAREC
+	/* Live interp/dynarec toggle (subtask 2). The interpreter stays the default
+	 * and correctness oracle; flip dynarec_enable to exercise the recompiler. */
+	if(dynarec_enable)
+		execute_arm_translate(execute_cycles);
+	else
+#endif
+		execute_arm(execute_cycles);
 	skip_next_frame = 0;
 	if(render_video && cgba_mode3_debug_copy_active)
 		copy_mode3_vram_to_framebuffer();
 }
+
+#ifdef CGBA_DYNAREC
+#include "sh4/sh4_diff_harness.h"
+
+/* Run the differential interp-vs-dynarec harness for a short window and format
+ * the first divergence (or agreement) into a one-line result. Invoked from the
+ * menu / diagnostics so the dynarec can be validated on casio-emu or hardware
+ * without a host oracle. */
+int cgba_gpsp_diff_test(uint32_t cycles, char *out, unsigned out_len)
+{
+	cgba_diff_result r;
+	int diverged = cgba_sh4_diff_run(cycles, &r);
+
+	if(diverged)
+		snprintf(out, out_len, "DIFF %s[%d] i=%08lX d=%08lX c=%lu",
+			cgba_sh4_diff_kind_name(r.kind), r.index,
+			(unsigned long)r.interp_value, (unsigned long)r.dynarec_value,
+			(unsigned long)r.cycles);
+	else
+		snprintf(out, out_len, "MATCH over %lu cycles", (unsigned long)cycles);
+	return diverged;
+}
+#endif
 
 uint32_t cgba_gpsp_keyinput(void)
 {
@@ -272,6 +302,12 @@ unsigned cgba_gpsp_diag(char out[][CGBA_DIAG_LINE_MAX], unsigned max_lines)
 			"fbhash=%08lX center=%04X",
 			(unsigned long)(fb ? cgba_gpsp_frame_hash(fb) : 0u),
 			fb ? fb[80 * CGBA_GBA_PITCH + 120] : 0);
+#ifdef CGBA_DYNAREC
+	/* One short interp-vs-dynarec comparison so the diag overlay surfaces
+	 * dynarec health on hardware/casio-emu. Kept brief to limit timing noise. */
+	if(n < max_lines)
+		cgba_gpsp_diff_test(1024, out[n++], CGBA_DIAG_LINE_MAX);
+#endif
 	return n;
 }
 

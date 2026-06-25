@@ -1,120 +1,443 @@
 /* gameplaySP — SH-4A (SH7305 / fx-CG100) dynarec host emitter.
  *
- * STATUS: in progress. The verified foundation is in place and host-tested:
- *   - instruction encoder           ports/fxcg100/sh4/sh4_codegen.h   (vs sh-elf-as)
- *   - literal pool + reg[] access    ports/fxcg100/sh4/sh4_emit_core.h (host audit)
- *   - Thumb data-proc translation    ports/fxcg100/sh4/sh4_thumb_mvp.h (host audit)
- *   - entry/exit trampoline          vendor/gpsp/sh4/sh4_stub.S        (assembles)
+ * This header is the seam cpu_threaded.c includes when SH4_ARCH is defined. It
+ * implements gpSP's host-emitter macro contract for SH-4A, building on the
+ * verified primitives:
+ *   - instruction encoder           ports/fxcg100/sh4/sh4_codegen.h
+ *   - literal pool + reg[] access   ports/fxcg100/sh4/sh4_emit_core.h
+ *   - bring-up emission glue         ports/fxcg100/sh4/sh4_emit_glue.h
+ *   - entry/exit trampoline          vendor/gpsp/sh4/sh4_stub.S
  *
- * This header is the seam included by cpu_threaded.c when SH4_ARCH is defined
- * (see cpu_threaded.c). It does NOT yet implement gpSP's full host-emitter macro
- * contract, so an SH4_ARCH build of cpu_threaded.c will not compile to
- * completion until the macros in the "REMAINING CONTRACT" checklist below are
- * filled in. The register model, primitives, and runtime symbols are settled.
- *
- * MVP model: every guest ARM register lives in reg[]; N/Z flags are materialized
- * directly in REG_CPSR (no flag caching yet); memory goes through the C
- * execute_load_* / execute_store_* helpers. Speed optimizations (resident hot
- * registers, lazy/dead-flag elimination, inline memory fast paths) layer on
- * after correctness — see docs/sh4-jit-optimization-plan.md.
+ * BRING-UP SCOPE (correctness deferred to the interp-vs-dynarec differential
+ * harness; see docs/sh4-jit-status.md): the goal is a build that compiles and
+ * links and runs the right control-flow skeleton. Thumb data-processing,
+ * shifts, branches, conditions, the cycle counter and block exits emit real
+ * SH4. The heavier/rarer handlers — all memory and block transfers, the ARM
+ * barrel-shifter data-proc, multiply(-long), PSR, SWAP, SWI and HLE divide —
+ * route to C helpers (sh4_interp_helpers.c) so they are correct-by-reuse while
+ * the inline emitters grow. N/Z flags are materialized in REG_CPSR; C/V are not
+ * computed yet, so C/V-dependent conditions are known-wrong until flag
+ * synthesis lands.
  */
 
 #ifndef SH4_EMIT_H
 #define SH4_EMIT_H
 
-#include "ports/fxcg100/sh4/sh4_emit_core.h"
-#include "ports/fxcg100/sh4/sh4_thumb_mvp.h"
+#include "ports/fxcg100/sh4/sh4_emit_glue.h"
 
 /* ------------------------------------------------------------------ */
-/* Runtime symbols provided by sh4/sh4_stub.S and cpu.cc / cpu_threaded.c */
+/* Runtime symbols (sh4/sh4_stub.S, cpu.cc, cpu_threaded.c, helpers).  */
 /* ------------------------------------------------------------------ */
 
-/* Entry point: set up reg base + cycle counter, dispatch first block. */
 u32  execute_arm_translate_internal(u32 cycles, void *reg_base);
 
-/* Branch-into-the-VM trampolines (jumped to, not called). */
+/* All guest branches/redispatch funnel through this stub entry (R4 = PC). */
+void sh4_block_exit(u32 pc);
+u32  sh4_update_gba(u32 pc);
 void sh4_indirect_branch_arm(u32 address);
 void sh4_indirect_branch_thumb(u32 address);
 void sh4_indirect_branch_dual(u32 address);
-
-/* Cycle-exhaustion + event hook; RAM SMC flush; SWI; cheat hook. */
-u32  sh4_update_gba(u32 pc);
 void smc_write(void);
 void execute_swi(u32 pc);
 void sh4_cheat_hook(void);
 
-/* CPSR/SPSR helpers (flags are kept live in CPSR in the MVP). */
 u32  execute_read_cpsr(void);
 u32  execute_read_spsr(void);
 u32  execute_spsr_restore(u32 address);
 void execute_store_cpsr(u32 new_cpsr, u32 store_mask);
 void execute_store_spsr(u32 new_spsr, u32 store_mask);
 
-/* Default guest-memory access handler tables (region-indexed), shared with the
- * C core; the MVP routes every access through execute_{load,store}_* directly. */
+/* Bring-up instruction helpers (sh4_interp_helpers.c) — interpret one guest
+ * instruction against reg[]/memory using the shared C core. Handlers that can
+ * change the guest PC return 1 (caller re-dispatches), else 0. */
+void cgba_sh4_thumb_ldst(u32 opcode, u32 pc);
+int  cgba_sh4_thumb_block(u32 opcode, u32 pc);
+int  cgba_sh4_arm_dp(u32 opcode, u32 pc);
+int  cgba_sh4_arm_ldst(u32 opcode, u32 pc);
+int  cgba_sh4_arm_block(u32 opcode, u32 pc);
+void cgba_sh4_arm_multiply(u32 opcode, u32 pc);
+void cgba_sh4_arm_multiply_long(u32 opcode, u32 pc);
+void cgba_sh4_arm_psr(u32 opcode, u32 pc);
+void cgba_sh4_arm_swap(u32 opcode, u32 pc);
+void cgba_sh4_hle_div(u32 cpu_mode, u32 pc);
+void cgba_sh4_thumb_shift_reg(u32 opcode, u32 pc);
+
 extern void *tmemld[11][16];
 extern void *tmemst[4][16];
 
-/* ------------------------------------------------------------------ */
-/* Host instruction-cache sync after emitting code (SH7305).           */
-/* OCBWB -> SYNCO -> ICBI per 32-byte line; see ports/.../sh4_cache.h.  */
-/* ------------------------------------------------------------------ */
 #ifdef CGBA_FXCG100
 #include "ports/fxcg100/sh4/sh4_cache.h"
 #endif
 
 /* ================================================================== */
-/* REMAINING CONTRACT — macros cpu_threaded.c requires from a host     */
-/* emitter. Each maps onto the verified primitives above. (Names taken */
-/* from the MIPS/x86 backends; signatures must match those.)           */
+/* Host register aliases used by the macros (host SH4 register #s).    */
 /* ================================================================== */
-/*
- * Codegen cursor / cache:
- *   translation_ptr, translation_cache_limit            (file-scope, like MIPS)
- *   generate_block_prologue()                           -> prologue: cache reg_base
- *                                                          (GBR or R14), load PC
- *   block_prologue_size                                 -> exact prologue bytes
- *   generate_block_extra_vars_arm/_thumb()              -> per-block locals
- *
- * Register move / immediate / PC  (use sh4_emit_load_greg/store_greg,
- *                                  sh4_emit_load_imm32, the literal pool):
- *   generate_load_reg(ireg, reg_index)
- *   generate_store_reg(ireg, reg_index)
- *   generate_load_imm(ireg, imm)
- *   generate_load_pc(ireg, new_pc)
- *   generate_store_reg_pc_no_flags / _flags(...)
- *
- * ALU / shift / multiply  (sh4_emit_add_reg/sub/and/or/xor/not, shad/shld,
- *                          dmulu_l/dmuls_l + sts macl/mach):
- *   generate_op_<name>_reg(rd, rn, rm)  and _imm(rd, rn)
- *     names: and orr eor bic sub rsb add adc sbc rsc mov mvn
- *   arm_data_proc / arm_data_proc_test / arm_data_proc_unary
- *   arm_multiply / arm_multiply_long
- *
- * Flags  (sh4_emit_set_nz pattern; extend to C/V; honour block_data flag_data):
- *   condition codes EQ..LE  -> CMP/TST setting T, then BT/BF
- *   generate_condition(), arm_conditional_block_header()
- *   arm_dead_flag_eliminate / thumb_*_flag_* are in cpu_threaded.c (shared)
- *
- * Cycles / branch / block link:
- *   generate_cycle_update()                  -> SUB #n from SH4_REG_CYCLES (DT/ADD)
- *   generate_branch_cycle_update(s, pc)
- *   generate_branch_no_cycle_update(s, pc)
- *   generate_branch_patch_conditional/_unconditional(dest, offset)  -> BT/BF, BRA
- *   generate_indirect_branch_arm/thumb/dual(...)  -> jmp sh4_indirect_branch_*
- *   generate_translation_gate(type)
- *
- * Memory  (MVP: jsr execute_load_* and execute_store_*; later inline fast):
- *   arm_access_memory_load/_store(mem_type)
- *   arm_access_memory(...)/thumb_block_memory(...)/arm_block_memory(...)
- *
- * Instruction handlers (decode lives in cpu_threaded.c; these EMIT):
- *   thumb_*: data_proc, shift, add_sub, imm, alu_op, hireg_op, mem_*, rlist,
- *            b, bl, blh, bx, swi, process_cheats     (reuse sh4_thumb_mvp.h)
- *   arm_*:   b, bl, bx, swi, data/half/block transfers, multiply, psr, swap
- *
- * C-call ABI helper:
- *   generate_function_call(fn)  -> materialize fn via literal pool, JSR @Rn, NOP
- */
+#define reg_a0   SH4_REG_ARG0   /* R4 */
+#define reg_a1   SH4_REG_ARG1   /* R5 */
+#define reg_a2   SH4_REG_ARG2   /* R6 */
+
+/* Instruction tracing is compiled out (no TRACE_INSTRUCTIONS support yet). */
+#define emit_trace_thumb_instruction(pc)
+#define emit_trace_arm_instruction(pc)
+
+/* ================================================================== */
+/* Block driver glue                                                   */
+/* ================================================================== */
+
+/* No prologue and no per-block trampolines: every far reference is a
+ * self-contained inline literal (sh4_emit_glue.h), so block entry is the first
+ * real instruction. */
+#define block_prologue_size 0
+#define generate_block_prologue()         do {} while(0)
+#define generate_block_extra_vars_arm()
+#define generate_block_extra_vars_thumb()
+
+#define generate_cycle_update()                                               \
+  do { if(cycle_count != 0) {                                                 \
+         sh4g_cycle_sub(&translation_ptr, (int)cycle_count); cycle_count = 0; \
+       } } while(0)
+
+#define generate_cycle_update_force()                                         \
+  do { sh4g_cycle_sub(&translation_ptr, (int)cycle_count); cycle_count = 0; } while(0)
+
+/* materialize an immediate / PC value into a host register */
+#define generate_load_pc(hostreg, value)                                      \
+  sh4g_const(&translation_ptr, (u32)(value), (hostreg))
+
+#define generate_load_reg_pc(hostreg, reg_index, pc_offset)                   \
+  do { if((reg_index) == REG_PC)                                              \
+         sh4g_const(&translation_ptr, (u32)(pc + (pc_offset)), (hostreg));    \
+       else                                                                   \
+         sh4g_load_greg(&translation_ptr, (reg_index), (hostreg));            \
+  } while(0)
+
+/* Patch sites: unconditional jump literal, conditional BT/BF disp8. */
+#define generate_branch_patch_unconditional(dest, offset)                     \
+  sh4g_patch_jump((u8 *)(dest), (const void *)(offset))
+#define generate_branch_patch_conditional(dest, offset)                       \
+  sh4g_patch_cond((u8 *)(dest), (const void *)(offset))
+
+/* Re-dispatch the block at `pc` (used when a block runs off its end or hits a
+ * translation gate). R4 = pc, then funnel through sh4_block_exit. */
+#define generate_translation_gate(type)                                       \
+  do { sh4g_const(&translation_ptr, (u32)pc, SH4_REG_ARG0);                   \
+       sh4g_far_jmp(&translation_ptr, (const void *)sh4_block_exit); } while(0)
+
+#define generate_indirect_branch_no_cycle_update(type)                        \
+  sh4g_far_jmp(&translation_ptr, (const void *)sh4_block_exit)
+#define generate_indirect_branch_cycle_update(type)                           \
+  do { generate_cycle_update();                                               \
+       sh4g_far_jmp(&translation_ptr, (const void *)sh4_block_exit); } while(0)
+#define generate_indirect_branch_arm()    generate_indirect_branch_no_cycle_update(arm)
+#define generate_indirect_branch_dual()   generate_indirect_branch_no_cycle_update(dual)
+
+#define generate_branch_no_cycle_update(writeback_location, new_pc)           \
+  (writeback_location) =                                                      \
+    sh4g_branch_exit(&translation_ptr, (u32)(new_pc), (const void *)sh4_block_exit)
+
+#define generate_branch_cycle_update(writeback_location, new_pc)              \
+  do { generate_cycle_update();                                               \
+       generate_branch_no_cycle_update(writeback_location, new_pc); } while(0)
+
+#define generate_branch()                                                     \
+  do {                                                                        \
+    if(condition == 0x0E)                                                     \
+      generate_branch_cycle_update(                                           \
+        block_exits[block_exit_position].branch_source,                       \
+        block_exits[block_exit_position].branch_target);                      \
+    else                                                                      \
+      generate_branch_no_cycle_update(                                        \
+        block_exits[block_exit_position].branch_source,                       \
+        block_exits[block_exit_position].branch_target);                      \
+    block_exit_position++;                                                    \
+  } while(0)
+
+/* ================================================================== */
+/* Conditions                                                          */
+/* ================================================================== */
+
+#define CGBA_CC_eq 0x0
+#define CGBA_CC_ne 0x1
+#define CGBA_CC_cs 0x2
+#define CGBA_CC_cc 0x3
+#define CGBA_CC_mi 0x4
+#define CGBA_CC_pl 0x5
+#define CGBA_CC_vs 0x6
+#define CGBA_CC_vc 0x7
+#define CGBA_CC_hi 0x8
+#define CGBA_CC_ls 0x9
+#define CGBA_CC_ge 0xA
+#define CGBA_CC_lt 0xB
+#define CGBA_CC_gt 0xC
+#define CGBA_CC_le 0xD
+
+/* T = condition satisfied, then BF skips the predicated body when false. */
+#define generate_cond_emit(cc_value)                                          \
+  do { sh4g_cond_to_T(&translation_ptr, (cc_value));                          \
+       backpatch_address = sh4g_emit_bf_placeholder(&translation_ptr); } while(0)
+
+#define generate_condition()        generate_cond_emit(condition)
+#define generate_condition_eq()     generate_cond_emit(CGBA_CC_eq)
+#define generate_condition_ne()     generate_cond_emit(CGBA_CC_ne)
+#define generate_condition_cs()     generate_cond_emit(CGBA_CC_cs)
+#define generate_condition_cc()     generate_cond_emit(CGBA_CC_cc)
+#define generate_condition_mi()     generate_cond_emit(CGBA_CC_mi)
+#define generate_condition_pl()     generate_cond_emit(CGBA_CC_pl)
+#define generate_condition_vs()     generate_cond_emit(CGBA_CC_vs)
+#define generate_condition_vc()     generate_cond_emit(CGBA_CC_vc)
+#define generate_condition_hi()     generate_cond_emit(CGBA_CC_hi)
+#define generate_condition_ls()     generate_cond_emit(CGBA_CC_ls)
+#define generate_condition_ge()     generate_cond_emit(CGBA_CC_ge)
+#define generate_condition_lt()     generate_cond_emit(CGBA_CC_lt)
+#define generate_condition_gt()     generate_cond_emit(CGBA_CC_gt)
+#define generate_condition_le()     generate_cond_emit(CGBA_CC_le)
+
+#define arm_conditional_block_header()   generate_condition()
+
+/* ================================================================== */
+/* Data-processing op-id maps                                          */
+/* ================================================================== */
+
+#define SH4OP_and  SH4DP_AND
+#define SH4OP_ands SH4DP_AND
+#define SH4OP_eor  SH4DP_EOR
+#define SH4OP_eors SH4DP_EOR
+#define SH4OP_orr  SH4DP_ORR
+#define SH4OP_orrs SH4DP_ORR
+#define SH4OP_bic  SH4DP_BIC
+#define SH4OP_bics SH4DP_BIC
+#define SH4OP_add  SH4DP_ADD
+#define SH4OP_adds SH4DP_ADD
+#define SH4OP_adc  SH4DP_ADC
+#define SH4OP_adcs SH4DP_ADC
+#define SH4OP_sub  SH4DP_SUB
+#define SH4OP_subs SH4DP_SUB
+#define SH4OP_sbc  SH4DP_SBC
+#define SH4OP_sbcs SH4DP_SBC
+#define SH4OP_rsb  SH4DP_RSB
+#define SH4OP_rsbs SH4DP_RSB
+#define SH4OP_rsc  SH4DP_RSC
+#define SH4OP_rscs SH4DP_RSC
+#define SH4OP_mov  SH4DP_MOV
+#define SH4OP_movs SH4DP_MOV
+#define SH4OP_mvn  SH4DP_MVN
+#define SH4OP_mvns SH4DP_MVN
+#define SH4OP_cmp  SH4DP_CMP
+#define SH4OP_cmn  SH4DP_CMN
+#define SH4OP_tst  SH4DP_TST
+#define SH4OP_teq  SH4DP_TEQ
+#define SH4OP_muls SH4DP_MUL
+#define SH4OP_neg  SH4DP_NEG
+#define SH4OP_negs SH4DP_NEG
+
+/* ================================================================== */
+/* Thumb data-processing (real SH4 emission). Thumb always sets flags. */
+/* ================================================================== */
+
+#define thumb_generate_op_reg(name, _rd, _rs, _rn)                            \
+  sh4g_dp_reg(&translation_ptr, SH4OP_##name, (_rd), (_rs), (_rn), 1)
+#define thumb_generate_op_imm(name, _rd, _rs, _rn)                            \
+  sh4g_dp_imm(&translation_ptr, SH4OP_##name, (_rd), (_rs), (u32)(_rn), 1)
+
+#define thumb_data_proc(type, name, rn_type, _rd, _rs, _rn)                   \
+  do { thumb_decode_##type();                                                 \
+       thumb_generate_op_##rn_type(name, _rd, _rs, _rn); } while(0)
+
+#define thumb_data_proc_test(type, name, rn_type, _rs, _rn)                   \
+  do { thumb_decode_##type();                                                 \
+       thumb_generate_op_##rn_type(name, 0, _rs, _rn); } while(0)
+
+#define thumb_data_proc_unary(type, name, rn_type, _rd, _rn)                  \
+  do { thumb_decode_##type();                                                 \
+       thumb_generate_op_##rn_type(name, _rd, 0, _rn); } while(0)
+
+/* Hi-register ops operate on the full r0..r15 file; rd==PC is a branch. */
+#define thumb_data_proc_hi(name)                                              \
+  do { thumb_decode_hireg_op();                                               \
+       sh4g_dp_reg(&translation_ptr, SH4OP_##name, rd, rd, rs, 0);            \
+       if(rd == REG_PC) {                                                     \
+         sh4g_load_greg(&translation_ptr, REG_PC, SH4_REG_ARG0);             \
+         generate_indirect_branch_cycle_update(thumb); }                      \
+  } while(0)
+
+#define thumb_data_proc_test_hi(name)                                         \
+  do { thumb_decode_hireg_op();                                               \
+       sh4g_dp_reg(&translation_ptr, SH4OP_##name, rd, rd, rs, 1); } while(0)
+
+#define thumb_data_proc_mov_hi()                                              \
+  do { thumb_decode_hireg_op();                                               \
+       sh4g_dp_reg(&translation_ptr, SH4DP_MOV, rd, rd, rs, 0);               \
+       if(rd == REG_PC) {                                                     \
+         sh4g_load_greg(&translation_ptr, REG_PC, SH4_REG_ARG0);             \
+         generate_indirect_branch_cycle_update(thumb); }                      \
+  } while(0)
+
+/* ================================================================== */
+/* Thumb shifts                                                        */
+/* ================================================================== */
+
+#define SH4SHK_lsl SH4SH_LSL
+#define SH4SHK_lsr SH4SH_LSR
+#define SH4SHK_asr SH4SH_ASR
+#define SH4SHK_ror SH4SH_ROR
+
+#define thumb_generate_shift_imm(name)                                        \
+  sh4g_shift_imm(&translation_ptr, SH4SHK_##name, rd, rs, imm, 1)
+/* Register-amount shifts (and ROR) need full ARM semantics + carry, which SH4
+ * SHLD/SHAD can't express directly, so route them to the C core. */
+#define thumb_generate_shift_reg(name)                                        \
+  SH4_CALL_OP2(cgba_sh4_thumb_shift_reg)
+
+#define thumb_shift(decode_type, op_type, value_type)                         \
+  do { thumb_decode_##decode_type();                                          \
+       thumb_generate_shift_##value_type(op_type); } while(0)
+
+/* ================================================================== */
+/* Thumb loads of PC/SP-relative addresses, SP adjust, pool const      */
+/* ================================================================== */
+
+#define thumb_load_pc(_rd)                                                    \
+  do { thumb_decode_imm();                                                    \
+       sh4g_const(&translation_ptr, (u32)(((pc & ~2) + 4) + (imm * 4)),       \
+                  SH4_REG_T0);                                                \
+       sh4g_store_greg(&translation_ptr, SH4_REG_T0, (_rd)); } while(0)
+
+#define thumb_load_sp(_rd)                                                    \
+  do { thumb_decode_imm();                                                    \
+       sh4g_load_greg(&translation_ptr, REG_SP, SH4_REG_T0);                  \
+       sh4g_const(&translation_ptr, (u32)(imm * 4), SH4_REG_T1);              \
+       sh4g_add_reg(&translation_ptr, SH4_REG_T1, SH4_REG_T0);                \
+       sh4g_store_greg(&translation_ptr, SH4_REG_T0, (_rd)); } while(0)
+
+#define thumb_adjust_sp_up()                                                  \
+  sh4g_add_reg(&translation_ptr, SH4_REG_T1, SH4_REG_T0)
+#define thumb_adjust_sp_down()                                                \
+  sh4g_sub_reg(&translation_ptr, SH4_REG_T1, SH4_REG_T0)
+
+#define thumb_adjust_sp(direction)                                            \
+  do { thumb_decode_add_sp();                                                 \
+       sh4g_load_greg(&translation_ptr, REG_SP, SH4_REG_T0);                  \
+       sh4g_const(&translation_ptr, (u32)(imm * 4), SH4_REG_T1);              \
+       thumb_adjust_sp_##direction();                                         \
+       sh4g_store_greg(&translation_ptr, SH4_REG_T0, REG_SP); } while(0)
+
+#define thumb_load_pc_pool_const(rd, value)                                   \
+  do { sh4g_const(&translation_ptr, (u32)(value), SH4_REG_T0);                \
+       sh4g_store_greg(&translation_ptr, SH4_REG_T0, (rd)); } while(0)
+
+/* ================================================================== */
+/* Branches                                                            */
+/* ================================================================== */
+
+#define arm_b()    generate_branch()
+
+#define arm_bl()                                                              \
+  do { sh4g_const(&translation_ptr, (u32)(pc + 4), SH4_REG_T0);               \
+       sh4g_store_greg(&translation_ptr, SH4_REG_T0, REG_LR);                 \
+       generate_branch(); } while(0)
+
+#define arm_bx()                                                              \
+  do { u32 rn = opcode & 0x0F;                                                \
+       generate_load_reg_pc(SH4_REG_ARG0, rn, 8);                            \
+       generate_indirect_branch_dual(); } while(0)
+
+#define arm_swi()                                                             \
+  do { sh4g_const(&translation_ptr, (u32)(pc + 4), SH4_REG_ARG0);             \
+       sh4g_far_call(&translation_ptr, (const void *)execute_swi);            \
+       generate_branch(); } while(0)
+
+#define thumb_b()                                                             \
+  do { generate_branch_cycle_update(                                          \
+         block_exits[block_exit_position].branch_source,                      \
+         block_exits[block_exit_position].branch_target);                     \
+       block_exit_position++; } while(0)
+
+#define thumb_bl()                                                            \
+  do { sh4g_const(&translation_ptr, (u32)((pc + 2) | 0x01), SH4_REG_T0);      \
+       sh4g_store_greg(&translation_ptr, SH4_REG_T0, REG_LR);                 \
+       generate_branch_cycle_update(                                          \
+         block_exits[block_exit_position].branch_source,                      \
+         block_exits[block_exit_position].branch_target);                     \
+       block_exit_position++; } while(0)
+
+#define thumb_blh()                                                           \
+  do { thumb_decode_branch();                                                 \
+       sh4g_load_greg(&translation_ptr, REG_LR, SH4_REG_ARG0);                \
+       sh4g_const(&translation_ptr, (u32)(offset * 2), SH4_REG_T1);           \
+       sh4g_add_reg(&translation_ptr, SH4_REG_T1, SH4_REG_ARG0);              \
+       sh4g_const(&translation_ptr, (u32)((pc + 2) | 0x01), SH4_REG_T0);      \
+       sh4g_store_greg(&translation_ptr, SH4_REG_T0, REG_LR);                 \
+       generate_indirect_branch_cycle_update(thumb); } while(0)
+
+#define thumb_bx()                                                            \
+  do { thumb_decode_hireg_op();                                               \
+       generate_load_reg_pc(SH4_REG_ARG0, rs, 4);                            \
+       generate_indirect_branch_cycle_update(dual); } while(0)
+
+#define thumb_conditional_branch(condition)                                   \
+  do { generate_condition_##condition();                                      \
+       generate_branch_no_cycle_update(                                       \
+         block_exits[block_exit_position].branch_source,                      \
+         block_exits[block_exit_position].branch_target);                     \
+       generate_branch_patch_conditional(backpatch_address, translation_ptr); \
+       block_exit_position++; } while(0)
+
+#define thumb_swi()                                                           \
+  do { sh4g_const(&translation_ptr, (u32)(pc + 2), SH4_REG_ARG0);             \
+       sh4g_far_call(&translation_ptr, (const void *)execute_swi);            \
+       generate_branch_cycle_update(                                          \
+         block_exits[block_exit_position].branch_source,                      \
+         block_exits[block_exit_position].branch_target);                     \
+       block_exit_position++; } while(0)
+
+/* ================================================================== */
+/* Cheats                                                              */
+/* ================================================================== */
+#define thumb_process_cheats()                                                \
+  sh4g_far_call(&translation_ptr, (const void *)sh4_cheat_hook)
+#define arm_process_cheats()                                                  \
+  sh4g_far_call(&translation_ptr, (const void *)sh4_cheat_hook)
+
+/* ================================================================== */
+/* C-helper handlers (bring-up): pass opcode in R4, pc in R5, JSR.     */
+/* ================================================================== */
+
+#define SH4_CALL_OP2(fn)                                                      \
+  do { sh4g_const(&translation_ptr, (u32)opcode, SH4_REG_ARG0);               \
+       sh4g_const(&translation_ptr, (u32)pc, SH4_REG_ARG1);                   \
+       sh4g_far_call(&translation_ptr, (const void *)(fn)); } while(0)
+
+/* Same, but the handler returns 1 in R0 when it changed the PC -> redispatch. */
+#define SH4_CALL_OP2_PC(fn)                                                   \
+  do { SH4_CALL_OP2(fn);                                                      \
+       sh4g_redispatch_if_r0(&translation_ptr, (const void *)sh4_block_exit); \
+  } while(0)
+
+/* Memory (single + block transfers). */
+#define thumb_access_memory(access_type, op_type, reg_rd, reg_rb, reg_ro,     \
+                            address_type, offset, mem_type)                   \
+  SH4_CALL_OP2(cgba_sh4_thumb_ldst)
+#define thumb_block_memory(access_type, pre_op, post_op, base_reg)            \
+  SH4_CALL_OP2_PC(cgba_sh4_thumb_block)
+#define arm_access_memory(access_type, direction, adjust_op, mem_type,        \
+                          offset_type)                                        \
+  SH4_CALL_OP2_PC(cgba_sh4_arm_ldst)
+#define arm_block_memory(access_type, offset_type, writeback_type, s_bit)     \
+  SH4_CALL_OP2_PC(cgba_sh4_arm_block)
+
+/* ARM data-processing (barrel shifter) + multiply/psr/swap via C core. */
+#define arm_data_proc(name, type, flags_op)        SH4_CALL_OP2_PC(cgba_sh4_arm_dp)
+#define arm_data_proc_test(name, type)             SH4_CALL_OP2(cgba_sh4_arm_dp)
+#define arm_data_proc_unary(name, type, flags_op)  SH4_CALL_OP2_PC(cgba_sh4_arm_dp)
+#define arm_multiply(add_op, flags)                SH4_CALL_OP2(cgba_sh4_arm_multiply)
+#define arm_multiply_long(name, add_op, flags)     SH4_CALL_OP2(cgba_sh4_arm_multiply_long)
+#define arm_psr(op_type, transfer_type, psr_reg)   SH4_CALL_OP2(cgba_sh4_arm_psr)
+#define arm_swap(type)                             SH4_CALL_OP2(cgba_sh4_arm_swap)
+
+#define arm_hle_div(cpu_mode)                                                 \
+  do { sh4g_const(&translation_ptr, 0u, SH4_REG_ARG0);                        \
+       sh4g_const(&translation_ptr, (u32)pc, SH4_REG_ARG1);                   \
+       sh4g_far_call(&translation_ptr, (const void *)cgba_sh4_hle_div); } while(0)
+#define arm_hle_div_arm(cpu_mode)                  arm_hle_div(cpu_mode)
 
 #endif /* SH4_EMIT_H */

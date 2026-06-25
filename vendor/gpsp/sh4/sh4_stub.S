@@ -18,10 +18,15 @@
 
 #include "../gpsp_config.h"
 
+/* The Casio sh-elf toolchain (fxSDK) uses a leading-underscore C ABI: a C
+ * symbol `foo` is `_foo` at link time (cf. bios_data.S). Export both spellings
+ * so generated code and the C core (which reference `_foo`) resolve. */
 #define defsymbl(symbol) \
   .global symbol ;       \
+  .global _##symbol ;    \
   .type symbol, @function ; \
-  symbol:
+  symbol: ;              \
+  _##symbol:
 
 /* reg[] byte offsets (u32 reg[]) */
 .equ REG_R0,           (0 * 4)
@@ -57,7 +62,7 @@
   nop
   .align 2
 8:
-  .long   \func
+  .long   _\func          /* C symbols carry a leading underscore (fxSDK ABI) */
 9:
 .endm
 
@@ -155,6 +160,25 @@ cpu_sleep_loop:
   and     r1, r13
   /* CPU active again: re-dispatch */
   bra     lookup_pc
+  nop
+
+/* ---- unified block exit: R4 = target GBA PC ----
+ * Every translated block branch funnels here (jumped to, not called). It stores
+ * the new PC, lets update_gba process pending hardware events, returns to the
+ * main C caller when the frame is done, otherwise re-dispatches on the new PC.
+ * The cheap direct-chaining fast path (when the cycle budget is not yet spent)
+ * is handled inline in generated code and bypasses this entirely. */
+defsymbl(sh4_block_exit)
+  mov     #REG_PC, r0
+  mov.l   r4, @(r0,r14)           /* reg[REG_PC] = target PC */
+  mov     r13, r4                 /* arg0 = remaining cycles */
+  CALL    update_gba
+  cmp/pz  r0
+  bf      return_to_main          /* bit31 set -> frame complete */
+  mov     r0, r13
+  mov.l   c_mask15, r1
+  and     r1, r13                 /* cycles = ret & 0x7FFF */
+  bra     lookup_pc               /* always re-dispatch on reg[REG_PC] */
   nop
 
 /* ---- indirect branches (BX, computed PC); R4 = target GBA address ---- */

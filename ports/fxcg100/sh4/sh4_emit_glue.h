@@ -1,0 +1,460 @@
+#ifndef CGBA_SH4_EMIT_GLUE_H
+#define CGBA_SH4_EMIT_GLUE_H
+
+/*
+ * Bring-up emission glue for the gpSP SH-4A dynarec backend.
+ *
+ * cpu_threaded.c drives translation through a raw `u8 *translation_ptr` cursor.
+ * The verified instruction encoder (sh4_codegen.h) works on a `sh4_codegen`
+ * struct, so every helper here wraps the current cursor in a transient
+ * `sh4_codegen`, emits a short fixed sequence, and writes the cursor back via
+ * the `u8 **tp` it is handed. Composition is fine: a higher helper calls lower
+ * ones, each re-reading *tp.
+ *
+ * BRING-UP MODEL (correctness deferred to the differential harness):
+ *   - All guest ARM registers live in reg[] (load -> op -> store per insn).
+ *   - N and Z are materialized in REG_CPSR bits 31/30 (literal-free); C and V
+ *     are NOT computed yet (a known follow-up; conditions that read C/V are
+ *     wrong until flag synthesis lands).
+ *   - 32-bit constants and all far targets use a SELF-CONTAINED inline literal
+ *     (MOV.L @(disp,PC) + a BRA/JMP that leaves the literal out of the
+ *     execution path). There is no deferred per-block literal pool here, so
+ *     nothing is range-limited and there is no cross-macro emitter state.
+ *   - Memory, block transfer, multiply-long, PSR, SWAP, SWI and HLE divide
+ *     route to C helpers (generate_function_call); data-proc / shifts / simple
+ *     branches emit real SH4.
+ *
+ * Host register model (mirrors sh4_emit_core.h):
+ *   R14 = reg[] base, R13 = cycle counter (both callee-saved, persistent),
+ *   R0  = forced scratch / C return, R1..R3 = scratch, R4..R7 = C args.
+ */
+
+#include "ports/fxcg100/sh4/sh4_codegen.h"
+#include "ports/fxcg100/sh4/sh4_emit_core.h"
+
+/* ---- transient-cursor wrapper -------------------------------------------- */
+
+/* A single emitted instruction/sequence is tiny; the driver enforces the real
+ * cache bound (TRANSLATION_CACHE_LIMIT_THRESHOLD) after every guest insn, so a
+ * generous local limit here only guards against a pathological single sequence. */
+static inline sh4_codegen sh4g_open(u8 **tp)
+{
+  sh4_codegen cg;
+  cg.ptr = *tp;
+  cg.limit = *tp + 1024;
+  cg.overflow = 0;
+  return cg;
+}
+
+static inline void sh4g_close(u8 **tp, sh4_codegen *cg) { *tp = cg->ptr; }
+
+static inline void sh4g_u16(u8 **tp, uint16_t op)
+{
+  sh4_codegen cg = sh4g_open(tp);
+  sh4_emit_u16(&cg, op);
+  sh4g_close(tp, &cg);
+}
+
+/* ---- constant materialization (self-contained) --------------------------- */
+
+/* Load a 32-bit constant into rn. Small signed values use MOV #imm8; otherwise
+ * a PC-relative load of an inline literal that is jumped over so it is never
+ * executed:
+ *     MOV.L @(d,PC), rn
+ *     BRA   9f
+ *     NOP            (delay slot)
+ *     [.long value]  (4-byte aligned)
+ *   9:
+ */
+static inline void sh4g_const(u8 **tp, uint32_t value, unsigned rn)
+{
+  if ((int32_t)value >= -128 && (int32_t)value <= 127) {
+    sh4g_u16(tp, (uint16_t)(0xE000 | (rn << 8) | (value & 0xFF)));   /* MOV #imm8 */
+    return;
+  }
+
+  {
+    u8 *load = *tp;                 /* MOV.L site */
+    u8 *lit;
+    long bra_disp, ld_disp;
+
+    /* Reserve: MOV.L(2) BRA(2) NOP(2) then literal 4-aligned. */
+    lit = (u8 *)(((uintptr_t)(load + 6) + 3u) & ~(uintptr_t)3u);
+
+    ld_disp = ((long)lit - (((long)load & ~3L) + 4)) / 4;     /* MOV.L disp */
+    sh4g_u16(tp, (uint16_t)(0xD000 | (rn << 8) | (ld_disp & 0xFF)));
+
+    /* BRA to just past the literal; delay-slot NOP follows. */
+    bra_disp = ((long)(lit + 4) - ((long)(*tp) + 4)) / 2;
+    sh4g_u16(tp, (uint16_t)(0xA000 | (bra_disp & 0x0FFF)));
+    sh4g_u16(tp, 0x0009);                                     /* NOP (delay) */
+
+    while (*tp < lit)                                         /* align pad */
+      sh4g_u16(tp, 0x0009);
+
+    {                                                         /* .long value */
+      sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_u32_be(&cg, value);
+      sh4g_close(tp, &cg);
+    }
+  }
+}
+
+/* small two-operand emitters used by a few handlers */
+static inline void sh4g_add_reg(u8 **tp, unsigned rm, unsigned rn)
+{ sh4_codegen cg = sh4g_open(tp); sh4_emit_add_reg(&cg, rm, rn); sh4g_close(tp, &cg); }
+static inline void sh4g_sub_reg(u8 **tp, unsigned rm, unsigned rn)
+{ sh4_codegen cg = sh4g_open(tp); sh4_emit_sub(&cg, rm, rn); sh4g_close(tp, &cg); }
+static inline void sh4g_mov_reg(u8 **tp, unsigned rm, unsigned rn)
+{ sh4_codegen cg = sh4g_open(tp); sh4_emit_mov_reg(&cg, rm, rn); sh4g_close(tp, &cg); }
+
+/* ---- guest reg[] access -------------------------------------------------- */
+
+static inline void sh4g_load_greg(u8 **tp, unsigned idx, unsigned rn)
+{
+  sh4_codegen cg = sh4g_open(tp);
+  sh4_emit_load_greg(&cg, idx, rn);
+  sh4g_close(tp, &cg);
+}
+
+static inline void sh4g_store_greg(u8 **tp, unsigned rn, unsigned idx)
+{
+  sh4_codegen cg = sh4g_open(tp);
+  sh4_emit_store_greg(&cg, rn, idx);
+  sh4g_close(tp, &cg);
+}
+
+/* ---- far call / jump via inline literal ---------------------------------- */
+
+/* JSR @literal(fn) then return: literal is skipped on return via BRA. */
+static inline void sh4g_far_call(u8 **tp, const void *fn)
+{
+  u8 *load = *tp, *lit;
+  long ld_disp, bra_disp;
+
+  /* MOV.L(2) JSR(2) NOP(2) BRA(2) NOP(2) [pad] .long ; 9: */
+  lit = (u8 *)(((uintptr_t)(load + 10) + 3u) & ~(uintptr_t)3u);
+
+  ld_disp = ((long)lit - (((long)load & ~3L) + 4)) / 4;
+  sh4g_u16(tp, (uint16_t)(0xD000 | (SH4_REG_RET << 8) | (ld_disp & 0xFF))); /* MOV.L @(d,PC),R0 */
+  sh4g_u16(tp, (uint16_t)(0x400B | (SH4_REG_RET << 8)));                    /* JSR @R0 */
+  sh4g_u16(tp, 0x0009);                                                     /* NOP (delay) */
+  bra_disp = ((long)(lit + 4) - ((long)(*tp) + 4)) / 2;
+  sh4g_u16(tp, (uint16_t)(0xA000 | (bra_disp & 0x0FFF)));                   /* BRA 9f */
+  sh4g_u16(tp, 0x0009);                                                     /* NOP (delay) */
+  while (*tp < lit)
+    sh4g_u16(tp, 0x0009);
+  {
+    sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_u32_be(&cg, (uint32_t)(uintptr_t)fn);
+    sh4g_close(tp, &cg);
+  }
+}
+
+/* JMP @literal(fn), no return; literal sits after the (taken) JMP. */
+static inline void sh4g_far_jmp(u8 **tp, const void *fn)
+{
+  u8 *load = *tp, *lit;
+  long ld_disp;
+
+  lit = (u8 *)(((uintptr_t)(load + 6) + 3u) & ~(uintptr_t)3u);
+  ld_disp = ((long)lit - (((long)load & ~3L) + 4)) / 4;
+  sh4g_u16(tp, (uint16_t)(0xD000 | (SH4_REG_RET << 8) | (ld_disp & 0xFF))); /* MOV.L @(d,PC),R0 */
+  sh4g_u16(tp, (uint16_t)(0x402B | (SH4_REG_RET << 8)));                    /* JMP @R0 */
+  sh4g_u16(tp, 0x0009);                                                     /* NOP (delay) */
+  while (*tp < lit)
+    sh4g_u16(tp, 0x0009);
+  {
+    sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_u32_be(&cg, (uint32_t)(uintptr_t)fn);
+    sh4g_close(tp, &cg);
+  }
+}
+
+/* ---- N/Z materialization (literal-free) into REG_CPSR -------------------- */
+
+/* result must be in R1 (SH4_REG_T0); clobbers R0/R2/R3. */
+static inline void sh4g_set_nz(u8 **tp, unsigned result)
+{
+  sh4_codegen cg = sh4g_open(tp);
+  const unsigned r_cpsr = SH4_REG_T1; /* R2 */
+  const unsigned r_tmp  = SH4_REG_T2; /* R3 */
+
+  sh4_emit_load_greg(&cg, SH4_GREG_CPSR, r_cpsr);
+  sh4_emit_shll2(&cg, r_cpsr);                 /* clear bits 31..30 */
+  sh4_emit_shlr2(&cg, r_cpsr);
+
+  /* N = result & 0x80000000 */
+  sh4_emit_mov_reg(&cg, result, r_tmp);
+  sh4_emit_mov_imm(&cg, 1, SH4_REG_RET);
+  sh4_emit_rotr(&cg, SH4_REG_RET);             /* R0 = 0x80000000 */
+  sh4_emit_and(&cg, SH4_REG_RET, r_tmp);
+  sh4_emit_or(&cg, r_tmp, r_cpsr);
+
+  /* Z = (result == 0) << 30 */
+  sh4_emit_tst(&cg, result, result);
+  sh4_emit_movt(&cg, r_tmp);
+  sh4_emit_mov_imm(&cg, 30, SH4_REG_RET);
+  sh4_emit_shld(&cg, SH4_REG_RET, r_tmp);
+  sh4_emit_or(&cg, r_tmp, r_cpsr);
+
+  sh4_emit_store_greg(&cg, r_cpsr, SH4_GREG_CPSR);
+  sh4g_close(tp, &cg);
+}
+
+/* ---- data-processing core ------------------------------------------------ */
+
+enum {
+  SH4DP_AND, SH4DP_ORR, SH4DP_EOR, SH4DP_BIC, SH4DP_ADD, SH4DP_SUB,
+  SH4DP_RSB, SH4DP_MOV, SH4DP_MVN, SH4DP_NEG, SH4DP_ADC, SH4DP_SBC,
+  SH4DP_RSC, SH4DP_CMP, SH4DP_CMN, SH4DP_TST, SH4DP_TEQ, SH4DP_MUL
+};
+
+/* ops that consume only the second operand (no Rn load) */
+static inline int sh4g_dp_second_only(int op)
+{ return op == SH4DP_MOV || op == SH4DP_MVN || op == SH4DP_NEG; }
+
+/* Compute (op of Rn-value, second) into R1 (result). first in R1, second in R2.
+ * C/V are not produced (bring-up). */
+static inline void sh4g_dp_compute(sh4_codegen *cg, int op)
+{
+  const unsigned a = SH4_REG_T0; /* R1 = first / result */
+  const unsigned b = SH4_REG_T1; /* R2 = second */
+
+  switch (op) {
+  case SH4DP_AND: case SH4DP_TST: sh4_emit_and(cg, b, a); break;
+  case SH4DP_ORR:                 sh4_emit_or(cg, b, a);  break;
+  case SH4DP_EOR: case SH4DP_TEQ: sh4_emit_xor(cg, b, a); break;
+  case SH4DP_BIC: sh4_emit_not(cg, b, b); sh4_emit_and(cg, b, a); break;
+  case SH4DP_ADD: case SH4DP_CMN: case SH4DP_ADC:
+                  sh4_emit_add_reg(cg, b, a); break;
+  case SH4DP_SUB: case SH4DP_CMP: case SH4DP_SBC:
+                  sh4_emit_sub(cg, b, a); break;       /* a = a - b */
+  case SH4DP_RSB: case SH4DP_RSC:
+                  sh4_emit_sub(cg, a, b);              /* b = b - a */
+                  sh4_emit_mov_reg(cg, b, a); break;   /* result in a */
+  case SH4DP_MUL: sh4_emit_mul_l(cg, b, a); sh4_emit_sts_macl(cg, a); break;
+  case SH4DP_MOV: sh4_emit_mov_reg(cg, b, a); break;   /* result = second */
+  case SH4DP_MVN: sh4_emit_not(cg, b, a); break;       /* result = ~second */
+  case SH4DP_NEG: sh4_emit_neg(cg, b, a); break;       /* result = -second */
+  default: break;
+  }
+}
+
+static inline int sh4g_dp_is_test(int op)
+{
+  return op == SH4DP_CMP || op == SH4DP_CMN || op == SH4DP_TST || op == SH4DP_TEQ;
+}
+
+/* rd/rn are guest reg indices; rm guest reg index. */
+static inline void sh4g_dp_reg(u8 **tp, int op, unsigned rd, unsigned rn,
+                               unsigned rm, int set_flags)
+{
+  sh4_codegen cg = sh4g_open(tp);
+  if (sh4g_dp_second_only(op))
+    sh4_emit_load_greg(&cg, rm, SH4_REG_T1);          /* second only */
+  else {
+    sh4_emit_load_greg(&cg, rn, SH4_REG_T0);
+    sh4_emit_load_greg(&cg, rm, SH4_REG_T1);
+  }
+  sh4g_dp_compute(&cg, op);
+  if (!sh4g_dp_is_test(op))
+    sh4_emit_store_greg(&cg, SH4_REG_T0, rd);
+  sh4g_close(tp, &cg);
+  if (set_flags)
+    sh4g_set_nz(tp, SH4_REG_T0);
+}
+
+/* rn guest reg index; imm immediate operand. */
+static inline void sh4g_dp_imm(u8 **tp, int op, unsigned rd, unsigned rn,
+                               uint32_t imm, int set_flags)
+{
+  sh4_codegen cg = sh4g_open(tp);
+  if (!sh4g_dp_second_only(op))
+    sh4_emit_load_greg(&cg, rn, SH4_REG_T0);
+  sh4g_close(tp, &cg);
+  sh4g_const(tp, imm, SH4_REG_T1);                    /* second = imm */
+  cg = sh4g_open(tp);
+  sh4g_dp_compute(&cg, op);
+  if (!sh4g_dp_is_test(op))
+    sh4_emit_store_greg(&cg, SH4_REG_T0, rd);
+  sh4g_close(tp, &cg);
+  if (set_flags)
+    sh4g_set_nz(tp, SH4_REG_T0);
+}
+
+/* ---- shifts (LSL/LSR/ASR/ROR by imm or reg) ------------------------------ */
+enum { SH4SH_LSL, SH4SH_LSR, SH4SH_ASR, SH4SH_ROR };
+
+static inline void sh4g_shift_imm(u8 **tp, int kind, unsigned rd, unsigned rs,
+                                  unsigned imm5, int set_flags)
+{
+  sh4_codegen cg = sh4g_open(tp);
+  sh4_emit_load_greg(&cg, rs, SH4_REG_T0);
+  if (imm5 != 0) {
+    int amt = (kind == SH4SH_LSL) ? (int)imm5 : -(int)imm5;
+    sh4_emit_mov_imm(&cg, amt, SH4_REG_RET);
+    if (kind == SH4SH_ASR)
+      sh4_emit_shad(&cg, SH4_REG_RET, SH4_REG_T0);
+    else                                              /* LSL / LSR */
+      sh4_emit_shld(&cg, SH4_REG_RET, SH4_REG_T0);
+  } else if (kind == SH4SH_LSR) {
+    /* Thumb LSR #0 means LSR #32 -> result is 0. */
+    sh4_emit_mov_imm(&cg, 0, SH4_REG_T0);
+  } else if (kind == SH4SH_ASR) {
+    /* Thumb ASR #0 means ASR #32 -> sign extension (0 or -1). */
+    sh4_emit_mov_imm(&cg, -31, SH4_REG_RET);
+    sh4_emit_shad(&cg, SH4_REG_RET, SH4_REG_T0);
+  }                                                   /* LSL #0 is a no-op */
+  sh4_emit_store_greg(&cg, SH4_REG_T0, rd);
+  sh4g_close(tp, &cg);
+  if (set_flags)
+    sh4g_set_nz(tp, SH4_REG_T0);
+}
+
+/* Register-amount shifts (LSL/LSR/ASR/ROR Rd,Rs) are routed to a C helper
+ * (cgba_sh4_thumb_shift_reg): SH4 SHLD/SHAD only use the low 5 bits + sign of
+ * the count, and ROR is not a logical shift, so the full ARM semantics + carry
+ * cannot be expressed by a single SH4 op. */
+
+/* ---- cycle counter ------------------------------------------------------- */
+
+static inline void sh4g_cycle_sub(u8 **tp, int n)
+{
+  if (n == 0)
+    return;
+  if (n >= -128 && n <= 127) {
+    sh4g_u16(tp, (uint16_t)(0x7000 | (SH4_REG_CYCLES << 8) | ((-n) & 0xFF))); /* ADD #-n */
+  } else {
+    sh4g_const(tp, (uint32_t)(-n), SH4_REG_T0);
+    sh4g_u16(tp, (uint16_t)(0x300C | (SH4_REG_CYCLES << 8) | (SH4_REG_T0 << 4))); /* ADD R1 */
+  }
+}
+
+/* ---- branch exit (patchable far jump) ------------------------------------ *
+ * Emits a fixed self-contained jump whose target literal is back-patched by
+ * sh4g_patch_jump(). Returns the patch site (the MOV.L address).             */
+static inline u8 *sh4g_emit_patch_jump(u8 **tp)
+{
+  u8 *site = *tp, *lit;
+  long ld_disp;
+
+  lit = (u8 *)(((uintptr_t)(site + 6) + 3u) & ~(uintptr_t)3u);
+  ld_disp = ((long)lit - (((long)site & ~3L) + 4)) / 4;
+  sh4g_u16(tp, (uint16_t)(0xD000 | (SH4_REG_RET << 8) | (ld_disp & 0xFF)));   /* MOV.L @(d,PC),R0 */
+  sh4g_u16(tp, (uint16_t)(0x402B | (SH4_REG_RET << 8)));                      /* JMP @R0 */
+  sh4g_u16(tp, 0x0009);                                                       /* NOP */
+  while (*tp < lit)
+    sh4g_u16(tp, 0x0009);
+  {
+    sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_u32_be(&cg, 0);                                                  /* target placeholder */
+    sh4g_close(tp, &cg);
+  }
+  return site;
+}
+
+/* Patch the literal of a jump emitted by sh4g_emit_patch_jump at `site`. */
+static inline void sh4g_patch_jump(u8 *site, const void *target)
+{
+  u8 *lit = (u8 *)(((uintptr_t)(site + 6) + 3u) & ~(uintptr_t)3u);
+  lit[0] = (uint8_t)((uintptr_t)target >> 24);
+  lit[1] = (uint8_t)((uintptr_t)target >> 16);
+  lit[2] = (uint8_t)((uintptr_t)target >> 8);
+  lit[3] = (uint8_t)((uintptr_t)target);
+}
+
+/* Materialize a guest PC value into R4 (ARG0) and store it to reg[REG_PC]. */
+static inline void sh4g_store_pc_imm(u8 **tp, uint32_t new_pc)
+{
+  sh4g_const(tp, new_pc, SH4_REG_ARG0);
+  sh4g_store_greg(tp, SH4_REG_ARG0, SH4_GREG_PC);
+}
+
+/* Block exit to `new_pc`. reg[REG_PC] and R4 are set to new_pc; if the cycle
+ * counter is exhausted (R13 < 0) control leaves to `block_exit_fn` (which
+ * processes events and re-dispatches), otherwise it takes a patchable jump that
+ * the driver back-patches to the resolved target block for direct chaining
+ * (initialized to `block_exit_fn` so the unpatched path is still correct).
+ * Returns the patch site. */
+static inline u8 *sh4g_branch_exit(u8 **tp, uint32_t new_pc, const void *block_exit_fn)
+{
+  u8 *bt, *site;
+  sh4g_store_pc_imm(tp, new_pc);                /* R4 = reg[REG_PC] = new_pc */
+
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_cmppz(&cg, SH4_REG_CYCLES);        /* T = (cycles >= 0) */
+    sh4g_close(tp, &cg); }
+  bt = *tp;
+  sh4g_u16(tp, 0x8900);                          /* BT over (skip exit if budget left) */
+  sh4g_far_jmp(tp, block_exit_fn);               /* exhausted: events + redispatch */
+  { long d = ((long)(*tp) - ((long)bt + 4)) / 2; bt[1] = (uint8_t)(d & 0xFF); }
+
+  site = sh4g_emit_patch_jump(tp);               /* chain to target block (patched) */
+  sh4g_patch_jump(site, block_exit_fn);          /* default: redispatch */
+  return site;
+}
+
+/* After a C handler that returns nonzero in R0 when it changed the guest PC,
+ * re-dispatch: TST R0,R0 ; BT skip ; (R4 = reg[REG_PC]) ; jmp block_exit ; skip:. */
+static inline void sh4g_redispatch_if_r0(u8 **tp, const void *block_exit_fn)
+{
+  u8 *bt;
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_tst(&cg, SH4_REG_RET, SH4_REG_RET);     /* T = (R0 == 0) */
+    sh4g_close(tp, &cg); }
+  bt = *tp;
+  sh4g_u16(tp, 0x8900);                               /* BT skip (no PC change) */
+  sh4g_load_greg(tp, SH4_GREG_PC, SH4_REG_ARG0);      /* R4 = reg[REG_PC] */
+  sh4g_far_jmp(tp, block_exit_fn);
+  { long d = ((long)(*tp) - ((long)bt + 4)) / 2; bt[1] = (uint8_t)(d & 0xFF); }
+}
+
+/* ---- conditional skip (BT/BF over predicated body) ----------------------- *
+ * Emit a test that leaves T = (ARM condition satisfied); the header then emits
+ * BF to skip the predicated body when the condition is false. Only N(31)/Z(30)
+ * are reliable in bring-up; C(29)/V(28) are not maintained yet, so the C/V and
+ * compound conditions are intentionally approximated by their primary flag and
+ * will be corrected once flag synthesis lands (the differential harness flags
+ * them). emits to R0/R3.                                                      */
+static inline void sh4g_cond_to_T(u8 **tp, unsigned cond)
+{
+  static const struct { unsigned char pos, want; } cc[14] = {
+    {30, 1}, /* EQ: Z set      */ {30, 0}, /* NE: Z clear    */
+    {29, 1}, /* CS: C set      */ {29, 0}, /* CC: C clear    */
+    {31, 1}, /* MI: N set      */ {31, 0}, /* PL: N clear    */
+    {28, 1}, /* VS: V set      */ {28, 0}, /* VC: V clear    */
+    {29, 1}, /* HI: ~C&Z aprx  */ {29, 0}, /* LS: ~C|Z aprx  */
+    {31, 1}, /* GE: N==V  aprx */ {31, 0}, /* LT: N!=V  aprx */
+    {30, 0}, /* GT: ~Z..  aprx */ {30, 1}, /* LE: Z..   aprx */
+  };
+  sh4_codegen cg = sh4g_open(tp);
+  unsigned cc4 = cond & 0x0F;
+
+  if (cc4 == 0x0E) { sh4_emit_sett(&cg); sh4g_close(tp, &cg); return; }   /* AL */
+  if (cc4 == 0x0F) { sh4_emit_clrt(&cg); sh4g_close(tp, &cg); return; }   /* NV */
+
+  sh4_emit_load_greg(&cg, SH4_GREG_CPSR, SH4_REG_RET);          /* R0 = CPSR */
+  sh4_emit_mov_imm(&cg, -(int)cc[cc4].pos, SH4_REG_T2);         /* R3 = -pos */
+  sh4_emit_shld(&cg, SH4_REG_T2, SH4_REG_RET);                  /* R0 >>= pos */
+  sh4_emit_and_imm(&cg, 1);                                     /* R0 &= 1 (flag) */
+  sh4_emit_cmpeq_imm(&cg, cc[cc4].want);                        /* T = (flag==want) */
+  sh4g_close(tp, &cg);
+}
+
+/* Emit BF placeholder (skip body when T==0); returns the BF site to patch. */
+static inline u8 *sh4g_emit_bf_placeholder(u8 **tp)
+{
+  u8 *site = *tp;
+  sh4g_u16(tp, 0x8B00);                                         /* BF 0 (disp patched) */
+  return site;
+}
+
+/* Patch a BT/BF disp8 at `site` to branch to `target`. Range +-256 bytes. */
+static inline void sh4g_patch_cond(u8 *site, const void *target)
+{
+  long d = ((long)(uintptr_t)target - ((long)(uintptr_t)site + 4)) / 2;
+  site[1] = (uint8_t)(d & 0xFF);
+}
+
+#endif /* CGBA_SH4_EMIT_GLUE_H */
