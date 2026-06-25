@@ -402,11 +402,23 @@ int cgba_sh4_arm_dp(u32 opcode, u32 pc)
   case 0xF: res = ~b; break;                       /* MVN */
   }
 
-  if (set_flags) set_nzcv(res, cf, vf & 1);
-
   if (writes) {
     reg[rd] = res;
-    if (rd == 15) { reg[REG_PC] = res & ~1u; return 1; }
+    if (rd == 15) {
+      /* Writing PC with the S bit (e.g. SUBS pc,lr,#4 — the IRQ/exception
+       * return) restores CPSR from the current mode's SPSR and re-banks the
+       * registers, just like the interpreter's arm_spsr_restore. Do this BEFORE
+       * masking PC so the restored Thumb bit picks the alignment. */
+      if (set_flags) {
+        reg[REG_CPSR] = REG_SPSR(reg[CPU_MODE]);
+        set_cpu_mode(cpu_modes[reg[REG_CPSR] & 0xF]);
+      }
+      reg[REG_PC] = res & ((reg[REG_CPSR] & 0x20) ? ~1u : ~3u);
+      return 1;
+    }
+    if (set_flags) set_nzcv(res, cf, vf & 1);
+  } else if (set_flags) {
+    set_nzcv(res, cf, vf & 1);
   }
   return 0;
 }
