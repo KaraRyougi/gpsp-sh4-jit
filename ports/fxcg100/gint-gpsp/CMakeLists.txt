@@ -43,6 +43,21 @@ set(GPSP_C_SOURCES
   # ~64 KB of .rodata. --gc-sections already strips it; not compiling it too.
 )
 
+# SH4 dynarec bring-up (opt-in). Adds the threaded recompiler, its SH4 host
+# emitter, the entry/exit trampoline, the executable code-cache placement and
+# the C instruction helpers. Default OFF so the interpreter build stays the
+# shipping target until the dynarec is differentially validated.
+option(CGBA_DYNAREC "Build the SH4 dynamic recompiler (bring-up)" OFF)
+if(CGBA_DYNAREC)
+  list(APPEND GPSP_C_SOURCES
+    ${GPSP}/cpu_threaded.c
+    ${GPSP}/memmap.c
+    ${FXCG100}/sh4/sh4_interp_helpers.c
+    ${FXCG100}/sh4/sh4_dynarec_state.c
+    ${FXCG100}/sh4/sh4_diff_harness.c
+  )
+endif()
+
 set(GPSP_CXX_SOURCES
   ${GPSP}/cpu.cc
   ${GPSP}/video.cc
@@ -51,6 +66,9 @@ set(GPSP_CXX_SOURCES
 set(GPSP_ASM_SOURCES
   ${GPSP}/bios_data.S
 )
+if(CGBA_DYNAREC)
+  list(APPEND GPSP_ASM_SOURCES ${GPSP}/sh4/sh4_stub.S)
+endif()
 
 add_executable(cgba-gint-gpsp
   ${PORT_SOURCES}
@@ -74,6 +92,23 @@ target_compile_definitions(cgba-gint-gpsp PRIVATE
   ROM_BUFFER_SIZE=1
   dma_transfer=gpsp_dma_transfer
 )
+
+if(CGBA_DYNAREC)
+  # SH4_ARCH selects the SH4 host emitter in cpu_threaded.c. Shrink the code
+  # caches to share the executable high-RAM arena with emulator state.
+  target_compile_definitions(cgba-gint-gpsp PRIVATE
+    CGBA_DYNAREC=1
+    SH4_ARCH=1
+    SMALL_TRANSLATION_CACHE=1
+    ROM_TRANSLATION_CACHE_SIZE=1048576      # 1 MiB
+    RAM_TRANSLATION_CACHE_SIZE=262144       # 256 KiB
+  )
+  # HAVE_DYNAREC only where it matters: main.c wires init_dynarec_caches/
+  # init_emitter and savestate.c flushes on load. cpu.cc must NOT see it, so it
+  # keeps owning the guest state arrays (reg[], ewram, ...) the dynarec links to.
+  set_property(SOURCE ${GPSP}/main.c ${GPSP}/savestate.c
+    APPEND PROPERTY COMPILE_DEFINITIONS HAVE_DYNAREC=1)
+endif()
 
 # Hardware debug: show an on-screen pipeline snapshot after loading a game (EXE
 # to continue). Kept OFF for normal builds; flip ON to debug the load/render path.

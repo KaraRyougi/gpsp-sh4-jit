@@ -1,0 +1,30 @@
+#ifndef CGBA_SH4_DIFF_HARNESS_H
+#define CGBA_SH4_DIFF_HARNESS_H
+
+#include <stdint.h>
+
+/* What diverged between the interpreter and the dynarec. */
+enum {
+  CGBA_DIFF_NONE = 0,
+  CGBA_DIFF_REG,
+  CGBA_DIFF_IWRAM,
+  CGBA_DIFF_EWRAM,
+  CGBA_DIFF_IO,
+};
+
+typedef struct {
+  int      diverged;        /* 1 if interp and dynarec disagree           */
+  int      kind;            /* CGBA_DIFF_* region of the first mismatch    */
+  int      index;           /* register index or byte offset within region */
+  uint32_t interp_value;    /* oracle value                                */
+  uint32_t dynarec_value;   /* dynarec value                               */
+  uint32_t cycles;          /* cycle budget the comparison used            */
+} cgba_diff_result;
+
+/* Run `cycles` of guest execution under both cores from one snapshot and diff
+ * the result. Returns 1 (and fills *out) on the first divergence, else 0. */
+int cgba_sh4_diff_run(uint32_t cycles, cgba_diff_result *out);
+
+const char *cgba_sh4_diff_kind_name(int kind);
+
+#endif /* CGBA_SH4_DIFF_HARNESS_H */

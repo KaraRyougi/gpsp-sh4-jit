@@ -253,6 +253,16 @@ typedef struct
   void platform_cache_sync(void *baseaddr, void *endptr) {
     __builtin___clear_cache(baseaddr, endptr);
   }
+#elif defined(SH4_ARCH)
+  /* SH7305 (SH-4A): make freshly emitted host code executable by writing back
+     the operand cache then invalidating the instruction cache for the range.
+     Per-32-byte-line OCBWB -> SYNCO -> ICBI -> SYNCO; see ports/.../sh4_cache.h.
+     Without this the CPU may execute stale I-cache lines and fault on the first
+     JMP into a translated block. */
+  #include "ports/fxcg100/sh4/sh4_cache.h"
+  void platform_cache_sync(void *baseaddr, void *endptr) {
+    cgba_sh4_cache_sync(baseaddr, endptr);
+  }
 #else
   /* x86 CPUs have icache consistency checks */
   void platform_cache_sync(void *baseaddr, void *endptr) {}

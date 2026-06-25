@@ -32,4 +32,11 @@ void cgba_gpsp_shutdown(void);
 #define CGBA_DIAG_LINE_MAX 48
 unsigned cgba_gpsp_diag(char out[][CGBA_DIAG_LINE_MAX], unsigned max_lines);
 
+#ifdef CGBA_DYNAREC
+/* Differential interp-vs-dynarec harness (subtask 2): run `cycles` of guest
+ * code through both cores from one snapshot and format the first divergence
+ * (or "MATCH") into out. Returns 1 if they diverged. */
+int cgba_gpsp_diff_test(uint32_t cycles, char *out, unsigned out_len);
+#endif
+
 #endif

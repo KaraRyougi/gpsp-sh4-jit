@@ -11,13 +11,23 @@
 #define ROM_BUFFER_SIZE 32
 #endif
 
-/* Cache sizes and their config knobs */
+/* Cache sizes and their config knobs. Sizes may be overridden from the build
+   (e.g. the fx-CG100 port shrinks them to fit its executable high-RAM arena);
+   the #ifndef guards let -DROM_TRANSLATION_CACHE_SIZE=... win. */
 #if defined(SMALL_TRANSLATION_CACHE)
+  #ifndef ROM_TRANSLATION_CACHE_SIZE
   #define ROM_TRANSLATION_CACHE_SIZE (1024 * 1024 * 2)
+  #endif
+  #ifndef RAM_TRANSLATION_CACHE_SIZE
   #define RAM_TRANSLATION_CACHE_SIZE (1024 * 384)
+  #endif
 #else
+  #ifndef ROM_TRANSLATION_CACHE_SIZE
   #define ROM_TRANSLATION_CACHE_SIZE (1024 * 1024 * 10)
+  #endif
+  #ifndef RAM_TRANSLATION_CACHE_SIZE
   #define RAM_TRANSLATION_CACHE_SIZE (1024 * 512)
+  #endif
 #endif
 
 /* Should be an upperbound to the maximum number of bytes a single JIT'ed
