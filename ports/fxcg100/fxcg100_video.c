@@ -133,6 +133,12 @@ static void lcd_draw_char(unsigned x, unsigned y, char ch,
 void fxcg100_lcd_init(void)
 {
   lcd_write(0x003, 0x1030);
+  lcd_set_window(0, 0, LCD_VISIBLE_WIDTH, LCD_VISIBLE_HEIGHT);
+}
+
+void fxcg100_lcd_shutdown(void)
+{
+  lcd_set_window(0, 0, LCD_VISIBLE_WIDTH, LCD_VISIBLE_HEIGHT);
 }
 
 void fxcg100_lcd_fill_rect(unsigned x, unsigned y, unsigned w, unsigned h,
