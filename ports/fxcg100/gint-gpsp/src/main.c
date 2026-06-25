@@ -196,6 +196,12 @@ static int cgba_headless_test(uint16_t *framebuffer)
 
 		cgba_gpsp_run_frame(FXCG100_GBA_BUTTON_NONE, rendered);
 		cgba_fps_tick(&cgba_fps, rendered);
+		if(rendered) {
+			/* Exercise the real blit path incl. the no-final-wait DMA overlap. */
+			fxcg100_lcd_overlay_fps(framebuffer, cgba_fps.emu_fps,
+				cgba_fps.vid_fps);
+			fxcg100_lcd_blit_gba(framebuffer);
+		}
 	}
 
 	/* Exercise the FPS overlay so the font + framebuffer write are validated;

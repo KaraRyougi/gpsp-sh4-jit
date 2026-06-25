@@ -222,7 +222,15 @@ void fxcg100_lcd_blit_gba(const uint16_t *pixels)
 		y += rows;
 	}
 
-	wait_lcd_dma();           /* frame complete before returning */
+	/*
+	 * Do NOT wait for the final strip's DMA here. The whole frame is already
+	 * copied into the XY-RAM strips, so we leave the last DMA in flight and
+	 * return -- the next frame's run_frame() then overlaps it (the prizoop
+	 * trick). Every consumer that could collide already waits first: the next
+	 * blit's leading wait_lcd_dma() before it reuses a strip bank, and the
+	 * menu/status path's restore_full_window() before any gint push. The frame
+	 * buffer itself is free to be overwritten (the DMA reads XY-RAM, not it).
+	 */
 	lcd_window_partial = 1;   /* window narrowed; menu restores it */
 }
 
@@ -273,7 +281,10 @@ static const uint8_t *fps_glyph(char c)
 	static const uint8_t S[FPS_GLYPH_H]  = {0x0F,0x10,0x10,0x0E,0x01,0x01,0x1E};
 	static const uint8_t E[FPS_GLYPH_H]  = {0x1F,0x10,0x10,0x1E,0x10,0x10,0x1F};
 	static const uint8_t V[FPS_GLYPH_H]  = {0x11,0x11,0x11,0x11,0x11,0x0A,0x04};
+	static const uint8_t D[FPS_GLYPH_H]  = {0x1E,0x11,0x11,0x11,0x11,0x11,0x1E};
+	static const uint8_t M[FPS_GLYPH_H]  = {0x11,0x1B,0x15,0x15,0x11,0x11,0x11};
 	static const uint8_t CO[FPS_GLYPH_H] = {0x00,0x04,0x00,0x00,0x04,0x00,0x00};
+	static const uint8_t PCT[FPS_GLYPH_H]= {0x19,0x1A,0x04,0x0B,0x13,0x03,0x00};
 	static const uint8_t SP[FPS_GLYPH_H] = {0,0,0,0,0,0,0};
 
 	if(c >= '0' && c <= '9')
@@ -284,46 +295,28 @@ static const uint8_t *fps_glyph(char c)
 	case 'S': return S;
 	case 'E': return E;
 	case 'V': return V;
+	case 'D': return D;
+	case 'M': return M;
 	case ':': return CO;
+	case '%': return PCT;
 	default:  return SP;
 	}
 }
 
-void fxcg100_lcd_overlay_fps(uint16_t *pixels, unsigned emu_fps,
-	unsigned vid_fps)
+static void fps_draw_text(uint16_t *pixels, int x, int y, const char *s,
+	uint16_t fg)
 {
-	const uint16_t fg = 0xFFFF;   /* white */
-	const uint16_t bg = 0x0000;   /* black */
-	char buf[24];
-	int len, box_w, x, i, r, col;
-
-	if(!pixels)
-		return;
-	if(emu_fps > 999)
-		emu_fps = 999;
-	if(vid_fps > 999)
-		vid_fps = 999;
-	snprintf(buf, sizeof(buf), "FPS E:%u V:%u", emu_fps, vid_fps);
-
-	len = (int)strlen(buf);
-	box_w = len * FPS_ADVANCE + 1;
-	if(box_w > GBA_W)
-		box_w = GBA_W;
-
-	for(r = 0; r < FPS_GLYPH_H + 2 && r < GBA_H; r++)
-		for(col = 0; col < box_w; col++)
-			pixels[r * GBA_W + col] = bg;
-
-	x = 1;
-	for(i = 0; i < len; i++) {
-		const uint8_t *g = fps_glyph(buf[i]);
+	for(; *s; s++) {
+		const uint8_t *g = fps_glyph(*s);
+		int r;
 
 		for(r = 0; r < FPS_GLYPH_H; r++) {
 			uint8_t bits = g[r];
+			int col;
 
 			for(col = 0; col < FPS_GLYPH_W; col++) {
 				int px = x + col;
-				int py = 1 + r;
+				int py = y + r;
 
 				if((bits & (0x10 >> col)) &&
 						px >= 0 && px < GBA_W &&
@@ -333,4 +326,46 @@ void fxcg100_lcd_overlay_fps(uint16_t *pixels, unsigned emu_fps,
 		}
 		x += FPS_ADVANCE;
 	}
+}
+
+/*
+ * Two-line metrics readout drawn into the frame buffer (no file/NOR I/O):
+ *   line 1: emulated FPS (E, core throughput) and rendered FPS (V, post-skip)
+ *   line 2: speed % of the 60 Hz target and average frame time in ms
+ * The per-second emulated FPS is the stable A/B instrument for build tuning.
+ */
+void fxcg100_lcd_overlay_fps(uint16_t *pixels, unsigned emu_fps,
+	unsigned vid_fps)
+{
+	const uint16_t fg = 0xFFFF;   /* white */
+	const uint16_t bg = 0x0000;   /* black */
+	char l1[24], l2[24];
+	unsigned spd, ms;
+	int box_w, w, r, col;
+
+	if(!pixels)
+		return;
+	if(emu_fps > 999)
+		emu_fps = 999;
+	if(vid_fps > 999)
+		vid_fps = 999;
+	spd = emu_fps * 100u / 60u;
+	ms = emu_fps ? 1000u / emu_fps : 0u;
+	snprintf(l1, sizeof(l1), "FPS E:%u V:%u", emu_fps, vid_fps);
+	snprintf(l2, sizeof(l2), "SPD:%u%% %uMS", spd, ms);
+
+	box_w = (int)strlen(l1);
+	w = (int)strlen(l2);
+	if(w > box_w)
+		box_w = w;
+	box_w = box_w * FPS_ADVANCE + 1;
+	if(box_w > GBA_W)
+		box_w = GBA_W;
+
+	for(r = 0; r < 2 * FPS_GLYPH_H + 3 && r < GBA_H; r++)
+		for(col = 0; col < box_w; col++)
+			pixels[r * GBA_W + col] = bg;
+
+	fps_draw_text(pixels, 1, 1, l1, fg);
+	fps_draw_text(pixels, 1, 1 + FPS_GLYPH_H + 1, l2, fg);
 }

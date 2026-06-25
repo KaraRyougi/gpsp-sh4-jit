@@ -99,6 +99,19 @@ target_compile_options(cgba-gint-gpsp PRIVATE
   $<$<COMPILE_LANGUAGE:ASM>:-Wa,-I${GPSP}>
 )
 
+# Performance A/B (P0): compile the two hottest gpSP translation units -- the CPU
+# interpreter and the scanline renderer -- at -O3 instead of the global -O2.
+# Build once each way and compare the on-screen emulated FPS. This is an
+# experiment, NOT an assumed win: on SH7305's small instruction cache, -O3 loop
+# unrolling can bloat the giant interpreter dispatch switch and regress it, so
+# keep whichever wins per the FPS readout. (-g is intentionally retained: it has
+# no runtime/g3a-size effect and preserves addr2line for crash triage.)
+option(CGBA_TUNE_HOTFILES_O3 "Compile cpu.cc + video.cc at -O3 (measure both ways)" OFF)
+if(CGBA_TUNE_HOTFILES_O3)
+  set_source_files_properties(${GPSP}/cpu.cc ${GPSP}/video.cc
+    PROPERTIES COMPILE_OPTIONS "-O3")
+endif()
+
 target_link_libraries(cgba-gint-gpsp Gint::Gint)
 
 target_link_options(cgba-gint-gpsp PRIVATE
