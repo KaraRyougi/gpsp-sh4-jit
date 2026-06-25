@@ -128,8 +128,15 @@ extern void *tmemst[4][16];
 #define generate_indirect_branch_cycle_update(type)                           \
   do { generate_cycle_update();                                               \
        sh4g_far_jmp(&translation_ptr, (const void *)sh4_block_exit); } while(0)
-#define generate_indirect_branch_arm()    generate_indirect_branch_no_cycle_update(arm)
-#define generate_indirect_branch_dual()   generate_indirect_branch_no_cycle_update(dual)
+/* Unconditional indirect branches must flush the block's accumulated cycles
+ * before exiting (matching the MIPS backend); a conditional one already had its
+ * cycles handled by the surrounding conditional/branch path. */
+#define generate_indirect_branch_arm()                                        \
+  do { if(condition == 0x0E) generate_indirect_branch_cycle_update(arm);      \
+       else generate_indirect_branch_no_cycle_update(arm); } while(0)
+#define generate_indirect_branch_dual()                                       \
+  do { if(condition == 0x0E) generate_indirect_branch_cycle_update(dual);     \
+       else generate_indirect_branch_no_cycle_update(dual); } while(0)
 
 #define generate_branch_no_cycle_update(writeback_location, new_pc)           \
   (writeback_location) =                                                      \

@@ -19,6 +19,9 @@ typedef struct {
   uint32_t interp_value;    /* oracle value                                */
   uint32_t dynarec_value;   /* dynarec value                               */
   uint32_t cycles;          /* cycle budget the comparison used            */
+  uint32_t start_pc;        /* guest PC at the start of the compared window */
+  uint32_t interp_pc;       /* oracle reg[15] after the run                 */
+  uint32_t dynarec_pc;      /* dynarec reg[15] after the run                */
 } cgba_diff_result;
 
 /* Run `cycles` of guest execution under both cores from one snapshot and diff
@@ -26,5 +29,9 @@ typedef struct {
 int cgba_sh4_diff_run(uint32_t cycles, cgba_diff_result *out);
 
 const char *cgba_sh4_diff_kind_name(int kind);
+
+/* Diagnostic: run the diff and dump start/interp/dynarec PC + each divergent
+ * r0..r15 (oracle vs dynarec) into out, up to max_lines. Returns lines used. */
+unsigned cgba_sh4_diff_dump(uint32_t cycles, char out[][48], unsigned max_lines);
 
 #endif /* CGBA_SH4_DIFF_HARNESS_H */

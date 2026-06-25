@@ -237,12 +237,15 @@ int cgba_gpsp_diff_test(uint32_t cycles, char *out, unsigned out_len)
 	int diverged = cgba_sh4_diff_run(cycles, &r);
 
 	if(diverged)
-		snprintf(out, out_len, "DIFF %s[%d] i=%08lX d=%08lX c=%lu",
+		snprintf(out, out_len, "D %s%d i%lX d%lX p%lX>%lX/%lX",
 			cgba_sh4_diff_kind_name(r.kind), r.index,
 			(unsigned long)r.interp_value, (unsigned long)r.dynarec_value,
-			(unsigned long)r.cycles);
+			(unsigned long)r.start_pc, (unsigned long)r.interp_pc,
+			(unsigned long)r.dynarec_pc);
 	else
-		snprintf(out, out_len, "MATCH over %lu cycles", (unsigned long)cycles);
+		snprintf(out, out_len, "MATCH %lu p%lX>%lX",
+			(unsigned long)cycles, (unsigned long)r.start_pc,
+			(unsigned long)r.interp_pc);
 	return diverged;
 }
 #endif
@@ -303,10 +306,10 @@ unsigned cgba_gpsp_diag(char out[][CGBA_DIAG_LINE_MAX], unsigned max_lines)
 			(unsigned long)(fb ? cgba_gpsp_frame_hash(fb) : 0u),
 			fb ? fb[80 * CGBA_GBA_PITCH + 120] : 0);
 #ifdef CGBA_DYNAREC
-	/* One short interp-vs-dynarec comparison so the diag overlay surfaces
-	 * dynarec health on hardware/casio-emu. Kept brief to limit timing noise. */
+	/* Short interp-vs-dynarec comparison so the diag overlay surfaces dynarec
+	 * health on hardware/casio-emu: start/interp/dynarec PC + divergent regs. */
 	if(n < max_lines)
-		cgba_gpsp_diff_test(1024, out[n++], CGBA_DIAG_LINE_MAX);
+		n += cgba_sh4_diff_dump(4, out + n, max_lines - n);
 #endif
 	return n;
 }
