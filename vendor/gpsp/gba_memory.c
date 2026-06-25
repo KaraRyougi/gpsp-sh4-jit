@@ -2940,6 +2940,29 @@ u32 load_gamepak_from_pages(const u8 * const *pages, u32 rom_size,
   if (backup_type_reset == BACKUP_UNKN)
   {
     u32 scan_size = raw_size < (32 * 1024) ? raw_size : (32 * 1024);
+#ifdef CGBA_FXCG100
+    /* The header scan only covers page 0 (32 KB); many games place the
+     * EEPROM/SRAM/FLASH tag further in. detect_backup_subcircuit() falls back to
+     * rom_scan_signatures_in_memory(), which scans gamepak_buffers[] -- but the
+     * paging loader leaves those empty. Prefill them from the head of the ROM
+     * (via the NOR-gather filestream) exactly like load_gamepak_raw does before
+     * detecting. These are transient scratch; the LRU re-pages them on demand. */
+    if (gamepak_file_large)
+    {
+      u32 bi;
+      for (bi = 0; bi < gamepak_buffer_count; bi++)
+      {
+        u32 got;
+        filestream_seek(gamepak_file_large,
+          (int64_t)bi * gamepak_buffer_blocksize, SEEK_SET);
+        got = (u32)filestream_read(gamepak_file_large,
+          gamepak_buffers[bi], gamepak_buffer_blocksize);
+        if (got < gamepak_buffer_blocksize)
+          memset(gamepak_buffers[bi] + got, 0xFF,
+            gamepak_buffer_blocksize - got);
+      }
+    }
+#endif
     detect_backup_subcircuit(header, scan_size);
   }
 
