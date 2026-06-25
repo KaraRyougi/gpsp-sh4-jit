@@ -145,12 +145,16 @@ const char *cgba_sh4_diff_kind_name(int kind)
 }
 
 /* ---------------- single-block lockstep differential ---------------------- *
- * The cycle-window diff is too coarse to localize one instruction. This steps
- * the dynarec exactly one block (via cgba_dynarec_single_block), then runs the
- * interpreter from the same state to the dynarec's next PC, and compares. It
- * reports the FIRST block whose register file or next-PC disagrees — i.e. the
- * exact block whose translation is wrong. Starts from a clean reset so the
- * earliest (simplest) blocks are checked first. */
+ * Steps the dynarec one block at a time (cgba_dynarec_single_block disables
+ * chaining), runs the interpreter from the same state to the dynarec's next PC,
+ * and reports the first block whose register file or next-PC disagrees.
+ *
+ * KNOWN LIMITATION (why the frame-level diff is the reliable path today): gpSP
+ * links blocks by recursively translating each branch target at translate time,
+ * so translating one block transitively translates the whole reachable graph —
+ * once execution reaches ROM this cascade is huge and stalls. Making this usable
+ * needs a bounded/lazy translation mode (translate only the entered block).
+ * Kept as infrastructure for that follow-up. */
 
 static u32 dyn_reg[64];
 
@@ -186,7 +190,13 @@ static void interp_run_to_pc(u32 target, unsigned max_steps)
 
 unsigned cgba_sh4_diff_blocks(unsigned max_blocks, char out[][48], unsigned max_lines)
 {
-  unsigned b, n = 0;
+  unsigned b, n = 0, w;
+
+  /* Advance past the VBlank halt with the interpreter so stepping starts inside
+   * executing code (the IRQ handler), not at a halt where lockstep is undefined. */
+  for (w = 0; w < 4000 && reg[CPU_HALT_STATE] != 0; w++)
+    execute_arm(4);
+  dbg_tag('W', reg[REG_PC]);          /* woken PC */
 
   /* Step from the current (live) state — not a reset — to avoid the full-ROM
    * translation cascade the cart entry point triggers. */
