@@ -3,9 +3,7 @@
 #define LCD_PRDR (*(volatile uint8_t *)0xa405013c)
 #define LCD_DATA (*(volatile uint16_t *)0xb4000000)
 
-#define LCD_REG_ENTRY_MODE 0x003
 #define LCD_REG_DATA       0x202
-#define LCD_ENTRY_MODE     0x1030
 #define LCD_VISIBLE_WIDTH 396
 #define LCD_VISIBLE_HEIGHT 224
 #define LCD_PANEL_BORDER_X 0
@@ -15,9 +13,6 @@
 
 #define RGB565(r, g, b) \
   (uint16_t)((((r) & 0x1f) << 11) | (((g) & 0x3f) << 5) | ((b) & 0x1f))
-
-static uint16_t lcd_saved_entry_mode;
-static int lcd_saved_entry_mode_valid;
 
 static void lcd_sync(void)
 {
@@ -46,12 +41,6 @@ static void lcd_write(uint16_t reg, uint16_t value)
 {
   lcd_index(reg);
   lcd_data(value);
-}
-
-static uint16_t lcd_read(uint16_t reg)
-{
-  lcd_index(reg);
-  return LCD_DATA;
 }
 
 static void lcd_set_window(unsigned x, unsigned y, unsigned w, unsigned h)
@@ -146,16 +135,11 @@ static void lcd_draw_char(unsigned x, unsigned y, char ch,
 
 void fxcg100_lcd_init(void)
 {
-  lcd_saved_entry_mode = lcd_read(LCD_REG_ENTRY_MODE);
-  lcd_saved_entry_mode_valid = 1;
-  lcd_write(LCD_REG_ENTRY_MODE, LCD_ENTRY_MODE);
   lcd_set_window(0, 0, LCD_VISIBLE_WIDTH, LCD_VISIBLE_HEIGHT);
 }
 
 void fxcg100_lcd_shutdown(void)
 {
-  if (lcd_saved_entry_mode_valid)
-    lcd_write(LCD_REG_ENTRY_MODE, lcd_saved_entry_mode);
   lcd_set_window(0, 0, LCD_VISIBLE_WIDTH, LCD_VISIBLE_HEIGHT);
 }
 
