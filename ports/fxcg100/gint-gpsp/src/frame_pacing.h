@@ -36,4 +36,23 @@ void cgba_pacer_reset(cgba_pacer *p);
  * be rendered + blitted, zero when its render should be skipped. */
 int cgba_pacer_should_render(cgba_pacer *p);
 
+/*
+ * FPS meter for on-screen performance metrics. Independent of the pacer / of the
+ * frameskip mode: it just counts emulated frames and rendered (blitted) frames
+ * over a ~1 s RTC window and exposes the two rates.
+ */
+typedef struct cgba_fps_meter {
+	uint32_t emu_frames;   /* emulated frames counted in the current window  */
+	uint32_t vid_frames;   /* rendered/blitted frames in the current window  */
+	uint32_t start_ticks;  /* rtc_ticks() at the start of the current window */
+	uint32_t emu_fps;      /* last computed emulated frames/sec              */
+	uint32_t vid_fps;      /* last computed rendered frames/sec              */
+} cgba_fps_meter;
+
+void cgba_fps_init(cgba_fps_meter *m);
+
+/* Call once per emulated frame; rendered != 0 when the frame was blitted.
+ * Refreshes emu_fps/vid_fps once per window; returns nonzero on a refresh. */
+int cgba_fps_tick(cgba_fps_meter *m, int rendered);
+
 #endif

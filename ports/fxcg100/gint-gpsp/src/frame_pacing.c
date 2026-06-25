@@ -83,3 +83,41 @@ int cgba_pacer_should_render(cgba_pacer *p)
 
 	return render;
 }
+
+void cgba_fps_init(cgba_fps_meter *m)
+{
+	m->emu_frames = 0;
+	m->vid_frames = 0;
+	m->emu_fps = 0;
+	m->vid_fps = 0;
+	m->start_ticks = rtc_ticks();
+}
+
+int cgba_fps_tick(cgba_fps_meter *m, int rendered)
+{
+	uint32_t now = rtc_ticks();
+	uint32_t elapsed;
+
+	m->emu_frames++;
+	if(rendered)
+		m->vid_frames++;
+
+	elapsed = ticks_elapsed(m->start_ticks, now);
+	/* A gap far larger than the window (e.g. returning from a paused menu)
+	 * would skew one reading; treat it as a fresh window without reporting. */
+	if(elapsed >= 4u * RTC_HZ) {
+		m->emu_frames = 0;
+		m->vid_frames = 0;
+		m->start_ticks = now;
+		return 0;
+	}
+	if(elapsed >= RTC_HZ) {            /* ~1 s measurement window */
+		m->emu_fps = m->emu_frames * RTC_HZ / elapsed;
+		m->vid_fps = m->vid_frames * RTC_HZ / elapsed;
+		m->emu_frames = 0;
+		m->vid_frames = 0;
+		m->start_ticks = now;
+		return 1;
+	}
+	return 0;
+}

@@ -20,6 +20,10 @@ extern char cgba_highbss_end[];
 
 static uint16_t cgba_framebuffer[CGBA_GBA_BUFFER_PIXELS] CGBA_HIGH_BSS;
 
+/* FPS metrics meter (emulated + rendered frame rate), shown when the menu's
+ * "SHOW FPS" option is on. Reset on each gameplay entry. */
+static cgba_fps_meter cgba_fps;
+
 static int app_chord(uint32_t keys, uint32_t chord)
 {
 	return (keys & chord) == chord;
@@ -68,6 +72,7 @@ static void blit_gba_frame(const uint16_t *pixels, unsigned frame,
 
 static void enter_gameplay_display(const uint16_t *framebuffer, unsigned frame)
 {
+	cgba_fps_init(&cgba_fps);
 	fxcg100_lcd_clear(C_BLACK);
 	fxcg100_lcd_update();
 	blit_gba_frame(framebuffer, frame, FXCG100_GBA_BUTTON_NONE);
@@ -129,8 +134,11 @@ static void show_diag_overlay(void)
 	char lines[8][CGBA_DIAG_LINE_MAX];
 	unsigned n, i;
 
+	/* Render the final frame (render_video=1): update_scanline() early-returns
+	 * while skip_next_frame is set, so a skipped run leaves the framebuffer stale
+	 * and fbhash/center would read blank. */
 	for(i = 0; i < 30; i++)
-		cgba_gpsp_run_frame(FXCG100_GBA_BUTTON_NONE, 0);
+		cgba_gpsp_run_frame(FXCG100_GBA_BUTTON_NONE, i == 29);
 
 	n = cgba_gpsp_diag(lines, 8);
 	dclear(C_WHITE);
@@ -186,8 +194,21 @@ static int cgba_headless_test(uint16_t *framebuffer)
 	}
 
 	hputs_dbg("loaded OK; running frames");
-	for(i = 0; i < 48; i++)
-		cgba_gpsp_run_frame(FXCG100_GBA_BUTTON_NONE, (i % 4) == 0);
+	cgba_fps_init(&cgba_fps);
+	for(i = 0; i < 48; i++) {
+		int rendered = (i % 4) == 0;
+
+		cgba_gpsp_run_frame(FXCG100_GBA_BUTTON_NONE, rendered);
+		cgba_fps_tick(&cgba_fps, rendered);
+	}
+
+	/* Exercise the FPS overlay so the font + framebuffer write are validated;
+	 * px[1,1] should become white (0xFFFF, the 'F' glyph), px[0,0] black. */
+	fxcg100_lcd_overlay_fps(framebuffer, cgba_fps.emu_fps, cgba_fps.vid_fps);
+	snprintf(buf, sizeof buf, "fps emu=%u vid=%u px00=%04X px11=%04X",
+		(unsigned)cgba_fps.emu_fps, (unsigned)cgba_fps.vid_fps,
+		framebuffer[0], framebuffer[1 * 240 + 1]);
+	hputs_dbg(buf);
 
 	n = cgba_gpsp_diag(lines, 8);
 	for(i = 0; i < n; i++)
@@ -316,8 +337,13 @@ int main(void)
 			render_video = fxcg100_menu_should_blit(&menu_state, frame);
 
 		cgba_gpsp_run_frame(gba_buttons, render_video);
-		if(render_video)
+		cgba_fps_tick(&cgba_fps, render_video);
+		if(render_video) {
+			if(menu_state.show_fps)
+				fxcg100_lcd_overlay_fps(framebuffer,
+					cgba_fps.emu_fps, cgba_fps.vid_fps);
 			blit_gba_frame(framebuffer, frame, gba_buttons);
+		}
 		previous_app_keys = app_keys;
 	}
 
