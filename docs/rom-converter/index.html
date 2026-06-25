@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cgba ROM host-order converter</title>
+<style>
+  :root {
+    --bg: #0e1116; --panel: #161b22; --panel2: #1c2330; --border: #2a3344;
+    --fg: #e6edf3; --dim: #8b97a7; --accent: #4cc2ff; --accent2: #2ea043;
+    --warn: #d29922; --err: #f85149;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    display: flex; justify-content: center; padding: 32px 16px;
+  }
+  main { width: 100%; max-width: 680px; }
+  h1 { font-size: 22px; margin: 0 0 4px; letter-spacing: .2px; }
+  .sub { color: var(--dim); margin: 0 0 24px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 12px; padding: 20px; margin-bottom: 16px;
+  }
+  #drop {
+    border: 2px dashed var(--border); border-radius: 12px; padding: 40px 20px;
+    text-align: center; color: var(--dim); cursor: pointer;
+    transition: border-color .15s, background .15s, color .15s;
+  }
+  #drop:hover, #drop.over { border-color: var(--accent); background: var(--panel2); color: var(--fg); }
+  #drop strong { color: var(--fg); }
+  input[type=file] { display: none; }
+  .row { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; }
+  .row .k { color: var(--dim); } .row .v { font-variant-numeric: tabular-nums; }
+  .badge { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 13px; font-weight: 600; }
+  .badge.normal { background: rgba(76,194,255,.15); color: var(--accent); }
+  .badge.host   { background: rgba(46,160,67,.18); color: var(--accent2); }
+  .badge.unknown{ background: rgba(248,81,73,.15); color: var(--err); }
+  button {
+    width: 100%; margin-top: 16px; padding: 12px 16px; border: 0; border-radius: 10px;
+    background: var(--accent); color: #00121f; font-size: 15px; font-weight: 700; cursor: pointer;
+  }
+  button:hover { filter: brightness(1.08); }
+  button:disabled { background: var(--panel2); color: var(--dim); cursor: not-allowed; }
+  .msg { margin-top: 12px; font-size: 14px; }
+  .msg.warn { color: var(--warn); } .msg.err { color: var(--err); } .msg.ok { color: var(--accent2); }
+  code { background: var(--panel2); padding: 1px 6px; border-radius: 5px; font-size: 13px; }
+  .hint { color: var(--dim); font-size: 13px; }
+  a { color: var(--accent); }
+  footer { color: var(--dim); font-size: 13px; margin-top: 8px; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<main>
+  <h1>cgba ROM host-order converter</h1>
+  <p class="sub">Byte-swaps a GBA ROM to (or from) fx-CG100 host order for the cgba host-order build.</p>
+
+  <div class="card">
+    <label id="drop" for="file">
+      <strong>Drop a .gba file here</strong> or click to choose<br>
+      <span class="hint">Everything runs in your browser — the ROM is never uploaded.</span>
+    </label>
+    <input type="file" id="file" accept=".gba,.bin,application/octet-stream">
+
+    <div id="info" class="hidden">
+      <div class="row"><span class="k">File</span><span class="v" id="fname">—</span></div>
+      <div class="row"><span class="k">Size</span><span class="v" id="fsize">—</span></div>
+      <div class="row"><span class="k">Detected order</span><span class="v"><span id="order" class="badge">—</span></span></div>
+      <div class="row"><span class="k">Logo word @0x04</span><span class="v" id="logo">—</span></div>
+      <button id="go" disabled>Convert &amp; download</button>
+      <div id="msg" class="msg"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <p style="margin:0 0 8px"><strong>What is this?</strong></p>
+    <p class="hint" style="margin:0">
+      The fx-CG100 (SH-4A) is big-endian. The cgba host-order build stores guest
+      memory pre-byteswapped so it reads the ROM with no per-access swap. A normal
+      <code>.gba</code> is little-endian, so it must be converted (each 32-bit word
+      reversed) before use with that build. The conversion is its own inverse —
+      run it again to get the original back. Equivalent CLI:
+      <code>python3 tools/gba_hostswap.py in.gba out.gba</code>.
+    </p>
+  </div>
+
+  <footer id="foot">cgba — GBA emulator port for the Casio fx-CG100.</footer>
+</main>
+
+<script>
+(function () {
+  "use strict";
+  // First word of the Nintendo logo (ROM offset 0x04), identical in every GBA
+  // ROM: file bytes 24 FF AE 51 in a normal (little-endian) ROM; reversed to
+  // 51 AE FF 24 once host-order-swapped. This tells us which way to convert.
+  var NORMAL = [0x24, 0xFF, 0xAE, 0x51];
+  var HOST   = [0x51, 0xAE, 0xFF, 0x24];
+
+  var fileEl = document.getElementById("file");
+  var drop = document.getElementById("drop");
+  var info = document.getElementById("info");
+  var go = document.getElementById("go");
+  var msg = document.getElementById("msg");
+  var state = null; // { bytes, name, order }
+
+  function fmtSize(n) {
+    if (n >= 1048576) return (n / 1048576).toFixed(n % 1048576 ? 2 : 0) + " MiB (" + n.toLocaleString() + " bytes)";
+    if (n >= 1024) return (n / 1024).toFixed(1) + " KiB";
+    return n + " bytes";
+  }
+  function hex4(b, i) {
+    function h(x){ return ("0" + x.toString(16).toUpperCase()).slice(-2); }
+    return h(b[i]) + " " + h(b[i+1]) + " " + h(b[i+2]) + " " + h(b[i+3]);
+  }
+  function eq(b, off, ref) {
+    for (var i = 0; i < 4; i++) if (b[off + i] !== ref[i]) return false;
+    return true;
+  }
+  function detect(b) {
+    if (b.length < 0xC0) return "unknown";
+    if (eq(b, 4, NORMAL)) return "normal";
+    if (eq(b, 4, HOST)) return "host";
+    return "unknown";
+  }
+  function setMsg(text, cls) { msg.textContent = text || ""; msg.className = "msg" + (cls ? " " + cls : ""); }
+
+  function show(file, buf) {
+    var bytes = new Uint8Array(buf);
+    var order = detect(bytes);
+    state = { bytes: bytes, name: file.name, order: order };
+
+    document.getElementById("fname").textContent = file.name;
+    document.getElementById("fsize").textContent = fmtSize(bytes.length);
+    document.getElementById("logo").textContent = bytes.length >= 8 ? hex4(bytes, 4) : "—";
+
+    var badge = document.getElementById("order");
+    info.classList.remove("hidden");
+
+    if (order === "normal") {
+      badge.textContent = "Normal GBA (little-endian)"; badge.className = "badge normal";
+      go.disabled = false; go.textContent = "Convert to host-order & download";
+      setMsg("Will reverse each 32-bit word → host-order ROM for the cgba host-order build.", "");
+    } else if (order === "host") {
+      badge.textContent = "Host-order (already swapped)"; badge.className = "badge host";
+      go.disabled = false; go.textContent = "Convert back to normal & download";
+      setMsg("This is already host-order. Converting again restores the original little-endian ROM.", "warn");
+    } else {
+      badge.textContent = "Not a recognized GBA ROM"; badge.className = "badge unknown";
+      go.disabled = false; go.textContent = "Byte-swap anyway & download";
+      setMsg("The Nintendo logo word wasn't found at 0x04 — this may not be a GBA ROM. You can still byte-swap it.", "err");
+    }
+    if (bytes.length & 3)
+      setMsg((msg.textContent ? msg.textContent + " " : "") + "Note: size isn't a multiple of 4; the trailing " + (bytes.length & 3) + " byte(s) are left as-is.", "warn");
+  }
+
+  function convert() {
+    if (!state) return;
+    var src = state.bytes, n = src.length & ~3;
+    var out = new Uint8Array(src.length);
+    out.set(src);
+    for (var i = 0; i < n; i += 4) {
+      out[i]   = src[i + 3];
+      out[i+1] = src[i + 2];
+      out[i+2] = src[i + 1];
+      out[i+3] = src[i];
+    }
+    var base = state.name.replace(/\.(gba|bin)$/i, "");
+    var suffix = state.order === "host" ? ".normal.gba" : ".hostorder.gba";
+    var blob = new Blob([out], { type: "application/octet-stream" });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url; a.download = base + suffix;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+    setMsg("Saved " + base + suffix + ".", "ok");
+  }
+
+  function load(file) {
+    if (!file) return;
+    setMsg("Reading…", "");
+    var r = new FileReader();
+    r.onload = function () { show(file, r.result); };
+    r.onerror = function () { setMsg("Could not read the file.", "err"); };
+    r.readAsArrayBuffer(file);
+  }
+
+  fileEl.addEventListener("change", function () { load(fileEl.files[0]); });
+  go.addEventListener("click", convert);
+  ["dragenter", "dragover"].forEach(function (e) {
+    drop.addEventListener(e, function (ev) { ev.preventDefault(); drop.classList.add("over"); });
+  });
+  ["dragleave", "drop"].forEach(function (e) {
+    drop.addEventListener(e, function (ev) { ev.preventDefault(); drop.classList.remove("over"); });
+  });
+  drop.addEventListener("drop", function (ev) {
+    if (ev.dataTransfer.files && ev.dataTransfer.files[0]) load(ev.dataTransfer.files[0]);
+  });
+})();
+</script>
+</body>
+</html>
