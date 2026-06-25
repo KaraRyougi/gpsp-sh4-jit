@@ -171,6 +171,12 @@ cpu_sleep_loop:
 defsymbl(sh4_block_exit)
   mov     #REG_PC, r0
   mov.l   r4, @(r0,r14)           /* reg[REG_PC] = target PC */
+  /* Differential-harness single-block mode: return to the C caller after one
+     block (PC already committed) so the interpreter can be diffed lockstep. */
+  mov.l   sb_flag, r0
+  mov.l   @r0, r0
+  tst     r0, r0
+  bf      return_to_main
   mov     r13, r4                 /* arg0 = remaining cycles */
   CALL    update_gba
   cmp/pz  r0
@@ -234,6 +240,8 @@ defsymbl(sh4_cheat_hook)
 .align 2
 c_mask15:
   .long   0x00007FFF
+sb_flag:
+  .long   _cgba_dynarec_single_block
 
 #if defined(__linux__) && defined(__ELF__)
   .section .note.GNU-stack,"",%progbits

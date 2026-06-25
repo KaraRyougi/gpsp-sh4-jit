@@ -34,4 +34,9 @@ const char *cgba_sh4_diff_kind_name(int kind);
  * r0..r15 (oracle vs dynarec) into out, up to max_lines. Returns lines used. */
 unsigned cgba_sh4_diff_dump(uint32_t cycles, char out[][48], unsigned max_lines);
 
+/* Single-block lockstep diff from a clean reset: report the first block whose
+ * dynarec translation disagrees with the interpreter (block PC + divergent
+ * register or next-PC). Returns lines used. */
+unsigned cgba_sh4_diff_blocks(unsigned max_blocks, char out[][48], unsigned max_lines);
+
 #endif /* CGBA_SH4_DIFF_HARNESS_H */
