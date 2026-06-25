@@ -5,6 +5,7 @@
 #include <gint/drivers/r61524.h>
 #include <gint/keyboard.h>
 
+#include <stdio.h>
 #include <string.h>
 
 #define LCD_W 384
@@ -268,4 +269,98 @@ uint32_t fxcg100_frame_hash(const uint16_t *pixels)
 	}
 
 	return hash;
+}
+
+/*
+ * FPS metrics overlay. Drawn directly into the 240x160 GBA frame buffer (top
+ * left) so it is carried by the normal strip-DMA blit -- gint's dtext path
+ * cannot compose with the DMA presenter. Minimal 5x7 bitmap font (row-major,
+ * bit 4 = leftmost column) for just the glyphs the readout uses. White text on
+ * a black box: both colors are byte-order invariant, so no RGB565 endianness
+ * concern regardless of the panel's byte order.
+ */
+#define FPS_GLYPH_W 5
+#define FPS_GLYPH_H 7
+#define FPS_ADVANCE 6
+
+static const uint8_t fps_font_digit[10][FPS_GLYPH_H] = {
+	{0x0E,0x11,0x13,0x15,0x19,0x11,0x0E}, /* 0 */
+	{0x04,0x0C,0x04,0x04,0x04,0x04,0x0E}, /* 1 */
+	{0x0E,0x11,0x01,0x02,0x04,0x08,0x1F}, /* 2 */
+	{0x0E,0x11,0x01,0x06,0x01,0x11,0x0E}, /* 3 */
+	{0x02,0x06,0x0A,0x12,0x1F,0x02,0x02}, /* 4 */
+	{0x1F,0x10,0x10,0x1E,0x01,0x11,0x0E}, /* 5 */
+	{0x0E,0x11,0x10,0x1E,0x11,0x11,0x0E}, /* 6 */
+	{0x1F,0x01,0x02,0x04,0x08,0x08,0x08}, /* 7 */
+	{0x0E,0x11,0x11,0x0E,0x11,0x11,0x0E}, /* 8 */
+	{0x0E,0x11,0x11,0x0F,0x01,0x11,0x0E}, /* 9 */
+};
+
+static const uint8_t *fps_glyph(char c)
+{
+	static const uint8_t F[FPS_GLYPH_H]  = {0x1F,0x10,0x10,0x1E,0x10,0x10,0x10};
+	static const uint8_t P[FPS_GLYPH_H]  = {0x1E,0x11,0x11,0x1E,0x10,0x10,0x10};
+	static const uint8_t S[FPS_GLYPH_H]  = {0x0F,0x10,0x10,0x0E,0x01,0x01,0x1E};
+	static const uint8_t E[FPS_GLYPH_H]  = {0x1F,0x10,0x10,0x1E,0x10,0x10,0x1F};
+	static const uint8_t V[FPS_GLYPH_H]  = {0x11,0x11,0x11,0x11,0x11,0x0A,0x04};
+	static const uint8_t CO[FPS_GLYPH_H] = {0x00,0x04,0x00,0x00,0x04,0x00,0x00};
+	static const uint8_t SP[FPS_GLYPH_H] = {0,0,0,0,0,0,0};
+
+	if(c >= '0' && c <= '9')
+		return fps_font_digit[c - '0'];
+	switch(c) {
+	case 'F': return F;
+	case 'P': return P;
+	case 'S': return S;
+	case 'E': return E;
+	case 'V': return V;
+	case ':': return CO;
+	default:  return SP;
+	}
+}
+
+void fxcg100_lcd_overlay_fps(uint16_t *pixels, unsigned emu_fps,
+	unsigned vid_fps)
+{
+	const uint16_t fg = 0xFFFF;   /* white */
+	const uint16_t bg = 0x0000;   /* black */
+	char buf[24];
+	int len, box_w, x, i, r, col;
+
+	if(!pixels)
+		return;
+	if(emu_fps > 999)
+		emu_fps = 999;
+	if(vid_fps > 999)
+		vid_fps = 999;
+	snprintf(buf, sizeof(buf), "FPS E:%u V:%u", emu_fps, vid_fps);
+
+	len = (int)strlen(buf);
+	box_w = len * FPS_ADVANCE + 1;
+	if(box_w > GBA_W)
+		box_w = GBA_W;
+
+	for(r = 0; r < FPS_GLYPH_H + 2 && r < GBA_H; r++)
+		for(col = 0; col < box_w; col++)
+			pixels[r * GBA_W + col] = bg;
+
+	x = 1;
+	for(i = 0; i < len; i++) {
+		const uint8_t *g = fps_glyph(buf[i]);
+
+		for(r = 0; r < FPS_GLYPH_H; r++) {
+			uint8_t bits = g[r];
+
+			for(col = 0; col < FPS_GLYPH_W; col++) {
+				int px = x + col;
+				int py = 1 + r;
+
+				if((bits & (0x10 >> col)) &&
+						px >= 0 && px < GBA_W &&
+						py >= 0 && py < GBA_H)
+					pixels[py * GBA_W + px] = fg;
+			}
+		}
+		x += FPS_ADVANCE;
+	}
 }

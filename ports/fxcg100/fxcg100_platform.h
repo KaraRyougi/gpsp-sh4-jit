@@ -52,6 +52,7 @@ typedef struct fxcg100_menu_state {
   uint32_t savestate_slot;
   uint32_t quick_save_slot;
   uint32_t backup_update;
+  uint32_t show_fps;
   uint32_t cheat_active[10];
   uint32_t selected[4];
   uint32_t scroll[4];
@@ -79,6 +80,12 @@ void fxcg100_lcd_update(void);
 void fxcg100_lcd_status(const char *text);
 void fxcg100_lcd_blit_gba(const uint16_t *pixels);
 uint32_t fxcg100_frame_hash(const uint16_t *pixels);
+
+/* Draw an FPS metrics overlay into the top-left of a 240x160 GBA frame buffer
+ * (so it rides along with the DMA blit). emu_fps = emulated frame rate, vid_fps
+ * = rendered/blitted frame rate after frameskip. */
+void fxcg100_lcd_overlay_fps(uint16_t *pixels, unsigned emu_fps,
+                             unsigned vid_fps);
 
 int cgba_run_jit_probe(void);
 

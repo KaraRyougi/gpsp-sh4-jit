@@ -28,6 +28,7 @@ typedef enum menu_value_id {
   MENU_VALUE_FRAMESKIP_TYPE,
   MENU_VALUE_FRAMESKIP_VALUE,
   MENU_VALUE_FRAMESKIP_VARIATION,
+  MENU_VALUE_SHOW_FPS,
   MENU_VALUE_SAVE_SLOT,
   MENU_VALUE_BACKUP_UPDATE
 } menu_value_id;
@@ -103,6 +104,11 @@ static const char * const frameskip_variation_options[] = {
   "RANDOM"
 };
 
+static const char * const on_off_options[] = {
+  "OFF",
+  "ON"
+};
+
 static const char * const backup_options[] = {
   "EXIT ONLY",
   "AUTOMATIC"
@@ -142,6 +148,8 @@ static const menu_item graphics_items[] = {
   { "FRAMESKIP VARIATION", MENU_ITEM_CHOICE, MENU_ACTION_NONE,
     MENU_PAGE_GRAPHICS, MENU_VALUE_FRAMESKIP_VARIATION,
     frameskip_variation_options, 2, NULL },
+  { "SHOW FPS", MENU_ITEM_CHOICE, MENU_ACTION_NONE,
+    MENU_PAGE_GRAPHICS, MENU_VALUE_SHOW_FPS, on_off_options, 2, NULL },
   { "BACK", MENU_ITEM_ACTION, MENU_ACTION_BACK,
     MENU_PAGE_MAIN, MENU_VALUE_NONE, NULL, 0, NULL }
 };
@@ -176,8 +184,6 @@ static const menu_item gamepad_items[] = {
   { "SAVE STATE", MENU_ITEM_INFO, MENU_ACTION_REMAP,
     MENU_PAGE_GAMEPAD, MENU_VALUE_NONE, NULL, 0, "TODO" },
   { "SAVE+EXIT", MENU_ITEM_INFO, MENU_ACTION_REMAP,
-    MENU_PAGE_GAMEPAD, MENU_VALUE_NONE, NULL, 0, "TODO" },
-  { "DISPLAY FPS", MENU_ITEM_INFO, MENU_ACTION_REMAP,
     MENU_PAGE_GAMEPAD, MENU_VALUE_NONE, NULL, 0, "TODO" },
   { "BACK", MENU_ITEM_ACTION, MENU_ACTION_BACK,
     MENU_PAGE_MAIN, MENU_VALUE_NONE, NULL, 0, NULL }
@@ -223,6 +229,8 @@ static uint32_t *menu_value_ptr(fxcg100_menu_state *state, menu_value_id id)
     return &state->frameskip_value;
   case MENU_VALUE_FRAMESKIP_VARIATION:
     return &state->frameskip_variation;
+  case MENU_VALUE_SHOW_FPS:
+    return &state->show_fps;
   case MENU_VALUE_SAVE_SLOT:
     return &state->savestate_slot;
   case MENU_VALUE_BACKUP_UPDATE:
