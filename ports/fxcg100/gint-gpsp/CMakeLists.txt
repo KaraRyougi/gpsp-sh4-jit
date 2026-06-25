@@ -100,7 +100,7 @@ if(CGBA_DYNAREC)
     CGBA_DYNAREC=1
     SH4_ARCH=1
     SMALL_TRANSLATION_CACHE=1
-    ROM_TRANSLATION_CACHE_SIZE=1048576      # 1 MiB
+    ROM_TRANSLATION_CACHE_SIZE=524288       # 512 KiB (shares high RAM w/ state + diff snapshot)
     RAM_TRANSLATION_CACHE_SIZE=262144       # 256 KiB
   )
   # HAVE_DYNAREC only where it matters: main.c wires init_dynarec_caches/

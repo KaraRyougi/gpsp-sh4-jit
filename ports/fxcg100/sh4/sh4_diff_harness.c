@@ -29,7 +29,11 @@ u32  execute_arm_translate(u32 cycles);    /* dynarec (sh4_interp_helpers.c) */
 
 #define CGBA_HIGH_BSS_LOCAL __attribute__((section(".cgba.highbss"), aligned(32)))
 
-/* Snapshot of all state the diff compares (kept in the high-RAM arena). */
+/* Full starting-state snapshot, used to rewind between the interpreter and the
+ * dynarec run so both execute from identical state. Just ONE copy lives in the
+ * high-RAM arena; the interpreter RESULT is compared via reg[] (full, to
+ * localize the divergent register) plus per-region FNV-1a hashes (cheap, no
+ * second multi-hundred-KB buffer). */
 typedef struct {
   u32 reg[64];
   u32 spsr[6];
@@ -43,9 +47,12 @@ typedef struct {
 } cgba_machine_snapshot;
 
 static cgba_machine_snapshot snap_initial CGBA_HIGH_BSS_LOCAL;
-static cgba_machine_snapshot snap_interp  CGBA_HIGH_BSS_LOCAL;
 
-static void capture(cgba_machine_snapshot *s)
+/* Interpreter result (the oracle): full reg[] + region hashes. */
+static u32 oracle_reg[64];
+static u32 oracle_h_iwram, oracle_h_ewram, oracle_h_vram, oracle_h_io;
+
+static void capture_full(cgba_machine_snapshot *s)
 {
   memcpy(s->reg, reg, sizeof s->reg);
   memcpy(s->spsr, spsr, sizeof s->spsr);
@@ -58,7 +65,7 @@ static void capture(cgba_machine_snapshot *s)
   memcpy(s->ewram, ewram, sizeof s->ewram);
 }
 
-static void restore(const cgba_machine_snapshot *s)
+static void restore_full(const cgba_machine_snapshot *s)
 {
   memcpy(reg, s->reg, sizeof s->reg);
   memcpy(spsr, s->spsr, sizeof s->spsr);
@@ -71,65 +78,88 @@ static void restore(const cgba_machine_snapshot *s)
   memcpy(ewram, s->ewram, sizeof s->ewram);
 }
 
-static int first_block_diff(const u8 *a, const u8 *b, u32 n, u32 *off)
+static u32 fnv1a(const void *p, u32 n)
 {
-  u32 i;
-  for (i = 0; i < n; i++)
-    if (a[i] != b[i]) { *off = i; return 1; }
-  return 0;
+  const u8 *b = (const u8 *)p;
+  u32 h = 2166136261u, i;
+  for (i = 0; i < n; i++) { h ^= b[i]; h *= 16777619u; }
+  return h;
 }
 
 int cgba_sh4_diff_run(uint32_t cycles, cgba_diff_result *out)
 {
   int i;
-  u32 off;
 
   memset(out, 0, sizeof *out);
   out->cycles = cycles;
+  out->start_pc = reg[REG_PC];
 
   /* 1. snapshot the starting state */
-  capture(&snap_initial);
+  capture_full(&snap_initial);
 
-  /* 2. reference run: interpreter */
+  /* 2. reference run: interpreter -> oracle reg[] + region hashes */
   execute_arm(cycles);
-  capture(&snap_interp);
+  out->interp_pc = reg[REG_PC];
+  memcpy(oracle_reg, reg, sizeof oracle_reg);
+  oracle_h_iwram = fnv1a(iwram, 1024 * 32 * 2);
+  oracle_h_ewram = fnv1a(ewram, 1024 * 256 * 2);
+  oracle_h_vram  = fnv1a(vram, 1024 * 96);
+  oracle_h_io    = fnv1a(io_registers, sizeof io_registers);
 
-  /* 3. restore and run the dynarec from the identical starting state */
-  restore(&snap_initial);
+  /* 3. rewind and run the dynarec from the identical starting state */
+  restore_full(&snap_initial);
   flush_dynarec_caches();
   execute_arm_translate(cycles);
+  out->dynarec_pc = reg[REG_PC];
 
-  /* 4. compare register file first (most actionable) */
+  /* 4. compare the register file first (most actionable) */
   for (i = 0; i < 64; i++) {
-    if (reg[i] != snap_interp.reg[i]) {
+    if (reg[i] != oracle_reg[i]) {
       out->diverged = 1;
       out->kind = CGBA_DIFF_REG;
       out->index = i;
-      out->interp_value = snap_interp.reg[i];
+      out->interp_value = oracle_reg[i];
       out->dynarec_value = reg[i];
       return 1;
     }
   }
 
-  /* 5. compare the touched memory regions */
-  if (first_block_diff(iwram, snap_interp.iwram, sizeof snap_interp.iwram, &off)) {
-    out->diverged = 1; out->kind = CGBA_DIFF_IWRAM; out->index = (int)off;
-    out->interp_value = snap_interp.iwram[off]; out->dynarec_value = iwram[off];
-    return 1;
+  /* 5. compare touched memory regions by hash */
+  if (fnv1a(iwram, 1024 * 32 * 2) != oracle_h_iwram) {
+    out->diverged = 1; out->kind = CGBA_DIFF_IWRAM; return 1;
   }
-  if (first_block_diff(ewram, snap_interp.ewram, sizeof snap_interp.ewram, &off)) {
-    out->diverged = 1; out->kind = CGBA_DIFF_EWRAM; out->index = (int)off;
-    out->interp_value = snap_interp.ewram[off]; out->dynarec_value = ewram[off];
-    return 1;
+  if (fnv1a(ewram, 1024 * 256 * 2) != oracle_h_ewram) {
+    out->diverged = 1; out->kind = CGBA_DIFF_EWRAM; return 1;
   }
-  if (first_block_diff((u8 *)io_registers, (u8 *)snap_interp.io_registers,
-                       sizeof snap_interp.io_registers, &off)) {
-    out->diverged = 1; out->kind = CGBA_DIFF_IO; out->index = (int)off;
-    return 1;
+  if (fnv1a(vram, 1024 * 96) != oracle_h_vram) {
+    out->diverged = 1; out->kind = CGBA_DIFF_EWRAM; out->index = -1; return 1;
+  }
+  if (fnv1a(io_registers, sizeof io_registers) != oracle_h_io) {
+    out->diverged = 1; out->kind = CGBA_DIFF_IO; return 1;
   }
 
   out->diverged = 0;
   return 0;
+}
+
+/* Run the diff and dump start PC + every divergent r0..r15 (oracle vs dynarec)
+ * across up to max_lines. For root-causing a specific block. */
+unsigned cgba_sh4_diff_dump(uint32_t cycles, char out[][48], unsigned max_lines)
+{
+  cgba_diff_result r;
+  unsigned n = 0;
+  int i;
+
+  cgba_sh4_diff_run(cycles, &r);
+  if (n < max_lines)
+    snprintf(out[n++], 48, "p%lX i%lX d%lX %s%d",
+      (unsigned long)r.start_pc, (unsigned long)r.interp_pc,
+      (unsigned long)r.dynarec_pc, cgba_sh4_diff_kind_name(r.kind), r.index);
+  for (i = 0; i < 16 && n < max_lines; i++)
+    if (reg[i] != oracle_reg[i])
+      snprintf(out[n++], 48, "r%d i%08lX d%08lX", i,
+        (unsigned long)oracle_reg[i], (unsigned long)reg[i]);
+  return n;
 }
 
 const char *cgba_sh4_diff_kind_name(int kind)
