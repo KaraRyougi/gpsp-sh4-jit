@@ -79,17 +79,23 @@ this isolate because direct HLE currently rejects gint's keyscan timer register
 write.
 
 The smoke app should show `CGBA SAFE BOOT`, diagnostic stack/key lines, and
-bottom color bars. The on-calculator shell includes a small Nspire-style gpSP
-menu:
+bottom color bars. The on-calculator shell uses a CGBC-like `ON` settings key
+with gpSP-style per-action input binding:
 
-- `TOOLS`: open the in-game menu
-- `SHIFT` + `EXE`: fallback menu chord
-- `SHIFT` + `HOME`: return through the loader after the startup grace period
+- `ON`: open the in-game settings menu
+- `HOME`: return through the loader from the safe-boot screen after the startup
+  grace period
+- All other calculator keys, including `TOOLS`, `SHIFT`, `AC`, `HOME`, digits,
+  operators, and arrows, are bindable
 
-The menu exposes graphics/frameskip, load/save-state slot, gamepad mapping,
-cheats/misc, load/restart/return/quit. Manual frameskip currently skips LCD
-blits; storage-backed options are present but marked TODO until file/NOR save
-plumbing is added.
+The default map mirrors CGBC's feel: `A=SHIFT`, `B=ALPHA`, `SELECT=VAR`,
+`START=EXE`, D-pad arrows, `L=BEGIN`, and `R=END`. gpSP hotkeys such as fast
+forward, load state, save state, save+exit, and display FPS are configured as
+separate bindings and default to `NONE`. The menu exposes graphics/frameskip/FPS
+display, load/save-state slot, gpSP-style key mapping, config save/load at
+`\\fls0\\CGBA.CFG`, cheats/misc, load/restart/return/quit. Manual frameskip
+currently skips LCD blits; game save/state storage-backed options are present
+but marked TODO until file/NOR save plumbing is added.
 
 An experimental helper for the longer OS/MPM path is also present:
 

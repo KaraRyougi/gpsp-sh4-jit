@@ -10,6 +10,7 @@
 
 /* Menu frameskip types (order matches frameskip_options[] in fxcg100_menu.c). */
 #define CGBA_FRAMESKIP_AUTOMATIC 0
+#define CGBA_FAST_FORWARD_RENDER_PERIOD 8u
 
 #define CGBA_HIGH_BSS __attribute__((section(".cgba.highbss"), aligned(32)))
 #define CGBA_HIGHRAM_SAFE_START ((uintptr_t)0x8c200000u)
@@ -23,11 +24,6 @@ static uint16_t cgba_framebuffer[CGBA_GBA_BUFFER_PIXELS] CGBA_HIGH_BSS;
 /* FPS metrics meter (emulated + rendered frame rate), shown when the menu's
  * "SHOW FPS" option is on. Reset on each gameplay entry. */
 static cgba_fps_meter cgba_fps;
-
-static int app_chord(uint32_t keys, uint32_t chord)
-{
-	return (keys & chord) == chord;
-}
 
 static void wait_briefly(void)
 {
@@ -228,6 +224,7 @@ int main(void)
 #endif
 	fxcg100_menu_state menu_state;
 	uint32_t previous_app_keys = 0;
+	uint32_t previous_hotkeys = 0;
 	uint32_t last_hash = 0;
 	unsigned current_rom;
 	unsigned frame = 1;
@@ -246,6 +243,7 @@ int main(void)
 	if(menu_result == FXCG100_MENU_QUIT)
 		return 1;
 	wait_for_keys_released();
+	previous_hotkeys = fxcg100_poll_hotkeys_mapped(menu_state.hotkey_map);
 
 	current_rom = normalize_rom_id(menu_state.rom_source);
 	if(menu_result == FXCG100_MENU_LOAD_STATE ||
@@ -265,28 +263,12 @@ int main(void)
 
 	for(;; frame++) {
 		uint32_t app_keys = fxcg100_poll_app_keys();
+		uint32_t hotkeys = fxcg100_poll_hotkeys_mapped(menu_state.hotkey_map);
+		uint32_t hotkey_edge = hotkeys & ~previous_hotkeys;
 		uint32_t gba_buttons = FXCG100_GBA_BUTTON_NONE;
 		int menu_open_edge =
-			((app_keys & FXCG100_APPKEY_MENU) &&
-			 !(previous_app_keys & FXCG100_APPKEY_MENU)) ||
-			(app_chord(app_keys, FXCG100_APPKEY_SHIFT | FXCG100_APPKEY_EXE) &&
-			 !app_chord(previous_app_keys,
-				FXCG100_APPKEY_SHIFT | FXCG100_APPKEY_EXE));
-
-		if(app_chord(app_keys, FXCG100_APPKEY_SHIFT | FXCG100_APPKEY_HOME))
-			break;
-
-		if(app_chord(app_keys, FXCG100_APPKEY_SHIFT | FXCG100_APPKEY_AC) &&
-				!app_chord(previous_app_keys,
-				FXCG100_APPKEY_SHIFT | FXCG100_APPKEY_AC)) {
-			cgba_gpsp_shutdown();
-			if(start_gpsp(framebuffer, current_rom) != 0)
-				return 1;
-			frame = 1;
-			enter_gameplay_display(framebuffer, frame);
-			previous_app_keys = app_keys;
-			continue;
-		}
+			(app_keys & FXCG100_APPKEY_ON) &&
+			!(previous_app_keys & FXCG100_APPKEY_ON);
 
 		if(menu_open_edge) {
 			last_hash = cgba_gpsp_frame_hash(framebuffer);
@@ -297,6 +279,8 @@ int main(void)
 
 			wait_for_keys_released();
 			previous_app_keys = fxcg100_poll_app_keys();
+			previous_hotkeys =
+				fxcg100_poll_hotkeys_mapped(menu_state.hotkey_map);
 			if(result == FXCG100_MENU_QUIT)
 				break;
 			if(result == FXCG100_MENU_RESET) {
@@ -325,11 +309,39 @@ int main(void)
 			continue;
 		}
 
-		if((app_keys & FXCG100_APPKEY_SHIFT) == 0)
-			gba_buttons = fxcg100_poll_gba_buttons();
+		if((previous_hotkeys &
+				FXCG100_HOTKEY_BIT(FXCG100_HOTKEY_FAST_FORWARD)) &&
+				!(hotkeys &
+				FXCG100_HOTKEY_BIT(FXCG100_HOTKEY_FAST_FORWARD)))
+			cgba_pacer_reset(&pacer);
+
+		if(hotkey_edge &
+				FXCG100_HOTKEY_BIT(FXCG100_HOTKEY_DISPLAY_FPS))
+			menu_state.show_fps = menu_state.show_fps ? 0 : 1;
+
+		if(hotkey_edge & FXCG100_HOTKEY_BIT(FXCG100_HOTKEY_LOAD_STATE)) {
+			draw_status("savestate unavailable", "not implemented yet");
+			wait_status();
+			enter_gameplay_display(framebuffer, frame);
+		}
+		if(hotkey_edge & FXCG100_HOTKEY_BIT(FXCG100_HOTKEY_SAVE_STATE)) {
+			draw_status("savestate unavailable", "not implemented yet");
+			wait_status();
+			enter_gameplay_display(framebuffer, frame);
+		}
+		if(hotkey_edge & FXCG100_HOTKEY_BIT(FXCG100_HOTKEY_SAVE_EXIT)) {
+			draw_status("save+exit unavailable", "not implemented yet");
+			wait_status();
+			enter_gameplay_display(framebuffer, frame);
+		}
+
+		gba_buttons = fxcg100_poll_gba_buttons_mapped(menu_state.keymap);
 
 		int render_video;
-		if(frame == 1)
+		if(hotkeys & FXCG100_HOTKEY_BIT(FXCG100_HOTKEY_FAST_FORWARD))
+			render_video = frame == 1 ||
+				(frame % CGBA_FAST_FORWARD_RENDER_PERIOD) == 0;
+		else if(frame == 1)
 			render_video = 1;
 		else if(menu_state.frameskip_type == CGBA_FRAMESKIP_AUTOMATIC)
 			render_video = cgba_pacer_should_render(&pacer);
@@ -345,6 +357,7 @@ int main(void)
 			blit_gba_frame(framebuffer, frame, gba_buttons);
 		}
 		previous_app_keys = app_keys;
+		previous_hotkeys = hotkeys;
 	}
 
 	cgba_gpsp_shutdown();
