@@ -120,9 +120,91 @@ static int start_gpsp(uint16_t *framebuffer, unsigned rom_id)
 	return 0;
 }
 
+#ifdef CGBA_GPSP_DIAG
+/* Hardware debug overlay: run a few frames so gpSP boots, then report the
+ * load/ROM/CPU/framebuffer state through gint's (proven) dtext path and hold
+ * until EXE. Set the CGBA_GPSP_DIAG CMake option OFF once the bug is found. */
+static void show_diag_overlay(void)
+{
+	char lines[8][CGBA_DIAG_LINE_MAX];
+	unsigned n, i;
+
+	for(i = 0; i < 30; i++)
+		cgba_gpsp_run_frame(FXCG100_GBA_BUTTON_NONE, 0);
+
+	n = cgba_gpsp_diag(lines, 8);
+	dclear(C_WHITE);
+	dtext(2, 2, C_BLACK, "CGBA DIAG  (EXE = continue)");
+	for(i = 0; i < n; i++)
+		dtext(2, 22 + 16 * (int)i, C_BLACK, lines[i]);
+	dupdate();
+
+	while(!(fxcg100_poll_app_keys() & FXCG100_APPKEY_EXE))
+		for(volatile unsigned z = 0; z < 100000; z++)
+			;
+	wait_for_keys_released();
+}
+#endif
+
+#ifdef CGBA_GPSP_HEADLESS_TEST
+/* Emulator-only validation: skip the menu, auto-boot the first storage ROM, run
+ * a few frames, and stream cgba_gpsp_diag() to the host via the emulator's
+ * 0xb7000000 debug-putchar port. Lets run-headless.sh confirm the NOR load /
+ * gather path without KEYSC key injection. Never compiled into shipping builds. */
+static void hputc_dbg(char c)
+{
+	*(volatile unsigned char *)0xb7000000u = (unsigned char)c;
+}
+
+static void hputs_dbg(const char *s)
+{
+	while(*s)
+		hputc_dbg(*s++);
+	hputc_dbg('\n');
+}
+
+static int cgba_headless_test(uint16_t *framebuffer)
+{
+	char lines[8][CGBA_DIAG_LINE_MAX];
+	char buf[64];
+	unsigned n, i, rom;
+
+	fxcg100_lcd_init();
+	cgba_gpsp_refresh_roms();
+	hputs_dbg("=== CGBA headless test ===");
+	snprintf(buf, sizeof buf, "rom_count=%u builtin=%u",
+		cgba_gpsp_rom_count(), (unsigned)CGBA_GPSP_ROM_BUILTIN_COUNT);
+	hputs_dbg(buf);
+
+	rom = (cgba_gpsp_rom_count() > CGBA_GPSP_ROM_BUILTIN_COUNT)
+		? CGBA_GPSP_ROM_BUILTIN_COUNT : 0;
+	if(start_gpsp(framebuffer, rom) != 0) {
+		hputs_dbg("start_gpsp FAILED");
+		hputs_dbg(cgba_gpsp_last_error() ? cgba_gpsp_last_error() : "(none)");
+		for(;;)
+			;
+	}
+
+	hputs_dbg("loaded OK; running frames");
+	for(i = 0; i < 48; i++)
+		cgba_gpsp_run_frame(FXCG100_GBA_BUTTON_NONE, (i % 4) == 0);
+
+	n = cgba_gpsp_diag(lines, 8);
+	for(i = 0; i < n; i++)
+		hputs_dbg(lines[i]);
+	hputs_dbg("=== done ===");
+	for(;;)   /* idle until the headless timeout kills us */
+		;
+	return 0;
+}
+#endif
+
 int main(void)
 {
 	uint16_t *framebuffer = cgba_framebuffer;
+#ifdef CGBA_GPSP_HEADLESS_TEST
+	return cgba_headless_test(framebuffer);
+#endif
 	fxcg100_menu_state menu_state;
 	uint32_t previous_app_keys = 0;
 	uint32_t last_hash = 0;
@@ -153,6 +235,10 @@ int main(void)
 
 	if(start_gpsp(framebuffer, current_rom) != 0)
 		return 1;
+
+#ifdef CGBA_GPSP_DIAG
+	show_diag_overlay();
+#endif
 
 	enter_gameplay_display(framebuffer, frame);
 
