@@ -47,4 +47,12 @@ void cgba_nor_rom_close(cgba_nor_rom *rom);
 void cgba_nor_rom_status(const cgba_nor_rom *rom, char *dst, size_t dst_size);
 unsigned cgba_nor_rom_scan_gba(cgba_nor_rom_list *list);
 
+/* Gather `len` bytes at logical ROM `offset` from the per-block NOR address
+ * table (memcpy from memory-mapped flash). Used by the gpSP filestream backend
+ * to fill the ROM page cache for fragmented pages. */
+int cgba_nor_rom_read(cgba_nor_rom *rom, void *dst, uint32_t offset, uint32_t len);
+
+/* Bind the open NOR ROM that the gpSP filestream backend pages from. */
+void cgba_gpsp_filestream_bind(cgba_nor_rom *rom);
+
 #endif

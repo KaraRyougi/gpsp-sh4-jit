@@ -15,6 +15,23 @@
 #define GBA_FRAME_BYTES (GBA_W * GBA_H * (int)sizeof(uint16_t))
 #define GBA_FRAME_DMA_BLOCKS (GBA_FRAME_BYTES / 32)
 
+/*
+ * Direct-LCD strip DMA from on-chip XY-RAM (uncached, DMA-safe), mirroring the
+ * working cgbc / prizoop presenter. DMAing the frame out of gint_vram is what
+ * produced the white screen on real hardware: gint_vram is in cached RAM, so
+ * the DMAC reads stale memory (casio-emu has no cache model, which is why it
+ * looked fine in the emulator). XY-RAM is on-chip and uncached, so the DMA sees
+ * the bytes we just wrote. Strips keep the R61524 4-row DMA window alignment
+ * (the GBA frame origin oy=32 and STRIP_LINES are both multiples of 4).
+ */
+#define STRIP_LINES 12
+#define STRIP_BUF0  ((uintptr_t)0xe5007000u)
+#define STRIP_BUF1  ((uintptr_t)0xe5017000u)
+_Static_assert(STRIP_LINES * GBA_W * 2 <= 0x2000,
+	"GBA strip must fit one 8KB on-chip XY-RAM bank");
+_Static_assert(STRIP_LINES % 4 == 0,
+	"strip height must stay 4-row aligned for the R61524 DMA window");
+
 static int lcd_dma_pending;
 /* The gameplay blit narrows the R61524 GRAM window to the GBA rectangle via
  * r61524_start_frame(). gint's dclear/dtext/dupdate menu rendering assumes the
@@ -176,37 +193,66 @@ void fxcg100_lcd_status(const char *text)
 	dupdate();
 }
 
+/* Start the DMA of one prepared strip (in on-chip RAM) to the LCD window.
+ * Falls back to CPU writes if the DMA channel is unavailable. */
+static void start_strip_dma(const uint16_t *strip, int x, int y,
+	int width, int rows)
+{
+	unsigned blocks = (unsigned)(width * rows) * sizeof(uint16_t) / 32u;
+
+	r61524_start_frame(x, x + width - 1, y, y + rows - 1);
+	if(dma_transfer_async(0, DMA_32B, blocks, (void *)strip, DMA_INC,
+			(void *)LCD_DATA_REGISTER, DMA_FIXED, GINT_CALL_NULL)) {
+		lcd_dma_pending = 1;
+		return;
+	}
+
+	volatile uint16_t *display = (volatile uint16_t *)LCD_DATA_REGISTER;
+	for(int i = 0; i < width * rows; i++)
+		display[0] = strip[i];
+}
+
 void fxcg100_lcd_blit_gba(const uint16_t *pixels)
 {
-	int ox = (DWIDTH - GBA_W) / 2;
-	int oy = (DHEIGHT - GBA_H) / 2;
-	uint16_t *vram = gint_vram;
+	int ox = (DWIDTH - GBA_W) / 2;   /* 78 */
+	int oy = (DHEIGHT - GBA_H) / 2;  /* 32 (4-aligned) */
+	uint16_t *const strips[2] = {
+		(uint16_t *)STRIP_BUF0,
+		(uint16_t *)STRIP_BUF1,
+	};
+	int y, bi;
+	int rows;
 
 	if(!pixels)
 		return;
 
+	/*
+	 * Present the frame as 12-row strips DMA'd out of on-chip XY-RAM (see the
+	 * note by STRIP_LINES). Double-buffered: copy the next strip into the
+	 * other on-chip bank while the current strip's DMA runs.
+	 */
 	wait_lcd_dma();
 
-	/*
-	 * Composite the 240x160 GBA frame into the centre of the full 396x224
-	 * gint VRAM (black borders) and push the WHOLE width through gint's
-	 * R61524 driver.
-	 *
-	 * The R61524 DMA path requires the full horizontal range. The previous
-	 * version narrowed the GRAM window to the 240-wide sub-rectangle
-	 * (r61524_start_frame at x=78..317) and DMA'd into it; the casio-emu DMA
-	 * model tolerates that, but real R61524 hardware rejects a partial-width
-	 * DMA and leaves the panel blank (the "white screen on a loaded game").
-	 * Driving the full width via r61524_display() matches the menu path,
-	 * which is why the menu shows correctly on hardware while gameplay did not.
-	 */
-	memset(vram, 0, (size_t)DWIDTH * DHEIGHT * sizeof(uint16_t));
-	for(int y = 0; y < GBA_H; y++)
-		memcpy(&vram[(oy + y) * DWIDTH + ox], &pixels[y * GBA_W],
-			(size_t)GBA_W * sizeof(uint16_t));
+	y = 0;
+	rows = STRIP_LINES;
+	memcpy(strips[0], &pixels[y * GBA_W],
+		(size_t)rows * GBA_W * sizeof(uint16_t));
+	start_strip_dma(strips[0], ox, oy + y, GBA_W, rows);
 
-	r61524_display(vram, 0, DHEIGHT, R61524_DMA_WAIT);
-	lcd_window_partial = 0;   /* full-width push leaves the window full */
+	bi = 1;
+	y += rows;
+	while(y < GBA_H) {
+		rows = (y + STRIP_LINES > GBA_H) ? (GBA_H - y) : STRIP_LINES;
+		memcpy(strips[bi], &pixels[y * GBA_W],
+			(size_t)rows * GBA_W * sizeof(uint16_t));
+		wait_lcd_dma();   /* wait for the previous strip's DMA */
+		start_strip_dma(strips[bi], ox, oy + y, GBA_W, rows);
+		bi ^= 1;
+		y += rows;
+	}
+
+	wait_lcd_dma();           /* frame complete before returning */
+	lcd_window_partial = 1;   /* window narrowed; menu restores it */
 }
 
 uint32_t fxcg100_frame_hash(const uint16_t *pixels)

@@ -248,16 +248,18 @@ audio). Moving the DMA source **off the slow VRAM path** was worth ~10 % (58.5 �
 - GBA's 240×160 fits inside the 396×224 panel **natively (no scaling)** — center
   it. Optional scaling later can reuse prizoop's hand-written RGB565 averaging
   ASM (`(X+Y-((X^Y)&0x0821))>>1`, endian-agnostic).
-- **The R61524 DMA path requires the full horizontal range.** A partial-width
-  window (`r61524_start_frame(78, 317, …)`) is tolerated by casio-emu but rejected
-  by real R61524 hardware — it left a loaded game showing a **white screen** while
-  the menu (full-width via `dupdate`) rendered fine. Fix: composite the 240×160
-  frame into the centre of the full 396×224 gint VRAM (black borders) and push the
-  whole width via `r61524_display(vram, 0, DHEIGHT, R61524_DMA_WAIT)`. Verified
-  under HLE in [gint_platform.c](../ports/fxcg100/gint-gpsp/src/gint_platform.c).
-- **Menu/UI renders through gint only, never a direct-DMA partial window.** With
-  the full-width gameplay blit the window never narrows; `restore_full_window()`
-  remains as a safety net.
+- **DMA the frame from uncached on-chip RAM, never from `gint_vram`.** This was
+  the real cause of the **white screen on a loaded game**: `gint_vram` is in
+  *cached* RAM, so the DMAC reads stale memory and the panel never shows the
+  frame. casio-emu has no cache model, so it rendered fine in the emulator and
+  masked the bug. The partial-horizontal window is *not* the problem (the working
+  cgbc/prizoop ports use partial windows). Fix (mirrors cgbc's shipping
+  `CGBC_DIRECT_LCD_STRIP_DMA` path and prizoop's strip presenter): copy the frame
+  in 12-row strips into on-chip **XY-RAM** (`0xe5007000`/`0xe5017000`, uncached,
+  DMA-safe) and `dma_transfer_async` each strip to the centred R61524 window,
+  double-buffered. See [gint_platform.c](../ports/fxcg100/gint-gpsp/src/gint_platform.c).
+- **Menu/UI renders through gint (`dupdate`).** The strip DMA narrows the window;
+  `restore_full_window()` restores the full 396×224 window before the next gint push.
 - **HLE NOR testing (no USB):** casio-emu now HLE-hooks `Bfile_GetBlockAddress`
   (+ `Find*` stubs) so the port's direct-mapped NOR loader works from a host
   directory — drop a ROM as `GAME.GBA` in `$HLE_FLS0` and run the add-in; no flash

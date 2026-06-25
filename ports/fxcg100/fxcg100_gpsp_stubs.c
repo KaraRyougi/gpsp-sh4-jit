@@ -31,7 +31,9 @@ void netpacket_poll_receive(void)
 {
 }
 
-RFILE *filestream_open(const char *path, unsigned mode, unsigned hints)
+/* Weak fallbacks: the gint NOR port overrides these with a NOR-backed
+ * filestream (src/nor_filestream.c). The freestanding build keeps these stubs. */
+__attribute__((weak)) RFILE *filestream_open(const char *path, unsigned mode, unsigned hints)
 {
   (void)path;
   (void)mode;
@@ -39,13 +41,13 @@ RFILE *filestream_open(const char *path, unsigned mode, unsigned hints)
   return NULL;
 }
 
-int64_t filestream_get_size(RFILE *stream)
+__attribute__((weak)) int64_t filestream_get_size(RFILE *stream)
 {
   (void)stream;
   return -1;
 }
 
-int64_t filestream_seek(RFILE *stream, int64_t offset, int seek_position)
+__attribute__((weak)) int64_t filestream_seek(RFILE *stream, int64_t offset, int seek_position)
 {
   (void)stream;
   (void)offset;
@@ -53,7 +55,7 @@ int64_t filestream_seek(RFILE *stream, int64_t offset, int seek_position)
   return -1;
 }
 
-int64_t filestream_read(RFILE *stream, void *data, int64_t len)
+__attribute__((weak)) int64_t filestream_read(RFILE *stream, void *data, int64_t len)
 {
   (void)stream;
   if (data && len > 0)
@@ -61,7 +63,7 @@ int64_t filestream_read(RFILE *stream, void *data, int64_t len)
   return 0;
 }
 
-int filestream_close(RFILE *stream)
+__attribute__((weak)) int filestream_close(RFILE *stream)
 {
   (void)stream;
   return 0;

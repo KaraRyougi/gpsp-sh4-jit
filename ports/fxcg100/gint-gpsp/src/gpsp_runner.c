@@ -3,11 +3,13 @@
 #include <stdio.h>
 #include <string.h>
 
+#include <streams/file_stream.h>
+
 #include "fxcg100_platform.h"
 #include "nor_rom.h"
-#include "test_rom/input_probe.h"
-#include "test_rom/mode3_smoke.h"
 #include "vendor/gpsp/common.h"
+
+extern RFILE *gamepak_file_large;   /* gpSP ROM page-fault source (gba_memory.c) */
 
 typedef struct cgba_rom_source {
 	const char *name;
@@ -18,20 +20,6 @@ typedef struct cgba_rom_source {
 } cgba_rom_source;
 
 static const cgba_rom_source cgba_rom_sources[] = {
-	[CGBA_GPSP_ROM_MODE3_SMOKE] = {
-		"MODE3 SMOKE",
-		cgba_mode3_smoke_gba,
-		cgba_mode3_smoke_gba_len,
-		0,
-		1,
-	},
-	[CGBA_GPSP_ROM_INPUT_PROBE] = {
-		"INPUT PROBE",
-		cgba_input_probe_gba,
-		cgba_input_probe_gba_len,
-		0,
-		1,
-	},
 	[CGBA_GPSP_ROM_LCD_TEST] = {
 		"LCD TEST",
 		NULL,
@@ -72,7 +60,7 @@ const char *cgba_gpsp_rom_name(unsigned rom_id)
 	if(rom_id < cgba_storage_roms.count)
 		return cgba_storage_roms.entries[rom_id].label;
 
-	return cgba_rom_sources[CGBA_GPSP_ROM_INPUT_PROBE].name;
+	return cgba_rom_sources[CGBA_GPSP_ROM_LCD_TEST].name;
 }
 
 unsigned cgba_gpsp_rom_count(void)
@@ -111,7 +99,7 @@ int cgba_gpsp_init(uint16_t *framebuffer, unsigned rom_id)
 			nor_entry = &cgba_storage_roms.entries[storage_id];
 	}
 	if(!rom && !nor_entry) {
-		rom_id = CGBA_GPSP_ROM_INPUT_PROBE;
+		rom_id = CGBA_GPSP_ROM_LCD_TEST;
 		rom = &cgba_rom_sources[rom_id];
 	}
 
@@ -137,6 +125,10 @@ int cgba_gpsp_init(uint16_t *framebuffer, unsigned rom_id)
 				cgba_last_error, sizeof(cgba_last_error));
 			return -3;
 		}
+		/* Fragmented pages are left unmapped by load_gamepak_from_pages and
+		 * page-faulted on demand; point gpSP's page source at the NOR gather. */
+		cgba_gpsp_filestream_bind(&cgba_current_nor_rom);
+		gamepak_file_large = filestream_open(NULL, 0, 0);
 		if(load_gamepak_from_pages(cgba_current_nor_rom.pages,
 				cgba_current_nor_rom.padded_size,
 				FEAT_DISABLE, FEAT_DISABLE,
@@ -243,6 +235,44 @@ uint32_t cgba_gpsp_frame_hash(const uint16_t *pixels)
 	}
 
 	return hash;
+}
+
+unsigned cgba_gpsp_diag(char out[][CGBA_DIAG_LINE_MAX], unsigned max_lines)
+{
+	extern u32 reg[64];   /* gpSP ARM register file; reg[15] = PC */
+	const cgba_nor_rom *r = &cgba_current_nor_rom;
+	const uint8_t *rp = (r->fd >= 0 && r->page_count > 0) ? r->pages[0] : NULL;
+	const uint16_t *fb = cgba_active_framebuffer;
+	unsigned n = 0;
+
+	if(n < max_lines)
+		snprintf(out[n++], CGBA_DIAG_LINE_MAX,
+			"load err=%d open=%d size=%d blk=%d",
+			r->last_error, r->open_result, r->size_result, r->block_result);
+	if(n < max_lines)
+		snprintf(out[n++], CGBA_DIAG_LINE_MAX,
+			"nor=%08lX pg=%lu dpg=%lu fb=%d",
+			(unsigned long)r->first_address, (unsigned long)r->page_count,
+			(unsigned long)r->direct_page_count, r->fallback_used);
+	if(n < max_lines) {
+		if(rp)
+			snprintf(out[n++], CGBA_DIAG_LINE_MAX,
+				"rom %02X %02X %02X %02X %02X %02X %02X %02X",
+				rp[0], rp[1], rp[2], rp[3], rp[4], rp[5], rp[6], rp[7]);
+		else
+			snprintf(out[n++], CGBA_DIAG_LINE_MAX, "rom: <not mapped>");
+	}
+	if(n < max_lines)
+		snprintf(out[n++], CGBA_DIAG_LINE_MAX,
+			"PC=%08lX DISPCNT=%04X VCNT=%lu",
+			(unsigned long)reg[15], (unsigned)read_ioreg(REG_DISPCNT),
+			(unsigned long)read_ioreg(REG_VCOUNT));
+	if(n < max_lines)
+		snprintf(out[n++], CGBA_DIAG_LINE_MAX,
+			"fbhash=%08lX center=%04X",
+			(unsigned long)(fb ? cgba_gpsp_frame_hash(fb) : 0u),
+			fb ? fb[80 * CGBA_GBA_PITCH + 120] : 0);
+	return n;
 }
 
 void cgba_gpsp_shutdown(void)

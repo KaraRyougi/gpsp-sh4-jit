@@ -43,6 +43,18 @@ typedef int (*cgba_bfile_find_close_t)(int handle);
 
 static uint8_t cgba_nor_single_page[CGBA_NOR_ROM_PAGE_SIZE] CGBA_HIGH_BSS;
 
+/* Per-4KB-block direct NOR address table for the loaded ROM. Captures any
+ * fragmentation (each block independent). Contiguous 32KB pages are direct
+ * mapped (zero-copy); fragmented pages are page-faulted and gathered from this
+ * table via NOR memcpy (see cgba_nor_rom_read). */
+#define CGBA_NOR_ROM_MAX_BLOCKS \
+	(CGBA_NOR_ROM_MAX_PAGES * CGBA_FLASH_BLOCKS_PER_PAGE)
+static const uint8_t *cgba_block_addr[CGBA_NOR_ROM_MAX_BLOCKS] CGBA_HIGH_BSS;
+static uint32_t cgba_block_total;
+/* Page 0 is read directly by the loader (header/backup scan); if it is
+ * fragmented we gather it here so it is always a valid contiguous pointer. */
+static uint8_t cgba_page0_buf[CGBA_NOR_ROM_PAGE_SIZE] CGBA_HIGH_BSS;
+
 static const uint16_t cgba_storage_root_prefix[] = {
 	'\\', '\\', 'f', 'l', 's', '0', '\\', 0
 };
@@ -259,10 +271,18 @@ static const uint8_t *cached_nor_pointer(unsigned char *address)
 {
 	uintptr_t value = (uintptr_t)address;
 
+	if(!value)
+		return NULL;
+
+	/*
+	 * Inside the known cached-NOR window, use the cached P1 alias. Outside it
+	 * the OS still hands back a directly-readable flash address (large files
+	 * are placed high in flash, e.g. 0xAA1CCE00, well past the window) -- accept
+	 * it as-is instead of rejecting it. This matches cgbc's cachedNorPointer();
+	 * the old window rejection is what made large ROMs fail to load (err -5).
+	 */
 	if(value >= CGBA_NOR_BASE_P2 && value < CGBA_NOR_END_P2)
 		value = value - CGBA_NOR_BASE_P2 + CGBA_NOR_BASE_P1;
-	if(value < CGBA_NOR_BASE_P1 || value >= CGBA_NOR_END_P1)
-		return NULL;
 
 	return (const uint8_t *)value;
 }
@@ -422,6 +442,98 @@ static int resolve_page(cgba_nor_rom *rom, uint32_t page)
 	return 0;
 }
 
+/*
+ * Read `len` bytes at logical ROM `offset` by gathering from the per-block NOR
+ * address table via memcpy (fast memory-mapped flash reads, no BFile). Used to
+ * fill gpSP's LRU page cache for fragmented pages, and to gather page 0.
+ */
+int cgba_nor_rom_read(cgba_nor_rom *rom, void *dst, uint32_t offset, uint32_t len)
+{
+	uint8_t *out = dst;
+
+	(void)rom;
+	while(len > 0) {
+		uint32_t block = offset / CGBA_FLASH_BLOCK_SIZE;
+		uint32_t intra = offset % CGBA_FLASH_BLOCK_SIZE;
+		uint32_t chunk = CGBA_FLASH_BLOCK_SIZE - intra;
+		const uint8_t *src;
+
+		if(chunk > len)
+			chunk = len;
+		src = (block < cgba_block_total) ? cgba_block_addr[block] : NULL;
+		if(src)
+			memcpy(out, src + intra, chunk);
+		else
+			memset(out, 0xff, chunk);   /* past file / unresolved -> open bus */
+		out += chunk;
+		offset += chunk;
+		len -= chunk;
+	}
+	return 0;
+}
+
+/*
+ * Resolve every 4KB block's direct NOR address, then classify each 32KB ROM
+ * page: contiguous pages get a direct (zero-copy) pointer in rom->pages[];
+ * fragmented pages are left NULL so gpSP page-faults them and gathers via
+ * cgba_nor_rom_read. Page 0 is always made directly available for the loader.
+ */
+static int build_block_table(cgba_nor_rom *rom)
+{
+	uint32_t total = rom->page_count * CGBA_FLASH_BLOCKS_PER_PAGE;
+	uint32_t p;
+
+	if(total > CGBA_NOR_ROM_MAX_BLOCKS)
+		return -1;
+
+	rom->direct_page_count = 0;
+	for(uint32_t b = 0; b < total; b++) {
+		unsigned char *raw = NULL;
+		int result = os_bfile_get_block_address(rom->fd,
+			(int)(b * CGBA_FLASH_BLOCK_SIZE), &raw);
+		const uint8_t *ptr = result < 0 ? NULL : cached_nor_pointer(raw);
+
+		if(b == 0) {
+			rom->block_result = result;
+			rom->first_address = (uintptr_t)(ptr ? (const void *)ptr : raw);
+		}
+		if(!ptr) {
+			rom->block_result = result;
+			rom->fail_block = b;
+			rom->first_address = (uintptr_t)raw;
+			return -1;
+		}
+		cgba_block_addr[b] = ptr;
+	}
+	cgba_block_total = total;
+
+	for(p = 0; p < rom->page_count; p++) {
+		const uint8_t *base = cgba_block_addr[p * CGBA_FLASH_BLOCKS_PER_PAGE];
+		int contiguous = 1;
+
+		for(uint32_t i = 1; i < CGBA_FLASH_BLOCKS_PER_PAGE; i++) {
+			if(cgba_block_addr[p * CGBA_FLASH_BLOCKS_PER_PAGE + i] !=
+					base + i * CGBA_FLASH_BLOCK_SIZE) {
+				contiguous = 0;
+				break;
+			}
+		}
+		if(contiguous) {
+			rom->pages[p] = base;
+			rom->direct_page_count++;
+		} else {
+			rom->pages[p] = NULL;   /* fragmented: gpSP pages it on demand */
+		}
+	}
+
+	/* The loader reads page 0 directly (ROM header + backup-type scan). */
+	if(rom->pages[0] == NULL) {
+		cgba_nor_rom_read(rom, cgba_page0_buf, 0, CGBA_NOR_ROM_PAGE_SIZE);
+		rom->pages[0] = cgba_page0_buf;
+	}
+	return 0;
+}
+
 static int map_open_fd(cgba_nor_rom *rom, int fd)
 {
 	int size;
@@ -457,15 +569,13 @@ static int map_open_fd(cgba_nor_rom *rom, int fd)
 		return -7;
 	}
 
-	for(uint32_t page = 0; page < rom->page_count; page++) {
-		if(resolve_page(rom, page) != 0) {
-			if(rom->page_count == 1 &&
-					load_single_page_fallback(rom) == 0)
-				return 0;
-			rom->last_error = -5;
-			close_fd_preserve_status(rom);
-			return -5;
-		}
+	if(build_block_table(rom) != 0) {
+		if(rom->page_count == 1 &&
+				load_single_page_fallback(rom) == 0)
+			return 0;
+		rom->last_error = -5;
+		close_fd_preserve_status(rom);
+		return -5;
 	}
 
 	return 0;
@@ -559,6 +669,14 @@ static int rom_entry_exists(const cgba_nor_rom_list *list,
 	return 0;
 }
 
+/* macOS copies leave AppleDouble sidecars like "._GAME.GBA" on the storage;
+ * they are not ROMs, so keep them out of the list. */
+static int path_is_appledouble(const uint16_t *path)
+{
+	size_t b = basename_start(path);
+	return path && path[b] == '.' && path[b + 1] == '_';
+}
+
 static int add_rom_entry_from_path(cgba_nor_rom_list *list,
 	const uint16_t *path)
 {
@@ -567,6 +685,7 @@ static int add_rom_entry_from_path(cgba_nor_rom_list *list,
 
 	if(!list || list->count >= CGBA_NOR_ROM_MAX_ENTRIES || !path ||
 			!path_has_gba_extension(path) ||
+			path_is_appledouble(path) ||
 			rom_entry_exists(list, path))
 		return 0;
 

@@ -10,9 +10,9 @@
 #define CGBA_GBA_BUFFER_PIXELS (CGBA_GBA_PITCH * (CGBA_GBA_HEIGHT + 1))
 
 typedef enum cgba_gpsp_rom_id {
-	CGBA_GPSP_ROM_MODE3_SMOKE = 0,
-	CGBA_GPSP_ROM_INPUT_PROBE,
-	CGBA_GPSP_ROM_LCD_TEST,
+	/* LCD TEST is a generated pattern (no embedded ROM); kept as the built-in
+	 * fallback when no storage ROM is present. Games load from \fls0\ storage. */
+	CGBA_GPSP_ROM_LCD_TEST = 0,
 	CGBA_GPSP_ROM_BUILTIN_COUNT
 } cgba_gpsp_rom_id;
 
@@ -25,5 +25,11 @@ void cgba_gpsp_run_frame(uint32_t gba_buttons, int render_video);
 uint32_t cgba_gpsp_keyinput(void);
 uint32_t cgba_gpsp_frame_hash(const uint16_t *pixels);
 void cgba_gpsp_shutdown(void);
+
+/* Fill up to max_lines short strings with a pipeline snapshot (ROM load result,
+ * first ROM bytes as seen by gpSP, gpSP PC/DISPCNT/VCOUNT, framebuffer state)
+ * for on-screen hardware debugging. Returns the number of lines written. */
+#define CGBA_DIAG_LINE_MAX 48
+unsigned cgba_gpsp_diag(char out[][CGBA_DIAG_LINE_MAX], unsigned max_lines);
 
 #endif

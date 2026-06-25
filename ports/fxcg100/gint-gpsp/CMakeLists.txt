@@ -18,6 +18,7 @@ set(PORT_SOURCES
   src/main.c
   src/gint_platform.c
   src/nor_rom.c
+  src/nor_filestream.c
   src/gpsp_runner.c
   src/frame_pacing.c
   src/no_osheap.c
@@ -36,7 +37,8 @@ set(GPSP_C_SOURCES
   ${GPSP}/serial_proto.c
   ${GPSP}/rfu.c
   ${GPSP}/savestate.c
-  ${GPSP}/gba_cc_lut.c
+  # gba_cc_lut.c (color-correction table) omitted: unused in this build and
+  # ~64 KB of .rodata. --gc-sections already strips it; not compiling it too.
 )
 
 set(GPSP_CXX_SOURCES
@@ -71,9 +73,23 @@ target_compile_definitions(cgba-gint-gpsp PRIVATE
   dma_transfer=gpsp_dma_transfer
 )
 
+# Hardware debug: show an on-screen pipeline snapshot after loading a game (EXE
+# to continue). ON to confirm the NOR large-file fix on hardware; set OFF after.
+option(CGBA_GPSP_DIAG "On-screen pipeline diagnostic overlay" ON)
+if(CGBA_GPSP_DIAG)
+  target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_GPSP_DIAG=1)
+endif()
+
+# Emulator-only: auto-boot the first storage ROM and stream cgba_gpsp_diag() to
+# the host debug-putchar port (run-headless.sh). Keep OFF for hardware builds.
+option(CGBA_GPSP_HEADLESS_TEST "Headless auto-boot + stdout diag (emulator)" OFF)
+if(CGBA_GPSP_HEADLESS_TEST)
+  target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_GPSP_HEADLESS_TEST=1)
+endif()
+
 target_compile_options(cgba-gint-gpsp PRIVATE
   -Wall -Wextra -Wno-unused-parameter -Wno-unused-function
-  -O2 -g -fomit-frame-pointer
+  -O2 -g -fomit-frame-pointer -ffunction-sections -fdata-sections
 )
 
 target_compile_options(cgba-gint-gpsp PRIVATE
@@ -84,6 +100,7 @@ target_compile_options(cgba-gint-gpsp PRIVATE
 target_link_libraries(cgba-gint-gpsp Gint::Gint)
 
 target_link_options(cgba-gint-gpsp PRIVATE
+  -Wl,--gc-sections
   -Wl,-Map=${CMAKE_CURRENT_BINARY_DIR}/cgba-gint-gpsp.map
 )
 

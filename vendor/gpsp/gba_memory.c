@@ -367,6 +367,18 @@ const unsigned gamepak_buffer_blocksize = 1024*1024;
 #define CGBA_FXCG100_STATIC_ROM_MAX (256 * 1024)
 static u8 cgba_static_mini_rom[CGBA_FXCG100_STATIC_ROM_MAX] CGBA_HIGH_BSS;
 static bool gamepak_mini_rom_static;
+
+/* LRU page cache for fragmented ROM pages. Contiguous pages are direct-mapped
+ * zero-copy from NOR; fragmented pages page-fault through load_gamepak_page,
+ * which fills these buffers via NOR gather. The original fx-CG100 path left
+ * gamepak_buffers NULL (it assumed the whole ROM was directly mapped), so the
+ * first fragmented page faulted into a NULL+offset write. One block = 1 MB =
+ * 32 x 32 KB pages; the indexing in load_gamepak_page hardcodes 32 pages/block,
+ * so the block size must stay 1 MB (== gamepak_buffer_blocksize). */
+#define CGBA_GAMEPAK_BLOCK_BYTES  (1024u * 1024u)
+#define CGBA_GAMEPAK_CACHE_BLOCKS 2u   /* 2 MB -> 64 resident fragmented pages */
+static u8 cgba_gamepak_cache[CGBA_GAMEPAK_CACHE_BLOCKS][CGBA_GAMEPAK_BLOCK_BYTES]
+	CGBA_HIGH_BSS;
 #endif
 
 // LRU queue with the loaded blocks and what they map to
@@ -2302,14 +2314,16 @@ void init_gamepak_buffer(void)
   unsigned i;
 
 #ifdef CGBA_FXCG100
-  gamepak_buffer_count = 0;
+  for (i = 0; i < CGBA_GAMEPAK_CACHE_BLOCKS; i++)
+    gamepak_buffers[i] = cgba_gamepak_cache[i];
+  gamepak_buffer_count = CGBA_GAMEPAK_CACHE_BLOCKS;
   for (i = 0; i < 1024; i++)
   {
     gamepak_blk_queue[i].next_lru = (u16)(i + 1);
     gamepak_blk_queue[i].phy_rom = -1;
   }
   gamepak_lru_head = 0;
-  gamepak_lru_tail = 0;
+  gamepak_lru_tail = 32 * gamepak_buffer_count - 1;
   return;
 #endif
 
@@ -2867,9 +2881,11 @@ u32 load_gamepak_from_pages(const u8 * const *pages, u32 rom_size,
   if (map_blocks == 0 || map_blocks > 1024)
     return (u32)-1;
 
-  for (phyn = 0; phyn < map_blocks; phyn++)
-    if (!pages[phyn])
-      return (u32)-1;
+  /* pages[0] must be valid (header / backup scan below); other pages may be
+   * NULL when fragmented in flash -- those are left unmapped so the gamepak
+   * page-fault path (load_gamepak_page -> filestream) fills them on demand. */
+  if (!pages[0])
+    return (u32)-1;
 
   free_gamepak_mini_rom();
   gamepak_mini_materialized = false;
@@ -2879,7 +2895,8 @@ u32 load_gamepak_from_pages(const u8 * const *pages, u32 rom_size,
 
   map_null(read, 0x8000000, 0xD000000);
   for (phyn = 0; phyn < map_blocks; phyn++)
-    map_rom_entry(read, phyn, (u8 *)pages[phyn], map_blocks);
+    if (pages[phyn])
+      map_rom_entry(read, phyn, (u8 *)pages[phyn], map_blocks);
   update_gpio_romregs();
 
   gamepak_mini_materialized = true;
