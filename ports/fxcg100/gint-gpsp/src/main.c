@@ -21,7 +21,7 @@ extern char cgba_highbss_end[];
 
 static uint16_t cgba_framebuffer[CGBA_GBA_BUFFER_PIXELS] CGBA_HIGH_BSS;
 
-/* FPS metrics meter (emulated + rendered frame rate), shown when the menu's
+/* FPS metrics meter (emulated + drawn frame rate), shown when the menu's
  * "SHOW FPS" option is on. Reset on each gameplay entry. */
 static cgba_fps_meter cgba_fps;
 
@@ -199,16 +199,16 @@ static int cgba_headless_test(uint16_t *framebuffer)
 		if(rendered) {
 			/* Exercise the real blit path incl. the no-final-wait DMA overlap. */
 			fxcg100_lcd_overlay_fps(framebuffer, cgba_fps.emu_fps,
-				cgba_fps.vid_fps);
+				cgba_fps.draw_fps);
 			fxcg100_lcd_blit_gba(framebuffer);
 		}
 	}
 
 	/* Exercise the FPS overlay so the font + framebuffer write are validated;
 	 * px[1,1] should become white (0xFFFF, the 'F' glyph), px[0,0] black. */
-	fxcg100_lcd_overlay_fps(framebuffer, cgba_fps.emu_fps, cgba_fps.vid_fps);
-	snprintf(buf, sizeof buf, "fps emu=%u vid=%u px00=%04X px11=%04X",
-		(unsigned)cgba_fps.emu_fps, (unsigned)cgba_fps.vid_fps,
+	fxcg100_lcd_overlay_fps(framebuffer, cgba_fps.emu_fps, cgba_fps.draw_fps);
+	snprintf(buf, sizeof buf, "fps emu=%u draw=%u px00=%04X px11=%04X",
+		(unsigned)cgba_fps.emu_fps, (unsigned)cgba_fps.draw_fps,
 		framebuffer[0], framebuffer[1 * 240 + 1]);
 	hputs_dbg(buf);
 
@@ -359,7 +359,7 @@ int main(void)
 		if(render_video) {
 			if(menu_state.show_fps)
 				fxcg100_lcd_overlay_fps(framebuffer,
-					cgba_fps.emu_fps, cgba_fps.vid_fps);
+					cgba_fps.emu_fps, cgba_fps.draw_fps);
 			blit_gba_frame(framebuffer, frame, gba_buttons);
 		}
 		previous_app_keys = app_keys;

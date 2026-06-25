@@ -330,12 +330,12 @@ static void fps_draw_text(uint16_t *pixels, int x, int y, const char *s,
 
 /*
  * Two-line metrics readout drawn into the frame buffer (no file/NOR I/O):
- *   line 1: emulated FPS (E, core throughput) and rendered FPS (V, post-skip)
+ *   line 1: emulated FPS (E, core throughput) and drawn FPS (D, post-skip)
  *   line 2: speed % of the 60 Hz target and average frame time in ms
  * The per-second emulated FPS is the stable A/B instrument for build tuning.
  */
 void fxcg100_lcd_overlay_fps(uint16_t *pixels, unsigned emu_fps,
-	unsigned vid_fps)
+	unsigned draw_fps)
 {
 	const uint16_t fg = 0xFFFF;   /* white */
 	const uint16_t bg = 0x0000;   /* black */
@@ -347,11 +347,11 @@ void fxcg100_lcd_overlay_fps(uint16_t *pixels, unsigned emu_fps,
 		return;
 	if(emu_fps > 999)
 		emu_fps = 999;
-	if(vid_fps > 999)
-		vid_fps = 999;
+	if(draw_fps > 999)
+		draw_fps = 999;
 	spd = emu_fps * 100u / 60u;
 	ms = emu_fps ? 1000u / emu_fps : 0u;
-	snprintf(l1, sizeof(l1), "FPS E:%u V:%u", emu_fps, vid_fps);
+	snprintf(l1, sizeof(l1), "FPS E:%u D:%u", emu_fps, draw_fps);
 	snprintf(l2, sizeof(l2), "SPD:%u%% %uMS", spd, ms);
 
 	box_w = (int)strlen(l1);
