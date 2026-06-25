@@ -128,10 +128,10 @@ void fxcg100_lcd_blit_gba(const uint16_t *pixels);
 uint32_t fxcg100_frame_hash(const uint16_t *pixels);
 
 /* Draw an FPS metrics overlay into the top-left of a 240x160 GBA frame buffer
- * (so it rides along with the DMA blit). emu_fps = emulated frame rate, vid_fps
- * = rendered/blitted frame rate after frameskip. */
+ * (so it rides along with the DMA blit). emu_fps = emulated frame rate,
+ * draw_fps = drawn/blitted frame rate after frameskip. */
 void fxcg100_lcd_overlay_fps(uint16_t *pixels, unsigned emu_fps,
-                             unsigned vid_fps);
+                             unsigned draw_fps);
 
 int cgba_run_jit_probe(void);
 
