@@ -74,8 +74,8 @@ target_compile_definitions(cgba-gint-gpsp PRIVATE
 )
 
 # Hardware debug: show an on-screen pipeline snapshot after loading a game (EXE
-# to continue). ON to confirm the NOR large-file fix on hardware; set OFF after.
-option(CGBA_GPSP_DIAG "On-screen pipeline diagnostic overlay" ON)
+# to continue). Kept OFF for normal builds; flip ON to debug the load/render path.
+option(CGBA_GPSP_DIAG "On-screen pipeline diagnostic overlay" OFF)
 if(CGBA_GPSP_DIAG)
   target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_GPSP_DIAG=1)
 endif()
