@@ -13,6 +13,8 @@
 #define GBA_W 240
 #define GBA_H 160
 #define LCD_DATA_REGISTER ((uintptr_t)0xb4000000u)
+#define R61524_REG_ENTRY_MODE 0x003
+#define R61524_ENTRY_MODE     0x1030
 #define GBA_FRAME_BYTES (GBA_W * GBA_H * (int)sizeof(uint16_t))
 #define GBA_FRAME_DMA_BLOCKS (GBA_FRAME_BYTES / 32)
 
@@ -34,6 +36,8 @@ _Static_assert(STRIP_LINES % 4 == 0,
 	"strip height must stay 4-row aligned for the R61524 DMA window");
 
 static int lcd_dma_pending;
+static uint16_t lcd_saved_entry_mode;
+static int lcd_saved_entry_mode_valid;
 /* The gameplay blit narrows the R61524 GRAM window to the GBA rectangle via
  * r61524_start_frame(). gint's dclear/dtext/dupdate menu rendering assumes the
  * full 396x224 window, so we must restore it before any gint push or the menu
@@ -113,12 +117,19 @@ uint32_t fxcg100_poll_app_keys(void)
 
 void fxcg100_lcd_init(void)
 {
+	if(!lcd_saved_entry_mode_valid) {
+		lcd_saved_entry_mode = r61524_get(R61524_REG_ENTRY_MODE);
+		lcd_saved_entry_mode_valid = 1;
+	}
+	r61524_set(R61524_REG_ENTRY_MODE, R61524_ENTRY_MODE);
 }
 
 void fxcg100_lcd_shutdown(void)
 {
 	restore_full_window();
 	wait_lcd_dma();
+	if(lcd_saved_entry_mode_valid)
+		r61524_set(R61524_REG_ENTRY_MODE, lcd_saved_entry_mode);
 }
 
 void fxcg100_lcd_clear(uint16_t color)
