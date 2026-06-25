@@ -526,11 +526,15 @@ static int build_block_table(cgba_nor_rom *rom)
 		}
 	}
 
-	/* The loader reads page 0 directly (ROM header + backup-type scan). */
-	if(rom->pages[0] == NULL) {
-		cgba_nor_rom_read(rom, cgba_page0_buf, 0, CGBA_NOR_ROM_PAGE_SIZE);
-		rom->pages[0] = cgba_page0_buf;
-	}
+	/* Page 0 ALWAYS uses a RAM shadow, never a direct NOR pointer. gpSP's
+	 * RTC/rumble emulation writes the GPIO register shadow into the ROM image at
+	 * 0x080000C4 (update_gpio_romregs); on real hardware a write to a NOR flash
+	 * address can latch a flash command sequence, not merely fault. The shadow
+	 * also serves the loader's header read / backup-type scan. */
+	if(rom->pages[0] != NULL)        /* was classified contiguous: uncount it */
+		rom->direct_page_count--;
+	cgba_nor_rom_read(rom, cgba_page0_buf, 0, CGBA_NOR_ROM_PAGE_SIZE);
+	rom->pages[0] = cgba_page0_buf;
 	return 0;
 }
 
