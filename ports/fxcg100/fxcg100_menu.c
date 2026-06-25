@@ -523,9 +523,29 @@ static void menu_draw_capture(const char *target, const char *message)
   fxcg100_lcd_update();
 }
 
-static int menu_capture_binding(const char *target, uint16_t *binding)
+static int menu_binding_key_used(const fxcg100_menu_state *state,
+                                 const uint16_t *binding, uint16_t key)
 {
-  if (!binding)
+  uint32_t i;
+
+  if (!state || key == 0)
+    return 0;
+
+  for (i = 0; i < FXCG100_GBA_KEY_COUNT; i++) {
+    if (&state->keymap[i] != binding && state->keymap[i] == key)
+      return 1;
+  }
+  for (i = 0; i < FXCG100_HOTKEY_COUNT; i++) {
+    if (&state->hotkey_map[i] != binding && state->hotkey_map[i] == key)
+      return 1;
+  }
+  return 0;
+}
+
+static int menu_capture_binding(fxcg100_menu_state *state, const char *target,
+                                uint16_t *binding)
+{
+  if (!state || !binding)
     return 0;
   menu_wait_no_physical_keys();
 
@@ -539,6 +559,11 @@ static int menu_capture_binding(const char *target, uint16_t *binding)
       return 0;
     }
     if (fxcg100_key_bindable(key)) {
+      if (menu_binding_key_used(state, binding, key)) {
+        menu_draw_capture(target, "KEY ALREADY USED");
+        menu_wait_no_physical_keys();
+        continue;
+      }
       *binding = key;
       menu_wait_no_physical_keys();
       return 1;
@@ -567,14 +592,14 @@ static fxcg100_menu_result menu_activate_item(fxcg100_menu_state *state,
     break;
   case MENU_ITEM_GBA_KEY:
     if (item->count < FXCG100_GBA_KEY_COUNT &&
-        menu_capture_binding(item->label, &state->keymap[item->count]))
+        menu_capture_binding(state, item->label, &state->keymap[item->count]))
       *message = "KEY MAPPING APPLIED";
     else
       *message = "KEY MAPPING CANCELLED";
     return FXCG100_MENU_CONTINUE;
   case MENU_ITEM_HOTKEY:
     if (item->count < FXCG100_HOTKEY_COUNT &&
-        menu_capture_binding(item->label, &state->hotkey_map[item->count]))
+        menu_capture_binding(state, item->label, &state->hotkey_map[item->count]))
       *message = "HOTKEY MAPPING APPLIED";
     else
       *message = "HOTKEY MAPPING CANCELLED";

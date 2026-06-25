@@ -137,12 +137,17 @@ void fxcg100_hotkey_defaults(uint16_t *hotkey_map)
 int fxcg100_keymap_valid(const uint16_t *keymap)
 {
   uint32_t i;
+  uint32_t j;
 
   if (!keymap)
     return 0;
   for (i = 0; i < FXCG100_GBA_KEY_COUNT; i++) {
     if (!fxcg100_key_bindable(keymap[i]))
       return 0;
+    for (j = i + 1; j < FXCG100_GBA_KEY_COUNT; j++) {
+      if (keymap[i] == keymap[j])
+        return 0;
+    }
   }
   return 1;
 }
@@ -150,12 +155,40 @@ int fxcg100_keymap_valid(const uint16_t *keymap)
 int fxcg100_hotkey_map_valid(const uint16_t *hotkey_map)
 {
   uint32_t i;
+  uint32_t j;
 
   if (!hotkey_map)
     return 0;
   for (i = 0; i < FXCG100_HOTKEY_COUNT; i++) {
     if (hotkey_map[i] != 0 && !fxcg100_key_bindable(hotkey_map[i]))
       return 0;
+    if (hotkey_map[i] == 0)
+      continue;
+    for (j = i + 1; j < FXCG100_HOTKEY_COUNT; j++) {
+      if (hotkey_map[i] == hotkey_map[j])
+        return 0;
+    }
+  }
+  return 1;
+}
+
+int fxcg100_input_maps_valid(const uint16_t *keymap,
+                             const uint16_t *hotkey_map)
+{
+  uint32_t i;
+  uint32_t j;
+
+  if (!fxcg100_keymap_valid(keymap) ||
+      !fxcg100_hotkey_map_valid(hotkey_map))
+    return 0;
+
+  for (i = 0; i < FXCG100_HOTKEY_COUNT; i++) {
+    if (hotkey_map[i] == 0)
+      continue;
+    for (j = 0; j < FXCG100_GBA_KEY_COUNT; j++) {
+      if (hotkey_map[i] == keymap[j])
+        return 0;
+    }
   }
   return 1;
 }

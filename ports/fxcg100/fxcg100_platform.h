@@ -99,6 +99,8 @@ void fxcg100_keymap_defaults(uint16_t *keymap);
 void fxcg100_hotkey_defaults(uint16_t *hotkey_map);
 int fxcg100_keymap_valid(const uint16_t *keymap);
 int fxcg100_hotkey_map_valid(const uint16_t *hotkey_map);
+int fxcg100_input_maps_valid(const uint16_t *keymap,
+                             const uint16_t *hotkey_map);
 int fxcg100_key_bindable(uint16_t key);
 const char *fxcg100_key_label(uint16_t key);
 const char *fxcg100_gba_key_label(uint32_t index);
