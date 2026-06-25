@@ -127,7 +127,7 @@ static int start_gpsp(uint16_t *framebuffer, unsigned rom_id)
  * until EXE. Set the CGBA_GPSP_DIAG CMake option OFF once the bug is found. */
 static void show_diag_overlay(void)
 {
-	char lines[8][CGBA_DIAG_LINE_MAX];
+	static char lines[20][CGBA_DIAG_LINE_MAX];
 	unsigned n, i;
 
 	/* Render the final frame (render_video=1): update_scanline() early-returns
@@ -136,7 +136,7 @@ static void show_diag_overlay(void)
 	for(i = 0; i < 30; i++)
 		cgba_gpsp_run_frame(FXCG100_GBA_BUTTON_NONE, i == 29);
 
-	n = cgba_gpsp_diag(lines, 8);
+	n = cgba_gpsp_diag(lines, 20);
 	dclear(C_WHITE);
 	dtext(2, 2, C_BLACK, "CGBA DIAG  (EXE = continue)");
 	for(i = 0; i < n; i++)
@@ -169,7 +169,7 @@ static void hputs_dbg(const char *s)
 
 static int cgba_headless_test(uint16_t *framebuffer)
 {
-	char lines[8][CGBA_DIAG_LINE_MAX];
+	static char lines[20][CGBA_DIAG_LINE_MAX];
 	char buf[64];
 	unsigned n, i, rom;
 
@@ -206,7 +206,7 @@ static int cgba_headless_test(uint16_t *framebuffer)
 		framebuffer[0], framebuffer[1 * 240 + 1]);
 	hputs_dbg(buf);
 
-	n = cgba_gpsp_diag(lines, 8);
+	n = cgba_gpsp_diag(lines, 20);
 	for(i = 0; i < n; i++)
 		hputs_dbg(lines[i]);
 	hputs_dbg("=== done ===");

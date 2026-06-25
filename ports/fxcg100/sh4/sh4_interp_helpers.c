@@ -17,6 +17,10 @@
 
 u32 execute_arm_translate_internal(u32 cycles, void *reg_base);  /* sh4_stub.S */
 
+/* When set, sh4_block_exit returns to the C caller after one translated block
+ * (the differential harness uses this to step the dynarec one block at a time). */
+int cgba_dynarec_single_block = 0;
+
 /* ---- guest memory accessors (backend-provided wrappers over gba_memory.c) --
  * The MIPS/ARM/x86 backends supply the execute_load / execute_store family that
  * translated code calls; for SH4 they are thin C wrappers over gpSP's

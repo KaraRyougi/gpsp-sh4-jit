@@ -41,6 +41,10 @@ void smc_write(void);
 void execute_swi(u32 pc);
 void sh4_cheat_hook(void);
 
+/* When set, the differential harness steps one block at a time: suppress direct
+ * block chaining so every branch funnels through sh4_block_exit. */
+extern int cgba_dynarec_single_block;
+
 u32  execute_read_cpsr(void);
 u32  execute_read_spsr(void);
 u32  execute_spsr_restore(u32 address);
@@ -111,9 +115,12 @@ extern void *tmemst[4][16];
          sh4g_load_greg(&translation_ptr, (reg_index), (hostreg));            \
   } while(0)
 
-/* Patch sites: unconditional jump literal, conditional BT/BF disp8. */
+/* Patch sites: unconditional jump literal, conditional BT/BF disp8. Direct
+ * chaining is suppressed while the single-block harness is stepping, so each
+ * branch redispatches through sh4_block_exit and can be diffed lockstep. */
 #define generate_branch_patch_unconditional(dest, offset)                     \
-  sh4g_patch_jump((u8 *)(dest), (const void *)(offset))
+  do { if(!cgba_dynarec_single_block)                                         \
+         sh4g_patch_jump((u8 *)(dest), (const void *)(offset)); } while(0)
 #define generate_branch_patch_conditional(dest, offset)                       \
   sh4g_patch_cond((u8 *)(dest), (const void *)(offset))
 
