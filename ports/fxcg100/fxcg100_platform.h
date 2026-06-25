@@ -117,6 +117,7 @@ uint32_t fxcg100_rom_source_count(void);
 const char *fxcg100_rom_source_label(uint32_t index);
 
 void fxcg100_lcd_init(void);
+void fxcg100_lcd_shutdown(void);
 void fxcg100_lcd_clear(uint16_t color);
 void fxcg100_lcd_fill_rect(unsigned x, unsigned y, unsigned w, unsigned h,
                            uint16_t color);

@@ -115,6 +115,12 @@ void fxcg100_lcd_init(void)
 {
 }
 
+void fxcg100_lcd_shutdown(void)
+{
+	restore_full_window();
+	wait_lcd_dma();
+}
+
 void fxcg100_lcd_clear(uint16_t color)
 {
 	wait_lcd_dma();

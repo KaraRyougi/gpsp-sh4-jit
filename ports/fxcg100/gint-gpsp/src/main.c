@@ -90,6 +90,12 @@ static void wait_for_keys_released(void)
 	}
 }
 
+static int exit_to_os(int code)
+{
+	fxcg100_lcd_shutdown();
+	return code;
+}
+
 static unsigned normalize_rom_id(unsigned rom_id)
 {
 	unsigned count = cgba_gpsp_rom_count();
@@ -247,7 +253,7 @@ int main(void)
 
 	menu_result = fxcg100_menu_run(&menu_state, 0, 0);
 	if(menu_result == FXCG100_MENU_QUIT)
-		return 1;
+		return exit_to_os(1);
 	wait_for_keys_released();
 	previous_hotkeys = fxcg100_poll_hotkeys_mapped(menu_state.hotkey_map);
 
@@ -259,7 +265,7 @@ int main(void)
 	}
 
 	if(start_gpsp(framebuffer, current_rom) != 0)
-		return 1;
+		return exit_to_os(1);
 
 #ifdef CGBA_GPSP_DIAG
 	show_diag_overlay();
@@ -292,7 +298,7 @@ int main(void)
 			if(result == FXCG100_MENU_RESET) {
 				cgba_gpsp_shutdown();
 				if(start_gpsp(framebuffer, current_rom) != 0)
-					return 1;
+					return exit_to_os(1);
 				frame = 1;
 				enter_gameplay_display(framebuffer, frame);
 				continue;
@@ -301,7 +307,7 @@ int main(void)
 				current_rom = normalize_rom_id(menu_state.rom_source);
 				cgba_gpsp_shutdown();
 				if(start_gpsp(framebuffer, current_rom) != 0)
-					return 1;
+					return exit_to_os(1);
 				frame = 1;
 				enter_gameplay_display(framebuffer, frame);
 				continue;
@@ -367,5 +373,5 @@ int main(void)
 	}
 
 	cgba_gpsp_shutdown();
-	return 1;
+	return exit_to_os(1);
 }

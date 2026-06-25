@@ -545,6 +545,7 @@ void exit(int status)
   fxcg100_debug_puts("\n[cgba] exit ");
   fxcg100_debug_hex32((uint32_t)status);
   fxcg100_debug_puts("\n");
+  fxcg100_lcd_shutdown();
   for (;;)
     ;
 }
@@ -552,6 +553,8 @@ void exit(int status)
 void abort(void)
 {
   fxcg100_panic("abort");
+  for (;;)
+    ;
 }
 
 void __assert_func(const char *file, int line, const char *func,
