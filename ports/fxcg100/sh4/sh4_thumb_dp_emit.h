@@ -194,4 +194,112 @@ static inline int sh4g_thumb_dp_native(u8 **tp, u32 opcode, u32 pc, u32 flag_sta
   return 0;
 }
 
+/* Set CPSR bit29 (C) to the constant c (0/1), preserving the rest. Used for the
+ * ARM logical-with-immediate shifter carry, which is a translate-time constant. */
+static inline void sh4g_set_c_const(u8 **tp, unsigned c)
+{
+  sh4_codegen cg = sh4g_open(tp);
+  const unsigned cpsr = SH4_REG_T1;            /* R2 */
+  sh4_emit_load_greg(&cg, SH4_GREG_CPSR, cpsr);
+  sh4_emit_mov_imm(&cg, 1, SH4_REG_RET);
+  sh4_emit_rotr(&cg, SH4_REG_RET);             /* R0 = 0x80000000 */
+  sh4_emit_shlr2(&cg, SH4_REG_RET);            /* R0 = 0x20000000 (bit29) */
+  if (c) {
+    sh4_emit_or(&cg, SH4_REG_RET, cpsr);
+  } else {
+    sh4_emit_not(&cg, SH4_REG_RET, SH4_REG_RET);
+    sh4_emit_and(&cg, SH4_REG_RET, cpsr);
+  }
+  sh4_emit_store_greg(&cg, cpsr, SH4_GREG_CPSR);
+  sh4g_close(tp, &cg);
+}
+
+/* Load ARM operand2 into R2: an immediate constant, or a plain register. */
+static inline void sh4g_arm_load_op2(u8 **tp, int is_imm, u32 op2, unsigned rm)
+{
+  if (is_imm) {
+    sh4g_const(tp, op2, SH4_REG_T1);
+  } else {
+    sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_load_greg(&cg, rm, SH4_REG_T1);
+    sh4g_close(tp, &cg);
+  }
+}
+
+/* Native SH4 for ARM data-processing (the dominant class on ARM-heavy games).
+ * Handles the two operand forms where the shifter carry is trivial: IMMEDIATE
+ * (operand2 + carry are translate-time constants) and plain REGISTER with no
+ * shift (operand2 = Rm, shifter C = old C, preserved). Arithmetic reuses
+ * sh4g_dp_addsub (C/V from the ALU); logical sets N/Z, leaves V, and sets C only
+ * for the rotated-immediate case. Shifted-register forms, RSB/ADC/SBC/RSC and
+ * the PC operands stay on the C path. Flags gated on the S bit (ARM has no
+ * dead-flag elimination — flag_status is always 0xF). */
+static inline int sh4g_arm_dp_native(u8 **tp, u32 opcode, u32 pc)
+{
+  u32 op = (opcode >> 21) & 0xF;
+  u32 S  = (opcode >> 20) & 1;
+  u32 rn = (opcode >> 16) & 0xF;
+  u32 rd = (opcode >> 12) & 0xF;
+  int is_imm = (opcode & 0x02000000) != 0;
+  u32 op2 = 0, rm = 0;
+  int c_const = -1;                              /* -1 = preserve C; 0/1 = set const */
+  (void)pc;
+
+  if (rd == 15 || rn == 15) return 0;            /* PC operands -> C path */
+  if (is_imm) {
+    u32 imm = opcode & 0xFF;
+    u32 rot = ((opcode >> 8) & 0xF) * 2;
+    op2 = rot ? ((imm >> rot) | (imm << (32 - rot))) : imm;
+    if (rot) c_const = (int)((op2 >> 31) & 1);   /* else shifter C = old C */
+  } else {
+    if (opcode & 0x0FF0) return 0;               /* shifted register -> C path */
+    rm = opcode & 0xF;
+    if (rm == 15) return 0;                       /* operand2 = reg[Rm], LSL #0 */
+  }
+
+  switch (op) {
+  case 0x2: case 0x4: case 0xA: case 0xB: {      /* SUB / ADD / CMP / CMN */
+    int is_sub = (op == 0x2 || op == 0xA);
+    int write  = (op == 0x2 || op == 0x4);
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_load_greg(&cg, rn, SH4_REG_T0);
+      sh4g_close(tp, &cg); }
+    sh4g_arm_load_op2(tp, is_imm, op2, rm);
+    sh4g_dp_addsub(tp, is_sub, rd, write, S);
+    return 1;
+  }
+  case 0x0: case 0x1: case 0xC: case 0xD:        /* AND/EOR/ORR/MOV */
+  case 0xE: case 0xF: case 0x8: case 0x9: {      /* BIC/MVN/TST/TEQ */
+    int dpop, write;
+    switch (op) {
+    case 0x0: dpop = SH4DP_AND; write = 1; break;
+    case 0x1: dpop = SH4DP_EOR; write = 1; break;
+    case 0xC: dpop = SH4DP_ORR; write = 1; break;
+    case 0xD: dpop = SH4DP_MOV; write = 1; break;
+    case 0xE: dpop = SH4DP_BIC; write = 1; break;
+    case 0xF: dpop = SH4DP_MVN; write = 1; break;
+    case 0x8: dpop = SH4DP_AND; write = 0; break; /* TST */
+    default:  dpop = SH4DP_EOR; write = 0; break; /* TEQ */
+    }
+    { sh4_codegen cg = sh4g_open(tp);
+      if (!(dpop == SH4DP_MOV || dpop == SH4DP_MVN))  /* MOV/MVN: second only */
+        sh4_emit_load_greg(&cg, rn, SH4_REG_T0);
+      sh4g_close(tp, &cg); }
+    sh4g_arm_load_op2(tp, is_imm, op2, rm);
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4g_dp_compute(&cg, dpop);
+      if (write)
+        sh4_emit_store_greg(&cg, SH4_REG_T0, rd);
+      sh4g_close(tp, &cg); }
+    if (S) {                                     /* N/Z; V kept; C only if const */
+      sh4g_set_nz(tp, SH4_REG_T0);
+      if (c_const >= 0)
+        sh4g_set_c_const(tp, (unsigned)c_const);
+    }
+    return 1;
+  }
+  default: return 0;                             /* RSB/ADC/SBC/RSC -> C path */
+  }
+}
+
 #endif /* CGBA_SH4_THUMB_DP_EMIT_H */

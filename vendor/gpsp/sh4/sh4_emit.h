@@ -430,10 +430,16 @@ extern void *tmemst[4][16];
 #define arm_block_memory(access_type, offset_type, writeback_type, s_bit)     \
   SH4_CALL_OP2_PC(cgba_sh4_arm_block)
 
-/* ARM data-processing (barrel shifter) + multiply/psr/swap via C core. */
-#define arm_data_proc(name, type, flags_op)        SH4_CALL_OP2_PC(cgba_sh4_arm_dp)
-#define arm_data_proc_test(name, type)             SH4_CALL_OP2(cgba_sh4_arm_dp)
-#define arm_data_proc_unary(name, type, flags_op)  SH4_CALL_OP2_PC(cgba_sh4_arm_dp)
+/* ARM data-processing: try native (immediate-operand forms), else the C core. */
+#define arm_data_proc(name, type, flags_op)                                   \
+  do { if(!sh4g_arm_dp_native(&translation_ptr, (u32)opcode, (u32)pc))         \
+         SH4_CALL_OP2_PC(cgba_sh4_arm_dp); } while(0)
+#define arm_data_proc_test(name, type)                                        \
+  do { if(!sh4g_arm_dp_native(&translation_ptr, (u32)opcode, (u32)pc))         \
+         SH4_CALL_OP2(cgba_sh4_arm_dp); } while(0)
+#define arm_data_proc_unary(name, type, flags_op)                             \
+  do { if(!sh4g_arm_dp_native(&translation_ptr, (u32)opcode, (u32)pc))         \
+         SH4_CALL_OP2_PC(cgba_sh4_arm_dp); } while(0)
 #define arm_multiply(add_op, flags)                SH4_CALL_OP2(cgba_sh4_arm_multiply)
 #define arm_multiply_long(name, add_op, flags)     SH4_CALL_OP2(cgba_sh4_arm_multiply_long)
 #define arm_psr(op_type, transfer_type, psr_reg)   SH4_CALL_OP2_PC(cgba_sh4_arm_psr)
