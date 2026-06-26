@@ -436,6 +436,48 @@ int cgba_sh4_arm_ldst(u32 opcode, u32 pc)
   return 0;
 }
 
+/* ===================== CPSR / SPSR write (gpSP canonical) ==========
+ * Every mode-changing write goes through these so the register banking stays in
+ * one place — the same set_cpu_mode + check_for_interrupts path the interpreter
+ * uses (cpu.cc). Doing the re-bank ad hoc per call site is what desynced
+ * reg[CPU_MODE] before. The IRQ gate reads IE/IF/IME through read_ioreg (the
+ * guest is little-endian, the SH4 host is big-endian), unlike the x86 backend
+ * which can index io_registers[] directly. */
+
+/* set_cpu_mode + check_for_interrupts: re-bank to the mode now in reg[REG_CPSR]
+ * and, if that just unmasked a pending IRQ, enter it (LR_irq = next_pc + 4,
+ * SPSR_irq = old CPSR, CPSR = 0xD2, switch to IRQ mode). Returns the IRQ vector
+ * to redispatch to, or 0 if no IRQ was taken. */
+static u32 sh4_rebank_and_irq(u32 next_pc)
+{
+  set_cpu_mode(cpu_modes[reg[REG_CPSR] & 0xF]);
+  if ((read_ioreg(REG_IE) & read_ioreg(REG_IF)) && read_ioreg(REG_IME) &&
+      ((reg[REG_CPSR] & 0x80) == 0)) {
+    REG_MODE(MODE_IRQ)[6] = next_pc + 4;
+    REG_SPSR(MODE_IRQ) = reg[REG_CPSR];
+    reg[REG_CPSR] = 0xD2;
+    set_cpu_mode(MODE_IRQ);
+    return 0x00000018;
+  }
+  return 0;
+}
+
+/* gpSP execute_spsr_restore: exception return (SUBS pc,... / LDM{pc}^). In a
+ * privileged non-system mode, restore CPSR from the mode's SPSR, re-bank, take a
+ * now-pending IRQ, and fold the restored Thumb bit (bit0) into the address. In
+ * USER/SYSTEM there is no SPSR, so the address passes through unchanged. */
+u32 execute_spsr_restore(u32 address)
+{
+  if (reg[CPU_MODE] != MODE_USER && reg[CPU_MODE] != MODE_SYSTEM) {
+    reg[REG_CPSR] = REG_SPSR(reg[CPU_MODE]);
+    if (sh4_rebank_and_irq(address))
+      address = 0x00000018;
+    else if (reg[REG_CPSR] & 0x20)
+      address |= 0x01;
+  }
+  return address;
+}
+
 /* ===================== ARM block (LDM/STM) ========================= */
 
 int cgba_sh4_arm_block(u32 opcode, u32 pc)
@@ -482,11 +524,11 @@ int cgba_sh4_arm_block(u32 opcode, u32 pc)
   if (writeback && !(is_load && (rlist & (1u << rn))))
     reg[rn] = new_base;
 
-  /* LDM{pc}^ (exception return): restore CPSR from the mode's SPSR + re-bank. */
+  /* LDM{pc}^ (exception return): restore CPSR from SPSR, re-bank, take any now-
+   * pending IRQ — the canonical execute_spsr_restore path. */
   if (wrote_pc && s_bit) {
-    reg[REG_CPSR] = REG_SPSR(reg[CPU_MODE]);
-    set_cpu_mode(cpu_modes[reg[REG_CPSR] & 0xF]);
-    reg[REG_PC] = reg[15] & ((reg[REG_CPSR] & 0x20) ? ~1u : ~3u);
+    u32 next = execute_spsr_restore(reg[15]);
+    reg[REG_PC] = next & ((reg[REG_CPSR] & 0x20) ? ~1u : ~3u);
   }
   return wrote_pc;
 }
@@ -541,14 +583,11 @@ int cgba_sh4_arm_dp(u32 opcode, u32 pc)
     reg[rd] = res;
     if (rd == 15) {
       /* Writing PC with the S bit (e.g. SUBS pc,lr,#4 — the IRQ/exception
-       * return) restores CPSR from the current mode's SPSR and re-banks the
-       * registers, just like the interpreter's arm_spsr_restore. Do this BEFORE
-       * masking PC so the restored Thumb bit picks the alignment. */
-      if (set_flags) {
-        reg[REG_CPSR] = REG_SPSR(reg[CPU_MODE]);
-        set_cpu_mode(cpu_modes[reg[REG_CPSR] & 0xF]);
-      }
-      reg[REG_PC] = res & ((reg[REG_CPSR] & 0x20) ? ~1u : ~3u);
+       * return) restores CPSR from SPSR and re-banks via execute_spsr_restore,
+       * which also folds the restored Thumb bit into bit0. Mask afterwards so
+       * the new Thumb state picks the alignment. */
+      u32 next = set_flags ? execute_spsr_restore(res) : res;
+      reg[REG_PC] = next & ((reg[REG_CPSR] & 0x20) ? ~1u : ~3u);
       return 1;
     }
     if (set_flags) set_nzcv(res, cf, vf & 1);
@@ -596,16 +635,15 @@ void cgba_sh4_arm_multiply_long(u32 opcode, u32 pc)
   }
 }
 
-void cgba_sh4_arm_psr(u32 opcode, u32 pc)
+int cgba_sh4_arm_psr(u32 opcode, u32 pc)
 {
   u32 is_msr   = (opcode >> 21) & 1;   /* 0 = MRS (read), 1 = MSR (write) */
   u32 use_spsr = (opcode >> 22) & 1;   /* 0 = CPSR, 1 = SPSR of cur mode  */
-  (void)pc;
 
   if (!is_msr) {                                     /* MRS Rd, <psr> */
     u32 rd = (opcode >> 12) & 0xF;
     reg[rd] = use_spsr ? REG_SPSR(reg[CPU_MODE]) : reg[REG_CPSR];
-    return;
+    return 0;
   }
 
   {                                                  /* MSR <psr>, val */
@@ -625,12 +663,18 @@ void cgba_sh4_arm_psr(u32 opcode, u32 pc)
       mask = spsr_masks[pfield];
       REG_SPSR(reg[CPU_MODE]) = (val & mask) | (REG_SPSR(reg[CPU_MODE]) & ~mask);
     } else {
+      /* CPSR write through the canonical bank path. When the control byte is
+       * written (mode/IRQ-disable change) re-bank and, if an IRQ just unmasked,
+       * take it and redispatch — gpSP's execute_store_cpsr. */
       mask = cpsr_masks[pfield][PRIVMODE(reg[CPU_MODE])];
       reg[REG_CPSR] = (val & mask) | (reg[REG_CPSR] & ~mask);
-      if (mask & 0xFF)                              /* mode/control changed */
-        set_cpu_mode(cpu_modes[reg[REG_CPSR] & 0xF]);
+      if (mask & 0xFF) {
+        u32 vec = sh4_rebank_and_irq(pc + 4);
+        if (vec) { reg[REG_PC] = vec; return 1; }
+      }
     }
   }
+  return 0;
 }
 
 void cgba_sh4_arm_swap(u32 opcode, u32 pc)
