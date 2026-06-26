@@ -47,4 +47,14 @@ unsigned cgba_sh4_bench(unsigned frames, char out[][48], unsigned max_lines);
  * register or next-PC). Returns lines used. */
 unsigned cgba_sh4_diff_blocks(unsigned max_blocks, char out[][48], unsigned max_lines);
 
+/* Same lockstep diff, but starts from the current live emulation state. Useful
+ * when a real game hangs only after several frames of input/video progress. */
+unsigned cgba_sh4_diff_blocks_here(unsigned max_blocks, char out[][48],
+  unsigned max_lines);
+
+/* Run the dump + region diff from the current state, then restore that state so
+ * callers can probe a live frame without advancing emulation. */
+unsigned cgba_sh4_diff_window(uint32_t cycles, char out[][48],
+  unsigned max_lines);
+
 #endif /* CGBA_SH4_DIFF_HARNESS_H */

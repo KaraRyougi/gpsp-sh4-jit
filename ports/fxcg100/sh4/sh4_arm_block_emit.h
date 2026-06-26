@@ -49,7 +49,8 @@ static inline u8 *sh4g_block_guard(u8 **tp, int slow_if_t)
 }
 
 /* Native ARM LDM/STM, or 0 to fall back to C. */
-static inline int sh4g_arm_block_native(u8 **tp, u32 opcode, u32 pc)
+static inline int sh4g_arm_block_native(u8 **tp, u32 opcode, u32 pc,
+  int cycle_count)
 {
   u32 rn        = (opcode >> 16) & 0xF;
   u32 rlist     = opcode & 0xFFFF;
@@ -174,7 +175,8 @@ static inline int sh4g_arm_block_native(u8 **tp, u32 opcode, u32 pc)
   sh4g_const(tp, (u32)opcode, SH4_REG_ARG0);
   sh4g_const(tp, (u32)pc, SH4_REG_ARG1);
   sh4g_far_call(tp, (const void *)cgba_sh4_arm_block);
-  sh4g_redispatch_if_r0(tp, (const void *)sh4_block_exit);
+  sh4g_cycle_debit_from_global(tp, &cgba_sh4_extra_cycles);
+  sh4g_redispatch_if_r0_debit(tp, cycle_count, (const void *)sh4_block_exit);
 
   sh4g_patch_bra(bra_done, *tp);
   return 1;

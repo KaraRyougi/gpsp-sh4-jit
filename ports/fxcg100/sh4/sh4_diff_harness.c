@@ -34,6 +34,7 @@ uint32_t rtc_ticks(void);
 
 void execute_arm(u32 cycles);              /* interpreter (cpu.cc) */
 u32  execute_arm_translate(u32 cycles);    /* dynarec (sh4_interp_helpers.c) */
+u32 update_gba(int remaining_cycles);      /* main.c hardware scheduler */
 void reset_gba(void);                      /* main.c */
 extern int cgba_dynarec_single_block;      /* sh4_interp_helpers.c / sh4_stub.S */
 extern u32 execute_cycles;                 /* gpSP per-frame cycle budget (main.c) */
@@ -133,9 +134,10 @@ unsigned cgba_sh4_diff_dump(uint32_t cycles, char out[][48], unsigned max_lines)
 
   cgba_sh4_diff_run(cycles, &r);
   if (n < max_lines)
-    snprintf(out[n++], 48, "p%lX i%lX d%lX %s%d",
+    snprintf(out[n++], 48, "p%lX i%lX d%lX %s%d %lX/%lX",
       (unsigned long)r.start_pc, (unsigned long)r.interp_pc,
-      (unsigned long)r.dynarec_pc, cgba_sh4_diff_kind_name(r.kind), r.index);
+      (unsigned long)r.dynarec_pc, cgba_sh4_diff_kind_name(r.kind), r.index,
+      (unsigned long)r.interp_value, (unsigned long)r.dynarec_value);
   for (i = 0; i < 16 && n < max_lines; i++)
     if (reg[i] != oracle_reg[i])
       snprintf(out[n++], 48, "r%d i%08lX d%08lX", i,
@@ -193,6 +195,22 @@ unsigned cgba_sh4_diff_regions(uint32_t cycles, char out[][48], unsigned max_lin
   if (cnt && n < max_lines)
     snprintf(out[n++], 48, "iw@%lX i%08lX d%08lX", (unsigned long)first,
       (unsigned long)iv, (unsigned long)dv);
+  return n;
+}
+
+unsigned cgba_sh4_diff_window(uint32_t cycles, char out[][48],
+  unsigned max_lines)
+{
+  unsigned n = 0;
+
+  if (n < max_lines)
+    n += cgba_sh4_diff_dump(cycles, out + n, max_lines - n);
+  restore_full();
+
+  if (n < max_lines)
+    n += cgba_sh4_diff_regions(cycles, out + n, max_lines - n);
+  restore_full();
+
   return n;
 }
 
@@ -273,6 +291,7 @@ static u32 dyn_reg[64];
 
 extern u32 cgba_diff_stop_pc;     /* cpu.cc: execute_arm "run until reg[15]==pc" hook */
 extern int cgba_diff_stop_active;
+extern s32 cgba_diff_stop_cycles_remaining;
 
 /* Incremental trace to the casio-emu debug-putchar port (0xb7000000), so if a
  * translated block hangs/faults the last printed PC pinpoints the bad block.
@@ -297,19 +316,18 @@ static void dbg_tag(char c, u32 v)
  * generous instruction budget is spent. Returns nonzero iff it reached
  * target_pc. Failing to reach it means the dynarec branched somewhere the
  * interpreter does not — a real control-flow divergence. */
-static int interp_run_to_pc(u32 target_pc)
+static int interp_run_to_pc(u32 target_pc, u32 cycles)
 {
-  unsigned k;
   cgba_diff_stop_pc = target_pc;
   cgba_diff_stop_active = 1;
-  for (k = 0; k < 4096 && reg[REG_PC] != target_pc &&
-              reg[CPU_HALT_STATE] == 0; k++)
-    execute_arm(0x400);            /* hook returns early the instant PC == target */
+  cgba_diff_stop_cycles_remaining = (s32)cycles;
+  execute_arm(cycles);             /* hook returns early the instant PC == target */
   cgba_diff_stop_active = 0;
   return reg[REG_PC] == target_pc;
 }
 
-unsigned cgba_sh4_diff_blocks(unsigned max_blocks, char out[][48], unsigned max_lines)
+static unsigned cgba_sh4_diff_blocks_core(unsigned max_blocks, char out[][48],
+  unsigned max_lines, int reset_first)
 {
   unsigned b, n = 0;
 
@@ -317,14 +335,28 @@ unsigned cgba_sh4_diff_blocks(unsigned max_blocks, char out[][48], unsigned max_
    * the earliest (simplest) blocks are checked first and there is no halt/wake
    * ambiguity. Chaining is disabled (cgba_dynarec_single_block) so each
    * execute_arm_translate stops after one block. */
-  reset_gba();
+  if (reset_first)
+    reset_gba();
   dbg_tag('S', reg[REG_PC]);
+  if (!reset_first && reg[CPU_HALT_STATE] != CPU_ACTIVE) {
+    u32 ret;
+    dbg_tag('H', reg[REG_PC]);
+    ret = update_gba(-64);
+    dbg_tag('W', reg[REG_PC]);
+    if (ret & 0x80000000u) {
+      if (n < max_lines)
+        snprintf(out[n++], 48, "SLEEP frame p%lX h%lu", (unsigned long)reg[REG_PC],
+          (unsigned long)reg[CPU_HALT_STATE]);
+      return n;
+    }
+  }
   flush_dynarec_caches();
   cgba_dynarec_single_block = 1;
 
   for (b = 0; b < max_blocks; b++) {
     u32 pc0 = reg[REG_PC];
     u32 dpc;
+    u32 dret, dused, iused;
     int i, diverged = 0;
 
     if (reg[CPU_HALT_STATE] != 0)
@@ -334,22 +366,30 @@ unsigned cgba_sh4_diff_blocks(unsigned max_blocks, char out[][48], unsigned max_
     dbg_tag('D', pc0);
 
     /* Dynarec: one block from S. Its end PC is the lockstep target. */
-    execute_arm_translate(0x4000);
+    dret = execute_arm_translate(0x4000);
+    dused = 0x4000u - dret;
     dpc = reg[REG_PC];
     memcpy(dyn_reg, reg, sizeof dyn_reg);
     dbg_tag('R', dpc);
 
     /* Interpreter (oracle): rewind to S, run to the dynarec's block-end PC. */
     restore_full();
-    if (!interp_run_to_pc(dpc)) {
+    if (!interp_run_to_pc(dpc, 0x4000u)) {
       if (n < max_lines)          /* dynarec went where the interpreter does not */
         snprintf(out[n++], 48, "B%u p%lX PC i%lX d%lX h%d", b,
           (unsigned long)pc0, (unsigned long)reg[REG_PC], (unsigned long)dpc,
           (int)reg[CPU_HALT_STATE]);
       break;
     }
+    iused = 0x4000u - (u32)cgba_diff_stop_cycles_remaining;
     memcpy(oracle_reg, reg, sizeof oracle_reg);
     dbg_tag('I', reg[REG_PC]);
+
+    if (iused != dused && n < max_lines) {
+      diverged = 1;
+      snprintf(out[n++], 48, "B%u p%lX cyc i%lu d%lu", b,
+        (unsigned long)pc0, (unsigned long)iused, (unsigned long)dused);
+    }
 
     for (i = 0; i < 16; i++) {     /* r0..r15 (r15 = PC, already aligned by both) */
       if (dyn_reg[i] != oracle_reg[i] && n < max_lines) {
@@ -364,6 +404,20 @@ unsigned cgba_sh4_diff_blocks(unsigned max_blocks, char out[][48], unsigned max_
       snprintf(out[n++], 48, "B%u p%lX cpsr i%lX d%lX", b, (unsigned long)pc0,
         (unsigned long)oracle_reg[REG_CPSR], (unsigned long)dyn_reg[REG_CPSR]);
     }
+    if (!diverged && dyn_reg[CPU_HALT_STATE] != oracle_reg[CPU_HALT_STATE] &&
+        n < max_lines) {
+      diverged = 1;
+      snprintf(out[n++], 48, "B%u p%lX halt i%lX d%lX", b,
+        (unsigned long)pc0, (unsigned long)oracle_reg[CPU_HALT_STATE],
+        (unsigned long)dyn_reg[CPU_HALT_STATE]);
+    }
+    if (!diverged && dyn_reg[REG_SLEEP_CYCLES] != oracle_reg[REG_SLEEP_CYCLES] &&
+        n < max_lines) {
+      diverged = 1;
+      snprintf(out[n++], 48, "B%u p%lX sleep i%lX d%lX", b,
+        (unsigned long)pc0, (unsigned long)oracle_reg[REG_SLEEP_CYCLES],
+        (unsigned long)dyn_reg[REG_SLEEP_CYCLES]);
+    }
     if (diverged)
       break;
     /* reg[] is now the interpreter state at dpc -> next iteration's baseline. */
@@ -372,4 +426,16 @@ unsigned cgba_sh4_diff_blocks(unsigned max_blocks, char out[][48], unsigned max_
   if (n == 0 && max_lines)
     snprintf(out[n++], 48, "MATCH %u blocks", b);
   return n;
+}
+
+unsigned cgba_sh4_diff_blocks(unsigned max_blocks, char out[][48],
+  unsigned max_lines)
+{
+  return cgba_sh4_diff_blocks_core(max_blocks, out, max_lines, 1);
+}
+
+unsigned cgba_sh4_diff_blocks_here(unsigned max_blocks, char out[][48],
+  unsigned max_lines)
+{
+  return cgba_sh4_diff_blocks_core(max_blocks, out, max_lines, 0);
 }

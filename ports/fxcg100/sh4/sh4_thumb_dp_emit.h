@@ -26,6 +26,10 @@
 
 #include "ports/fxcg100/sh4/sh4_emit_glue.h"
 
+extern u8 *memory_map_read[];
+int cgba_sh4_thumb_ldst(u32 opcode, u32 pc);
+void sh4_block_exit(u32 pc);
+
 /* Write N/Z/C/V into reg[REG_CPSR] from a result register plus C and V already
  * reduced to 0/1 in rc/rv. N = result bit31, Z = (result==0). rc and rv must NOT
  * be R1/R2/R3 (the working set used here). Mirrors sh4g_set_nz's N/Z path. */
@@ -244,6 +248,89 @@ static inline int sh4g_thumb_dp_native(u8 **tp, u32 opcode, u32 pc, u32 flag_sta
   }
 
   return 0;
+}
+
+/* Native Thumb byte LDR/STR with imm5 offset:
+ *   0111 0 imm5 rb rd  STRB Rd,[Rb,#imm5]
+ *   0111 1 imm5 rb rd  LDRB Rd,[Rb,#imm5]
+ * Only EWRAM/IWRAM are fast-pathed; all other regions fall back to the helper
+ * so I/O side effects, ROM paging, backup, and alerts stay exact. */
+static inline int sh4g_thumb_ldst_native(u8 **tp, u32 opcode, u32 pc,
+  int cycle_count)
+{
+#ifndef CGBA_SH4_THUMB_LDST_NATIVE
+  (void)tp;
+  (void)opcode;
+  (void)pc;
+  (void)cycle_count;
+  return 0;
+#else
+  u32 hi = (opcode >> 8) & 0xFF;
+  u32 rd, rb, imm5, is_load;
+  u8 *guard, *bra_done;
+
+  if (hi < 0x70 || hi > 0x7F)
+    return 0;
+
+  rd = opcode & 7;
+  rb = (opcode >> 3) & 7;
+  imm5 = (opcode >> 6) & 0x1F;
+  is_load = (opcode >> 11) & 1;
+
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_load_greg(&cg, rb, SH4_REG_T0);       /* R1 = base */
+    sh4g_close(tp, &cg); }
+  if (imm5) {
+    sh4g_const(tp, imm5, SH4_REG_T1);
+    sh4g_add_reg(tp, SH4_REG_T1, SH4_REG_T0);      /* R1 = addr */
+  }
+
+  /* EWRAM/IWRAM only: addr>>25 is 1 for 0x02xxxxxx and 0x03xxxxxx. */
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
+    sh4_emit_mov_imm(&cg, -25, SH4_REG_T1);
+    sh4_emit_shld(&cg, SH4_REG_T1, SH4_REG_RET);
+    sh4_emit_cmpeq_imm(&cg, 1);
+    sh4g_close(tp, &cg); }
+  guard = sh4g_emit_bf_placeholder(tp);
+
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
+    sh4_emit_mov_imm(&cg, -15, SH4_REG_T1);
+    sh4_emit_shld(&cg, SH4_REG_T1, SH4_REG_RET);   /* R0 = addr >> 15 */
+    sh4_emit_shll2(&cg, SH4_REG_RET);              /* R0 = index * 4 */
+    sh4g_close(tp, &cg); }
+  sh4g_const(tp, (u32)(uintptr_t)memory_map_read, SH4_REG_T2);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_l_load_r0(&cg, SH4_REG_T2, SH4_REG_T2);
+
+    sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET); /* R0 = addr & 0x7FFF */
+    sh4_emit_shll16(&cg, SH4_REG_RET);
+    sh4_emit_shll(&cg, SH4_REG_RET);
+    sh4_emit_shlr16(&cg, SH4_REG_RET);
+    sh4_emit_shlr(&cg, SH4_REG_RET);
+
+    if (is_load) {
+      sh4_emit_mov_b_load_r0(&cg, SH4_REG_T2, SH4_REG_T1);
+      sh4_emit_extu_b(&cg, SH4_REG_T1, SH4_REG_T1);
+      sh4_emit_store_greg(&cg, SH4_REG_T1, rd);
+    } else {
+      sh4_emit_load_greg(&cg, rd, SH4_REG_T1);
+      sh4_emit_mov_b_store_r0(&cg, SH4_REG_T1, SH4_REG_T2);
+    }
+    sh4g_close(tp, &cg); }
+  bra_done = sh4g_emit_bra_placeholder(tp);
+
+  sh4g_patch_cond(guard, *tp);
+  sh4g_const(tp, (u32)opcode, SH4_REG_ARG0);
+  sh4g_const(tp, (u32)pc, SH4_REG_ARG1);
+  sh4g_far_call(tp, (const void *)cgba_sh4_thumb_ldst);
+  sh4g_cycle_debit_from_global(tp, &cgba_sh4_extra_cycles);
+  sh4g_redispatch_if_r0_debit(tp, cycle_count, (const void *)sh4_block_exit);
+
+  sh4g_patch_bra(bra_done, *tp);
+  return 1;
+#endif
 }
 
 /* Set CPSR bit29 (C) to the constant c (0/1), preserving the rest. Used for the

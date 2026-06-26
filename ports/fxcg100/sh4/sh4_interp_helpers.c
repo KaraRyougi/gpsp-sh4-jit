@@ -17,20 +17,70 @@
 
 u32 execute_arm_translate_internal(u32 cycles, void *reg_base);  /* sh4_stub.S */
 
+#if defined(CGBA_GPSP_HEADLESS_TEST) && CGBA_GPSP_HEADLESS_TRACE_PC != 0
+static void sh4_headless_putc(char c)
+{
+  *(volatile unsigned char *)0xb7000000u = (unsigned char)c;
+}
+
+static void sh4_headless_puts(const char *s)
+{
+  while (*s)
+    sh4_headless_putc(*s++);
+}
+
+static void sh4_headless_hex32(u32 v)
+{
+  static const char hex[] = "0123456789ABCDEF";
+  int i;
+  for (i = 7; i >= 0; i--)
+    sh4_headless_putc(hex[(v >> (i * 4)) & 0x0F]);
+}
+
+static void sh4_headless_trace_ldst(u32 pc, u32 opcode)
+{
+  static u32 count;
+  if ((u32)CGBA_GPSP_HEADLESS_TRACE_PC != 0xffffffffu &&
+      pc != (u32)CGBA_GPSP_HEADLESS_TRACE_PC)
+    return;
+  count++;
+  if ((count & (u32)CGBA_GPSP_HEADLESS_TRACE_MASK) != 0)
+    return;
+
+  sh4_headless_puts("T");
+  sh4_headless_hex32(count);
+  sh4_headless_puts(" p");
+  sh4_headless_hex32(pc);
+  sh4_headless_puts(" op");
+  sh4_headless_hex32(opcode);
+  sh4_headless_puts(" r0");
+  sh4_headless_hex32(reg[0]);
+  sh4_headless_puts(" r3");
+  sh4_headless_hex32(reg[3]);
+  sh4_headless_puts(" r4");
+  sh4_headless_hex32(reg[4]);
+  sh4_headless_puts(" r5");
+  sh4_headless_hex32(reg[5]);
+  sh4_headless_puts(" pc");
+  sh4_headless_hex32(reg[REG_PC]);
+  sh4_headless_putc('\n');
+}
+#else
+static void sh4_headless_trace_ldst(u32 pc, u32 opcode)
+{
+  (void)pc;
+  (void)opcode;
+}
+#endif
+
 /* When set, sh4_block_exit returns to the C caller after one translated block
  * (the differential harness uses this to step the dynarec one block at a time). */
 int cgba_dynarec_single_block = 0;
 
 /* ---- guest memory accessors (backend-provided wrappers over gba_memory.c) --
  * The MIPS/ARM/x86 backends supply the execute_load / execute_store family that
- * translated code calls; for SH4 they are thin C wrappers over gpSP's
- * region-dispatching read_memory / write_memory core. SMC write-alerts are
- * ignored in bring-up (RAM-code invalidation is a follow-up). */
-u32 function_cc execute_load_u8(u32 address)  { return read_memory8(address); }
-u32 function_cc execute_load_u16(u32 address) { return read_memory16(address); }
-u32 function_cc execute_load_u32(u32 address) { return read_memory32(address); }
-u32 function_cc execute_load_s8(u32 address)  { return read_memory8s(address); }
-u32 function_cc execute_load_s16(u32 address) { return read_memory16s(address); }
+ * translated code calls. For SH4, the C wrappers also accumulate the GBA memory
+ * access cycles so emitted code can debit R13 after a helper returns. */
 /* A store can raise a CPU alert: DMA/HALT idle (CPU_HALT_STATE set), a newly
  * pending IRQ, or SMC (the guest overwrote code). write_memory* return it; we
  * accumulate it here and the ldst helpers consume it after their store(s) via
@@ -38,11 +88,33 @@ u32 function_cc execute_load_s16(u32 address) { return read_memory16s(address); 
  * never idled, never took a store-raised IRQ, and never flushed self-modified
  * code — it just ran past, diverging from the interpreter. */
 static cpu_alert_type cgba_store_alert;
+int cgba_sh4_extra_cycles;
+static int cgba_sh4_mem_cycle_seq;
 
-void function_cc execute_store_u8(u32 address, u32 source)  { cgba_store_alert |= write_memory8(address, (u8)source); }
-void function_cc execute_store_u16(u32 address, u32 source) { cgba_store_alert |= write_memory16(address, (u16)source); }
-void function_cc execute_store_u32(u32 address, u32 source) { cgba_store_alert |= write_memory32(address, source); }
-void function_cc execute_store_aligned_u32(u32 address, u32 source) { cgba_store_alert |= write_memory32(address, source); }
+static void cgba_sh4_reset_mem_cycles(int seq)
+{
+  cgba_sh4_extra_cycles = 0;
+  cgba_sh4_mem_cycle_seq = seq;
+}
+
+static void cgba_sh4_charge_mem(u32 address, unsigned size_index)
+{
+  if (address < 0x10000000u) {
+    u32 region = address >> 24;
+    cgba_sh4_extra_cycles += cgba_sh4_mem_cycle_seq ?
+      ws_cyc_seq[region][size_index] : ws_cyc_nseq[region][size_index];
+  }
+}
+
+u32 function_cc execute_load_u8(u32 address)  { cgba_sh4_charge_mem(address, 0); return read_memory8(address); }
+u32 function_cc execute_load_u16(u32 address) { cgba_sh4_charge_mem(address, 0); return read_memory16(address); }
+u32 function_cc execute_load_u32(u32 address) { cgba_sh4_charge_mem(address, 1); return read_memory32(address); }
+u32 function_cc execute_load_s8(u32 address)  { cgba_sh4_charge_mem(address, 0); return read_memory8s(address); }
+u32 function_cc execute_load_s16(u32 address) { cgba_sh4_charge_mem(address, 0); return read_memory16s(address); }
+void function_cc execute_store_u8(u32 address, u32 source)  { cgba_sh4_charge_mem(address, 0); cgba_store_alert |= write_memory8(address, (u8)source); }
+void function_cc execute_store_u16(u32 address, u32 source) { cgba_sh4_charge_mem(address, 0); cgba_store_alert |= write_memory16(address, (u16)source); }
+void function_cc execute_store_u32(u32 address, u32 source) { cgba_sh4_charge_mem(address, 1); cgba_store_alert |= write_memory32(address, source); }
+void function_cc execute_store_aligned_u32(u32 address, u32 source) { cgba_sh4_charge_mem(address, 1); cgba_store_alert |= write_memory32(address, source); }
 
 /* Consume any pending store alert. If set, point PC at the next instruction,
  * flush the RAM code cache on SMC, and return 1 so the emitter glue redispatches
@@ -165,7 +237,9 @@ static void cgba_sh4_thumb_ldst_do(u32 opcode, u32 pc)
  * if a store raised an alert (DMA/HALT idle, IRQ, SMC). */
 int cgba_sh4_thumb_ldst(u32 opcode, u32 pc)
 {
+  cgba_sh4_reset_mem_cycles(0);
   cgba_sh4_thumb_ldst_do(opcode, pc);
+  sh4_headless_trace_ldst(pc, opcode);
   return cgba_store_alert_break(pc + 2);
 }
 
@@ -177,6 +251,8 @@ int cgba_sh4_thumb_block(u32 opcode, u32 pc)
   u32 rlist = opcode & 0xFF;
   int wrote_pc = 0;
   int i;
+
+  cgba_sh4_reset_mem_cycles(1);
 
   if (hi == 0xB4 || hi == 0xB5) {                  /* PUSH {rlist[, lr]} */
     u32 sp = reg[REG_SP];
@@ -418,6 +494,8 @@ int cgba_sh4_arm_ldst(u32 opcode, u32 pc)
   u32 offset, addr;
   int is_half = 0, is_byte = 0, signed_ld = 0, half_w = 0;
 
+  cgba_sh4_reset_mem_cycles(0);
+
   if ((opcode & 0x0E000090) == 0x00000090) {
     /* halfword / signed-byte transfer (bits 27..25 = 000, bits 7,4 = 1) */
     is_half = 1;
@@ -524,6 +602,8 @@ int cgba_sh4_arm_block(u32 opcode, u32 pc)
   u32 base = reg[rn];
   u32 count = 0, addr, new_base, i, lowest = 16;
   int wrote_pc = 0;
+
+  cgba_sh4_reset_mem_cycles(1);
 
   /* TODO(S-bit): with the S bit set and r15 NOT in the list, LDM/STM transfer
      the USER-mode banked registers — not handled here (rare). */
@@ -719,6 +799,7 @@ void cgba_sh4_arm_swap(u32 opcode, u32 pc)
   u32 is_byte = (opcode >> 22) & 1;
   u32 addr = reg[rn];
   (void)pc;
+  cgba_sh4_reset_mem_cycles(0);
   if (is_byte) {
     u32 tmp = execute_load_u8(addr);
     execute_store_u8(addr, reg[rm]);

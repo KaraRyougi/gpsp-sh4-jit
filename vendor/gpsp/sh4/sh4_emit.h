@@ -104,11 +104,13 @@ extern void *tmemst[4][16];
 
 #define generate_cycle_update()                                               \
   do { if(cycle_count != 0) {                                                 \
-         sh4g_cycle_sub(&translation_ptr, (int)cycle_count); cycle_count = 0; \
+         sh4g_cycle_sub(&translation_ptr, (int)cycle_count, (u32)pc,          \
+                        (const void *)sh4_block_exit); cycle_count = 0;       \
        } } while(0)
 
 #define generate_cycle_update_force()                                         \
-  do { sh4g_cycle_sub(&translation_ptr, (int)cycle_count); cycle_count = 0; } while(0)
+  do { sh4g_cycle_sub(&translation_ptr, (int)cycle_count, (u32)pc,            \
+                      (const void *)sh4_block_exit); cycle_count = 0; } while(0)
 
 /* materialize an immediate / PC value into a host register */
 #define generate_load_pc(hostreg, value)                                      \
@@ -131,9 +133,11 @@ extern void *tmemst[4][16];
   sh4g_patch_cond((u8 *)(dest), (const void *)(offset))
 
 /* Re-dispatch the block at `pc` (used when a block runs off its end or hits a
- * translation gate). R4 = pc, then funnel through sh4_block_exit. */
+ * translation gate). Flush accumulated block cycles first so run-off/gate loops
+ * cannot spin without giving update_gba() a chance to retire events. */
 #define generate_translation_gate(type)                                       \
-  do { sh4g_const(&translation_ptr, (u32)pc, SH4_REG_ARG0);                   \
+  do { generate_cycle_update();                                               \
+       sh4g_const(&translation_ptr, (u32)pc, SH4_REG_ARG0);                   \
        sh4g_far_jmp(&translation_ptr, (const void *)sh4_block_exit); } while(0)
 
 /* Indirect branches (BX / computed PC) must honour the ARM/Thumb mode of the
@@ -161,18 +165,23 @@ extern void *tmemst[4][16];
   (writeback_location) =                                                      \
     sh4g_branch_exit(&translation_ptr, (u32)(new_pc), (const void *)sh4_block_exit)
 
-#define generate_branch_cycle_update(writeback_location, new_pc)              \
-  do { generate_cycle_update();                                               \
+#define generate_branch_current_update(writeback_location, new_pc)            \
+  do { sh4g_cycle_debit(&translation_ptr, (int)cycle_count);                  \
+       cycle_count = 0;                                                       \
        generate_branch_no_cycle_update(writeback_location, new_pc); } while(0)
 
-#define generate_branch()                                                     \
+#define generate_branch_cycle_update(cycle_type, writeback_location, new_pc)  \
+  do { cycle_count += ws_cyc_nseq[((u32)(new_pc) >> 24) & 0x0F][cycle_type];  \
+       generate_branch_current_update(writeback_location, new_pc); } while(0)
+
+#define generate_arm_branch()                                                 \
   do {                                                                        \
     if(condition == 0x0E)                                                     \
-      generate_branch_cycle_update(                                           \
+      generate_branch_cycle_update(1,                                         \
         block_exits[block_exit_position].branch_source,                       \
         block_exits[block_exit_position].branch_target);                      \
     else                                                                      \
-      generate_branch_no_cycle_update(                                        \
+      generate_branch_current_update(                                         \
         block_exits[block_exit_position].branch_source,                       \
         block_exits[block_exit_position].branch_target);                      \
     block_exit_position++;                                                    \
@@ -330,32 +339,43 @@ extern void *tmemst[4][16];
        sh4g_store_greg(&translation_ptr, SH4_REG_T0, REG_SP); } while(0)
 
 #define thumb_load_pc_pool_const(rd, value)                                   \
-  do { sh4g_const(&translation_ptr, (u32)(value), SH4_REG_T0);                \
+  do { u32 _pool_addr = ((pc & ~2u) + 4u) + ((opcode & 0xFFu) * 4u);          \
+       cycle_count += ws_cyc_nseq[(_pool_addr >> 24) & 0x0F][1];             \
+       sh4g_const(&translation_ptr, (u32)(value), SH4_REG_T0);                \
        sh4g_store_greg(&translation_ptr, SH4_REG_T0, (rd)); } while(0)
 
 /* ================================================================== */
 /* Branches                                                            */
 /* ================================================================== */
 
-#define arm_b()    generate_branch()
+#define arm_b()    generate_arm_branch()
 
 #define arm_bl()                                                              \
   do { sh4g_const(&translation_ptr, (u32)(pc + 4), SH4_REG_T0);               \
        sh4g_store_greg(&translation_ptr, SH4_REG_T0, REG_LR);                 \
-       generate_branch(); } while(0)
+       generate_arm_branch(); } while(0)
 
 #define arm_bx()                                                              \
   do { u32 rn = opcode & 0x0F;                                                \
        generate_load_reg_pc(SH4_REG_ARG0, rn, 8);                            \
+       /* The interpreter's ARM->Thumb BX path jumps to thumb_loop before the \
+        * normal post-instruction sequential charge. The bring-up trampoline  \
+        * cannot yet specialize on the runtime target bit, so compensate the   \
+        * common GBA boot path here and let the differential harness keep us   \
+        * honest as this grows into a runtime dual-path emitter. */            \
+       cycle_count -= ws_cyc_seq[(pc >> 24) & 0x0F][1];                       \
        generate_indirect_branch_dual(); } while(0)
 
 #define arm_swi()                                                             \
   do { sh4g_const(&translation_ptr, (u32)(pc + 4), SH4_REG_ARG0);             \
        sh4g_far_call(&translation_ptr, (const void *)execute_swi);            \
-       generate_branch(); } while(0)
+       generate_branch_current_update(                                        \
+         block_exits[block_exit_position].branch_source,                      \
+         block_exits[block_exit_position].branch_target);                     \
+       block_exit_position++; } while(0)
 
 #define thumb_b()                                                             \
-  do { generate_branch_cycle_update(                                          \
+  do { generate_branch_cycle_update(0,                                        \
          block_exits[block_exit_position].branch_source,                      \
          block_exits[block_exit_position].branch_target);                     \
        block_exit_position++; } while(0)
@@ -363,7 +383,7 @@ extern void *tmemst[4][16];
 #define thumb_bl()                                                            \
   do { sh4g_const(&translation_ptr, (u32)((pc + 2) | 0x01), SH4_REG_T0);      \
        sh4g_store_greg(&translation_ptr, SH4_REG_T0, REG_LR);                 \
-       generate_branch_cycle_update(                                          \
+       generate_branch_cycle_update(0,                                        \
          block_exits[block_exit_position].branch_source,                      \
          block_exits[block_exit_position].branch_target);                     \
        block_exit_position++; } while(0)
@@ -384,7 +404,7 @@ extern void *tmemst[4][16];
 
 #define thumb_conditional_branch(condition)                                   \
   do { generate_condition_##condition();                                      \
-       generate_branch_no_cycle_update(                                       \
+       generate_branch_current_update(                                        \
          block_exits[block_exit_position].branch_source,                      \
          block_exits[block_exit_position].branch_target);                     \
        generate_branch_patch_conditional(backpatch_address, translation_ptr); \
@@ -393,7 +413,7 @@ extern void *tmemst[4][16];
 #define thumb_swi()                                                           \
   do { sh4g_const(&translation_ptr, (u32)(pc + 2), SH4_REG_ARG0);             \
        sh4g_far_call(&translation_ptr, (const void *)execute_swi);            \
-       generate_branch_cycle_update(                                          \
+       generate_branch_current_update(                                        \
          block_exits[block_exit_position].branch_source,                      \
          block_exits[block_exit_position].branch_target);                     \
        block_exit_position++; } while(0)
@@ -415,25 +435,43 @@ extern void *tmemst[4][16];
        sh4g_const(&translation_ptr, (u32)pc, SH4_REG_ARG1);                   \
        sh4g_far_call(&translation_ptr, (const void *)(fn)); } while(0)
 
+#define SH4_CALL_OP2_MEM(fn)                                                  \
+  do { SH4_CALL_OP2(fn);                                                      \
+       sh4g_cycle_debit_from_global(&translation_ptr,                         \
+                                    &cgba_sh4_extra_cycles); } while(0)
+
 /* Same, but the handler returns 1 in R0 when it changed the PC -> redispatch. */
 #define SH4_CALL_OP2_PC(fn)                                                   \
   do { SH4_CALL_OP2(fn);                                                      \
-       sh4g_redispatch_if_r0(&translation_ptr, (const void *)sh4_block_exit); \
+       sh4g_redispatch_if_r0_debit(&translation_ptr, (int)cycle_count,        \
+                                   (const void *)sh4_block_exit);             \
+  } while(0)
+
+#define SH4_CALL_OP2_PC_MEM(fn)                                               \
+  do { SH4_CALL_OP2(fn);                                                      \
+       sh4g_cycle_debit_from_global(&translation_ptr,                         \
+                                    &cgba_sh4_extra_cycles);                  \
+       sh4g_redispatch_if_r0_debit(&translation_ptr, (int)cycle_count,        \
+                                   (const void *)sh4_block_exit);             \
   } while(0)
 
 /* Memory (single + block transfers). */
 #define thumb_access_memory(access_type, op_type, reg_rd, reg_rb, reg_ro,     \
                             address_type, offset, mem_type)                   \
-  SH4_CALL_OP2_PC(cgba_sh4_thumb_ldst)
+  do { if(!sh4g_thumb_ldst_native(&translation_ptr, (u32)opcode, (u32)pc,     \
+                                  (int)cycle_count))                          \
+         SH4_CALL_OP2_PC_MEM(cgba_sh4_thumb_ldst); } while(0)
 #define thumb_block_memory(access_type, pre_op, post_op, base_reg)            \
-  SH4_CALL_OP2_PC(cgba_sh4_thumb_block)
+  SH4_CALL_OP2_PC_MEM(cgba_sh4_thumb_block)
 #define arm_access_memory(access_type, direction, adjust_op, mem_type,        \
                           offset_type)                                        \
-  do { if(!sh4g_arm_ldst_native(&translation_ptr, (u32)opcode, (u32)pc))       \
-         SH4_CALL_OP2_PC(cgba_sh4_arm_ldst); } while(0)
+  do { if(!sh4g_arm_ldst_native(&translation_ptr, (u32)opcode, (u32)pc,       \
+                                (int)cycle_count))                            \
+         SH4_CALL_OP2_PC_MEM(cgba_sh4_arm_ldst); } while(0)
 #define arm_block_memory(access_type, offset_type, writeback_type, s_bit)     \
-  do { if(!sh4g_arm_block_native(&translation_ptr, (u32)opcode, (u32)pc))      \
-         SH4_CALL_OP2_PC(cgba_sh4_arm_block); } while(0)
+  do { if(!sh4g_arm_block_native(&translation_ptr, (u32)opcode, (u32)pc,      \
+                                 (int)cycle_count))                           \
+         SH4_CALL_OP2_PC_MEM(cgba_sh4_arm_block); } while(0)
 
 /* ARM data-processing: try native (immediate-operand forms), else the C core. */
 #define arm_data_proc(name, type, flags_op)                                   \
@@ -452,7 +490,7 @@ extern void *tmemst[4][16];
   do { if(!sh4g_arm_multiply_long_native(&translation_ptr, (u32)opcode))      \
          SH4_CALL_OP2(cgba_sh4_arm_multiply_long); } while(0)
 #define arm_psr(op_type, transfer_type, psr_reg)   SH4_CALL_OP2_PC(cgba_sh4_arm_psr)
-#define arm_swap(type)                             SH4_CALL_OP2(cgba_sh4_arm_swap)
+#define arm_swap(type)                             SH4_CALL_OP2_MEM(cgba_sh4_arm_swap)
 
 #define arm_hle_div(cpu_mode)                                                 \
   do { sh4g_const(&translation_ptr, 0u, SH4_REG_ARG0);                        \

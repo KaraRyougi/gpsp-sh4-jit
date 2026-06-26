@@ -32,6 +32,11 @@ void cgba_gpsp_shutdown(void);
 #define CGBA_DIAG_LINE_MAX 48
 unsigned cgba_gpsp_diag(char out[][CGBA_DIAG_LINE_MAX], unsigned max_lines);
 
+#define CGBA_STATE_LINE_MAX 512
+unsigned cgba_gpsp_state_lines(unsigned frame, const char *phase,
+	const uint16_t *framebuffer, char out[][CGBA_STATE_LINE_MAX],
+	unsigned max_lines);
+
 #ifdef CGBA_DYNAREC
 /* Differential interp-vs-dynarec harness (subtask 2): run `cycles` of guest
  * code through both cores from one snapshot and format the first divergence
