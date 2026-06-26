@@ -39,6 +39,7 @@ static inline int sh4g_arm_ldst_native(u8 **tp, u32 opcode, u32 pc)
   u32 writeback = (opcode >> 21) & 1, is_load = (opcode >> 20) & 1;
   u32 rn = (opcode >> 16) & 0xF, rd = (opcode >> 12) & 0xF;
   u32 offset = 0, reg_offset = 0, rm = 0;
+  u32 shift_offset = 0, shoff_type = 0, shoff_amount = 0;
   int kind, align_mask;
   u8 *guards[3]; int ng = 0;
   u8 *bra_done;
@@ -57,22 +58,28 @@ static inline int sh4g_arm_ldst_native(u8 **tp, u32 opcode, u32 pc)
     else                     { kind = LDK_UH; align_mask = 1; }   /* LDRH/STRH */
   } else {                                             /* normal word / byte form */
     if (opcode & 0x02000000) {                         /* register offset */
-      if (opcode & 0xFF0) return 0;                    /* shifted -> C (LSL#0 only) */
-      reg_offset = 1; rm = opcode & 0xF;
+      u32 st = (opcode >> 5) & 3, sa = (opcode >> 7) & 0x1F;
+      if (opcode & 0x10)        return 0;              /* register-specified shift -> C */
+      rm = opcode & 0xF;
+      if (sa == 0 && st == 0)   reg_offset = 1;        /* LSL #0 = plain register */
+      else if (st == 3)         return 0;              /* ROR/RRX -> C */
+      else { shift_offset = 1; shoff_type = st; shoff_amount = sa; } /* LSL/LSR/ASR #k */
     } else {
       offset = opcode & 0xFFF;                          /* 12-bit immediate */
     }
     if ((opcode >> 22) & 1)  { kind = LDK_B; align_mask = 0; }    /* LDRB/STRB */
     else                     { kind = LDK_W; align_mask = 3; }    /* LDR/STR  */
   }
-  if (reg_offset && rm == 15) return 0;                /* PC offset register -> C */
+  if ((reg_offset || shift_offset) && rm == 15) return 0;  /* PC offset register -> C */
   if (!is_load && (kind == LDK_SH || kind == LDK_SB)) return 0;   /* LDRD/STRD -> C */
 
   /* addr = reg[rn] +/- offset, in R1; then page = memory_map_read[addr>>15] in R3 */
   { sh4_codegen cg = sh4g_open(tp);
     sh4_emit_load_greg(&cg, rn, SH4_REG_T0);
     sh4g_close(tp, &cg); }
-  if (reg_offset) {                                    /* offset = reg[rm] (runtime) */
+  if (shift_offset) {                                  /* offset = reg[rm] shifted (R2) */
+    sh4g_arm_shift_imm_op2(tp, shoff_type, shoff_amount, rm);
+  } else if (reg_offset) {                             /* offset = reg[rm] (runtime) */
     sh4_codegen cg = sh4g_open(tp);
     sh4_emit_load_greg(&cg, rm, SH4_REG_T1);
     sh4g_close(tp, &cg);
@@ -80,7 +87,7 @@ static inline int sh4g_arm_ldst_native(u8 **tp, u32 opcode, u32 pc)
     sh4g_const(tp, up ? offset : (u32)(-(int32_t)offset), SH4_REG_T1);
   }
   { sh4_codegen cg = sh4g_open(tp);
-    if (reg_offset && !up)                             /* addr = rn - rm (down) */
+    if ((reg_offset || shift_offset) && !up)           /* addr = rn - offset (down) */
       sh4_emit_sub(&cg, SH4_REG_T1, SH4_REG_T0);
     else                                               /* addr = rn + offset */
       sh4_emit_add_reg(&cg, SH4_REG_T1, SH4_REG_T0);   /* R1 = addr */
