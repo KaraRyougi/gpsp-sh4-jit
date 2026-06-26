@@ -46,6 +46,10 @@ static u8 snap_buf[GBA_STATE_MEM_SIZE] CGBA_HIGH_BSS_LOCAL;
 static u32 oracle_reg[64];
 static u32 oracle_h_iwram, oracle_h_ewram, oracle_h_vram, oracle_h_io;
 
+/* Byte copy of the interpreter's IWRAM, so a divergence can be located to an
+ * address (not just a hash mismatch). 64 KiB; in the high arena. */
+static u8 oracle_iwram[1024 * 32 * 2] CGBA_HIGH_BSS_LOCAL;
+
 static void capture_full(void)  { gba_save_state(snap_buf); }
 static void restore_full(void)  { gba_load_state(snap_buf); }
 
@@ -130,6 +134,57 @@ unsigned cgba_sh4_diff_dump(uint32_t cycles, char out[][48], unsigned max_lines)
     if (reg[i] != oracle_reg[i])
       snprintf(out[n++], 48, "r%d i%08lX d%08lX", i,
         (unsigned long)oracle_reg[i], (unsigned long)reg[i]);
+  return n;
+}
+
+/* Run one window under both cores and report WHICH regions diverge (so VRAM —
+ * the display — is checked, not short-circuited at IWRAM) plus the first
+ * diverging IWRAM word + total diverging word count. For classifying the
+ * post-halt content diff: benign (sound/scratch, VRAM matches) vs real. */
+unsigned cgba_sh4_diff_regions(uint32_t cycles, char out[][48], unsigned max_lines)
+{
+  unsigned n = 0, i;
+  u32 start_pc = reg[REG_PC], ipc, dpc;
+  u32 hew, hvr, hio;
+  u32 first = 0xFFFFFFFFu, cnt = 0, iv = 0, dv = 0;
+  int rdiff = -1;
+
+  capture_full();
+  execute_arm(cycles);
+  ipc = reg[REG_PC];
+  memcpy(oracle_reg, reg, sizeof oracle_reg);
+  memcpy(oracle_iwram, iwram, sizeof oracle_iwram);
+  hew = fnv1a(ewram, 1024 * 256 * 2);
+  hvr = fnv1a(vram, 1024 * 96);
+  hio = fnv1a(io_registers, sizeof io_registers);
+
+  restore_full();
+  flush_dynarec_caches();
+  execute_arm_translate(cycles);
+  dpc = reg[REG_PC];
+
+  for (i = 0; i < 16; i++)
+    if (reg[i] != oracle_reg[i]) { rdiff = (int)i; break; }
+  for (i = 0; i < sizeof oracle_iwram; i += 4) {
+    u32 a, b;
+    memcpy(&a, oracle_iwram + i, 4);
+    memcpy(&b, iwram + i, 4);
+    if (a != b) { if (first == 0xFFFFFFFFu) { first = i; iv = a; dv = b; } cnt++; }
+  }
+
+  if (n < max_lines)
+    snprintf(out[n++], 48, "p%lX i%lX d%lX r%d", (unsigned long)start_pc,
+      (unsigned long)ipc, (unsigned long)dpc, rdiff);
+  if (n < max_lines)        /* iw = diverging IWRAM words; the rest are 0/1 flags */
+    snprintf(out[n++], 48, "iw%lu ew%d vr%d io%d", (unsigned long)cnt,
+      fnv1a(ewram, 1024 * 256 * 2) != hew, fnv1a(vram, 1024 * 96) != hvr,
+      fnv1a(io_registers, sizeof io_registers) != hio);
+  /* First diverging IWRAM word (GBA addr = 0x03000000 + off). Audio-like packed
+   * sample bytes vs a silent oracle => a sound buffer (cosmetic); structured
+   * data => a real store bug worth the single-block lockstep hunt. */
+  if (cnt && n < max_lines)
+    snprintf(out[n++], 48, "iw@%lX i%08lX d%08lX", (unsigned long)first,
+      (unsigned long)iv, (unsigned long)dv);
   return n;
 }
 
