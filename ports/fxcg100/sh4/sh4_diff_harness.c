@@ -171,6 +171,8 @@ unsigned cgba_sh4_diff_regions(uint32_t cycles, char out[][48], unsigned max_lin
 
   for (i = 0; i < 16; i++)
     if (reg[i] != oracle_reg[i]) { rdiff = (int)i; break; }
+  if (rdiff < 0 && reg[REG_CPSR] != oracle_reg[REG_CPSR])
+    rdiff = REG_CPSR;                         /* r16 => flags/mode (N/Z/C/V) diverged */
   for (i = 0; i < sizeof oracle_iwram; i += 4) {
     u32 a, b;
     memcpy(&a, oracle_iwram + i, 4);
