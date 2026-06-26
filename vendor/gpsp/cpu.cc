@@ -1476,6 +1476,23 @@ u8 vram[1024 * 96] CGBA_HIGH_BSS;
 u16 io_registers[512] CGBA_HIGH_BSS;
 #endif
 
+#ifdef CGBA_DYNAREC
+/* Differential single-block harness hook (sh4_diff_harness.c). When active,
+ * execute_arm returns the instant it is about to execute cgba_diff_stop_pc, so
+ * the interpreter can be run to an exact dynarec-chosen block-boundary PC and the
+ * two register files compared there. extern "C" so the C harness can set them;
+ * only compiled into dynarec (dev) builds, and a no-op when inactive. */
+extern "C" {
+u32 cgba_diff_stop_pc;
+int cgba_diff_stop_active;
+}
+#define CGBA_DIFF_STOP_CHECK()                                                \
+  do { if(cgba_diff_stop_active && reg[REG_PC] == cgba_diff_stop_pc) return; } \
+  while(0)
+#else
+#define CGBA_DIFF_STOP_CHECK() do {} while(0)
+#endif
+
 void execute_arm(u32 cycles)
 {
   u32 opcode;
@@ -1530,6 +1547,7 @@ arm_loop:
        using_instruction(arm);
        check_pc_region();
        reg[REG_PC] &= ~0x03;
+       CGBA_DIFF_STOP_CHECK();
        opcode = readaddress32(pc_address_block, (reg[REG_PC] & 0x7FFF));
        condition = opcode >> 28;
 
@@ -3109,6 +3127,7 @@ thumb_loop:
        using_instruction(thumb);
        check_pc_region();
        reg[REG_PC] &= ~0x01;
+       CGBA_DIFF_STOP_CHECK();
        opcode = readaddress16(pc_address_block, (reg[REG_PC] & 0x7FFF));
 
        #ifdef TRACE_INSTRUCTIONS
