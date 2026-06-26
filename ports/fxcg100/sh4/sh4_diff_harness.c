@@ -28,10 +28,16 @@
 #include "vendor/gpsp/savestate.h"
 #include "ports/fxcg100/sh4/sh4_diff_harness.h"
 
+/* gint's rtc_ticks(), declared directly: <gint/rtc.h> pulls <gint/types.h> whose
+ * `u32` (uint32_t) collides with gpSP's `u32` (unsigned int). 128 Hz counter. */
+uint32_t rtc_ticks(void);
+
 void execute_arm(u32 cycles);              /* interpreter (cpu.cc) */
 u32  execute_arm_translate(u32 cycles);    /* dynarec (sh4_interp_helpers.c) */
 void reset_gba(void);                      /* main.c */
 extern int cgba_dynarec_single_block;      /* sh4_interp_helpers.c / sh4_stub.S */
+extern u32 execute_cycles;                 /* gpSP per-frame cycle budget (main.c) */
+extern u32 skip_next_frame;                /* gpSP: 1 = skip the renderer */
 
 #define CGBA_HIGH_BSS_LOCAL __attribute__((section(".cgba.highbss"), aligned(32)))
 
@@ -185,6 +191,48 @@ unsigned cgba_sh4_diff_regions(uint32_t cycles, char out[][48], unsigned max_lin
   if (cnt && n < max_lines)
     snprintf(out[n++], 48, "iw@%lX i%08lX d%08lX", (unsigned long)first,
       (unsigned long)iv, (unsigned long)dv);
+  return n;
+}
+
+/* A/B throughput benchmark: from one snapshot, time `frames` GBA frames of pure
+ * CPU emulation (renderer skipped) under the interpreter, then the dynarec, and
+ * report ticks + frames/sec for each plus the dynarec time-speedup (x100; >100 =
+ * faster). Both run the identical workload from the same state, so the ratio
+ * isolates the recompiler from everything else. The 128 Hz RTC is the timer, so
+ * the numbers are real FPS on hardware and a comparable ratio in casio-emu. */
+unsigned cgba_sh4_bench(unsigned frames, char out[][48], unsigned max_lines)
+{
+  unsigned i, n = 0;
+  uint32_t t0, it, dt, ifps, dfps, spd;
+  u32 saved_skip = skip_next_frame;
+
+  capture_full();                            /* S = current game state */
+
+  restore_full();                            /* interpreter from S */
+  skip_next_frame = 1;
+  t0 = rtc_ticks();
+  for (i = 0; i < frames; i++) execute_arm(execute_cycles);
+  it = rtc_ticks() - t0;
+
+  restore_full();                            /* dynarec from S (load flushes cache) */
+  skip_next_frame = 1;
+  t0 = rtc_ticks();
+  for (i = 0; i < frames; i++) execute_arm_translate(execute_cycles);
+  dt = rtc_ticks() - t0;
+
+  restore_full();                            /* leave a coherent state */
+  skip_next_frame = saved_skip;
+
+  ifps = it ? frames * 128u / it : 0;
+  dfps = dt ? frames * 128u / dt : 0;
+  spd  = dt ? it * 100u / dt : 0;
+
+  if (n < max_lines)
+    snprintf(out[n++], 48, "bench f%u it%lu dt%lu", frames,
+      (unsigned long)it, (unsigned long)dt);
+  if (n < max_lines)
+    snprintf(out[n++], 48, "ifps%lu dfps%lu spd%lu", (unsigned long)ifps,
+      (unsigned long)dfps, (unsigned long)spd);
   return n;
 }
 
