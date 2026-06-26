@@ -149,7 +149,7 @@ int cgba_gpsp_init(uint16_t *framebuffer, unsigned rom_id)
 		return -2;
 
 	selected_boot_mode = boot_game;
-	dynarec_enable = 0;
+	dynarec_enable = 1;   /* JIT on by default (SAVE_STATE hotkey still toggles) */
 	sprite_limit = 1;
 	reset_gba();
 	return 0;
