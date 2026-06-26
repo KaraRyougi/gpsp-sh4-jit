@@ -24,6 +24,7 @@
 #define SH4_EMIT_H
 
 #include "ports/fxcg100/sh4/sh4_emit_glue.h"
+#include "ports/fxcg100/sh4/sh4_thumb_dp_emit.h"
 
 /* ------------------------------------------------------------------ */
 /* Runtime symbols (sh4/sh4_stub.S, cpu.cc, cpu_threaded.c, helpers).  */
@@ -265,17 +266,29 @@ extern void *tmemst[4][16];
  * determines the operation, so the helper re-decodes and the macro tokens are
  * unused. rd is r0..r7 here (never PC); only the hi-reg forms can write PC.
  */
+/* Each form first tries native SH4 emission (sh4g_thumb_dp_native, op-by-op
+ * allow-list); on a 0 it falls back to the C helper, untouched. */
 #define thumb_data_proc(type, name, rn_type, _rd, _rs, _rn)                   \
-  SH4_CALL_OP2(cgba_sh4_thumb_dp)
+  do { if(!sh4g_thumb_dp_native(&translation_ptr, (u32)opcode, (u32)pc))      \
+         SH4_CALL_OP2(cgba_sh4_thumb_dp); } while(0)
 #define thumb_data_proc_test(type, name, rn_type, _rs, _rn)                   \
-  SH4_CALL_OP2(cgba_sh4_thumb_dp)
+  do { if(!sh4g_thumb_dp_native(&translation_ptr, (u32)opcode, (u32)pc))      \
+         SH4_CALL_OP2(cgba_sh4_thumb_dp); } while(0)
 #define thumb_data_proc_unary(type, name, rn_type, _rd, _rn)                  \
-  SH4_CALL_OP2(cgba_sh4_thumb_dp)
+  do { if(!sh4g_thumb_dp_native(&translation_ptr, (u32)opcode, (u32)pc))      \
+         SH4_CALL_OP2(cgba_sh4_thumb_dp); } while(0)
 
-/* Hi-register ADD/MOV can target r15 -> re-dispatch when the helper returns 1. */
-#define thumb_data_proc_hi(name)        SH4_CALL_OP2_PC(cgba_sh4_thumb_dp)
-#define thumb_data_proc_test_hi(name)   SH4_CALL_OP2(cgba_sh4_thumb_dp)
-#define thumb_data_proc_mov_hi()        SH4_CALL_OP2_PC(cgba_sh4_thumb_dp)
+/* Hi-register ADD/MOV can target r15 -> re-dispatch when the helper returns 1.
+ * The native path returns 0 for the rd==15 cases so they stay on the C path. */
+#define thumb_data_proc_hi(name)                                              \
+  do { if(!sh4g_thumb_dp_native(&translation_ptr, (u32)opcode, (u32)pc))      \
+         SH4_CALL_OP2_PC(cgba_sh4_thumb_dp); } while(0)
+#define thumb_data_proc_test_hi(name)                                         \
+  do { if(!sh4g_thumb_dp_native(&translation_ptr, (u32)opcode, (u32)pc))      \
+         SH4_CALL_OP2(cgba_sh4_thumb_dp); } while(0)
+#define thumb_data_proc_mov_hi()                                              \
+  do { if(!sh4g_thumb_dp_native(&translation_ptr, (u32)opcode, (u32)pc))      \
+         SH4_CALL_OP2_PC(cgba_sh4_thumb_dp); } while(0)
 
 /* ================================================================== */
 /* Thumb shifts — routed to C for correct N/Z/C (immediate and register). */
