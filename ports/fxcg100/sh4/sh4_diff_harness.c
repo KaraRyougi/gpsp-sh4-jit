@@ -389,6 +389,25 @@ static unsigned cgba_sh4_diff_blocks_core(unsigned max_blocks, char out[][48],
       diverged = 1;
       snprintf(out[n++], 48, "B%u p%lX cyc i%lu d%lu", b,
         (unsigned long)pc0, (unsigned long)iused, (unsigned long)dused);
+#ifdef CGBA_SH4_DIFF_DUMP_OPS
+      { u32 a;
+        extern int cgba_diff_trace_cycles;
+        if (n < max_lines)
+          snprintf(out[n++], 48, "Bops cpsr%lX dpc%lX",
+            (unsigned long)oracle_reg[REG_CPSR], (unsigned long)dpc);
+        for (a = pc0; a < dpc && a < pc0 + 0x44u && n < max_lines; a += 4)
+          snprintf(out[n++], 48, "op %lX %08lX", (unsigned long)a,
+            (unsigned long)read_memory32(a));
+        /* re-run the interp from the snapshot to dpc with per-insn cycle trace
+         * (streamed to the putchar port as cPC:REMAIN lines). */
+        restore_full();
+        cgba_diff_stop_pc = dpc; cgba_diff_stop_active = 1;
+        cgba_diff_stop_cycles_remaining = (s32)0x4000;
+        cgba_diff_trace_cycles = 1;
+        execute_arm(0x4000u);
+        cgba_diff_trace_cycles = 0; cgba_diff_stop_active = 0;
+      }
+#endif
     }
 
     for (i = 0; i < 16; i++) {     /* r0..r15 (r15 = PC, already aligned by both) */
