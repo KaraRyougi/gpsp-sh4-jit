@@ -108,6 +108,57 @@ static inline void sh4g_dp_addsub(u8 **tp, int is_sub, unsigned rd,
     sh4g_set_nzcv(tp, SH4_REG_T0, SH4_REG_ARG0, SH4_REG_ARG1);
 }
 
+/* ADC/SBC/RSC: carry-in add/subtract of (a in R1, b in R2), result in R1. The
+ * shifter carry is irrelevant here (C comes from the ALU). Carry-in T = old C
+ * for ADC, !old C for SBC/RSC (ARM borrow = ~C). C-out = T for ADC, !T for the
+ * subtract (ARM C = !borrow). V uses the bit formula from the saved operands:
+ *   add:  V = (~(a^b) & (a^res)) >> 31     sub: V = ((a^b) & (a^res)) >> 31. */
+static inline void sh4g_dp_carry(u8 **tp, int is_sub, unsigned rd,
+                                 int write_result, int set_flags)
+{
+  sh4_codegen cg = sh4g_open(tp);
+  const unsigned a  = SH4_REG_T0;    /* R1 = first / result */
+  const unsigned b  = SH4_REG_T1;    /* R2 = second (preserved by addc/subc) */
+  const unsigned a0 = SH4_REG_ARG2;  /* R6 = saved original a (for V) */
+  const unsigned rc = SH4_REG_ARG0;  /* R4 = C (0/1) */
+  const unsigned rv = SH4_REG_ARG1;  /* R5 = V (0/1) */
+  const unsigned t  = SH4_REG_T2;    /* R3 scratch */
+
+  if (set_flags) sh4_emit_mov_reg(&cg, a, a0);
+  if (!is_sub) {                                  /* ADC: T = old C, then a+b+C */
+    sh4_emit_load_greg(&cg, SH4_GREG_CPSR, SH4_REG_RET);
+    sh4_emit_shll2(&cg, SH4_REG_RET);
+    sh4_emit_shll(&cg, SH4_REG_RET);              /* T = CPSR bit29 = old C */
+    sh4_emit_addc(&cg, b, a);                     /* a = a + b + C, T = C-out */
+    if (set_flags) sh4_emit_movt(&cg, rc);
+  } else {                                        /* SBC/RSC: T = !old C, then a-b-!C */
+    sh4_emit_load_greg(&cg, SH4_GREG_CPSR, t);
+    sh4_emit_mov_imm(&cg, 1, SH4_REG_RET);
+    sh4_emit_rotr(&cg, SH4_REG_RET);
+    sh4_emit_shlr2(&cg, SH4_REG_RET);             /* R0 = 0x20000000 (C bit) */
+    sh4_emit_tst(&cg, SH4_REG_RET, t);            /* T = (old C == 0) = !C */
+    sh4_emit_subc(&cg, b, a);                     /* a = a - b - !C, T = borrow */
+    if (set_flags) {                              /* ARM C = !borrow */
+      sh4_emit_movt(&cg, rc);
+      sh4_emit_not(&cg, rc, SH4_REG_RET);
+      sh4_emit_and_imm(&cg, 1);
+      sh4_emit_mov_reg(&cg, SH4_REG_RET, rc);
+    }
+  }
+  if (set_flags) {                                /* V from saved a0, b, res */
+    sh4_emit_mov_reg(&cg, a0, t); sh4_emit_xor(&cg, b, t);     /* t = a0 ^ b */
+    if (!is_sub) sh4_emit_not(&cg, t, t);                       /* add: ~(a0^b) */
+    sh4_emit_mov_reg(&cg, a0, SH4_REG_RET); sh4_emit_xor(&cg, a, SH4_REG_RET); /* R0 = a0^res */
+    sh4_emit_and(&cg, SH4_REG_RET, t);
+    sh4_emit_shll(&cg, t);                         /* T = bit31 of t */
+    sh4_emit_movt(&cg, rv);
+  }
+  if (write_result) sh4_emit_store_greg(&cg, a, rd);
+  sh4g_close(tp, &cg);
+  if (set_flags)
+    sh4g_set_nzcv(tp, SH4_REG_T0, SH4_REG_ARG0, SH4_REG_ARG1);
+}
+
 /* Emit native SH4 for the Thumb data-proc `opcode`, or return 0 to fall back to
  * the C helper. flag_status is gpSP's per-instruction dead-flag mask (bits N=8
  * Z=4 C=2 V=1): when the flags this op sets are all dead, the flag emission is
@@ -404,7 +455,25 @@ static inline int sh4g_arm_dp_native(u8 **tp, u32 opcode, u32 pc)
     }
     return 1;
   }
-  default: return 0;                             /* RSB/ADC/SBC/RSC -> C path */
+  case 0x3: case 0x5: case 0x6: case 0x7: {      /* RSB / ADC / SBC / RSC */
+    int reverse = (op == 0x3 || op == 0x7);       /* result = op2 - rn */
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_load_greg(&cg, rn, SH4_REG_T0);
+      sh4g_close(tp, &cg); }
+    if (shifted) sh4g_arm_shift_imm_op2(tp, shift_type, shift_amount, rm);
+    else         sh4g_arm_load_op2(tp, is_imm, op2, rm);
+    if (reverse) {                                /* swap to T0=op2, T1=rn */
+      sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
+      sh4_emit_mov_reg(&cg, SH4_REG_T1, SH4_REG_T0);
+      sh4_emit_mov_reg(&cg, SH4_REG_RET, SH4_REG_T1);
+      sh4g_close(tp, &cg);
+    }
+    if (op == 0x3) sh4g_dp_addsub(tp, 1, rd, 1, S);          /* RSB = op2 - rn */
+    else           sh4g_dp_carry(tp, op != 0x5, rd, 1, S);   /* ADC add / SBC,RSC sub */
+    return 1;
+  }
+  default: return 0;
   }
 }
 
