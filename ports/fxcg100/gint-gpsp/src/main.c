@@ -9,6 +9,7 @@
 #include "gpsp_runner.h"
 #ifdef CGBA_DYNAREC
 #include "sh4/sh4_diff_harness.h"
+extern int dynarec_enable;   /* gpSP: 0 = interpreter, 1 = SH4 recompiler */
 #endif
 
 /* Menu frameskip types (order matches frameskip_options[] in fxcg100_menu.c). */
@@ -334,7 +335,17 @@ int main(void)
 			enter_gameplay_display(framebuffer, frame);
 		}
 		if(hotkey_edge & FXCG100_HOTKEY_BIT(FXCG100_HOTKEY_SAVE_STATE)) {
+#ifdef CGBA_DYNAREC
+			/* Test build: SAVE_STATE hotkey toggles the SH4 recompiler so the
+			 * interpreter and dynarec can be A/B-compared on hardware (use the
+			 * FPS hotkey to read the speedup). Boots in the interpreter so the
+			 * device is never bricked by a dynarec fault at load. */
+			dynarec_enable = dynarec_enable ? 0 : 1;
+			draw_status("CPU core toggled",
+				dynarec_enable ? "DYNAREC (JIT)" : "INTERPRETER");
+#else
 			draw_status("savestate unavailable", "not implemented yet");
+#endif
 			wait_status();
 			enter_gameplay_display(framebuffer, frame);
 		}

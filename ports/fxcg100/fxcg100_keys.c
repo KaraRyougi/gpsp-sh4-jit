@@ -74,7 +74,11 @@ static const char * const gba_key_labels[FXCG100_GBA_KEY_COUNT] = {
 static const char * const hotkey_labels[FXCG100_HOTKEY_COUNT] = {
   "FAST FORWARD",
   "LOAD STATE",
+#ifdef CGBA_DYNAREC
+  "DYNAREC TOGGLE",   /* SAVE_STATE hotkey repurposed: interpreter <-> JIT */
+#else
   "SAVE STATE",
+#endif
   "SAVE+EXIT",
   "DISPLAY FPS",
 };
