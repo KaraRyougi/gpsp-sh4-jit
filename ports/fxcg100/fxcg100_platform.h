@@ -99,6 +99,8 @@ void fxcg100_keymap_defaults(uint16_t *keymap);
 void fxcg100_hotkey_defaults(uint16_t *hotkey_map);
 int fxcg100_keymap_valid(const uint16_t *keymap);
 int fxcg100_hotkey_map_valid(const uint16_t *hotkey_map);
+int fxcg100_input_maps_valid(const uint16_t *keymap,
+                             const uint16_t *hotkey_map);
 int fxcg100_key_bindable(uint16_t key);
 const char *fxcg100_key_label(uint16_t key);
 const char *fxcg100_gba_key_label(uint32_t index);
@@ -115,6 +117,7 @@ uint32_t fxcg100_rom_source_count(void);
 const char *fxcg100_rom_source_label(uint32_t index);
 
 void fxcg100_lcd_init(void);
+void fxcg100_lcd_shutdown(void);
 void fxcg100_lcd_clear(uint16_t color);
 void fxcg100_lcd_fill_rect(unsigned x, unsigned y, unsigned w, unsigned h,
                            uint16_t color);
@@ -126,10 +129,10 @@ void fxcg100_lcd_blit_gba(const uint16_t *pixels);
 uint32_t fxcg100_frame_hash(const uint16_t *pixels);
 
 /* Draw an FPS metrics overlay into the top-left of a 240x160 GBA frame buffer
- * (so it rides along with the DMA blit). emu_fps = emulated frame rate, vid_fps
- * = rendered/blitted frame rate after frameskip. */
+ * (so it rides along with the DMA blit). emu_fps = emulated frame rate,
+ * draw_fps = drawn/blitted frame rate after frameskip. */
 void fxcg100_lcd_overlay_fps(uint16_t *pixels, unsigned emu_fps,
-                             unsigned vid_fps);
+                             unsigned draw_fps);
 
 int cgba_run_jit_probe(void);
 

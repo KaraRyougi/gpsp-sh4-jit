@@ -159,6 +159,7 @@ static int run_safe_boot_app(void)
   }
 
   fxcg100_lcd_status("CGBA RETURN");
+  fxcg100_lcd_shutdown();
   return 0;
 }
 #endif
@@ -308,6 +309,7 @@ int emain(void)
   }
 
   fxcg100_lcd_status("CGBA EXIT");
+  fxcg100_lcd_shutdown();
   return 0;
 #endif
 }
