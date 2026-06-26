@@ -2,26 +2,33 @@
 #define CGBA_SH4_ARM_BLOCK_EMIT_H
 
 /*
- * Native SH-4A emission for ARM block transfer LDM (cgba_sh4_arm_block), the
+ * Native SH-4A emission for ARM block transfer LDM/STM (cgba_sh4_arm_block), the
  * #3 remaining lever (~194k C-dispatches/window). The register list is a
  * translate-time constant, so the transfer UNROLLS into a straight-line run of
- * fast-path word loads.
+ * fast-path word accesses instead of the C helper's popcount loop + per-word
+ * execute_load/store region switch.
  *
- * Stage 1 = LDM only (loads raise no cpu_alert, so no store/SMC handling needed).
- * STM stays on C until a store fast path exists. We also bail to C for: r15 in
- * the list (PC load needs redispatch / the ^ SPSR path), the S bit (user-bank
- * transfer), rn==15, and an empty list.
+ * LDM (load) reads through any mapped host page (EWRAM/IWRAM/IO/VRAM/paged-ROM,
+ * memory_map_read non-NULL, region != 0). STM (store) writes through the SAME
+ * backing pointer but is restricted to EWRAM/IWRAM (region 2/3): those raise no
+ * cpu_alert (write_memory returns CPU_ALERT_NONE) and the SH4 path tracks no SMC,
+ * so an inline store there is equivalent to the C path; VRAM/IO/ROM stores have
+ * side effects / are read-only and fall to C.
  *
- * Address model (matches the oracle exactly): lowest-numbered register goes to
- * the lowest address; the run is `count` contiguous ascending words starting at
- * A = (base & ~3) + offset, with offset = IA:0 IB:+4 DB:-count*4 DA:-count*4+4.
- * Writeback stores new_base = base +/- count*4 (from the UNALIGNED base), and is
- * suppressed when the base register is itself in the list.
+ * Address model (matches the oracle exactly): lowest-numbered register <-> lowest
+ * address; the run is `count` contiguous ascending words from A = (base & ~3) +
+ * offset, offset = IA:0 IB:+4 DB:-count*4 DA:-count*4+4. Writeback stores
+ * new_base = base +/- count*4 (from the UNALIGNED base): suppressed for LDM when
+ * the base is in the list, never suppressed for STM. STM stores new_base for the
+ * base register when it is in the list and not the lowest, else the old reg value.
  *
- * The whole run is guarded to lie in ONE mapped host page (memory_map_read), so
- * a single resolve covers every word and a page-straddle / unmapped / BIOS run
- * falls back to the C helper. The guards use a short skip over a far BRA-to-slow
- * (sh4g_patch_cond truncates disp8, so a long conditional branch is unsafe).
+ * The whole run is guarded into ONE mapped host page (single resolve covers every
+ * word); a straddle / wrong-region / unmapped run falls to the C helper. Guards
+ * use a short skip over a far BRA-to-slow (sh4g_patch_cond truncates disp8, so a
+ * long conditional branch over a count-sized fast path would be unsafe).
+ *
+ * Bails to C: r15 in the list (PC redispatch / ^ SPSR), the S bit (user-bank),
+ * rn==15, empty list, STM outside EWRAM/IWRAM, any straddle/unmapped run.
  */
 
 #include "ports/fxcg100/sh4/sh4_emit_glue.h"
@@ -41,7 +48,7 @@ static inline u8 *sh4g_block_guard(u8 **tp, int slow_if_t)
   return sh4g_emit_bra_placeholder(tp);       /* BRA 0 + NOP delay -> slow      */
 }
 
-/* Native ARM LDM, or 0 to fall back to C. */
+/* Native ARM LDM/STM, or 0 to fall back to C. */
 static inline int sh4g_arm_block_native(u8 **tp, u32 opcode, u32 pc)
 {
   u32 rn        = (opcode >> 16) & 0xF;
@@ -51,22 +58,22 @@ static inline int sh4g_arm_block_native(u8 **tp, u32 opcode, u32 pc)
   u32 pre       = (opcode >> 24) & 1;
   u32 up        = (opcode >> 23) & 1;
   u32 s_bit     = (opcode >> 22) & 1;
-  u32 count = 0, i;
+  u32 count = 0, i, lowest = 16;
   int offset_a, offset_nb, do_wb;
-  u8 *g_strad, *g_region, *g_page, *bra_done;
+  u8 *guards[3]; int ng = 0;
+  u8 *bra_done;
 
-  if (!is_load)              return 0;         /* STM -> C (no store fast path yet) */
   if (s_bit)                 return 0;         /* user-bank / SPSR restore -> C */
   if (rlist & 0x8000)        return 0;         /* PC in list -> C (redispatch)  */
   if (rn == 15)              return 0;         /* base = PC -> C */
 
-  for (i = 0; i < 16; i++) if (rlist & (1u << i)) count++;
+  for (i = 0; i < 16; i++)
+    if (rlist & (1u << i)) { count++; if (lowest == 16) lowest = i; }
   if (count == 0)            return 0;         /* empty list -> C (rare) */
 
   offset_a  = up ? (pre ? 4 : 0) : (pre ? -(int)(count * 4) : -(int)(count * 4) + 4);
   offset_nb = up ? (int)(count * 4) : -(int)(count * 4);
-  /* LDM with the base in the list keeps the loaded value (no writeback). */
-  do_wb = writeback && !(rlist & (1u << rn));
+  do_wb = writeback && !(is_load && (rlist & (1u << rn)));
 
   /* base = reg[rn] in R1; A = (base & ~3) + offset_a in R5 */
   { sh4_codegen cg = sh4g_open(tp);
@@ -87,17 +94,28 @@ static inline int sh4g_arm_block_native(u8 **tp, u32 opcode, u32 pc)
     sh4_emit_shld(&cg, SH4_REG_T1, SH4_REG_T2);      /* R3 = (A+count*4-1) >> 15 */
     sh4_emit_cmpeq(&cg, SH4_REG_RET, SH4_REG_T2);    /* T = same page */
     sh4g_close(tp, &cg); }
-  g_strad = sh4g_block_guard(tp, 0);                 /* straddle (T==0) -> slow */
+  guards[ng++] = sh4g_block_guard(tp, 0);            /* straddle (T==0) -> slow */
 
-  /* region guard: A >> 24 != 0 (exclude BIOS / region 0) */
-  { sh4_codegen cg = sh4g_open(tp);
-    sh4_emit_mov_reg(&cg, SH4_REG_ARG1, SH4_REG_T2);
-    sh4_emit_shlr16(&cg, SH4_REG_T2); sh4_emit_shlr8(&cg, SH4_REG_T2);
-    sh4_emit_tst(&cg, SH4_REG_T2, SH4_REG_T2);       /* T = (region == 0) */
-    sh4g_close(tp, &cg); }
-  g_region = sh4g_block_guard(tp, 1);
+  if (is_load) {
+    /* region guard: A >> 24 != 0 (exclude BIOS / region 0) */
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_reg(&cg, SH4_REG_ARG1, SH4_REG_T2);
+      sh4_emit_shlr16(&cg, SH4_REG_T2); sh4_emit_shlr8(&cg, SH4_REG_T2);
+      sh4_emit_tst(&cg, SH4_REG_T2, SH4_REG_T2);     /* T = (region == 0) */
+      sh4g_close(tp, &cg); }
+    guards[ng++] = sh4g_block_guard(tp, 1);
+  } else {
+    /* STM region guard: (A >> 25) == 1, i.e. EWRAM (0x02) or IWRAM (0x03) only */
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_reg(&cg, SH4_REG_ARG1, SH4_REG_RET);
+      sh4_emit_mov_imm(&cg, -25, SH4_REG_T1);
+      sh4_emit_shld(&cg, SH4_REG_T1, SH4_REG_RET);   /* R0 = A >> 25 */
+      sh4_emit_cmpeq_imm(&cg, 1);                     /* T = (== 1) */
+      sh4g_close(tp, &cg); }
+    guards[ng++] = sh4g_block_guard(tp, 0);          /* not EWRAM/IWRAM -> slow */
+  }
 
-  /* page = memory_map_read[A >> 15]; guard non-NULL */
+  /* page = memory_map_read[A >> 15] in R3 */
   { sh4_codegen cg = sh4g_open(tp);
     sh4_emit_mov_reg(&cg, SH4_REG_ARG1, SH4_REG_RET);
     sh4_emit_mov_imm(&cg, -15, SH4_REG_T1);
@@ -107,9 +125,9 @@ static inline int sh4g_arm_block_native(u8 **tp, u32 opcode, u32 pc)
   sh4g_const(tp, (u32)(uintptr_t)memory_map_read, SH4_REG_T2);
   { sh4_codegen cg = sh4g_open(tp);
     sh4_emit_mov_l_load_r0(&cg, SH4_REG_T2, SH4_REG_T2);  /* R3 = page base */
-    sh4_emit_tst(&cg, SH4_REG_T2, SH4_REG_T2);            /* T = (page == NULL) */
+    if (is_load) sh4_emit_tst(&cg, SH4_REG_T2, SH4_REG_T2);  /* T = (page==NULL) */
     sh4g_close(tp, &cg); }
-  g_page = sh4g_block_guard(tp, 1);
+  if (is_load) guards[ng++] = sh4g_block_guard(tp, 1);  /* STM region==2/3 => mapped */
 
   /* R0 = A & 0x7FFF (in-page offset of the first word) */
   { sh4_codegen cg = sh4g_open(tp);
@@ -118,18 +136,32 @@ static inline int sh4g_arm_block_native(u8 **tp, u32 opcode, u32 pc)
     sh4_emit_shlr16(&cg, SH4_REG_RET); sh4_emit_shlr(&cg, SH4_REG_RET);
     sh4g_close(tp, &cg); }
 
-  /* fast path: load each listed register (ascending = lowest addr first) */
+  /* fast path: transfer each listed register (ascending = lowest addr first) */
   { sh4_codegen cg = sh4g_open(tp);
     for (i = 0; i < 16; i++) {
       if (!(rlist & (1u << i))) continue;
-      sh4_emit_mov_l_load_r0(&cg, SH4_REG_T2, SH4_REG_T1);  /* R2 = page[R0] (raw BE) */
-      sh4_emit_add_imm(&cg, 4, SH4_REG_RET);                /* next word offset */
-      sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_ARG0);       /* byte-reverse to LE */
-      sh4_emit_swap_w(&cg, SH4_REG_ARG0, SH4_REG_ARG0);
-      sh4_emit_swap_b(&cg, SH4_REG_ARG0, SH4_REG_T1);
-      sh4_emit_store_greg(&cg, SH4_REG_T1, i);              /* reg[i] = value */
+      if (is_load) {
+        sh4_emit_mov_l_load_r0(&cg, SH4_REG_T2, SH4_REG_T1);  /* R2 = page[R0] (raw BE) */
+        sh4_emit_add_imm(&cg, 4, SH4_REG_RET);
+        sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_ARG0);       /* byte-reverse to LE */
+        sh4_emit_swap_w(&cg, SH4_REG_ARG0, SH4_REG_ARG0);
+        sh4_emit_swap_b(&cg, SH4_REG_ARG0, SH4_REG_T1);
+        sh4_emit_store_greg(&cg, SH4_REG_T1, i);              /* reg[i] = value */
+      } else {
+        if (i == rn && writeback && i != lowest) {            /* base-in-list: new_base */
+          sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_T1);
+          sh4_emit_add_imm(&cg, offset_nb, SH4_REG_T1);
+        } else {
+          sh4_emit_load_greg(&cg, i, SH4_REG_T1);             /* value = reg[i] */
+        }
+        sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_ARG0);       /* host LE -> guest order */
+        sh4_emit_swap_w(&cg, SH4_REG_ARG0, SH4_REG_ARG0);
+        sh4_emit_swap_b(&cg, SH4_REG_ARG0, SH4_REG_T1);
+        sh4_emit_mov_l_store_r0(&cg, SH4_REG_T1, SH4_REG_T2); /* page[R0] = value */
+        sh4_emit_add_imm(&cg, 4, SH4_REG_RET);
+      }
     }
-    if (do_wb) {                                            /* reg[rn] = base +/- count*4 */
+    if (do_wb) {                                              /* reg[rn] = base +/- count*4 */
       sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_T1);
       sh4_emit_add_imm(&cg, offset_nb, SH4_REG_T1);
       sh4_emit_store_greg(&cg, SH4_REG_T1, rn);
@@ -138,9 +170,7 @@ static inline int sh4g_arm_block_native(u8 **tp, u32 opcode, u32 pc)
   bra_done = sh4g_emit_bra_placeholder(tp);
 
   /* slow path: the C helper (SH4_CALL_OP2_PC equivalent) */
-  sh4g_patch_bra(g_strad,  *tp);
-  sh4g_patch_bra(g_region, *tp);
-  sh4g_patch_bra(g_page,   *tp);
+  for (i = 0; i < (u32)ng; i++) sh4g_patch_bra(guards[i], *tp);
   sh4g_const(tp, (u32)opcode, SH4_REG_ARG0);
   sh4g_const(tp, (u32)pc, SH4_REG_ARG1);
   sh4g_far_call(tp, (const void *)cgba_sh4_arm_block);
