@@ -482,4 +482,24 @@ static inline void sh4g_patch_cond(u8 *site, const void *target)
   SH4G_RESYNC(site, 2);            /* BT/BF is an instruction: re-fetch it */
 }
 
+/* Emit an unconditional local forward branch placeholder (BRA 0 + delay NOP);
+ * returns the BRA site to patch. Disp12 range +-4 KB — fits a single guest
+ * instruction's two arms. */
+static inline u8 *sh4g_emit_bra_placeholder(u8 **tp)
+{
+  u8 *site = *tp;
+  sh4g_u16(tp, 0xA000);            /* BRA disp12 (patched) */
+  sh4g_u16(tp, 0x0009);            /* NOP in the delay slot */
+  return site;
+}
+
+/* Patch a BRA disp12 at `site` to branch to `target`. */
+static inline void sh4g_patch_bra(u8 *site, const void *target)
+{
+  long d = ((long)(uintptr_t)target - ((long)(uintptr_t)site + 4)) / 2;
+  site[0] = (uint8_t)(0xA0 | ((d >> 8) & 0x0F));
+  site[1] = (uint8_t)(d & 0xFF);
+  SH4G_RESYNC(site, 2);
+}
+
 #endif /* CGBA_SH4_EMIT_GLUE_H */
