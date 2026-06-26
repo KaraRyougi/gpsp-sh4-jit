@@ -26,6 +26,7 @@
 #include "ports/fxcg100/sh4/sh4_emit_glue.h"
 #include "ports/fxcg100/sh4/sh4_thumb_dp_emit.h"
 #include "ports/fxcg100/sh4/sh4_arm_ldst_emit.h"
+#include "ports/fxcg100/sh4/sh4_arm_mul_emit.h"
 
 /* ------------------------------------------------------------------ */
 /* Runtime symbols (sh4/sh4_stub.S, cpu.cc, cpu_threaded.c, helpers).  */
@@ -442,8 +443,12 @@ extern void *tmemst[4][16];
 #define arm_data_proc_unary(name, type, flags_op)                             \
   do { if(!sh4g_arm_dp_native(&translation_ptr, (u32)opcode, (u32)pc))         \
          SH4_CALL_OP2_PC(cgba_sh4_arm_dp); } while(0)
-#define arm_multiply(add_op, flags)                SH4_CALL_OP2(cgba_sh4_arm_multiply)
-#define arm_multiply_long(name, add_op, flags)     SH4_CALL_OP2(cgba_sh4_arm_multiply_long)
+#define arm_multiply(add_op, flags)                                          \
+  do { if(!sh4g_arm_multiply_native(&translation_ptr, (u32)opcode))           \
+         SH4_CALL_OP2(cgba_sh4_arm_multiply); } while(0)
+#define arm_multiply_long(name, add_op, flags)                                \
+  do { if(!sh4g_arm_multiply_long_native(&translation_ptr, (u32)opcode))      \
+         SH4_CALL_OP2(cgba_sh4_arm_multiply_long); } while(0)
 #define arm_psr(op_type, transfer_type, psr_reg)   SH4_CALL_OP2_PC(cgba_sh4_arm_psr)
 #define arm_swap(type)                             SH4_CALL_OP2(cgba_sh4_arm_swap)
 
