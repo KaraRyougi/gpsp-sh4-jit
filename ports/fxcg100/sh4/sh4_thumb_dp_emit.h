@@ -141,8 +141,9 @@ static inline int sh4g_thumb_dp_native(u8 **tp, u32 opcode, u32 pc, u32 flag_sta
     return 1;
   }
 
-  /* fmt2 ADD/SUB Rd,Rn,Rm|#imm3  (00011 I op nnn mmm/iii ddd). */
-  if (hi >= 0x18 && hi <= 0x1B) {
+  /* fmt2 ADD/SUB Rd,Rn,Rm|#imm3  (00011 I op nnn mmm/iii ddd). I=bit10 selects
+   * register (0x18-0x1B) vs #imm3 (0x1C-0x1F); both go native via sh4g_dp_addsub. */
+  if (hi >= 0x18 && hi <= 0x1F) {
     unsigned rd  = opcode & 7;
     unsigned rn  = (opcode >> 3) & 7;
     unsigned arg = (opcode >> 6) & 7;
