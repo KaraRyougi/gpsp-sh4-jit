@@ -30,18 +30,26 @@ void sh4_block_exit(u32 pc);
 enum { LDK_W = 0, LDK_B, LDK_UH, LDK_SH, LDK_SB };
 
 /* Emit native SH4 for the ARM ld/st `opcode`, or return 0 to fall back to C.
- * Handles pre-indexed, no-writeback LOADS (word/byte/halfword/signed), immediate
- * or register (no-shift) offset, through gpSP's memory_map_read host-page table
- * (any mapped region: EWRAM/IWRAM/IO/VRAM/paged-ROM); else the C helper. */
-static inline int sh4g_arm_ldst_native(u8 **tp, u32 opcode, u32 pc)
+ * Handles pre-indexed, no-writeback LOADS/STORES (word/byte/halfword/signed),
+ * immediate or register (no-shift) offset, through gpSP's memory_map_read
+ * host-page table for EWRAM/IWRAM only; else the C helper. */
+static inline int sh4g_arm_ldst_native(u8 **tp, u32 opcode, u32 pc,
+  int cycle_count)
 {
+#ifndef CGBA_SH4_ARM_LDST_NATIVE
+  (void)tp;
+  (void)opcode;
+  (void)pc;
+  (void)cycle_count;
+  return 0;
+#else
   u32 pre = (opcode >> 24) & 1, up = (opcode >> 23) & 1;
   u32 writeback = (opcode >> 21) & 1, is_load = (opcode >> 20) & 1;
   u32 rn = (opcode >> 16) & 0xF, rd = (opcode >> 12) & 0xF;
   u32 offset = 0, reg_offset = 0, rm = 0;
   u32 shift_offset = 0, shoff_type = 0, shoff_amount = 0;
   int kind, align_mask;
-  u8 *guards[3]; int ng = 0;
+  u8 *guards[4]; int ng = 0;
   u8 *bra_done;
 
   if (!pre || writeback)    return 0;   /* pre-indexed, no writeback */
@@ -91,6 +99,16 @@ static inline int sh4g_arm_ldst_native(u8 **tp, u32 opcode, u32 pc)
       sh4_emit_sub(&cg, SH4_REG_T1, SH4_REG_T0);
     else                                               /* addr = rn + offset */
       sh4_emit_add_reg(&cg, SH4_REG_T1, SH4_REG_T0);   /* R1 = addr */
+    sh4g_close(tp, &cg); }
+
+  /* memory_map_read[] only covers the GBA 0x00000000..0x0fffffff space. */
+  sh4g_const(tp, 0x10000000u, SH4_REG_T1);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_cmphs(&cg, SH4_REG_T1, SH4_REG_T0);       /* T = (addr >= 0x10000000) */
+    sh4g_close(tp, &cg); }
+  guards[ng++] = sh4g_emit_bt_placeholder(tp);         /* out of map -> slow */
+
+  { sh4_codegen cg = sh4g_open(tp);
     sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
     sh4_emit_mov_imm(&cg, -15, SH4_REG_T1);
     sh4_emit_shld(&cg, SH4_REG_T1, SH4_REG_RET);       /* R0 = addr >> 15 (page index) */
@@ -100,26 +118,19 @@ static inline int sh4g_arm_ldst_native(u8 **tp, u32 opcode, u32 pc)
   { sh4_codegen cg = sh4g_open(tp);
     sh4_emit_mov_l_load_r0(&cg, SH4_REG_T2, SH4_REG_T2);  /* R3 = memory_map_read[idx] */
     sh4g_close(tp, &cg); }
-  if (is_load) {                                       /* load: any mapped region, not BIOS */
-    { sh4_codegen cg = sh4g_open(tp);
-      sh4_emit_tst(&cg, SH4_REG_T2, SH4_REG_T2);          /* T = (page == NULL) */
-      sh4g_close(tp, &cg); }
-    guards[ng++] = sh4g_emit_bt_placeholder(tp);          /* unmapped -> slow */
-    { sh4_codegen cg = sh4g_open(tp);                       /* region != 0: BIOS is PC-guarded */
-      sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
-      sh4_emit_shlr16(&cg, SH4_REG_RET); sh4_emit_shlr8(&cg, SH4_REG_RET);
-      sh4_emit_tst(&cg, SH4_REG_RET, SH4_REG_RET);        /* T = (region == 0) */
-      sh4g_close(tp, &cg); }
-    guards[ng++] = sh4g_emit_bt_placeholder(tp);          /* BIOS region -> slow */
-  } else {                                              /* store: EWRAM/IWRAM only (no alert/SMC) */
-    sh4_codegen cg = sh4g_open(tp);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_tst(&cg, SH4_REG_T2, SH4_REG_T2);          /* T = (page == NULL) */
+    sh4g_close(tp, &cg); }
+  guards[ng++] = sh4g_emit_bt_placeholder(tp);          /* unmapped -> slow */
+
+  /* Fast memory must not bypass gpSP side effects. 0x02/0x03 are plain RAM. */
+  { sh4_codegen cg = sh4g_open(tp);
     sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
     sh4_emit_mov_imm(&cg, -25, SH4_REG_T1);
-    sh4_emit_shld(&cg, SH4_REG_T1, SH4_REG_RET);          /* R0 = addr >> 25 */
-    sh4_emit_cmpeq_imm(&cg, 1);                            /* T = (region 2 or 3) */
-    sh4g_close(tp, &cg);
-    guards[ng++] = sh4g_emit_bf_placeholder(tp);          /* not EWRAM/IWRAM -> slow */
-  }
+    sh4_emit_shld(&cg, SH4_REG_T1, SH4_REG_RET);        /* R0 = addr >> 25 */
+    sh4_emit_cmpeq_imm(&cg, 1);                         /* T = region 2 or 3 */
+    sh4g_close(tp, &cg); }
+  guards[ng++] = sh4g_emit_bf_placeholder(tp);          /* not EWRAM/IWRAM -> slow */
   if (align_mask) {                                    /* SH4 faults on unaligned w/h */
     sh4_codegen cg = sh4g_open(tp);
     sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
@@ -186,10 +197,12 @@ static inline int sh4g_arm_ldst_native(u8 **tp, u32 opcode, u32 pc)
   sh4g_const(tp, (u32)opcode, SH4_REG_ARG0);
   sh4g_const(tp, (u32)pc, SH4_REG_ARG1);
   sh4g_far_call(tp, (const void *)cgba_sh4_arm_ldst);
-  sh4g_redispatch_if_r0(tp, (const void *)sh4_block_exit);
+  sh4g_cycle_debit_from_global(tp, &cgba_sh4_extra_cycles);
+  sh4g_redispatch_if_r0_debit(tp, cycle_count, (const void *)sh4_block_exit);
 
   sh4g_patch_bra(bra_done, *tp);
   return 1;
+#endif
 }
 
 #endif /* CGBA_SH4_ARM_LDST_EMIT_H */

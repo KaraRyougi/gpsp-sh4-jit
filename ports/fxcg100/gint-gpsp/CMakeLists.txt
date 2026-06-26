@@ -48,6 +48,14 @@ set(GPSP_C_SOURCES
 # the C instruction helpers. Default OFF so the interpreter build stays the
 # shipping target until the dynarec is differentially validated.
 option(CGBA_DYNAREC "Build the SH4 dynamic recompiler (bring-up)" OFF)
+option(CGBA_SH4_ARM_LDST_NATIVE
+  "Enable experimental SH4 native ARM single load/store fast path" OFF)
+option(CGBA_SH4_THUMB_LDST_NATIVE
+  "Enable experimental SH4 native Thumb byte load/store fast path" ON)
+set(CGBA_GPSP_ROM_TRANSLATION_CACHE_SIZE "524288" CACHE STRING
+  "SH4 dynarec ROM translation cache size in bytes")
+set(CGBA_GPSP_RAM_TRANSLATION_CACHE_SIZE "262144" CACHE STRING
+  "SH4 dynarec RAM translation cache size in bytes")
 if(CGBA_DYNAREC)
   list(APPEND GPSP_C_SOURCES
     ${GPSP}/cpu_threaded.c
@@ -94,20 +102,26 @@ target_compile_definitions(cgba-gint-gpsp PRIVATE
 )
 
 if(CGBA_DYNAREC)
-  # SH4_ARCH selects the SH4 host emitter in cpu_threaded.c. Shrink the code
-  # caches to share the executable high-RAM arena with emulator state.
+  # SH4_ARCH selects the SH4 host emitter in cpu_threaded.c. The code caches live
+  # in the executable high-RAM arena and are tunable for emulator soaks.
   target_compile_definitions(cgba-gint-gpsp PRIVATE
     CGBA_DYNAREC=1
     SH4_ARCH=1
     SMALL_TRANSLATION_CACHE=1
-    ROM_TRANSLATION_CACHE_SIZE=524288       # 512 KiB (shares high RAM w/ state + diff snapshot)
-    RAM_TRANSLATION_CACHE_SIZE=262144       # 256 KiB
+    ROM_TRANSLATION_CACHE_SIZE=${CGBA_GPSP_ROM_TRANSLATION_CACHE_SIZE}
+    RAM_TRANSLATION_CACHE_SIZE=${CGBA_GPSP_RAM_TRANSLATION_CACHE_SIZE}
   )
   # HAVE_DYNAREC only where it matters: main.c wires init_dynarec_caches/
   # init_emitter and savestate.c flushes on load. cpu.cc must NOT see it, so it
   # keeps owning the guest state arrays (reg[], ewram, ...) the dynarec links to.
   set_property(SOURCE ${GPSP}/main.c ${GPSP}/savestate.c
     APPEND PROPERTY COMPILE_DEFINITIONS HAVE_DYNAREC=1)
+  if(CGBA_SH4_ARM_LDST_NATIVE)
+    target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_SH4_ARM_LDST_NATIVE=1)
+  endif()
+  if(CGBA_SH4_THUMB_LDST_NATIVE)
+    target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_SH4_THUMB_LDST_NATIVE=1)
+  endif()
 endif()
 
 # Hardware debug: show an on-screen pipeline snapshot after loading a game (EXE
@@ -120,8 +134,72 @@ endif()
 # Emulator-only: auto-boot the first storage ROM and stream cgba_gpsp_diag() to
 # the host debug-putchar port (run-headless.sh). Keep OFF for hardware builds.
 option(CGBA_GPSP_HEADLESS_TEST "Headless auto-boot + stdout diag (emulator)" OFF)
+set(CGBA_GPSP_HEADLESS_FRAMES "48" CACHE STRING
+  "Number of frames to run in CGBA_GPSP_HEADLESS_TEST")
+set(CGBA_GPSP_HEADLESS_LOG_EVERY "1" CACHE STRING
+  "Frame log interval in CGBA_GPSP_HEADLESS_TEST; 0 logs only summary")
+set(CGBA_GPSP_HEADLESS_START_FRAME "0" CACHE STRING
+  "Frame at which CGBA_GPSP_HEADLESS_TEST injects GBA START")
+set(CGBA_GPSP_HEADLESS_START_HOLD "0" CACHE STRING
+  "Number of frames to hold START in CGBA_GPSP_HEADLESS_TEST; 0 disables")
+set(CGBA_GPSP_HEADLESS_A_FRAME "0" CACHE STRING
+  "Frame at which CGBA_GPSP_HEADLESS_TEST starts pressing GBA A/SHIFT")
+set(CGBA_GPSP_HEADLESS_A_HOLD "0" CACHE STRING
+  "Number of frames to keep tapping GBA A/SHIFT; 0 disables")
+set(CGBA_GPSP_HEADLESS_A_PERIOD "12" CACHE STRING
+  "A/SHIFT tap period in frames; 0 holds continuously")
+set(CGBA_GPSP_HEADLESS_A_PRESS "2" CACHE STRING
+  "Number of pressed frames per A/SHIFT tap period")
+set(CGBA_GPSP_HEADLESS_DUMP_EVERY "0" CACHE STRING
+  "Headless debug: dump raw GBA framebuffer every N frames as RGB565 hex; 0 disables")
+set(CGBA_GPSP_HEADLESS_STAT_EVERY "0" CACHE STRING
+  "Headless debug: log framebuffer stats every N frames; 0 disables")
+set(CGBA_GPSP_HEADLESS_STATE_EVERY "0" CACHE STRING
+  "Headless debug: log CPU/scheduler/memory state every N frames; 0 disables")
+set(CGBA_GPSP_HEADLESS_PHASE_START "4294967295" CACHE STRING
+  "Headless debug: first frame for per-phase loop breadcrumbs")
+set(CGBA_GPSP_HEADLESS_PHASE_END "4294967295" CACHE STRING
+  "Headless debug: last frame for per-phase loop breadcrumbs")
+set(CGBA_GPSP_HEADLESS_DYNAREC "-1" CACHE STRING
+  "Force dynarec in CGBA_GPSP_HEADLESS_TEST: -1 default, 0 off, 1 on")
+set(CGBA_GPSP_HEADLESS_DIFF_FRAME "-1" CACHE STRING
+  "Headless debug: frame at which to run live dynarec block diff; -1 disables")
+set(CGBA_GPSP_HEADLESS_DIFF_BLOCKS "0" CACHE STRING
+  "Headless debug: maximum live dynarec block-diff blocks; 0 disables")
+set(CGBA_GPSP_HEADLESS_WINDOW_DIFF_FRAME "-1" CACHE STRING
+  "Headless debug: frame at which to run a preserving interp-vs-JIT window diff; -1 disables")
+set(CGBA_GPSP_HEADLESS_TRACE_PC "0" CACHE STRING
+  "Headless debug: trace Thumb load/store helper state at this guest PC; 0 disables")
+set(CGBA_GPSP_HEADLESS_TRACE_MASK "4095" CACHE STRING
+  "Headless debug: log trace-PC helper state when (++count & mask) == 0")
+set(CGBA_GPSP_HEADLESS_TRACE_JIT "0" CACHE STRING
+  "Headless debug: log per-frame JIT pc/cpsr/cycle state; 0 disables")
+set(CGBA_GPSP_HEADLESS_BENCH_FRAMES "0" CACHE STRING
+  "Headless debug: run interpreter-vs-JIT throughput bench for this many frames; 0 disables")
 if(CGBA_GPSP_HEADLESS_TEST)
-  target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_GPSP_HEADLESS_TEST=1)
+  target_compile_definitions(cgba-gint-gpsp PRIVATE
+    CGBA_GPSP_HEADLESS_TEST=1
+    CGBA_GPSP_HEADLESS_FRAMES=${CGBA_GPSP_HEADLESS_FRAMES}
+    CGBA_GPSP_HEADLESS_LOG_EVERY=${CGBA_GPSP_HEADLESS_LOG_EVERY}
+    CGBA_GPSP_HEADLESS_START_FRAME=${CGBA_GPSP_HEADLESS_START_FRAME}
+    CGBA_GPSP_HEADLESS_START_HOLD=${CGBA_GPSP_HEADLESS_START_HOLD}
+    CGBA_GPSP_HEADLESS_A_FRAME=${CGBA_GPSP_HEADLESS_A_FRAME}
+    CGBA_GPSP_HEADLESS_A_HOLD=${CGBA_GPSP_HEADLESS_A_HOLD}
+    CGBA_GPSP_HEADLESS_A_PERIOD=${CGBA_GPSP_HEADLESS_A_PERIOD}
+    CGBA_GPSP_HEADLESS_A_PRESS=${CGBA_GPSP_HEADLESS_A_PRESS}
+    CGBA_GPSP_HEADLESS_DUMP_EVERY=${CGBA_GPSP_HEADLESS_DUMP_EVERY}
+    CGBA_GPSP_HEADLESS_STAT_EVERY=${CGBA_GPSP_HEADLESS_STAT_EVERY}
+    CGBA_GPSP_HEADLESS_STATE_EVERY=${CGBA_GPSP_HEADLESS_STATE_EVERY}
+    CGBA_GPSP_HEADLESS_PHASE_START=${CGBA_GPSP_HEADLESS_PHASE_START}
+    CGBA_GPSP_HEADLESS_PHASE_END=${CGBA_GPSP_HEADLESS_PHASE_END}
+    CGBA_GPSP_HEADLESS_DYNAREC=${CGBA_GPSP_HEADLESS_DYNAREC}
+    CGBA_GPSP_HEADLESS_DIFF_FRAME=${CGBA_GPSP_HEADLESS_DIFF_FRAME}
+    CGBA_GPSP_HEADLESS_DIFF_BLOCKS=${CGBA_GPSP_HEADLESS_DIFF_BLOCKS}
+    CGBA_GPSP_HEADLESS_WINDOW_DIFF_FRAME=${CGBA_GPSP_HEADLESS_WINDOW_DIFF_FRAME}
+    CGBA_GPSP_HEADLESS_TRACE_PC=${CGBA_GPSP_HEADLESS_TRACE_PC}
+    CGBA_GPSP_HEADLESS_TRACE_MASK=${CGBA_GPSP_HEADLESS_TRACE_MASK}
+    CGBA_GPSP_HEADLESS_TRACE_JIT=${CGBA_GPSP_HEADLESS_TRACE_JIT}
+    CGBA_GPSP_HEADLESS_BENCH_FRAMES=${CGBA_GPSP_HEADLESS_BENCH_FRAMES})
 endif()
 
 target_compile_options(cgba-gint-gpsp PRIVATE
@@ -153,10 +231,9 @@ target_link_libraries(cgba-gint-gpsp Gint::Gint)
 target_link_options(cgba-gint-gpsp PRIVATE
   -Wl,--gc-sections
   -Wl,-Map=${CMAKE_CURRENT_BINARY_DIR}/cgba-gint-gpsp.map
-  # The port's no_osheap.c intentionally re-implements the Casio syscall stubs
-  # (___malloc, BFile_*, Timer_*, ...) to avoid the OS heap. With current gint,
-  # the kernel pulls in libgint's own syscalls.S, which redefines them; allow the
-  # port's (first-linked) definitions to win the override.
+  # no_osheap.c intentionally replaces libgint's legacy-CASIOWIN syscall stubs.
+  # Current libgint can still pull syscalls.S for unrelated symbols, so keep the
+  # port's first-linked definitions and tolerate the later duplicate stubs.
   -Wl,--allow-multiple-definition
 )
 

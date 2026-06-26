@@ -32,6 +32,8 @@
 #include "ports/fxcg100/sh4/sh4_codegen.h"
 #include "ports/fxcg100/sh4/sh4_emit_core.h"
 
+extern int cgba_sh4_extra_cycles;
+
 /* ---- back-patch I-cache sync --------------------------------------------- *
  * Re-sync a patched line on the SH-4A's split I/D caches. Used only by
  * sh4g_patch_cond: it rewrites the disp8 of a BT/BF, which is fetched and
@@ -341,7 +343,7 @@ static inline void sh4g_shift_imm(u8 **tp, int kind, unsigned rd, unsigned rs,
 
 /* ---- cycle counter ------------------------------------------------------- */
 
-static inline void sh4g_cycle_sub(u8 **tp, int n)
+static inline void sh4g_cycle_debit(u8 **tp, int n)
 {
   if (n == 0)
     return;
@@ -351,6 +353,32 @@ static inline void sh4g_cycle_sub(u8 **tp, int n)
     sh4g_const(tp, (uint32_t)(-n), SH4_REG_T0);
     sh4g_u16(tp, (uint16_t)(0x300C | (SH4_REG_CYCLES << 8) | (SH4_REG_T0 << 4))); /* ADD R1 */
   }
+}
+
+static inline void sh4g_cycle_debit_from_global(u8 **tp, const int *extra_cycles)
+{
+  sh4g_const(tp, (uint32_t)(uintptr_t)extra_cycles, SH4_REG_T0);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_l_load(&cg, SH4_REG_T0, SH4_REG_T0);
+    sh4_emit_sub(&cg, SH4_REG_T0, SH4_REG_CYCLES);
+    sh4g_close(tp, &cg); }
+}
+
+static inline void sh4g_cycle_sub(u8 **tp, int n, uint32_t pc,
+                                  const void *block_exit_fn)
+{
+  u8 *bt;
+  if (n == 0)
+    return;
+  sh4g_cycle_debit(tp, n);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_cmppz(&cg, SH4_REG_CYCLES);      /* T = (cycles >= 0) */
+    sh4g_close(tp, &cg); }
+  bt = *tp;
+  sh4g_u16(tp, 0x8900);                        /* BT skip update */
+  sh4g_const(tp, pc, SH4_REG_ARG0);
+  sh4g_far_jmp(tp, block_exit_fn);
+  { long d = ((long)(*tp) - ((long)bt + 4)) / 2; bt[1] = (uint8_t)(d & 0xFF); }
 }
 
 /* ---- branch exit (patchable far jump) ------------------------------------ *
@@ -430,6 +458,29 @@ static inline void sh4g_redispatch_if_r0(u8 **tp, const void *block_exit_fn)
   bt = *tp;
   sh4g_u16(tp, 0x8900);                               /* BT skip (no PC change) */
   sh4g_load_greg(tp, SH4_GREG_PC, SH4_REG_ARG0);      /* R4 = reg[REG_PC] */
+  sh4g_far_jmp(tp, block_exit_fn);
+  { long d = ((long)(*tp) - ((long)bt + 4)) / 2; bt[1] = (uint8_t)(d & 0xFF); }
+}
+
+/* Same as sh4g_redispatch_if_r0(), but when the helper returns nonzero it first
+ * debits the translated instructions accumulated since the previous cycle gate.
+ * The no-PC-change path deliberately keeps accumulating: it skips this debit and
+ * the normal block-end/branch gate will flush the full run later. */
+static inline void sh4g_redispatch_if_r0_debit(u8 **tp, int cycle_count,
+                                               const void *block_exit_fn)
+{
+  u8 *bt;
+  if (cycle_count == 0) {
+    sh4g_redispatch_if_r0(tp, block_exit_fn);
+    return;
+  }
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_tst(&cg, SH4_REG_RET, SH4_REG_RET);     /* T = (R0 == 0) */
+    sh4g_close(tp, &cg); }
+  bt = *tp;
+  sh4g_u16(tp, 0x8900);                              /* BT skip (no PC change) */
+  sh4g_cycle_debit(tp, cycle_count);
+  sh4g_load_greg(tp, SH4_GREG_PC, SH4_REG_ARG0);     /* R4 = reg[REG_PC] */
   sh4g_far_jmp(tp, block_exit_fn);
   { long d = ((long)(*tp) - ((long)bt + 4)) / 2; bt[1] = (uint8_t)(d & 0xFF); }
 }

@@ -75,7 +75,14 @@ typedef struct
   u32 next_entry;
 } hashhdr_type;
 
-u32 rom_branch_hash[ROM_BRANCH_HASH_SIZE];
+u32 rom_branch_hash[ROM_BRANCH_HASH_SIZE] CGBA_HIGH_BSS;
+
+#if defined(CGBA_GPSP_HEADLESS_TEST)
+u32 cgba_dynarec_rom_flush_count;
+u32 cgba_dynarec_ram_flush_count;
+u32 cgba_dynarec_arm_translate_count;
+u32 cgba_dynarec_thumb_translate_count;
+#endif
 
 typedef struct
 {
@@ -3043,6 +3050,11 @@ bool translate_block_arm(u32 pc, bool ram_region)
   u32 flag_status;
   block_exit_type external_block_exits[MAX_EXITS];
   generate_block_extra_vars_arm();
+
+#if defined(CGBA_GPSP_HEADLESS_TEST)
+  cgba_dynarec_arm_translate_count++;
+#endif
+
   arm_fix_pc();
 
   if(!pc_address_block)
@@ -3079,8 +3091,13 @@ bool translate_block_arm(u32 pc, bool ram_region)
   {
     branch_target = block_exits[i].branch_target;
 
+#ifdef SH4_ARCH
+    if((branch_target >= block_start_pc) &&
+     (branch_target < block_end_pc))
+#else
     if((branch_target > block_start_pc) &&
      (branch_target < block_end_pc))
+#endif
     {
       block_data[(branch_target - block_start_pc) /
        arm_instruction_width].update_cycles = 1;
@@ -3096,6 +3113,12 @@ bool translate_block_arm(u32 pc, bool ram_region)
 
   while(pc != block_end_pc)
   {
+#ifdef SH4_ARCH
+    if(block_data[block_data_position].update_cycles)
+    {
+      generate_cycle_update();
+    }
+#endif
     block_data[block_data_position].block_offset = translation_ptr;
     arm_base_cycles();
 
@@ -3123,11 +3146,13 @@ bool translate_block_arm(u32 pc, bool ram_region)
 
     /* If the next instruction is a block entry point update the
        cycle counter and update */
+#ifndef SH4_ARCH
     if (pc != block_end_pc &&
         block_data[block_data_position].update_cycles)
     {
       generate_cycle_update();
     }
+#endif
   }
 
   /* This can happen if the last instruction is *not* inconditional */
@@ -3213,6 +3238,11 @@ bool translate_block_thumb(u32 pc, bool ram_region)
   u32 flag_status;
   block_exit_type external_block_exits[MAX_EXITS];
   generate_block_extra_vars_thumb();
+
+#if defined(CGBA_GPSP_HEADLESS_TEST)
+  cgba_dynarec_thumb_translate_count++;
+#endif
+
   thumb_fix_pc();
 
   if(!pc_address_block)
@@ -3248,8 +3278,13 @@ bool translate_block_thumb(u32 pc, bool ram_region)
   {
     branch_target = block_exits[i].branch_target;
 
+#ifdef SH4_ARCH
+    if((branch_target >= block_start_pc) &&
+     (branch_target < block_end_pc))
+#else
     if((branch_target > block_start_pc) &&
      (branch_target < block_end_pc))
+#endif
     {
       block_data[(branch_target - block_start_pc) /
        thumb_instruction_width].update_cycles = 1;
@@ -3263,6 +3298,12 @@ bool translate_block_thumb(u32 pc, bool ram_region)
 
   while(pc != block_end_pc)
   {
+#ifdef SH4_ARCH
+    if(block_data[block_data_position].update_cycles)
+    {
+      generate_cycle_update();
+    }
+#endif
     block_data[block_data_position].block_offset = translation_ptr;
     thumb_base_cycles();
 
@@ -3291,11 +3332,13 @@ bool translate_block_thumb(u32 pc, bool ram_region)
 
     /* If the next instruction is a block entry point update the
        cycle counter and update */
+#ifndef SH4_ARCH
     if (pc != block_end_pc &&
         block_data[block_data_position].update_cycles)
     {
       generate_cycle_update();
     }
+#endif
   }
 
   /* Unconditionally generate translation targets. In case we hit one or
@@ -3366,6 +3409,9 @@ void flush_translation_cache_ram(void)
 {
   /* Flushes RAM caches avoiding doing too much work (ie. wiping unused memory) */
   flush_ram_count++;
+#if defined(CGBA_GPSP_HEADLESS_TEST)
+  cgba_dynarec_ram_flush_count++;
+#endif
   /*printf("ram flush %d (pc %x), %x to %x, %x to %x\n",
    flush_ram_count, reg[REG_PC], iwram_code_min, iwram_code_max,
    ewram_code_min, ewram_code_max);*/
@@ -3403,6 +3449,10 @@ void flush_translation_cache_ram(void)
 void flush_translation_cache_rom(void)
 {
   /* We flush the generated code except for everything below the watermark. */
+#if defined(CGBA_GPSP_HEADLESS_TEST)
+  cgba_dynarec_rom_flush_count++;
+#endif
+
   last_rom_translation_ptr = &rom_translation_cache[rom_cache_watermark];
   rom_translation_ptr      = &rom_translation_cache[rom_cache_watermark];
 
@@ -3435,4 +3485,3 @@ void flush_dynarec_caches(void)
   iwram_code_max = 0x8000;
   flush_translation_cache_ram();
 }
-

@@ -1,8 +1,10 @@
 ports/fxcg100/build/
 ports/fxcg100/build-full/
-ports/fxcg100/gint-smoke/build-cg/
+ports/fxcg100/build-*/
+ports/fxcg100/gint-smoke/build-cg*/
 ports/fxcg100/gint-smoke/CGBA-GINT.g3a
-ports/fxcg100/gint-gpsp/build-cg/
+# build-cg (shipping), build-cg-headless-* (dynarec soak/diff harness builds)
+ports/fxcg100/gint-gpsp/build-cg*/
 ports/fxcg100/gint-gpsp/CGBA-GPSP.g3a
 
 # macOS + accidental Finder "Keep both" duplicate dirs (e.g. "mips 2/")

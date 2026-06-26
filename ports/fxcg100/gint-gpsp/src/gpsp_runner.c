@@ -9,7 +9,14 @@
 #include "nor_rom.h"
 #include "vendor/gpsp/common.h"
 
+#ifndef CGBA_GPSP_HEADLESS_TRACE_JIT
+#define CGBA_GPSP_HEADLESS_TRACE_JIT 0
+#endif
+
 extern RFILE *gamepak_file_large;   /* gpSP ROM page-fault source (gba_memory.c) */
+extern timer_type timer[4];
+extern s32 video_count;
+extern u32 instruction_count;
 
 typedef struct cgba_rom_source {
 	const char *name;
@@ -36,6 +43,32 @@ static char cgba_last_error[96];
 static int cgba_lcd_test_active;
 static int cgba_mode3_debug_copy_active;
 static uint16_t *cgba_active_framebuffer;
+
+#if defined(CGBA_DYNAREC) && CGBA_GPSP_HEADLESS_TRACE_JIT
+static void hputc_dbg(char c)
+{
+	*(volatile uint8_t *)0xb7000000 = (uint8_t)c;
+}
+
+static void hputs_dbg(const char *s)
+{
+	while(*s)
+		hputc_dbg(*s++);
+	hputc_dbg('\n');
+}
+
+static void trace_jit_state(const char *phase, u32 cycles)
+{
+	char buf[128];
+
+	snprintf(buf, sizeof buf,
+		"JIT %s pc=%08lX cpsr=%08lX cycles=%ld halt=%lu",
+		phase, (unsigned long)reg[REG_PC],
+		(unsigned long)reg[REG_CPSR], (long)(s32)cycles,
+		(unsigned long)reg[CPU_HALT_STATE]);
+	hputs_dbg(buf);
+}
+#endif
 
 unsigned cgba_gpsp_refresh_roms(void)
 {
@@ -160,6 +193,125 @@ const char *cgba_gpsp_last_error(void)
 	return cgba_last_error[0] ? cgba_last_error : NULL;
 }
 
+#ifdef CGBA_GPSP_HEADLESS_TEST
+static uint32_t cgba_fnv1a32(const void *data, uint32_t bytes)
+{
+	const uint8_t *p = (const uint8_t *)data;
+	uint32_t h = 2166136261u;
+
+	for(uint32_t i = 0; i < bytes; i++) {
+		h ^= p[i];
+		h *= 16777619u;
+	}
+	return h;
+}
+
+static uint32_t cgba_fnv1a16_pixels(const uint16_t *data, uint32_t pixels)
+{
+	uint32_t h = 2166136261u;
+
+	if(!data)
+		return 0;
+	for(uint32_t i = 0; i < pixels; i++) {
+		uint16_t px = data[i];
+		h ^= (uint8_t)(px >> 8);
+		h *= 16777619u;
+		h ^= (uint8_t)px;
+		h *= 16777619u;
+	}
+	return h;
+}
+
+unsigned cgba_gpsp_state_lines(unsigned frame, const char *phase,
+	const uint16_t *framebuffer, char out[][CGBA_STATE_LINE_MAX],
+	unsigned max_lines)
+{
+	unsigned n = 0;
+
+	if(!phase)
+		phase = "?";
+	if(n < max_lines)
+		snprintf(out[n++], CGBA_STATE_LINE_MAX,
+			"@@CGBA_STATE frame=%u phase=%s pc=%08lX cpsr=%08lX mode=%lu "
+			"halt=%lu sleep=%08lX exec=%lu cpu=%lu video=%ld fc=%lu "
+			"instr=%lu r0=%08lX r1=%08lX r2=%08lX r3=%08lX r4=%08lX "
+			"r5=%08lX r6=%08lX r7=%08lX r8=%08lX r9=%08lX r10=%08lX "
+			"r11=%08lX r12=%08lX sp=%08lX lr=%08lX",
+			frame, phase, (unsigned long)reg[REG_PC],
+			(unsigned long)reg[REG_CPSR], (unsigned long)reg[CPU_MODE],
+			(unsigned long)reg[CPU_HALT_STATE],
+			(unsigned long)reg[REG_SLEEP_CYCLES],
+			(unsigned long)execute_cycles, (unsigned long)cpu_ticks,
+			(long)video_count, (unsigned long)frame_counter,
+			(unsigned long)instruction_count, (unsigned long)reg[0],
+			(unsigned long)reg[1], (unsigned long)reg[2],
+			(unsigned long)reg[3], (unsigned long)reg[4],
+			(unsigned long)reg[5], (unsigned long)reg[6],
+			(unsigned long)reg[7], (unsigned long)reg[8],
+			(unsigned long)reg[9], (unsigned long)reg[10],
+			(unsigned long)reg[11], (unsigned long)reg[12],
+			(unsigned long)reg[REG_SP], (unsigned long)reg[REG_LR]);
+	if(n < max_lines)
+		snprintf(out[n++], CGBA_STATE_LINE_MAX,
+			"@@CGBA_IO frame=%u phase=%s dispcnt=%04X dispstat=%04X "
+			"vcount=%u p1=%04X ie=%04X if=%04X ime=%04X wait=%04X "
+			"siocnt=%04X irqcyc=%lu oamupd=%lu",
+			frame, phase, read_ioreg(REG_DISPCNT),
+			read_ioreg(REG_DISPSTAT), read_ioreg(REG_VCOUNT),
+			read_ioreg(REG_P1), read_ioreg(REG_IE), read_ioreg(REG_IF),
+			read_ioreg(REG_IME), read_ioreg(REG_WAITCNT),
+			read_ioreg(REG_SIOCNT), (unsigned long)serial_get_irq_cycles(),
+			(unsigned long)reg[OAM_UPDATED]);
+	if(n < max_lines)
+		snprintf(out[n++], CGBA_STATE_LINE_MAX,
+			"@@CGBA_HASH frame=%u phase=%s iw=%08lX ew=%08lX vr=%08lX "
+			"pal=%08lX oam=%08lX io=%08lX fb=%08lX",
+			frame, phase,
+			(unsigned long)cgba_fnv1a32(iwram + 0x8000, 0x8000),
+			(unsigned long)cgba_fnv1a32(ewram, 0x40000),
+			(unsigned long)cgba_fnv1a32(vram, 1024 * 96),
+			(unsigned long)cgba_fnv1a32(palette_ram, sizeof palette_ram),
+			(unsigned long)cgba_fnv1a32(oam_ram, sizeof oam_ram),
+			(unsigned long)cgba_fnv1a32(io_registers, sizeof io_registers),
+			(unsigned long)cgba_fnv1a16_pixels(framebuffer,
+				CGBA_GBA_WIDTH * CGBA_GBA_HEIGHT));
+	if(n < max_lines)
+		snprintf(out[n++], CGBA_STATE_LINE_MAX,
+			"@@CGBA_TIMER frame=%u phase=%s t0c=%ld t0r=%lu t0p=%lu t0s=%lu "
+			"t1c=%ld t1r=%lu t1p=%lu t1s=%lu t2c=%ld t2r=%lu t2p=%lu "
+			"t2s=%lu t3c=%ld t3r=%lu t3p=%lu t3s=%lu",
+			frame, phase, (long)timer[0].count,
+			(unsigned long)timer[0].reload, (unsigned long)timer[0].prescale,
+			(unsigned long)timer[0].status, (long)timer[1].count,
+			(unsigned long)timer[1].reload, (unsigned long)timer[1].prescale,
+			(unsigned long)timer[1].status, (long)timer[2].count,
+			(unsigned long)timer[2].reload, (unsigned long)timer[2].prescale,
+			(unsigned long)timer[2].status, (long)timer[3].count,
+			(unsigned long)timer[3].reload, (unsigned long)timer[3].prescale,
+			(unsigned long)timer[3].status);
+	if(n < max_lines)
+		snprintf(out[n++], CGBA_STATE_LINE_MAX,
+			"@@CGBA_DMA frame=%u phase=%s d0s=%lu d0src=%08lX d0dst=%08lX "
+			"d0len=%lu d1s=%lu d1src=%08lX d1dst=%08lX d1len=%lu "
+			"d2s=%lu d2src=%08lX d2dst=%08lX d2len=%lu "
+			"d3s=%lu d3src=%08lX d3dst=%08lX d3len=%lu",
+			frame, phase, (unsigned long)dma[0].start_type,
+			(unsigned long)dma[0].source_address,
+			(unsigned long)dma[0].dest_address,
+			(unsigned long)dma[0].length, (unsigned long)dma[1].start_type,
+			(unsigned long)dma[1].source_address,
+			(unsigned long)dma[1].dest_address,
+			(unsigned long)dma[1].length, (unsigned long)dma[2].start_type,
+			(unsigned long)dma[2].source_address,
+			(unsigned long)dma[2].dest_address,
+			(unsigned long)dma[2].length, (unsigned long)dma[3].start_type,
+			(unsigned long)dma[3].source_address,
+			(unsigned long)dma[3].dest_address,
+			(unsigned long)dma[3].length);
+	return n;
+}
+#endif
+
 static void fill_lcd_test_frame(uint32_t frame)
 {
 	uint16_t *dst = cgba_active_framebuffer;
@@ -201,6 +353,8 @@ static void copy_mode3_vram_to_framebuffer(void)
 
 void cgba_gpsp_run_frame(uint32_t gba_buttons, int render_video)
 {
+	u32 cycles = (reg[CPU_HALT_STATE] == CPU_ACTIVE) ? execute_cycles : (u32)-64;
+
 	if(cgba_lcd_test_active) {
 		static uint32_t test_frame;
 		fill_lcd_test_frame(test_frame++);
@@ -214,11 +368,17 @@ void cgba_gpsp_run_frame(uint32_t gba_buttons, int render_video)
 #ifdef CGBA_DYNAREC
 	/* Live interp/dynarec toggle (subtask 2). The interpreter stays the default
 	 * and correctness oracle; flip dynarec_enable to exercise the recompiler. */
-	if(dynarec_enable)
-		execute_arm_translate(execute_cycles);
-	else
+	if(dynarec_enable) {
+#if CGBA_GPSP_HEADLESS_TRACE_JIT
+		trace_jit_state("before", cycles);
 #endif
-		execute_arm(execute_cycles);
+		execute_arm_translate(cycles);
+#if CGBA_GPSP_HEADLESS_TRACE_JIT
+		trace_jit_state("after", cycles);
+#endif
+	} else
+#endif
+		execute_arm(cycles);
 	skip_next_frame = 0;
 	if(render_video && cgba_mode3_debug_copy_active)
 		copy_mode3_vram_to_framebuffer();

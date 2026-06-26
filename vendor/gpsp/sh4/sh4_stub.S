@@ -176,7 +176,10 @@ defsymbl(sh4_block_exit)
   mov.l   sb_flag, r0
   mov.l   @r0, r0
   tst     r0, r0
-  bf      return_to_main
+  bt      1f
+  bra     return_to_main
+  mov     r13, r0                 /* single-block diff: return remaining cycles */
+1:
   mov     r13, r4                 /* arg0 = remaining cycles */
   CALL    update_gba
   cmp/pz  r0

@@ -10,6 +10,14 @@
 #ifdef CGBA_DYNAREC
 #include "sh4/sh4_diff_harness.h"
 extern int dynarec_enable;   /* gpSP: 0 = interpreter, 1 = SH4 recompiler */
+extern uint32_t execute_cycles;
+extern uint32_t reg[64];
+#ifdef CGBA_GPSP_HEADLESS_TEST
+extern uint32_t cgba_dynarec_rom_flush_count;
+extern uint32_t cgba_dynarec_ram_flush_count;
+extern uint32_t cgba_dynarec_arm_translate_count;
+extern uint32_t cgba_dynarec_thumb_translate_count;
+#endif
 #endif
 
 /* Menu frameskip types (order matches frameskip_options[] in fxcg100_menu.c). */
@@ -161,6 +169,78 @@ static void show_diag_overlay(void)
 #endif
 
 #ifdef CGBA_GPSP_HEADLESS_TEST
+#ifndef CGBA_GPSP_HEADLESS_FRAMES
+#define CGBA_GPSP_HEADLESS_FRAMES 48u
+#endif
+
+#ifndef CGBA_GPSP_HEADLESS_LOG_EVERY
+#define CGBA_GPSP_HEADLESS_LOG_EVERY 1u
+#endif
+
+#ifndef CGBA_GPSP_HEADLESS_START_FRAME
+#define CGBA_GPSP_HEADLESS_START_FRAME 0u
+#endif
+
+#ifndef CGBA_GPSP_HEADLESS_START_HOLD
+#define CGBA_GPSP_HEADLESS_START_HOLD 0u
+#endif
+
+#ifndef CGBA_GPSP_HEADLESS_A_FRAME
+#define CGBA_GPSP_HEADLESS_A_FRAME 0u
+#endif
+
+#ifndef CGBA_GPSP_HEADLESS_A_HOLD
+#define CGBA_GPSP_HEADLESS_A_HOLD 0u
+#endif
+
+#ifndef CGBA_GPSP_HEADLESS_A_PERIOD
+#define CGBA_GPSP_HEADLESS_A_PERIOD 12u
+#endif
+
+#ifndef CGBA_GPSP_HEADLESS_A_PRESS
+#define CGBA_GPSP_HEADLESS_A_PRESS 2u
+#endif
+
+#ifndef CGBA_GPSP_HEADLESS_DUMP_EVERY
+#define CGBA_GPSP_HEADLESS_DUMP_EVERY 0u
+#endif
+
+#ifndef CGBA_GPSP_HEADLESS_STAT_EVERY
+#define CGBA_GPSP_HEADLESS_STAT_EVERY 0u
+#endif
+
+#ifndef CGBA_GPSP_HEADLESS_STATE_EVERY
+#define CGBA_GPSP_HEADLESS_STATE_EVERY 0u
+#endif
+
+#ifndef CGBA_GPSP_HEADLESS_PHASE_START
+#define CGBA_GPSP_HEADLESS_PHASE_START 0xffffffffu
+#endif
+
+#ifndef CGBA_GPSP_HEADLESS_PHASE_END
+#define CGBA_GPSP_HEADLESS_PHASE_END 0xffffffffu
+#endif
+
+#ifndef CGBA_GPSP_HEADLESS_DYNAREC
+#define CGBA_GPSP_HEADLESS_DYNAREC -1
+#endif
+
+#ifndef CGBA_GPSP_HEADLESS_DIFF_FRAME
+#define CGBA_GPSP_HEADLESS_DIFF_FRAME -1
+#endif
+
+#ifndef CGBA_GPSP_HEADLESS_DIFF_BLOCKS
+#define CGBA_GPSP_HEADLESS_DIFF_BLOCKS 0u
+#endif
+
+#ifndef CGBA_GPSP_HEADLESS_WINDOW_DIFF_FRAME
+#define CGBA_GPSP_HEADLESS_WINDOW_DIFF_FRAME -1
+#endif
+
+#ifndef CGBA_GPSP_HEADLESS_BENCH_FRAMES
+#define CGBA_GPSP_HEADLESS_BENCH_FRAMES 0u
+#endif
+
 /* Emulator-only validation: skip the menu, auto-boot the first storage ROM, run
  * a few frames, and stream cgba_gpsp_diag() to the host via the emulator's
  * 0xb7000000 debug-putchar port. Lets run-headless.sh confirm the NOR load /
@@ -177,10 +257,212 @@ static void hputs_dbg(const char *s)
 	hputc_dbg('\n');
 }
 
+static void hput_hex4_dbg(uint16_t value)
+{
+	static const char hex[] = "0123456789ABCDEF";
+
+	hputc_dbg(hex[(value >> 12) & 0x0f]);
+	hputc_dbg(hex[(value >> 8) & 0x0f]);
+	hputc_dbg(hex[(value >> 4) & 0x0f]);
+	hputc_dbg(hex[value & 0x0f]);
+}
+
+static void headless_dump_framebuffer(unsigned frame, const uint16_t *framebuffer)
+{
+	if(!framebuffer)
+		return;
+#if CGBA_GPSP_HEADLESS_DUMP_EVERY == 0
+	(void)frame;
+	return;
+#else
+	char buf[96];
+
+	if((frame % (unsigned)CGBA_GPSP_HEADLESS_DUMP_EVERY) != 0 &&
+			frame + 1 != CGBA_GPSP_HEADLESS_FRAMES)
+		return;
+
+	snprintf(buf, sizeof buf,
+		"@@CGBA_FRAME_BEGIN frame=%u w=%u h=%u pitch=%u fmt=rgb565",
+		frame, (unsigned)CGBA_GBA_WIDTH, (unsigned)CGBA_GBA_HEIGHT,
+		(unsigned)CGBA_GBA_PITCH);
+	hputs_dbg(buf);
+	for(unsigned y = 0; y < CGBA_GBA_HEIGHT; y++) {
+		const uint16_t *row = framebuffer + y * CGBA_GBA_PITCH;
+		for(unsigned x = 0; x < CGBA_GBA_WIDTH; x++)
+			hput_hex4_dbg(row[x]);
+		hputc_dbg('\n');
+	}
+	snprintf(buf, sizeof buf, "@@CGBA_FRAME_END frame=%u", frame);
+	hputs_dbg(buf);
+#endif
+}
+
+static void headless_log_framebuffer_stat(unsigned frame,
+	const uint16_t *framebuffer)
+{
+#if CGBA_GPSP_HEADLESS_STAT_EVERY == 0
+	(void)frame;
+	(void)framebuffer;
+#else
+	char buf[128];
+	uint32_t hash = 2166136261u;
+	unsigned black = 0;
+	const unsigned stat_every = (unsigned)CGBA_GPSP_HEADLESS_STAT_EVERY;
+
+	if(!framebuffer)
+		return;
+	if((frame % stat_every) != 0 && frame + 1 != CGBA_GPSP_HEADLESS_FRAMES)
+		return;
+
+	for(unsigned y = 0; y < CGBA_GBA_HEIGHT; y++) {
+		const uint16_t *row = framebuffer + y * CGBA_GBA_PITCH;
+		for(unsigned x = 0; x < CGBA_GBA_WIDTH; x++) {
+			uint16_t px = row[x];
+			black += px == 0;
+			hash = (hash ^ (uint8_t)(px >> 8)) * 16777619u;
+			hash = (hash ^ (uint8_t)px) * 16777619u;
+		}
+	}
+
+	snprintf(buf, sizeof buf,
+		"@@CGBA_FBSTAT frame=%u black=%u/%u hash=%08lX p00=%04X p11=%04X pc=%04X",
+		frame, black, (unsigned)(CGBA_GBA_WIDTH * CGBA_GBA_HEIGHT),
+		(unsigned long)hash, framebuffer[0],
+		framebuffer[1 * CGBA_GBA_PITCH + 1],
+		framebuffer[(CGBA_GBA_HEIGHT / 2) * CGBA_GBA_PITCH +
+			(CGBA_GBA_WIDTH / 2)]);
+	hputs_dbg(buf);
+#endif
+}
+
+static int headless_state_frame(unsigned frame)
+{
+#if CGBA_GPSP_HEADLESS_STATE_EVERY == 0
+	(void)frame;
+	return 0;
+#else
+	if(CGBA_GPSP_HEADLESS_STATE_EVERY == 0)
+		return 0;
+	return (frame % (unsigned)CGBA_GPSP_HEADLESS_STATE_EVERY) == 0 ||
+		frame + 1 == CGBA_GPSP_HEADLESS_FRAMES;
+#endif
+}
+
+static void headless_log_state(unsigned frame, const char *phase,
+	const uint16_t *framebuffer)
+{
+	char lines[8][CGBA_STATE_LINE_MAX];
+	unsigned n, i;
+
+	if(!headless_state_frame(frame))
+		return;
+	n = cgba_gpsp_state_lines(frame, phase, framebuffer, lines, 8);
+	for(i = 0; i < n; i++)
+		hputs_dbg(lines[i]);
+}
+
+#ifdef CGBA_DYNAREC
+enum {
+	CGBA_HEADLESS_REG_PC = 15,
+	CGBA_HEADLESS_CPU_HALT_STATE = 18,
+	CGBA_HEADLESS_REG_SLEEP_CYCLES = 24,
+	CGBA_HEADLESS_CPU_ACTIVE = 0,
+};
+
+static void headless_window_diff(unsigned frame)
+{
+#if CGBA_GPSP_HEADLESS_WINDOW_DIFF_FRAME >= 0
+	char lines[24][48];
+	char buf[128];
+	uint32_t cycles;
+	unsigned n, i;
+
+	if((int)frame != CGBA_GPSP_HEADLESS_WINDOW_DIFF_FRAME)
+		return;
+
+	cycles = (reg[CGBA_HEADLESS_CPU_HALT_STATE] == CGBA_HEADLESS_CPU_ACTIVE) ?
+		execute_cycles : (uint32_t)-64;
+	snprintf(buf, sizeof buf,
+		"@@CGBA_WINDOW_DIFF_BEGIN frame=%u cycles=%ld pc=%08lX halt=%lu sleep=%08lX",
+		frame, (long)(int32_t)cycles,
+		(unsigned long)reg[CGBA_HEADLESS_REG_PC],
+		(unsigned long)reg[CGBA_HEADLESS_CPU_HALT_STATE],
+		(unsigned long)reg[CGBA_HEADLESS_REG_SLEEP_CYCLES]);
+	hputs_dbg(buf);
+	n = cgba_sh4_diff_window(cycles, lines, 24);
+	for(i = 0; i < n; i++) {
+		snprintf(buf, sizeof buf, "@@CGBA_WINDOW_DIFF frame=%u line=%u %s",
+			frame, i, lines[i]);
+		hputs_dbg(buf);
+	}
+	snprintf(buf, sizeof buf, "@@CGBA_WINDOW_DIFF_END frame=%u", frame);
+	hputs_dbg(buf);
+#else
+	(void)frame;
+#endif
+}
+#endif
+
+static void headless_log_phase(unsigned frame, const char *phase)
+{
+	char buf[64];
+
+	if(frame < (unsigned)CGBA_GPSP_HEADLESS_PHASE_START ||
+			frame > (unsigned)CGBA_GPSP_HEADLESS_PHASE_END)
+		return;
+
+	snprintf(buf, sizeof buf, "phase frame=%u %s", frame, phase);
+	hputs_dbg(buf);
+}
+
+static int headless_log_frame(unsigned frame)
+{
+	if(CGBA_GPSP_HEADLESS_LOG_EVERY == 0)
+		return frame + 1 == CGBA_GPSP_HEADLESS_FRAMES;
+	return (frame % (unsigned)CGBA_GPSP_HEADLESS_LOG_EVERY) == 0 ||
+		frame + 1 == CGBA_GPSP_HEADLESS_FRAMES;
+}
+
+static int headless_a_down(unsigned frame)
+{
+	const unsigned start = (unsigned)CGBA_GPSP_HEADLESS_A_FRAME;
+	const unsigned hold = (unsigned)CGBA_GPSP_HEADLESS_A_HOLD;
+	const unsigned period = (unsigned)CGBA_GPSP_HEADLESS_A_PERIOD;
+	const unsigned press = (unsigned)CGBA_GPSP_HEADLESS_A_PRESS;
+	unsigned rel;
+
+	if(hold == 0 || press == 0 || frame < start || frame >= start + hold)
+		return 0;
+	rel = frame - start;
+	if(period == 0)
+		return 1;
+	return (rel % period) < press;
+}
+
+static int headless_a_edge(unsigned frame)
+{
+	return headless_a_down(frame) &&
+		(frame == 0 || !headless_a_down(frame - 1));
+}
+
+static uint32_t headless_buttons_for_frame(unsigned frame)
+{
+	const unsigned start = (unsigned)CGBA_GPSP_HEADLESS_START_FRAME;
+	const unsigned hold = (unsigned)CGBA_GPSP_HEADLESS_START_HOLD;
+	uint32_t buttons = FXCG100_GBA_BUTTON_NONE;
+
+	if(hold != 0 && frame >= start && frame < start + hold)
+		buttons |= FXCG100_GBA_BUTTON_START;
+	if(headless_a_down(frame))
+		buttons |= FXCG100_GBA_BUTTON_A;
+
+	return buttons;
+}
+
 static int cgba_headless_test(uint16_t *framebuffer)
 {
 	static char lines[20][CGBA_DIAG_LINE_MAX];
-	char buf[64];
+	char buf[128];
 	unsigned n, i, rom;
 
 	fxcg100_lcd_init();
@@ -199,19 +481,97 @@ static int cgba_headless_test(uint16_t *framebuffer)
 			;
 	}
 
-	hputs_dbg("loaded OK; running frames");
-	cgba_fps_init(&cgba_fps);
-	for(i = 0; i < 48; i++) {
-		int rendered = (i % 4) == 0;
+#ifdef CGBA_DYNAREC
+#if CGBA_GPSP_HEADLESS_DYNAREC >= 0
+	dynarec_enable = CGBA_GPSP_HEADLESS_DYNAREC ? 1 : 0;
+#endif
+	snprintf(buf, sizeof buf, "dynarec=%d", dynarec_enable);
+	hputs_dbg(buf);
+	cgba_dynarec_rom_flush_count = 0;
+	cgba_dynarec_ram_flush_count = 0;
+	cgba_dynarec_arm_translate_count = 0;
+	cgba_dynarec_thumb_translate_count = 0;
+	#endif
+	snprintf(buf, sizeof buf, "input START f=%u h=%u A/SHIFT f=%u h=%u p=%u w=%u",
+		(unsigned)CGBA_GPSP_HEADLESS_START_FRAME,
+		(unsigned)CGBA_GPSP_HEADLESS_START_HOLD,
+		(unsigned)CGBA_GPSP_HEADLESS_A_FRAME,
+		(unsigned)CGBA_GPSP_HEADLESS_A_HOLD,
+		(unsigned)CGBA_GPSP_HEADLESS_A_PERIOD,
+		(unsigned)CGBA_GPSP_HEADLESS_A_PRESS);
+	hputs_dbg(buf);
 
-		cgba_gpsp_run_frame(FXCG100_GBA_BUTTON_NONE, rendered);
+	snprintf(buf, sizeof buf, "loaded OK; running %u frames",
+		(unsigned)CGBA_GPSP_HEADLESS_FRAMES);
+	hputs_dbg(buf);
+	cgba_fps_init(&cgba_fps);
+	for(i = 0; i < CGBA_GPSP_HEADLESS_FRAMES; i++) {
+		int rendered = (i % 4) == 0;
+		int log_frame = headless_log_frame(i);
+		uint32_t buttons = headless_buttons_for_frame(i);
+
+		if(log_frame) {
+			snprintf(buf, sizeof buf, "frame %u before render=%d",
+				i, rendered);
+			hputs_dbg(buf);
+		}
+		if(buttons & FXCG100_GBA_BUTTON_START) {
+			snprintf(buf, sizeof buf, "frame %u START", i);
+			hputs_dbg(buf);
+		}
+		if(headless_a_edge(i)) {
+			snprintf(buf, sizeof buf, "frame %u A/SHIFT", i);
+			hputs_dbg(buf);
+		}
+#ifdef CGBA_DYNAREC
+#if CGBA_GPSP_HEADLESS_DIFF_BLOCKS > 0
+		if((int)i == CGBA_GPSP_HEADLESS_DIFF_FRAME) {
+			unsigned j;
+			snprintf(buf, sizeof buf, "=== live block diff frame %u blocks %u ===",
+				i, (unsigned)CGBA_GPSP_HEADLESS_DIFF_BLOCKS);
+			hputs_dbg(buf);
+			n = cgba_sh4_diff_blocks_here(
+				(unsigned)CGBA_GPSP_HEADLESS_DIFF_BLOCKS, lines, 20);
+			for(j = 0; j < n; j++)
+				hputs_dbg(lines[j]);
+			snprintf(buf, sizeof buf, "=== live block diff done frame %u ===", i);
+			hputs_dbg(buf);
+		}
+#endif
+#endif
+		headless_log_phase(i, "pre-run");
+		headless_log_state(i, "pre", framebuffer);
+#ifdef CGBA_DYNAREC
+		headless_window_diff(i);
+#endif
+		cgba_gpsp_run_frame(buttons, rendered);
+		headless_log_phase(i, "post-run");
+		headless_log_state(i, "post", framebuffer);
+		if((buttons & FXCG100_GBA_BUTTON_START) || headless_a_edge(i)) {
+			snprintf(buf, sizeof buf, "frame %u P1=%03lX buttons=%03lX",
+				i, (unsigned long)cgba_gpsp_keyinput(),
+				(unsigned long)buttons);
+			hputs_dbg(buf);
+		}
+		if(log_frame) {
+			snprintf(buf, sizeof buf, "frame %u after", i);
+			hputs_dbg(buf);
+		}
+		headless_dump_framebuffer(i, framebuffer);
+		headless_log_framebuffer_stat(i, framebuffer);
+		headless_log_phase(i, "post-dump");
 		cgba_fps_tick(&cgba_fps, rendered);
+		headless_log_phase(i, "post-fps");
 		if(rendered) {
 			/* Exercise the real blit path incl. the no-final-wait DMA overlap. */
+			headless_log_phase(i, "pre-overlay");
 			fxcg100_lcd_overlay_fps(framebuffer, cgba_fps.emu_fps,
 				cgba_fps.draw_fps);
+			headless_log_phase(i, "post-overlay");
 			fxcg100_lcd_blit_gba(framebuffer);
+			headless_log_phase(i, "post-blit");
 		}
+		headless_log_phase(i, "loop-end");
 	}
 
 	/* Exercise the FPS overlay so the font + framebuffer write are validated;
@@ -225,12 +585,29 @@ static int cgba_headless_test(uint16_t *framebuffer)
 	n = cgba_gpsp_diag(lines, 20);
 	for(i = 0; i < n; i++)
 		hputs_dbg(lines[i]);
-#ifdef CGBA_DYNAREC
+	#ifdef CGBA_DYNAREC
+	#if CGBA_GPSP_HEADLESS_BENCH_FRAMES > 0
+	snprintf(buf, sizeof buf,
+		"jit stats rom_flush=%lu ram_flush=%lu arm_tx=%lu thumb_tx=%lu",
+		(unsigned long)cgba_dynarec_rom_flush_count,
+		(unsigned long)cgba_dynarec_ram_flush_count,
+		(unsigned long)cgba_dynarec_arm_translate_count,
+		(unsigned long)cgba_dynarec_thumb_translate_count);
+	hputs_dbg(buf);
 	hputs_dbg("=== throughput bench ===");
-	n = cgba_sh4_bench(120, lines, 20);
+	n = cgba_sh4_bench(CGBA_GPSP_HEADLESS_BENCH_FRAMES, lines, 20);
 	for(i = 0; i < n; i++)
 		hputs_dbg(lines[i]);
-#endif
+	#else
+	snprintf(buf, sizeof buf,
+		"jit stats rom_flush=%lu ram_flush=%lu arm_tx=%lu thumb_tx=%lu",
+		(unsigned long)cgba_dynarec_rom_flush_count,
+		(unsigned long)cgba_dynarec_ram_flush_count,
+		(unsigned long)cgba_dynarec_arm_translate_count,
+		(unsigned long)cgba_dynarec_thumb_translate_count);
+	hputs_dbg(buf);
+	#endif
+	#endif
 	hputs_dbg("=== done ===");
 	for(;;)   /* idle until the headless timeout kills us */
 		;
