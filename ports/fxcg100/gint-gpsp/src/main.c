@@ -7,6 +7,9 @@
 #include "fxcg100_platform.h"
 #include "frame_pacing.h"
 #include "gpsp_runner.h"
+#ifdef CGBA_DYNAREC
+#include "sh4/sh4_diff_harness.h"
+#endif
 
 /* Menu frameskip types (order matches frameskip_options[] in fxcg100_menu.c). */
 #define CGBA_FRAMESKIP_AUTOMATIC 0
@@ -209,6 +212,12 @@ static int cgba_headless_test(uint16_t *framebuffer)
 	n = cgba_gpsp_diag(lines, 20);
 	for(i = 0; i < n; i++)
 		hputs_dbg(lines[i]);
+#ifdef CGBA_DYNAREC
+	hputs_dbg("=== throughput bench ===");
+	n = cgba_sh4_bench(120, lines, 20);
+	for(i = 0; i < n; i++)
+		hputs_dbg(lines[i]);
+#endif
 	hputs_dbg("=== done ===");
 	for(;;)   /* idle until the headless timeout kills us */
 		;

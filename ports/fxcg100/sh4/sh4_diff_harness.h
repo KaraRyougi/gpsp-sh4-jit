@@ -38,6 +38,10 @@ unsigned cgba_sh4_diff_dump(uint32_t cycles, char out[][48], unsigned max_lines)
  * diverge plus the first diverging IWRAM word, for classifying a content diff. */
 unsigned cgba_sh4_diff_regions(uint32_t cycles, char out[][48], unsigned max_lines);
 
+/* A/B throughput benchmark: time `frames` CPU-only frames under the interpreter
+ * then the dynarec from one snapshot; report ticks, fps, and dynarec speedup. */
+unsigned cgba_sh4_bench(unsigned frames, char out[][48], unsigned max_lines);
+
 /* Single-block lockstep diff from a clean reset: report the first block whose
  * dynarec translation disagrees with the interpreter (block PC + divergent
  * register or next-PC). Returns lines used. */
