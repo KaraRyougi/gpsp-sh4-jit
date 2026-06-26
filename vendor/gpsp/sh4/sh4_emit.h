@@ -64,7 +64,9 @@ void cgba_sh4_arm_multiply_long(u32 opcode, u32 pc);
 void cgba_sh4_arm_psr(u32 opcode, u32 pc);
 void cgba_sh4_arm_swap(u32 opcode, u32 pc);
 void cgba_sh4_hle_div(u32 cpu_mode, u32 pc);
+int  cgba_sh4_thumb_dp(u32 opcode, u32 pc);
 void cgba_sh4_thumb_shift_reg(u32 opcode, u32 pc);
+void cgba_sh4_thumb_shift_imm(u32 opcode, u32 pc);
 
 extern void *tmemld[11][16];
 extern void *tmemst[4][16];
@@ -251,66 +253,36 @@ extern void *tmemst[4][16];
 #define SH4OP_negs SH4DP_NEG
 
 /* ================================================================== */
-/* Thumb data-processing (real SH4 emission). Thumb always sets flags. */
+/* Thumb data-processing.                                              */
 /* ================================================================== */
-
-#define thumb_generate_op_reg(name, _rd, _rs, _rn)                            \
-  sh4g_dp_reg(&translation_ptr, SH4OP_##name, (_rd), (_rs), (_rn), 1)
-#define thumb_generate_op_imm(name, _rd, _rs, _rn)                            \
-  sh4g_dp_imm(&translation_ptr, SH4OP_##name, (_rd), (_rs), (u32)(_rn), 1)
-
+/*
+ * Routed to the C core (cgba_sh4_thumb_dp) for full, correct N/Z/C/V and
+ * carry-in. The earlier inline emitters set only N/Z and mapped ADC/SBC to
+ * plain add/sub (dropping carry-in -> wrong result), so CS/CC/VS/VC and the
+ * compound conditions were wrong and ADC/SBC were doubly wrong. The inline path
+ * (sh4g_dp_*) remains in the glue for the eventual lazy/dead-flag synthesis the
+ * optimization plan describes; for bring-up, correctness wins. The opcode fully
+ * determines the operation, so the helper re-decodes and the macro tokens are
+ * unused. rd is r0..r7 here (never PC); only the hi-reg forms can write PC.
+ */
 #define thumb_data_proc(type, name, rn_type, _rd, _rs, _rn)                   \
-  do { thumb_decode_##type();                                                 \
-       thumb_generate_op_##rn_type(name, _rd, _rs, _rn); } while(0)
-
+  SH4_CALL_OP2(cgba_sh4_thumb_dp)
 #define thumb_data_proc_test(type, name, rn_type, _rs, _rn)                   \
-  do { thumb_decode_##type();                                                 \
-       thumb_generate_op_##rn_type(name, 0, _rs, _rn); } while(0)
-
+  SH4_CALL_OP2(cgba_sh4_thumb_dp)
 #define thumb_data_proc_unary(type, name, rn_type, _rd, _rn)                  \
-  do { thumb_decode_##type();                                                 \
-       thumb_generate_op_##rn_type(name, _rd, 0, _rn); } while(0)
+  SH4_CALL_OP2(cgba_sh4_thumb_dp)
 
-/* Hi-register ops operate on the full r0..r15 file; rd==PC is a branch. */
-#define thumb_data_proc_hi(name)                                              \
-  do { thumb_decode_hireg_op();                                               \
-       sh4g_dp_reg(&translation_ptr, SH4OP_##name, rd, rd, rs, 0);            \
-       if(rd == REG_PC) {                                                     \
-         sh4g_load_greg(&translation_ptr, REG_PC, SH4_REG_ARG0);             \
-         generate_indirect_branch_cycle_update(thumb); }                      \
-  } while(0)
-
-#define thumb_data_proc_test_hi(name)                                         \
-  do { thumb_decode_hireg_op();                                               \
-       sh4g_dp_reg(&translation_ptr, SH4OP_##name, rd, rd, rs, 1); } while(0)
-
-#define thumb_data_proc_mov_hi()                                              \
-  do { thumb_decode_hireg_op();                                               \
-       sh4g_dp_reg(&translation_ptr, SH4DP_MOV, rd, rd, rs, 0);               \
-       if(rd == REG_PC) {                                                     \
-         sh4g_load_greg(&translation_ptr, REG_PC, SH4_REG_ARG0);             \
-         generate_indirect_branch_cycle_update(thumb); }                      \
-  } while(0)
+/* Hi-register ADD/MOV can target r15 -> re-dispatch when the helper returns 1. */
+#define thumb_data_proc_hi(name)        SH4_CALL_OP2_PC(cgba_sh4_thumb_dp)
+#define thumb_data_proc_test_hi(name)   SH4_CALL_OP2(cgba_sh4_thumb_dp)
+#define thumb_data_proc_mov_hi()        SH4_CALL_OP2_PC(cgba_sh4_thumb_dp)
 
 /* ================================================================== */
-/* Thumb shifts                                                        */
+/* Thumb shifts — routed to C for correct N/Z/C (immediate and register). */
 /* ================================================================== */
-
-#define SH4SHK_lsl SH4SH_LSL
-#define SH4SHK_lsr SH4SH_LSR
-#define SH4SHK_asr SH4SH_ASR
-#define SH4SHK_ror SH4SH_ROR
-
-#define thumb_generate_shift_imm(name)                                        \
-  sh4g_shift_imm(&translation_ptr, SH4SHK_##name, rd, rs, imm, 1)
-/* Register-amount shifts (and ROR) need full ARM semantics + carry, which SH4
- * SHLD/SHAD can't express directly, so route them to the C core. */
-#define thumb_generate_shift_reg(name)                                        \
-  SH4_CALL_OP2(cgba_sh4_thumb_shift_reg)
 
 #define thumb_shift(decode_type, op_type, value_type)                         \
-  do { thumb_decode_##decode_type();                                          \
-       thumb_generate_shift_##value_type(op_type); } while(0)
+  SH4_CALL_OP2(cgba_sh4_thumb_shift_##value_type)
 
 /* ================================================================== */
 /* Thumb loads of PC/SP-relative addresses, SP adjust, pool const      */

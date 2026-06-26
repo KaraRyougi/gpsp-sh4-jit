@@ -60,6 +60,20 @@ static inline void set_nzcv(u32 result, u32 c, u32 v)
   reg[REG_CPSR] = cpsr;
 }
 
+/* ARM add-with-carry: a + b + cin, with full NZCV. All ARM/Thumb arithmetic is
+ * expressed as add-with-carry of possibly-inverted operands:
+ *   ADD = addc(a,  b, 0)   ADC = addc(a,  b, C)
+ *   SUB = addc(a, ~b, 1)   SBC = addc(a, ~b, C)   RSB = addc(~a, b, 1)
+ *   CMP = SUB (no write)   CMN = ADD (no write)   NEG = addc(~a, 0, 1) */
+static inline u32 do_addc(u32 a, u32 b, u32 cin, int set_flags)
+{
+  u64 tmp = (u64)a + (u64)b + cin;
+  u32 res = (u32)tmp;
+  if (set_flags)
+    set_nzcv(res, (u32)(tmp >> 32), ((~(a ^ b)) & (a ^ res)) >> 31);
+  return res;
+}
+
 /* ===================== Thumb single load/store ===================== */
 
 void cgba_sh4_thumb_ldst(u32 opcode, u32 pc)
@@ -216,6 +230,101 @@ void cgba_sh4_thumb_shift_reg(u32 opcode, u32 pc)
   reg[REG_CPSR] = cpsr;
 }
 
+/* Thumb format 1 immediate shift (LSL/LSR/ASR Rd,Rs,#imm5), N/Z/C. */
+void cgba_sh4_thumb_shift_imm(u32 opcode, u32 pc)
+{
+  u32 op = (opcode >> 11) & 3;       /* 0=LSL 1=LSR 2=ASR */
+  u32 imm5 = (opcode >> 6) & 0x1F;
+  u32 rs = (opcode >> 3) & 7, rd = opcode & 7;
+  u32 val = reg[rs];
+  u32 result = val, carry = (reg[REG_CPSR] >> 29) & 1, cpsr;
+  (void)pc;
+
+  switch (op) {
+  case 0:                                            /* LSL #imm (0 = no-op) */
+    if (imm5) { carry = (val >> (32 - imm5)) & 1; result = val << imm5; }
+    break;
+  case 1:                                            /* LSR (#0 means #32) */
+    if (imm5 == 0) { carry = (val >> 31) & 1; result = 0; }
+    else { carry = (val >> (imm5 - 1)) & 1; result = val >> imm5; }
+    break;
+  default:                                           /* ASR (#0 means #32) */
+    if (imm5 == 0) { carry = (val >> 31) & 1; result = (u32)((s32)val >> 31); }
+    else { carry = (val >> (imm5 - 1)) & 1; result = (u32)((s32)val >> imm5); }
+    break;
+  }
+
+  reg[rd] = result;
+  cpsr = reg[REG_CPSR] & ~(CF_N | CF_Z | CF_C);
+  if (result & 0x80000000u) cpsr |= CF_N;
+  if (result == 0)          cpsr |= CF_Z;
+  if (carry)                cpsr |= CF_C;
+  reg[REG_CPSR] = cpsr;
+}
+
+/* ===================== Thumb data-processing (full NZCV) =============
+ * The native inline emitters set only N/Z (and mishandle ADC/SBC carry-in),
+ * so the Thumb data-proc family routes here for correct N/Z/C/V and carry-in
+ * until inline flag synthesis (the status doc's lazy/dead-flag path) lands.
+ * Returns 1 if it wrote PC (hi-register ADD/MOV) so the caller re-dispatches. */
+int cgba_sh4_thumb_dp(u32 opcode, u32 pc)
+{
+  u32 hi  = (opcode >> 8) & 0xFF;
+  u32 cin = (reg[REG_CPSR] >> 29) & 1;
+
+  if (hi >= 0x18 && hi <= 0x1F) {                    /* fmt2 ADD/SUB rd,rs,rn|imm3 */
+    u32 rd = opcode & 7, rs = (opcode >> 3) & 7;
+    u32 b = (opcode & 0x0400) ? ((opcode >> 6) & 7) : reg[(opcode >> 6) & 7];
+    u32 a = reg[rs];
+    reg[rd] = (opcode & 0x0200) ? do_addc(a, ~b, 1, 1) : do_addc(a, b, 0, 1);
+    return 0;
+  }
+  if (hi >= 0x20 && hi <= 0x3F) {                    /* fmt3 MOV/CMP/ADD/SUB rd,#imm8 */
+    u32 rd = (opcode >> 8) & 7, imm = opcode & 0xFF, a = reg[rd];
+    switch ((opcode >> 11) & 3) {
+    case 0: reg[rd] = imm; set_nz(imm); break;            /* MOV */
+    case 1: do_addc(a, ~imm, 1, 1); break;                /* CMP */
+    case 2: reg[rd] = do_addc(a, imm, 0, 1); break;       /* ADD */
+    default: reg[rd] = do_addc(a, ~imm, 1, 1); break;     /* SUB */
+    }
+    return 0;
+  }
+  if (hi >= 0x40 && hi <= 0x43) {                    /* fmt4 ALU (non-shift) */
+    u32 rd = opcode & 7, rs = (opcode >> 3) & 7;
+    u32 a = reg[rd], b = reg[rs];
+    switch ((opcode >> 6) & 0xF) {
+    case 0x0: reg[rd] = a & b;  set_nz(reg[rd]); break;   /* AND */
+    case 0x1: reg[rd] = a ^ b;  set_nz(reg[rd]); break;   /* EOR */
+    case 0x5: reg[rd] = do_addc(a, b, cin, 1); break;     /* ADC */
+    case 0x6: reg[rd] = do_addc(a, ~b, cin, 1); break;    /* SBC */
+    case 0x8: set_nz(a & b); break;                       /* TST */
+    case 0x9: reg[rd] = do_addc(~b, 0, 1, 1); break;      /* NEG = 0 - rs */
+    case 0xA: do_addc(a, ~b, 1, 1); break;                /* CMP */
+    case 0xB: do_addc(a, b, 0, 1); break;                 /* CMN */
+    case 0xC: reg[rd] = a | b;  set_nz(reg[rd]); break;   /* ORR */
+    case 0xD: reg[rd] = a * b;  set_nz(reg[rd]); break;   /* MUL */
+    case 0xE: reg[rd] = a & ~b; set_nz(reg[rd]); break;   /* BIC */
+    case 0xF: reg[rd] = ~b;     set_nz(reg[rd]); break;   /* MVN */
+    default: break;  /* 0x2/0x3/0x4/0x7 shifts routed to shift helpers */
+    }
+    return 0;
+  }
+  if (hi >= 0x44 && hi <= 0x46) {                    /* fmt5 hi-reg ADD/CMP/MOV */
+    u32 op = (opcode >> 8) & 3;                       /* 0 ADD, 1 CMP, 2 MOV */
+    u32 rd = (opcode & 7) | ((opcode >> 4) & 8);
+    u32 rs = (opcode >> 3) & 0xF;
+    u32 a = (rd == 15) ? (pc + 4) : reg[rd];          /* Thumb R15 reads PC+4 */
+    u32 b = (rs == 15) ? (pc + 4) : reg[rs];
+    u32 res;
+    if (op == 1) { do_addc(a, ~b, 1, 1); return 0; }  /* CMP sets flags only */
+    res = (op == 0) ? (a + b) : b;                     /* ADD / MOV: no flags */
+    if (rd == 15) { reg[REG_PC] = res & ~1u; return 1; }
+    reg[rd] = res;
+    return 0;
+  }
+  return 0;
+}
+
 /* ===================== ARM single data transfer ==================== */
 
 static u32 arm_shifter_operand(u32 opcode, u32 pc, u32 *carry_out)
@@ -230,10 +339,13 @@ static u32 arm_shifter_operand(u32 opcode, u32 pc, u32 *carry_out)
     return v;
   } else {                                         /* register shift */
     u32 rm = opcode & 0xF;
-    u32 val = (rm == 15) ? (pc + 8) : reg[rm];
+    u32 by_reg = opcode & 0x10;                     /* shift amount in a reg */
+    /* R15 reads PC+8, or PC+12 when the shift amount is register-specified
+       (the extra pipeline cycle advances PC one instruction further). */
+    u32 val = (rm == 15) ? (pc + (by_reg ? 12 : 8)) : reg[rm];
     u32 type = (opcode >> 5) & 3;
     u32 amount;
-    if (opcode & 0x10) {                            /* shift by register */
+    if (by_reg) {                                   /* shift by register */
       u32 rs = (opcode >> 8) & 0xF;
       amount = reg[rs] & 0xFF;
       if (amount == 0) { *carry_out = cpsr_c; return val; } /* reg-#0: no-op */
@@ -334,28 +446,48 @@ int cgba_sh4_arm_block(u32 opcode, u32 pc)
   u32 writeback = (opcode >> 21) & 1;
   u32 pre = (opcode >> 24) & 1;
   u32 up = (opcode >> 23) & 1;
+  u32 s_bit = (opcode >> 22) & 1;
   u32 base = reg[rn];
-  u32 count = 0, addr, i;
+  u32 count = 0, addr, new_base, i, lowest = 16;
   int wrote_pc = 0;
 
-  (void)pc;
-  for (i = 0; i < 16; i++) if (rlist & (1 << i)) count++;
-  addr = up ? base : base - count * 4;
-  if (up == 0) pre = !pre;   /* normalize to ascending traversal */
+  /* TODO(S-bit): with the S bit set and r15 NOT in the list, LDM/STM transfer
+     the USER-mode banked registers — not handled here (rare). */
+
+  for (i = 0; i < 16; i++)
+    if (rlist & (1u << i)) { count++; if (lowest == 16) lowest = i; }
+
+  new_base = up ? base + count * 4 : base - count * 4;
+  addr = (up ? base : new_base) & ~3u;   /* word-align; traverse ascending */
+  if (up == 0) pre = !pre;
 
   for (i = 0; i < 16; i++) {
-    if (!(rlist & (1 << i))) continue;
+    if (!(rlist & (1u << i))) continue;
     if (pre) addr += 4;
     if (is_load) {
       reg[i] = execute_load_u32(addr);
       if (i == 15) { reg[REG_PC] = reg[15] & ~1u; wrote_pc = 1; }
     } else {
-      execute_store_u32(addr, reg[i]);
+      /* STM stores PC+12 for r15; for the base reg, the OLD base is stored only
+         when it is the lowest in the list, otherwise the written-back value. */
+      u32 v = (i == 15) ? (pc + 12)
+            : (i == rn && writeback && i != lowest) ? new_base
+            : reg[i];
+      execute_store_u32(addr, v);
     }
     if (!pre) addr += 4;
   }
-  if (writeback)
-    reg[rn] = up ? base + count * 4 : base - count * 4;
+
+  /* LDM with the base in the list keeps the loaded value (no writeback). */
+  if (writeback && !(is_load && (rlist & (1u << rn))))
+    reg[rn] = new_base;
+
+  /* LDM{pc}^ (exception return): restore CPSR from the mode's SPSR + re-bank. */
+  if (wrote_pc && s_bit) {
+    reg[REG_CPSR] = REG_SPSR(reg[CPU_MODE]);
+    set_cpu_mode(cpu_modes[reg[REG_CPSR] & 0xF]);
+    reg[REG_PC] = reg[15] & ((reg[REG_CPSR] & 0x20) ? ~1u : ~3u);
+  }
   return wrote_pc;
 }
 
@@ -367,7 +499,10 @@ int cgba_sh4_arm_dp(u32 opcode, u32 pc)
   u32 set_flags = (opcode >> 20) & 1;
   u32 rn = (opcode >> 16) & 0xF;
   u32 rd = (opcode >> 12) & 0xF;
-  u32 a = (rn == 15) ? (pc + 8) : reg[rn];
+  /* With a register-controlled shift (bit25 clear, bit4 set), R15 reads PC+12;
+     otherwise PC+8. arm_shifter_operand applies the same rule to Rm. */
+  u32 reg_shift = ((opcode & 0x02000010) == 0x00000010);
+  u32 a = (rn == 15) ? (pc + (reg_shift ? 12 : 8)) : reg[rn];
   u32 carry = (reg[REG_CPSR] >> 29) & 1;
   u32 b = arm_shifter_operand(opcode, pc, &carry);
   u32 cf = carry, vf = (reg[REG_CPSR] >> 28) & 1, res = 0;
@@ -474,24 +609,26 @@ void cgba_sh4_arm_psr(u32 opcode, u32 pc)
   }
 
   {                                                  /* MSR <psr>, val */
-    u32 val, mask = 0;
+    /* Field mask is privilege-aware (gpSP's cpsr_masks): in USER mode the
+       control byte is restricted to the Thumb bit, so USER code cannot change
+       the mode bits. pfield bit0 = control field, bit1 = flags field. */
+    u32 pfield = ((opcode >> 16) & 1) | ((opcode >> 18) & 2);
+    u32 val, mask;
     if (opcode & 0x02000000) {
       u32 imm = opcode & 0xFF, rot = ((opcode >> 8) & 0xF) * 2;
       val = rot ? ((imm >> rot) | (imm << (32 - rot))) : imm;
     } else {
       val = reg[opcode & 0xF];
     }
-    if (opcode & 0x00080000) mask |= 0xFF000000u;     /* flags field   */
-    if (opcode & 0x00010000) mask |= 0x000000FFu;     /* control field */
 
     if (use_spsr) {
-      REG_SPSR(reg[CPU_MODE]) = (REG_SPSR(reg[CPU_MODE]) & ~mask) | (val & mask);
+      mask = spsr_masks[pfield];
+      REG_SPSR(reg[CPU_MODE]) = (val & mask) | (REG_SPSR(reg[CPU_MODE]) & ~mask);
     } else {
-      /* TODO(mode-banking): an MSR that changes the mode bits should re-bank the
-       * registers via set_cpu_mode, but doing so here desyncs reg[CPU_MODE] from
-       * the dynarec's other mode-change paths and hangs. Needs to route CPSR
-       * writes through gpSP's execute_store_cpsr instead. */
-      reg[REG_CPSR] = (reg[REG_CPSR] & ~mask) | (val & mask);
+      mask = cpsr_masks[pfield][PRIVMODE(reg[CPU_MODE])];
+      reg[REG_CPSR] = (val & mask) | (reg[REG_CPSR] & ~mask);
+      if (mask & 0xFF)                              /* mode/control changed */
+        set_cpu_mode(cpu_modes[reg[REG_CPSR] & 0xF]);
     }
   }
 }
