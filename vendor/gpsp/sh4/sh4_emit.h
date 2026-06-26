@@ -54,7 +54,7 @@ void execute_store_spsr(u32 new_spsr, u32 store_mask);
 /* Bring-up instruction helpers (sh4_interp_helpers.c) — interpret one guest
  * instruction against reg[]/memory using the shared C core. Handlers that can
  * change the guest PC return 1 (caller re-dispatches), else 0. */
-void cgba_sh4_thumb_ldst(u32 opcode, u32 pc);
+int  cgba_sh4_thumb_ldst(u32 opcode, u32 pc);   /* returns 1 if a store alerted */
 int  cgba_sh4_thumb_block(u32 opcode, u32 pc);
 int  cgba_sh4_arm_dp(u32 opcode, u32 pc);
 int  cgba_sh4_arm_ldst(u32 opcode, u32 pc);
@@ -408,7 +408,7 @@ extern void *tmemst[4][16];
 /* Memory (single + block transfers). */
 #define thumb_access_memory(access_type, op_type, reg_rd, reg_rb, reg_ro,     \
                             address_type, offset, mem_type)                   \
-  SH4_CALL_OP2(cgba_sh4_thumb_ldst)
+  SH4_CALL_OP2_PC(cgba_sh4_thumb_ldst)
 #define thumb_block_memory(access_type, pre_op, post_op, base_reg)            \
   SH4_CALL_OP2_PC(cgba_sh4_thumb_block)
 #define arm_access_memory(access_type, direction, adjust_op, mem_type,        \

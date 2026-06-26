@@ -31,10 +31,35 @@ u32 function_cc execute_load_u16(u32 address) { return read_memory16(address); }
 u32 function_cc execute_load_u32(u32 address) { return read_memory32(address); }
 u32 function_cc execute_load_s8(u32 address)  { return read_memory8s(address); }
 u32 function_cc execute_load_s16(u32 address) { return read_memory16s(address); }
-void function_cc execute_store_u8(u32 address, u32 source)  { write_memory8(address, (u8)source); }
-void function_cc execute_store_u16(u32 address, u32 source) { write_memory16(address, (u16)source); }
-void function_cc execute_store_u32(u32 address, u32 source) { write_memory32(address, source); }
-void function_cc execute_store_aligned_u32(u32 address, u32 source) { write_memory32(address, source); }
+/* A store can raise a CPU alert: DMA/HALT idle (CPU_HALT_STATE set), a newly
+ * pending IRQ, or SMC (the guest overwrote code). write_memory* return it; we
+ * accumulate it here and the ldst helpers consume it after their store(s) via
+ * cgba_store_alert_break(). Dropping it (the old behavior) meant the dynarec
+ * never idled, never took a store-raised IRQ, and never flushed self-modified
+ * code — it just ran past, diverging from the interpreter. */
+static cpu_alert_type cgba_store_alert;
+
+void function_cc execute_store_u8(u32 address, u32 source)  { cgba_store_alert |= write_memory8(address, (u8)source); }
+void function_cc execute_store_u16(u32 address, u32 source) { cgba_store_alert |= write_memory16(address, (u16)source); }
+void function_cc execute_store_u32(u32 address, u32 source) { cgba_store_alert |= write_memory32(address, source); }
+void function_cc execute_store_aligned_u32(u32 address, u32 source) { cgba_store_alert |= write_memory32(address, source); }
+
+/* Consume any pending store alert. If set, point PC at the next instruction,
+ * flush the RAM code cache on SMC, and return 1 so the emitter glue redispatches
+ * through sh4_block_exit -> update_gba (which idles on HALT/DMA and vectors a
+ * pending IRQ). Returns 0 — continue the block — when there is no alert, which is
+ * always the case after a pure load. */
+static int cgba_store_alert_break(u32 next_pc)
+{
+  cpu_alert_type a = cgba_store_alert;
+  cgba_store_alert = CPU_ALERT_NONE;
+  if (!a)
+    return 0;
+  if (a & CPU_ALERT_SMC)
+    flush_translation_cache_ram();
+  reg[REG_PC] = next_pc;
+  return 1;
+}
 
 /* CPSR flag bits (canonical packed form, matching the interpreter). */
 #define CF_N (1u << 31)
@@ -76,7 +101,7 @@ static inline u32 do_addc(u32 a, u32 b, u32 cin, int set_flags)
 
 /* ===================== Thumb single load/store ===================== */
 
-void cgba_sh4_thumb_ldst(u32 opcode, u32 pc)
+static void cgba_sh4_thumb_ldst_do(u32 opcode, u32 pc)
 {
   u32 hi = (opcode >> 8) & 0xFF;
   u32 rd = opcode & 7;
@@ -136,6 +161,14 @@ void cgba_sh4_thumb_ldst(u32 opcode, u32 pc)
   }
 }
 
+/* Thumb single load/store never targets PC; run it, then break out of the block
+ * if a store raised an alert (DMA/HALT idle, IRQ, SMC). */
+int cgba_sh4_thumb_ldst(u32 opcode, u32 pc)
+{
+  cgba_sh4_thumb_ldst_do(opcode, pc);
+  return cgba_store_alert_break(pc + 2);
+}
+
 /* ===================== Thumb block (PUSH/POP/LDMIA/STMIA) =========== */
 
 int cgba_sh4_thumb_block(u32 opcode, u32 pc)
@@ -145,7 +178,6 @@ int cgba_sh4_thumb_block(u32 opcode, u32 pc)
   int wrote_pc = 0;
   int i;
 
-  (void)pc;
   if (hi == 0xB4 || hi == 0xB5) {                  /* PUSH {rlist[, lr]} */
     u32 sp = reg[REG_SP];
     u32 count = 0;
@@ -156,7 +188,7 @@ int cgba_sh4_thumb_block(u32 opcode, u32 pc)
     for (i = 0; i < 8; i++)
       if (rlist & (1 << i)) { execute_store_u32(sp, reg[i]); sp += 4; }
     if (hi == 0xB5) execute_store_u32(sp, reg[REG_LR]);
-    return 0;
+    return cgba_store_alert_break(pc + 2);
   }
   if (hi == 0xBC || hi == 0xBD) {                  /* POP {rlist[, pc]} */
     u32 sp = reg[REG_SP];
@@ -177,9 +209,9 @@ int cgba_sh4_thumb_block(u32 opcode, u32 pc)
         addr += 4;
       }
     reg[rb] = addr;
-    return 0;
+    return cgba_store_alert_break(pc + 2);
   }
-  return 0;
+  return cgba_store_alert_break(pc + 2);
 }
 
 /* ===================== Thumb register shift (LSL/LSR/ASR/ROR Rd,Rs) =
@@ -433,7 +465,7 @@ int cgba_sh4_arm_ldst(u32 opcode, u32 pc)
     if (!pre) addr = up ? base + offset : base - offset;
     if (writeback || !pre) reg[rn] = addr;
   }
-  return 0;
+  return cgba_store_alert_break(pc + 4);
 }
 
 /* ===================== CPSR / SPSR write (gpSP canonical) ==========
@@ -530,7 +562,9 @@ int cgba_sh4_arm_block(u32 opcode, u32 pc)
     u32 next = execute_spsr_restore(reg[15]);
     reg[REG_PC] = next & ((reg[REG_CPSR] & 0x20) ? ~1u : ~3u);
   }
-  return wrote_pc;
+  /* `|` not `||`: always consume the alert. LDM is loads (no alert) so the break
+   * is a no-op for wrote_pc; STM stores, where the break may exit the block. */
+  return wrote_pc | cgba_store_alert_break(pc + 4);
 }
 
 /* ===================== ARM data-processing ========================= */
