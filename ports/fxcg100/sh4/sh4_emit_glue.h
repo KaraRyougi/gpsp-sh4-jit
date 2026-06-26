@@ -474,6 +474,14 @@ static inline u8 *sh4g_emit_bf_placeholder(u8 **tp)
   return site;
 }
 
+/* Emit BT placeholder (branch when T==1); returns the BT site to patch. */
+static inline u8 *sh4g_emit_bt_placeholder(u8 **tp)
+{
+  u8 *site = *tp;
+  sh4g_u16(tp, 0x8900);                                         /* BT 0 (disp patched) */
+  return site;
+}
+
 /* Patch a BT/BF disp8 at `site` to branch to `target`. Range +-256 bytes. */
 static inline void sh4g_patch_cond(u8 *site, const void *target)
 {
