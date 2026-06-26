@@ -76,7 +76,8 @@ static inline void sh4g_set_nzcv(u8 **tp, unsigned result, unsigned rc, unsigned
  *   ADD: clrt; addc => result + C in T;  addv on a copy => V in T.
  *   SUB: cmp/hs => ARM C in T (a>=b);  sub => result;  subv on a copy => V.
  * C and V are captured to R4/R5 (movt) and packed by sh4g_set_nzcv. */
-static inline void sh4g_dp_addsub(u8 **tp, int is_sub, unsigned rd, int write_result)
+static inline void sh4g_dp_addsub(u8 **tp, int is_sub, unsigned rd,
+                                  int write_result, int set_flags)
 {
   sh4_codegen cg = sh4g_open(tp);
   const unsigned a = SH4_REG_T0;     /* R1 = first / result */
@@ -85,29 +86,33 @@ static inline void sh4g_dp_addsub(u8 **tp, int is_sub, unsigned rd, int write_re
   const unsigned rc = SH4_REG_ARG0;  /* R4 = C (0/1) */
   const unsigned rv = SH4_REG_ARG1;  /* R5 = V (0/1) */
 
-  sh4_emit_mov_reg(&cg, a, acopy);             /* save original a for V */
+  if (set_flags)
+    sh4_emit_mov_reg(&cg, a, acopy);           /* save original a for V */
   if (is_sub) {
-    sh4_emit_cmphs(&cg, b, a);                 /* T = (a >= b) = ARM C */
+    if (set_flags) { sh4_emit_cmphs(&cg, b, a); sh4_emit_movt(&cg, rc); }
+    sh4_emit_sub(&cg, b, a);                    /* a = a - b (result) */
+    if (set_flags) { sh4_emit_subv(&cg, b, acopy); sh4_emit_movt(&cg, rv); }
+  } else if (set_flags) {
+    sh4_emit_clrt(&cg);
+    sh4_emit_addc(&cg, b, a);                   /* a = a + b + 0, T = carry = ARM C */
     sh4_emit_movt(&cg, rc);
-    sh4_emit_sub(&cg, b, a);                   /* a = a - b (result) */
-    sh4_emit_subv(&cg, b, acopy);              /* T = signed overflow = V */
+    sh4_emit_addv(&cg, b, acopy);               /* T = signed overflow = V */
     sh4_emit_movt(&cg, rv);
   } else {
-    sh4_emit_clrt(&cg);
-    sh4_emit_addc(&cg, b, a);                  /* a = a + b + 0, T = carry = ARM C */
-    sh4_emit_movt(&cg, rc);
-    sh4_emit_addv(&cg, b, acopy);              /* T = signed overflow = V */
-    sh4_emit_movt(&cg, rv);
+    sh4_emit_add_reg(&cg, b, a);                /* a = a + b (no flags) */
   }
   if (write_result)
     sh4_emit_store_greg(&cg, a, rd);
   sh4g_close(tp, &cg);
-  sh4g_set_nzcv(tp, SH4_REG_T0, SH4_REG_ARG0, SH4_REG_ARG1);
+  if (set_flags)
+    sh4g_set_nzcv(tp, SH4_REG_T0, SH4_REG_ARG0, SH4_REG_ARG1);
 }
 
 /* Emit native SH4 for the Thumb data-proc `opcode`, or return 0 to fall back to
- * the C helper. pc is unused for the non-PC-writing forms handled here. */
-static inline int sh4g_thumb_dp_native(u8 **tp, u32 opcode, u32 pc)
+ * the C helper. flag_status is gpSP's per-instruction dead-flag mask (bits N=8
+ * Z=4 C=2 V=1): when the flags this op sets are all dead, the flag emission is
+ * skipped — the big win, since the eager NZCV pack dominates the op's cost. */
+static inline int sh4g_thumb_dp_native(u8 **tp, u32 opcode, u32 pc, u32 flag_status)
 {
   u32 hi = (opcode >> 8) & 0xFF;
   (void)pc;
@@ -117,7 +122,8 @@ static inline int sh4g_thumb_dp_native(u8 **tp, u32 opcode, u32 pc)
     unsigned rd = (opcode >> 8) & 7;
     sh4g_const(tp, opcode & 0xFF, SH4_REG_T0);
     sh4g_store_greg(tp, SH4_REG_T0, rd);
-    sh4g_set_nz(tp, SH4_REG_T0);
+    if (flag_status & 0xC)
+      sh4g_set_nz(tp, SH4_REG_T0);
     return 1;
   }
 
@@ -125,12 +131,13 @@ static inline int sh4g_thumb_dp_native(u8 **tp, u32 opcode, u32 pc)
   if (hi >= 0x28 && hi <= 0x3F) {
     unsigned sub = (opcode >> 11) & 3;
     unsigned rd  = (opcode >> 8) & 7;
+    int sf = (flag_status & 0xF) != 0;
     { sh4_codegen cg = sh4g_open(tp);
       sh4_emit_load_greg(&cg, rd, SH4_REG_T0);          /* a = reg[rd] */
       sh4g_close(tp, &cg); }
     sh4g_const(tp, opcode & 0xFF, SH4_REG_T1);          /* b = imm8 */
-    if (sub == 2) sh4g_dp_addsub(tp, 0, rd, 1);         /* ADD */
-    else          sh4g_dp_addsub(tp, 1, rd, sub == 3);  /* CMP (no wb) / SUB */
+    if (sub == 2) sh4g_dp_addsub(tp, 0, rd, 1, sf);     /* ADD */
+    else          sh4g_dp_addsub(tp, 1, rd, sub == 3, sf); /* CMP (no wb) / SUB */
     return 1;
   }
 
@@ -148,7 +155,7 @@ static inline int sh4g_thumb_dp_native(u8 **tp, u32 opcode, u32 pc)
     else { sh4_codegen cg = sh4g_open(tp);
       sh4_emit_load_greg(&cg, arg, SH4_REG_T1);         /* b = reg[Rm] */
       sh4g_close(tp, &cg); }
-    sh4g_dp_addsub(tp, is_sub, rd, 1);
+    sh4g_dp_addsub(tp, is_sub, rd, 1, (flag_status & 0xF) != 0);
     return 1;
   }
 
@@ -179,7 +186,8 @@ static inline int sh4g_thumb_dp_native(u8 **tp, u32 opcode, u32 pc)
       if (write)
         sh4_emit_store_greg(&cg, SH4_REG_T0, rd);
       sh4g_close(tp, &cg); }
-    sh4g_set_nz(tp, SH4_REG_T0);
+    if (flag_status & 0xC)
+      sh4g_set_nz(tp, SH4_REG_T0);
     return 1;
   }
 

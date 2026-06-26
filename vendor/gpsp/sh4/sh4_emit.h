@@ -269,25 +269,25 @@ extern void *tmemst[4][16];
 /* Each form first tries native SH4 emission (sh4g_thumb_dp_native, op-by-op
  * allow-list); on a 0 it falls back to the C helper, untouched. */
 #define thumb_data_proc(type, name, rn_type, _rd, _rs, _rn)                   \
-  do { if(!sh4g_thumb_dp_native(&translation_ptr, (u32)opcode, (u32)pc))      \
+  do { if(!sh4g_thumb_dp_native(&translation_ptr, (u32)opcode, (u32)pc, (u32)flag_status))      \
          SH4_CALL_OP2(cgba_sh4_thumb_dp); } while(0)
 #define thumb_data_proc_test(type, name, rn_type, _rs, _rn)                   \
-  do { if(!sh4g_thumb_dp_native(&translation_ptr, (u32)opcode, (u32)pc))      \
+  do { if(!sh4g_thumb_dp_native(&translation_ptr, (u32)opcode, (u32)pc, (u32)flag_status))      \
          SH4_CALL_OP2(cgba_sh4_thumb_dp); } while(0)
 #define thumb_data_proc_unary(type, name, rn_type, _rd, _rn)                  \
-  do { if(!sh4g_thumb_dp_native(&translation_ptr, (u32)opcode, (u32)pc))      \
+  do { if(!sh4g_thumb_dp_native(&translation_ptr, (u32)opcode, (u32)pc, (u32)flag_status))      \
          SH4_CALL_OP2(cgba_sh4_thumb_dp); } while(0)
 
 /* Hi-register ADD/MOV can target r15 -> re-dispatch when the helper returns 1.
  * The native path returns 0 for the rd==15 cases so they stay on the C path. */
 #define thumb_data_proc_hi(name)                                              \
-  do { if(!sh4g_thumb_dp_native(&translation_ptr, (u32)opcode, (u32)pc))      \
+  do { if(!sh4g_thumb_dp_native(&translation_ptr, (u32)opcode, (u32)pc, (u32)flag_status))      \
          SH4_CALL_OP2_PC(cgba_sh4_thumb_dp); } while(0)
 #define thumb_data_proc_test_hi(name)                                         \
-  do { if(!sh4g_thumb_dp_native(&translation_ptr, (u32)opcode, (u32)pc))      \
+  do { if(!sh4g_thumb_dp_native(&translation_ptr, (u32)opcode, (u32)pc, (u32)flag_status))      \
          SH4_CALL_OP2(cgba_sh4_thumb_dp); } while(0)
 #define thumb_data_proc_mov_hi()                                              \
-  do { if(!sh4g_thumb_dp_native(&translation_ptr, (u32)opcode, (u32)pc))      \
+  do { if(!sh4g_thumb_dp_native(&translation_ptr, (u32)opcode, (u32)pc, (u32)flag_status))      \
          SH4_CALL_OP2_PC(cgba_sh4_thumb_dp); } while(0)
 
 /* ================================================================== */
