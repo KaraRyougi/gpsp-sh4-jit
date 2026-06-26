@@ -1496,6 +1496,12 @@ s32 cgba_diff_stop_cycles_remaining;
 #define CGBA_DIFF_STOP_CHECK() do {} while(0)
 #endif
 
+#ifdef CGBA_SH4_DIFF_DUMP_OPS
+extern "C" { int cgba_diff_trace_cycles; }
+static inline void cgba_trace_putc(char c){ *(volatile unsigned char*)0xb7000000u=(unsigned char)c; }
+static inline void cgba_trace_hex(u32 v){ static const char h[]="0123456789ABCDEF"; for(int i=7;i>=0;i--) cgba_trace_putc(h[(v>>(i*4))&0xF]); }
+#endif
+
 void execute_arm(u32 cycles)
 {
   u32 opcode;
@@ -3093,6 +3099,10 @@ skip_instruction:
 
        /* End of Execute ARM instruction */
        cycles_remaining -= ws_cyc_seq[(reg[REG_PC] >> 24) & 0xF][1];
+#ifdef CGBA_SH4_DIFF_DUMP_OPS
+       if(cgba_diff_trace_cycles){ cgba_trace_putc('c'); cgba_trace_hex(reg[REG_PC]);
+         cgba_trace_putc(':'); cgba_trace_hex((u32)cycles_remaining); cgba_trace_putc('\n'); }
+#endif
 
        if ((reg[REG_PC] == idle_loop_target_pc
 #ifdef CGBA_FXCG100
