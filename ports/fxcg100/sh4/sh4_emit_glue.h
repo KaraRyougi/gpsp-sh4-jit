@@ -403,6 +403,35 @@ static inline void sh4g_charge_mem_run(u8 **tp, unsigned addr_reg, int seq,
     sh4g_close(tp, &cg); }
 }
 
+/* Charge the indirect-branch (BX / computed PC) pipeline refill at RUNTIME to
+ * match the interpreter: an ARM target costs ws_cyc_nseq[target>>24][1]; a Thumb
+ * target (bit 0 set) costs nothing -- the interp's ARM->Thumb BX falls straight
+ * into thumb_loop and takes no refill (cpu.cc). `target_reg` holds the runtime
+ * target and is preserved; clobbers R0/T1/T2. */
+static inline void sh4g_charge_indirect_refill(u8 **tp, unsigned target_reg)
+{
+  u8 *bf;
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_reg(&cg, target_reg, SH4_REG_RET);      /* R0 = target            */
+    sh4g_close(tp, &cg); }
+  sh4g_u16(tp, (uint16_t)(0xC800 | 0x01));               /* TST #1,R0 -> T=ARM target*/
+  bf = *tp;
+  sh4g_u16(tp, 0x8B00);                                  /* BF skip (Thumb: no refill)*/
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_shlr16(&cg, SH4_REG_RET);
+    sh4_emit_shlr8(&cg, SH4_REG_RET);                    /* R0 = target >> 24 (region)*/
+    sh4_emit_shll(&cg, SH4_REG_RET);                     /* R0 = region * 2          */
+    sh4_emit_add_imm(&cg, 1, SH4_REG_RET);               /* + word column            */
+    sh4g_close(tp, &cg); }
+  sh4g_const(tp, (uint32_t)(uintptr_t)ws_cyc_nseq, SH4_REG_T2);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_b_load_r0(&cg, SH4_REG_T2, SH4_REG_T1); /* T1 = ws_cyc_nseq[reg][1] */
+    sh4_emit_extu_b(&cg, SH4_REG_T1, SH4_REG_T1);
+    sh4_emit_sub(&cg, SH4_REG_T1, SH4_REG_CYCLES);       /* R13 -= refill            */
+    sh4g_close(tp, &cg); }
+  { long d = ((long)(*tp) - ((long)bf + 4)) / 2; bf[1] = (uint8_t)(d & 0xFF); }
+}
+
 static inline void sh4g_cycle_sub(u8 **tp, int n, uint32_t pc,
                                   const void *block_exit_fn)
 {
