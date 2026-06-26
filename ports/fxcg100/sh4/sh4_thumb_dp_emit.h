@@ -227,6 +227,34 @@ static inline void sh4g_arm_load_op2(u8 **tp, int is_imm, u32 op2, unsigned rm)
   }
 }
 
+/* ARM operand2 = reg[rm] shifted by an IMMEDIATE amount, into R2. type: 0=LSL
+ * 1=LSR 2=ASR (NOT ROR). `amount` is the 5-bit field; in the shifted path LSL is
+ * always >=1, while an LSR/ASR field of 0 means shift by 32. Verified bit-exact
+ * vs arm_shifter_operand. Does NOT compute the shifter carry (arith ops take C/V
+ * from the ALU; logical+S handles the carry separately). SH4 shld/shad take a
+ * signed amount: +n left, -n right, with mov #imm sign-extending. */
+static inline void sh4g_arm_shift_imm_op2(u8 **tp, u32 type, u32 amount, unsigned rm)
+{
+  sh4_codegen cg = sh4g_open(tp);
+  const unsigned op2 = SH4_REG_T1;                 /* R2 */
+  sh4_emit_load_greg(&cg, rm, op2);
+  if (type == 0) {                                 /* LSL #amount (amount 1..31) */
+    sh4_emit_mov_imm(&cg, (int)amount, SH4_REG_RET);
+    sh4_emit_shld(&cg, SH4_REG_RET, op2);
+  } else if (type == 1) {                          /* LSR */
+    if (amount == 0) {                             /* LSR #32 -> 0 */
+      sh4_emit_mov_imm(&cg, 0, op2);
+    } else {
+      sh4_emit_mov_imm(&cg, -(int)amount, SH4_REG_RET);
+      sh4_emit_shld(&cg, SH4_REG_RET, op2);        /* logical right */
+    }
+  } else {                                         /* ASR (type 2) */
+    sh4_emit_mov_imm(&cg, amount == 0 ? -32 : -(int)amount, SH4_REG_RET);
+    sh4_emit_shad(&cg, SH4_REG_RET, op2);          /* arithmetic right (#32 = sign) */
+  }
+  sh4g_close(tp, &cg);
+}
+
 /* Native SH4 for ARM data-processing (the dominant class on ARM-heavy games).
  * Handles the two operand forms where the shifter carry is trivial: IMMEDIATE
  * (operand2 + carry are translate-time constants) and plain REGISTER with no
@@ -243,6 +271,7 @@ static inline int sh4g_arm_dp_native(u8 **tp, u32 opcode, u32 pc)
   u32 rd = (opcode >> 12) & 0xF;
   int is_imm = (opcode & 0x02000000) != 0;
   u32 op2 = 0, rm = 0;
+  u32 shifted = 0, shift_type = 0, shift_amount = 0;
   int c_const = -1;                              /* -1 = preserve C; 0/1 = set const */
   (void)pc;
 
@@ -253,9 +282,15 @@ static inline int sh4g_arm_dp_native(u8 **tp, u32 opcode, u32 pc)
     op2 = rot ? ((imm >> rot) | (imm << (32 - rot))) : imm;
     if (rot) c_const = (int)((op2 >> 31) & 1);   /* else shifter C = old C */
   } else {
-    if (opcode & 0x0FF0) return 0;               /* shifted register -> C path */
     rm = opcode & 0xF;
-    if (rm == 15) return 0;                       /* operand2 = reg[Rm], LSL #0 */
+    if (rm == 15) return 0;                       /* Rm = PC -> C path */
+    if (opcode & 0x0FF0) {                        /* shifted register */
+      shift_type = (opcode >> 5) & 3;
+      if ((opcode >> 4) & 1)     return 0;        /* register-specified shift -> C */
+      if (shift_type == 3)       return 0;        /* ROR/RRX -> C (later) */
+      shift_amount = (opcode >> 7) & 0x1F;
+      shifted = 1;                                /* immediate LSL/LSR/ASR */
+    }                                             /* else operand2 = reg[Rm], LSL #0 */
   }
 
   switch (op) {
@@ -265,13 +300,15 @@ static inline int sh4g_arm_dp_native(u8 **tp, u32 opcode, u32 pc)
     { sh4_codegen cg = sh4g_open(tp);
       sh4_emit_load_greg(&cg, rn, SH4_REG_T0);
       sh4g_close(tp, &cg); }
-    sh4g_arm_load_op2(tp, is_imm, op2, rm);
+    if (shifted) sh4g_arm_shift_imm_op2(tp, shift_type, shift_amount, rm);
+    else         sh4g_arm_load_op2(tp, is_imm, op2, rm);
     sh4g_dp_addsub(tp, is_sub, rd, write, S);
     return 1;
   }
   case 0x0: case 0x1: case 0xC: case 0xD:        /* AND/EOR/ORR/MOV */
   case 0xE: case 0xF: case 0x8: case 0x9: {      /* BIC/MVN/TST/TEQ */
     int dpop, write;
+    if (shifted) return 0;                        /* logical+shift carry -> C (next) */
     switch (op) {
     case 0x0: dpop = SH4DP_AND; write = 1; break;
     case 0x1: dpop = SH4DP_EOR; write = 1; break;
