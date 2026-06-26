@@ -710,12 +710,26 @@ void cgba_sh4_hle_div(u32 cpu_mode, u32 pc)
   }
 }
 
-/* SWI trampoline target (sh4_stub.S execute_swi -> here). reg[REG_PC] holds the
- * return address. Bring-up: software interrupts are not yet emulated; the BIOS
- * HLE path is the follow-up. */
+/* SWI trampoline target (sh4_stub.S execute_swi -> here). The stub has already
+ * stashed the return address (next-instruction PC) into reg[REG_PC]. Vector to
+ * the BIOS SWI handler exactly like the interpreter (cpu.cc:3516): bank into
+ * Supervisor mode, save LR_svc / SPSR_svc, switch to ARM with IRQs disabled, set
+ * the post-SWI open-bus value, and point PC at the 0x08 vector.
+ *
+ * Only the mode/bank/vector setup happens here — the emitted block then
+ * redispatches to 0x08, because the block scan already registered this exit's
+ * target as the BIOS vector (cpu_threaded.c:2957) and arm_swi/thumb_swi branch
+ * there. gpSP loads the real open BIOS, so no SWI HLE dispatch is needed (the
+ * divide HLE is handled separately by cgba_sh4_hle_div). */
 void sh4_swi_handler(void)
 {
-  /* TODO: dispatch BIOS SWIs; for now this is a no-op so blocks still link. */
+  u32 return_pc = reg[REG_PC];                              /* stashed by execute_swi */
+  REG_MODE(MODE_SUPERVISOR)[6] = return_pc;                 /* LR_svc = return address */
+  REG_SPSR(MODE_SUPERVISOR) = reg[REG_CPSR];                /* SPSR_svc = CPSR */
+  reg[REG_CPSR] = (reg[REG_CPSR] & ~0x3Fu) | 0x13u | 0x80u; /* ARM + SVC + IRQ off */
+  set_cpu_mode(MODE_SUPERVISOR);
+  reg[REG_BUS_VALUE] = 0xe3a02004u;                         /* post-SWI bios[0xE4] open-bus */
+  reg[REG_PC] = 0x00000008u;                                /* SWI vector */
 }
 
 /* Host-emitter init hook (main.c calls this under HAVE_DYNAREC). The MIPS/x86
