@@ -145,18 +145,29 @@ const char *cgba_sh4_diff_kind_name(int kind)
 }
 
 /* ---------------- single-block lockstep differential ---------------------- *
- * Steps the dynarec one block at a time (cgba_dynarec_single_block disables
- * chaining), runs the interpreter from the same state to the dynarec's next PC,
- * and reports the first block whose register file or next-PC disagrees.
+ * Dynarec-driven lockstep: step the dynarec exactly one block from a shared
+ * state, then run the interpreter from the same state TO the dynarec's block-end
+ * PC, and compare the register files there. Reports the first block that
+ * disagrees, isolating a dynarec bug to one block.
  *
- * KNOWN LIMITATION (why the frame-level diff is the reliable path today): gpSP
- * links blocks by recursively translating each branch target at translate time,
- * so translating one block transitively translates the whole reachable graph —
- * once execution reaches ROM this cascade is huge and stalls. Making this usable
- * needs a bounded/lazy translation mode (translate only the entered block).
- * Kept as infrastructure for that follow-up. */
+ * Why dynarec-driven: the dynarec can only stop at block boundaries, while the
+ * interpreter's reg[15] advances at arbitrary cycle points (a taken branch does
+ * `goto arm_loop`, bypassing the budget check, so execute_arm(1) runs a coarse
+ * multi-instruction slice). Driving with the interpreter and making the dynarec
+ * chase its settle-PC overshoots — the dynarec's block runs straight past a
+ * mid-block settle point. Driving with the dynarec and making the interpreter
+ * run to the dynarec's (real) block-end PC always aligns, because that PC is a
+ * branch boundary the interpreter passes through. The catch-up uses execute_arm's
+ * cgba_diff_stop_pc hook (cpu.cc), which returns the instant reg[15] == target.
+ *
+ * Cycle accounting differs between the two cores, so after enough blocks the
+ * IRQ/halt timing skews and registers legitimately diverge there — that's the
+ * signal that the residual is timing, not per-block logic, not a bug to chase. */
 
 static u32 dyn_reg[64];
+
+extern u32 cgba_diff_stop_pc;     /* cpu.cc: execute_arm "run until reg[15]==pc" hook */
+extern int cgba_diff_stop_active;
 
 /* Incremental trace to the casio-emu debug-putchar port (0xb7000000), so if a
  * translated block hangs/faults the last printed PC pinpoints the bad block.
@@ -176,18 +187,21 @@ static void dbg_tag(char c, u32 v)
 #endif
 }
 
-/* Advance the interpreter just until it leaves the block's start PC — i.e. one
- * block transition, matching the dynarec's single-block step. Stopping at the
- * dynarec's exact next-PC instead would overshoot, since gpSP's reg[15] only
- * settles at coarse boundaries and a fixed cycle step can cross several. */
-static void interp_step_block(u32 start_pc, unsigned max_steps)
+/* Run the interpreter from the current state until it is about to execute
+ * target_pc (via execute_arm's cgba_diff_stop_pc hook), or until it halts / a
+ * generous instruction budget is spent. Returns nonzero iff it reached
+ * target_pc. Failing to reach it means the dynarec branched somewhere the
+ * interpreter does not — a real control-flow divergence. */
+static int interp_run_to_pc(u32 target_pc)
 {
-  unsigned i;
-  for (i = 0; i < max_steps; i++) {
-    if (reg[REG_PC] != start_pc || reg[CPU_HALT_STATE] != 0)
-      return;
-    execute_arm(1);
-  }
+  unsigned k;
+  cgba_diff_stop_pc = target_pc;
+  cgba_diff_stop_active = 1;
+  for (k = 0; k < 4096 && reg[REG_PC] != target_pc &&
+              reg[CPU_HALT_STATE] == 0; k++)
+    execute_arm(0x400);            /* hook returns early the instant PC == target */
+  cgba_diff_stop_active = 0;
+  return reg[REG_PC] == target_pc;
 }
 
 unsigned cgba_sh4_diff_blocks(unsigned max_blocks, char out[][48], unsigned max_lines)
@@ -196,50 +210,43 @@ unsigned cgba_sh4_diff_blocks(unsigned max_blocks, char out[][48], unsigned max_
 
   /* Step from a clean reset: the cart boots from 0x08000000 without halting, so
    * the earliest (simplest) blocks are checked first and there is no halt/wake
-   * ambiguity. The cascade is disabled (cgba_dynarec_single_block), so the ROM
-   * entry no longer translates the whole reachable graph. */
+   * ambiguity. Chaining is disabled (cgba_dynarec_single_block) so each
+   * execute_arm_translate stops after one block. */
   reset_gba();
   dbg_tag('S', reg[REG_PC]);
   flush_dynarec_caches();
-  cgba_dynarec_single_block = 1;     /* one block per entry, no chaining */
+  cgba_dynarec_single_block = 1;
 
   for (b = 0; b < max_blocks; b++) {
     u32 pc0 = reg[REG_PC];
-    u32 settle;
-    int i, k, diverged = 0;
+    u32 dpc;
+    int i, diverged = 0;
 
-    dbg_tag('D', pc0);
-    capture_full();                /* snapshot the shared starting state */
-
-    /* Interpreter (oracle): let it settle one step — gpSP's reg[15] advances at
-     * coarse boundaries, so this may span several blocks. That settling PC is
-     * the lockstep target. */
     if (reg[CPU_HALT_STATE] != 0)
-      break;                       /* halt: stop (frame-level diff handles those) */
-    execute_arm(1);
-    settle = reg[REG_PC];
-    memcpy(oracle_reg, reg, sizeof oracle_reg);
-    dbg_tag('I', settle);
+      break;                       /* halt: frame-level diff handles those */
 
-    /* Dynarec: from the same start, step single blocks until it reaches the
-     * interpreter's settling PC. A wrong block sends it elsewhere -> never
-     * reaches settle -> reported as a PC divergence. */
-    restore_full();
-    for (k = 0; k < 200 && reg[REG_PC] != settle &&
-                reg[CPU_HALT_STATE] == 0; k++) {
-      dbg_tag('d', reg[REG_PC]);   /* each dynarec block PC */
-      execute_arm_translate(0x4000);
-    }
+    capture_full();                /* shared starting state S (= interp baseline) */
+    dbg_tag('D', pc0);
+
+    /* Dynarec: one block from S. Its end PC is the lockstep target. */
+    execute_arm_translate(0x4000);
+    dpc = reg[REG_PC];
     memcpy(dyn_reg, reg, sizeof dyn_reg);
-    dbg_tag('R', reg[REG_PC]);
+    dbg_tag('R', dpc);
 
-    if (reg[REG_PC] != settle) {
-      if (n < max_lines)
-        snprintf(out[n++], 48, "B%u p%lX PC i%lX d%lX", b,
-          (unsigned long)pc0, (unsigned long)settle, (unsigned long)reg[REG_PC]);
+    /* Interpreter (oracle): rewind to S, run to the dynarec's block-end PC. */
+    restore_full();
+    if (!interp_run_to_pc(dpc)) {
+      if (n < max_lines)          /* dynarec went where the interpreter does not */
+        snprintf(out[n++], 48, "B%u p%lX PC i%lX d%lX h%d", b,
+          (unsigned long)pc0, (unsigned long)reg[REG_PC], (unsigned long)dpc,
+          (int)reg[CPU_HALT_STATE]);
       break;
     }
-    for (i = 0; i < 16; i++) {
+    memcpy(oracle_reg, reg, sizeof oracle_reg);
+    dbg_tag('I', reg[REG_PC]);
+
+    for (i = 0; i < 16; i++) {     /* r0..r15 (r15 = PC, already aligned by both) */
       if (dyn_reg[i] != oracle_reg[i] && n < max_lines) {
         diverged = 1;
         snprintf(out[n++], 48, "B%u p%lX r%d i%lX d%lX", b,
@@ -247,12 +254,14 @@ unsigned cgba_sh4_diff_blocks(unsigned max_blocks, char out[][48], unsigned max_
           (unsigned long)dyn_reg[i]);
       }
     }
+    if (!diverged && dyn_reg[REG_CPSR] != oracle_reg[REG_CPSR] && n < max_lines) {
+      diverged = 1;                /* mode/flags divergence */
+      snprintf(out[n++], 48, "B%u p%lX cpsr i%lX d%lX", b, (unsigned long)pc0,
+        (unsigned long)oracle_reg[REG_CPSR], (unsigned long)dyn_reg[REG_CPSR]);
+    }
     if (diverged)
       break;
-
-    /* Advance the shared baseline to the interpreter's settled state. */
-    restore_full();
-    execute_arm(1);
+    /* reg[] is now the interpreter state at dpc -> next iteration's baseline. */
   }
   cgba_dynarec_single_block = 0;
   if (n == 0 && max_lines)
