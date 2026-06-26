@@ -30,14 +30,15 @@ void sh4_block_exit(u32 pc);
 enum { LDK_W = 0, LDK_B, LDK_UH, LDK_SH, LDK_SB };
 
 /* Emit native SH4 for the ARM ld/st `opcode`, or return 0 to fall back to C.
- * Handles immediate-offset, pre-indexed, no-writeback LOADS (word/byte/halfword/
- * signed) to EWRAM/IWRAM; everything else falls to the C helper at run time. */
+ * Handles pre-indexed, no-writeback LOADS (word/byte/halfword/signed), immediate
+ * or register (no-shift) offset, through gpSP's memory_map_read host-page table
+ * (any mapped region: EWRAM/IWRAM/IO/VRAM/paged-ROM); else the C helper. */
 static inline int sh4g_arm_ldst_native(u8 **tp, u32 opcode, u32 pc)
 {
   u32 pre = (opcode >> 24) & 1, up = (opcode >> 23) & 1;
   u32 writeback = (opcode >> 21) & 1, is_load = (opcode >> 20) & 1;
   u32 rn = (opcode >> 16) & 0xF, rd = (opcode >> 12) & 0xF;
-  u32 offset;
+  u32 offset = 0, reg_offset = 0, rm = 0;
   int kind, align_mask;
   u8 *bt1, *bt2, *bf3 = (u8 *)0, *bra_done;
 
@@ -47,25 +48,41 @@ static inline int sh4g_arm_ldst_native(u8 **tp, u32 opcode, u32 pc)
 
   if ((opcode & 0x0E000090) == 0x00000090) {           /* halfword / signed form */
     u32 signed_ld = (opcode >> 6) & 1, half_w = (opcode >> 5) & 1;
-    if (!(opcode & 0x00400000)) return 0;              /* register offset -> C */
-    offset = ((opcode >> 4) & 0xF0) | (opcode & 0xF);  /* 8-bit immediate */
+    if (opcode & 0x00400000)                           /* immediate (8-bit) */
+      offset = ((opcode >> 4) & 0xF0) | (opcode & 0xF);
+    else                                               /* register offset (no shift) */
+      { reg_offset = 1; rm = opcode & 0xF; }
     if (signed_ld && half_w) { kind = LDK_SH; align_mask = 1; }   /* LDRSH */
     else if (signed_ld)      { kind = LDK_SB; align_mask = 0; }   /* LDRSB */
     else                     { kind = LDK_UH; align_mask = 1; }   /* LDRH  */
   } else {                                             /* normal word / byte form */
-    if (opcode & 0x02000000) return 0;                /* register offset -> C */
-    offset = opcode & 0xFFF;                           /* 12-bit immediate */
+    if (opcode & 0x02000000) {                         /* register offset */
+      if (opcode & 0xFF0) return 0;                    /* shifted -> C (LSL#0 only) */
+      reg_offset = 1; rm = opcode & 0xF;
+    } else {
+      offset = opcode & 0xFFF;                          /* 12-bit immediate */
+    }
     if ((opcode >> 22) & 1)  { kind = LDK_B; align_mask = 0; }    /* LDRB */
     else                     { kind = LDK_W; align_mask = 3; }    /* LDR  */
   }
+  if (reg_offset && rm == 15) return 0;                /* PC offset register -> C */
 
   /* addr = reg[rn] +/- offset, in R1; then page = memory_map_read[addr>>15] in R3 */
   { sh4_codegen cg = sh4g_open(tp);
     sh4_emit_load_greg(&cg, rn, SH4_REG_T0);
     sh4g_close(tp, &cg); }
-  sh4g_const(tp, up ? offset : (u32)(-(int32_t)offset), SH4_REG_T1);
+  if (reg_offset) {                                    /* offset = reg[rm] (runtime) */
+    sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_load_greg(&cg, rm, SH4_REG_T1);
+    sh4g_close(tp, &cg);
+  } else {                                             /* offset = +/- immediate */
+    sh4g_const(tp, up ? offset : (u32)(-(int32_t)offset), SH4_REG_T1);
+  }
   { sh4_codegen cg = sh4g_open(tp);
-    sh4_emit_add_reg(&cg, SH4_REG_T1, SH4_REG_T0);     /* R1 = addr */
+    if (reg_offset && !up)                             /* addr = rn - rm (down) */
+      sh4_emit_sub(&cg, SH4_REG_T1, SH4_REG_T0);
+    else                                               /* addr = rn + offset */
+      sh4_emit_add_reg(&cg, SH4_REG_T1, SH4_REG_T0);   /* R1 = addr */
     sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
     sh4_emit_mov_imm(&cg, -15, SH4_REG_T1);
     sh4_emit_shld(&cg, SH4_REG_T1, SH4_REG_RET);       /* R0 = addr >> 15 (page index) */
