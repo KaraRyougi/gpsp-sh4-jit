@@ -3114,12 +3114,29 @@ bool translate_block_arm(u32 pc, bool ram_region)
   while(pc != block_end_pc)
   {
 #ifdef SH4_ARCH
+    /* Block-entry (branch target). Force-close any open ARM conditional block so
+     * the flush is UNCONDITIONAL (fall-through must always charge+zero the
+     * pre-entry cycles, even when the surrounding condition is false). The flush
+     * sits before block_offset so a loop-back jump bypasses it (no re-charge);
+     * a gate-only check sits AT block_offset so loop-back can still break a spin. */
     if(block_data[block_data_position].update_cycles)
     {
+      if((last_condition & 0x0F) != 0x0E)
+      {
+        generate_branch_patch_conditional(backpatch_address, translation_ptr);
+        last_condition = 0x0E;
+      }
       generate_cycle_update();
+      block_data[block_data_position].block_offset = translation_ptr;
+      generate_cycle_gate();
     }
-#endif
+    else
+    {
+      block_data[block_data_position].block_offset = translation_ptr;
+    }
+#else
     block_data[block_data_position].block_offset = translation_ptr;
+#endif
     arm_base_cycles();
 
     if (pc == cheat_master_hook)
@@ -3299,12 +3316,22 @@ bool translate_block_thumb(u32 pc, bool ram_region)
   while(pc != block_end_pc)
   {
 #ifdef SH4_ARCH
+    /* Block-entry: flush before block_offset (loop-back bypasses it), gate-only
+     * AT block_offset (loop-back hits it). Thumb has no conditional runs, so no
+     * force-close is needed -- the flush is already unconditional here. */
     if(block_data[block_data_position].update_cycles)
     {
       generate_cycle_update();
+      block_data[block_data_position].block_offset = translation_ptr;
+      generate_cycle_gate();
     }
-#endif
+    else
+    {
+      block_data[block_data_position].block_offset = translation_ptr;
+    }
+#else
     block_data[block_data_position].block_offset = translation_ptr;
+#endif
     thumb_base_cycles();
 
     if (pc == cheat_master_hook)
