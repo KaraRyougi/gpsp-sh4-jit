@@ -112,6 +112,10 @@ extern void *tmemst[4][16];
   do { sh4g_cycle_sub(&translation_ptr, (int)cycle_count, (u32)pc,            \
                       (const void *)sh4_block_exit); cycle_count = 0; } while(0)
 
+/* Loop-break gate only (no flush) emitted AT a block-entry / loop-back target. */
+#define generate_cycle_gate()                                                 \
+  sh4g_cycle_gate(&translation_ptr, (u32)pc, (const void *)sh4_block_exit)
+
 /* materialize an immediate / PC value into a host register */
 #define generate_load_pc(hostreg, value)                                      \
   sh4g_const(&translation_ptr, (u32)(value), (hostreg))
@@ -174,6 +178,18 @@ extern void *tmemst[4][16];
   do { cycle_count += ws_cyc_nseq[((u32)(new_pc) >> 24) & 0x0F][cycle_type];  \
        generate_branch_current_update(writeback_location, new_pc); } while(0)
 
+/* A CONDITIONAL branch's exit sequence is emitted INSIDE the condition guard
+ * (the not-taken path skips it). So it must NOT reset the translate-time
+ * cycle_count: the not-taken fall-through keeps accumulating those fetch cycles
+ * and a later unconditional gate flushes them. The taken path debits the cycles
+ * up to the branch (a constant) plus the target-fetch refill, then exits. (An
+ * unconditional branch uses generate_branch_cycle_update, which DOES zero, since
+ * it always exits.) */
+#define generate_branch_taken(cycle_type, writeback_location, new_pc)         \
+  do { sh4g_cycle_debit(&translation_ptr, (int)cycle_count +                  \
+         (int)ws_cyc_nseq[((u32)(new_pc) >> 24) & 0x0F][cycle_type]);         \
+       generate_branch_no_cycle_update(writeback_location, new_pc); } while(0)
+
 #define generate_arm_branch()                                                 \
   do {                                                                        \
     if(condition == 0x0E)                                                     \
@@ -181,7 +197,7 @@ extern void *tmemst[4][16];
         block_exits[block_exit_position].branch_source,                       \
         block_exits[block_exit_position].branch_target);                      \
     else                                                                      \
-      generate_branch_current_update(                                         \
+      generate_branch_taken(1,                                                \
         block_exits[block_exit_position].branch_source,                       \
         block_exits[block_exit_position].branch_target);                      \
     block_exit_position++;                                                    \
@@ -404,7 +420,7 @@ extern void *tmemst[4][16];
 
 #define thumb_conditional_branch(condition)                                   \
   do { generate_condition_##condition();                                      \
-       generate_branch_current_update(                                        \
+       generate_branch_taken(0,                                               \
          block_exits[block_exit_position].branch_source,                      \
          block_exits[block_exit_position].branch_target);                     \
        generate_branch_patch_conditional(backpatch_address, translation_ptr); \

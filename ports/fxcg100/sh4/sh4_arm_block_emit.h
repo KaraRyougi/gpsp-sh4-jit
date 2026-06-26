@@ -168,6 +168,10 @@ static inline int sh4g_arm_block_native(u8 **tp, u32 opcode, u32 pc,
       sh4_emit_store_greg(&cg, SH4_REG_T1, rn);
     }
     sh4g_close(tp, &cg); }
+  /* Charge the transfer cycles the inline run just performed (the slow C path
+   * charges these via cgba_sh4_extra_cycles; the fast path must match). All
+   * `count` words are in one page/region (straddle-guarded): seq, word. */
+  sh4g_charge_mem_run(tp, SH4_REG_ARG1, /*seq=*/1, /*is_word=*/1, count);
   bra_done = sh4g_emit_bra_placeholder(tp);
 
   /* slow path: the C helper (SH4_CALL_OP2_PC equivalent) */

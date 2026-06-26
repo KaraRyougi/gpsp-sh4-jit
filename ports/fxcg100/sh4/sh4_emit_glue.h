@@ -33,6 +33,8 @@
 #include "ports/fxcg100/sh4/sh4_emit_core.h"
 
 extern int cgba_sh4_extra_cycles;
+extern u8 ws_cyc_seq[16][2];   /* gba_memory.c: GBA wait-state cycle tables, */
+extern u8 ws_cyc_nseq[16][2];  /* [region][word?1:0], live under WAITCNT.    */
 
 /* ---- back-patch I-cache sync --------------------------------------------- *
  * Re-sync a patched line on the SH-4A's split I/D caches. Used only by
@@ -364,6 +366,43 @@ static inline void sh4g_cycle_debit_from_global(u8 **tp, const int *extra_cycles
     sh4g_close(tp, &cg); }
 }
 
+/* Charge `count` guest memory accesses to the cycle counter at RUNTIME, reading
+ * the SAME ws_cyc_{seq,nseq}[region][word] table the C helpers use
+ * (cgba_sh4_charge_mem in sh4_interp_helpers.c) so a native INLINE fast path
+ * debits exactly what its slow (C-helper) path would. The interpreter charges
+ * block (LDM/STM) transfers sequentially and single transfers nonsequentially,
+ * word vs byte/halfword by column; this mirrors that.
+ *
+ * `addr_reg` holds a guest address in the accessed region (region = addr >> 24)
+ * and must not be R0/T1/T2. `seq` selects the seq vs nonseq table; `is_word`
+ * selects column 1 (32-bit) vs 0 (8/16-bit). Clobbers R0/T1/T2 (and T0 when
+ * count > 1); only the cycle counter R13 changes. */
+static inline void sh4g_charge_mem_run(u8 **tp, unsigned addr_reg, int seq,
+                                       int is_word, unsigned count)
+{
+  if (count == 0)
+    return;
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_reg(&cg, addr_reg, SH4_REG_RET);
+    sh4_emit_shlr16(&cg, SH4_REG_RET);
+    sh4_emit_shlr8(&cg, SH4_REG_RET);            /* R0 = region = addr >> 24      */
+    sh4_emit_shll(&cg, SH4_REG_RET);             /* R0 = region * 2 (u8[16][2] row)*/
+    if (is_word)
+      sh4_emit_add_imm(&cg, 1, SH4_REG_RET);     /* + word column                 */
+    sh4g_close(tp, &cg); }
+  sh4g_const(tp, (uint32_t)(uintptr_t)(seq ? ws_cyc_seq : ws_cyc_nseq), SH4_REG_T2);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_b_load_r0(&cg, SH4_REG_T2, SH4_REG_T1);  /* T1 = table[region][col]*/
+    sh4_emit_extu_b(&cg, SH4_REG_T1, SH4_REG_T1);         /* zero-extend cost (>=0) */
+    if (count > 1) {
+      sh4_emit_mov_imm(&cg, (int)count, SH4_REG_T0);
+      sh4_emit_mul_l(&cg, SH4_REG_T1, SH4_REG_T0);        /* MACL = cost * count    */
+      sh4_emit_sts_macl(&cg, SH4_REG_T1);                 /* T1 = cost * count      */
+    }
+    sh4_emit_sub(&cg, SH4_REG_T1, SH4_REG_CYCLES);        /* R13 -= cost * count    */
+    sh4g_close(tp, &cg); }
+}
+
 static inline void sh4g_cycle_sub(u8 **tp, int n, uint32_t pc,
                                   const void *block_exit_fn)
 {
@@ -376,6 +415,24 @@ static inline void sh4g_cycle_sub(u8 **tp, int n, uint32_t pc,
     sh4g_close(tp, &cg); }
   bt = *tp;
   sh4g_u16(tp, 0x8900);                        /* BT skip update */
+  sh4g_const(tp, pc, SH4_REG_ARG0);
+  sh4g_far_jmp(tp, block_exit_fn);
+  { long d = ((long)(*tp) - ((long)bt + 4)) / 2; bt[1] = (uint8_t)(d & 0xFF); }
+}
+
+/* Loop-break GATE only (no debit, no zero): exit to update_gba() if the cycle
+ * counter has gone negative, so a wait/idle loop can't spin past its budget.
+ * Placed AT a branch-target block entry (loop-back lands here). The accounting
+ * flush is a separate, earlier step that loop-back deliberately bypasses, so
+ * this must not itself touch the counter. */
+static inline void sh4g_cycle_gate(u8 **tp, uint32_t pc, const void *block_exit_fn)
+{
+  u8 *bt;
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_cmppz(&cg, SH4_REG_CYCLES);       /* T = (cycles >= 0) */
+    sh4g_close(tp, &cg); }
+  bt = *tp;
+  sh4g_u16(tp, 0x8900);                        /* BT skip (budget remains) */
   sh4g_const(tp, pc, SH4_REG_ARG0);
   sh4g_far_jmp(tp, block_exit_fn);
   { long d = ((long)(*tp) - ((long)bt + 4)) / 2; bt[1] = (uint8_t)(d & 0xFF); }

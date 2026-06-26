@@ -319,6 +319,9 @@ static inline int sh4g_thumb_ldst_native(u8 **tp, u32 opcode, u32 pc,
       sh4_emit_mov_b_store_r0(&cg, SH4_REG_T1, SH4_REG_T2);
     }
     sh4g_close(tp, &cg); }
+  /* Charge the single byte access (nonseq, byte column); addr is still in T0.
+   * The slow path charges the same via cgba_sh4_extra_cycles. */
+  sh4g_charge_mem_run(tp, SH4_REG_T0, /*seq=*/0, /*is_word=*/0, 1);
   bra_done = sh4g_emit_bra_placeholder(tp);
 
   sh4g_patch_cond(guard, *tp);

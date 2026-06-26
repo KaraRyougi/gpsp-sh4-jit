@@ -190,6 +190,9 @@ static inline int sh4g_arm_ldst_native(u8 **tp, u32 opcode, u32 pc,
       }
     }
     sh4g_close(tp, &cg); }
+  /* Charge the single access (nonseq; word column for LDR/STR, else byte/half);
+   * addr is still in T0. The slow path charges the same via extra_cycles. */
+  sh4g_charge_mem_run(tp, SH4_REG_T0, /*seq=*/0, /*is_word=*/(kind == LDK_W), 1);
   bra_done = sh4g_emit_bra_placeholder(tp);
 
   /* --- slow path: the C helper (SH4_CALL_OP2_PC equivalent) --- */
