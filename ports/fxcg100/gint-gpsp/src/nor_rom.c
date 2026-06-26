@@ -95,6 +95,12 @@ static int os_bfile_read(int fd, void *dst, int size, int offset)
 	return fn(fd, dst, size, offset);
 }
 
+static int bfile_read_exact_ok(int result, int size)
+{
+	/* Fugue returns bytes read; CASIOWIN returns bytes remaining after read. */
+	return result == size || result == 0;
+}
+
 static void os_bfile_close(int fd)
 {
 	cgba_bfile_close_t fn = (cgba_bfile_close_t)CGBA_BFILE_CLOSE;
@@ -385,7 +391,7 @@ static int load_single_page_fallback(cgba_nor_rom *rom)
 	memset(cgba_nor_single_page, 0xff, sizeof(cgba_nor_single_page));
 	int got = os_bfile_read(rom->fd, cgba_nor_single_page,
 		(int)rom->size, 0);
-	if(got != (int)rom->size) {
+	if(!bfile_read_exact_ok(got, (int)rom->size)) {
 		rom->last_error = -6;
 		rom->block_result = got;
 		return -1;

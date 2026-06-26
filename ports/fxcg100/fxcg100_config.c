@@ -80,6 +80,12 @@ static int os_bfile_read(int fd, void *dst, int size, int offset)
   return fn(fd, dst, size, offset);
 }
 
+static int bfile_read_exact_ok(int result, int size)
+{
+  /* Fugue returns bytes read; CASIOWIN returns bytes remaining after read. */
+  return result == size || result == 0;
+}
+
 static int os_bfile_write(int fd, const void *src, int size)
 {
   cgba_bfile_write_t fn = (cgba_bfile_write_t)CGBA_BFILE_WRITE;
@@ -113,8 +119,7 @@ static int config_valid(const fxcg100_config_file *config)
       config->version != CGBA_CONFIG_VERSION ||
       config->size != sizeof(*config))
     return 0;
-  return fxcg100_keymap_valid(config->keymap) &&
-    fxcg100_hotkey_map_valid(config->hotkey_map) &&
+  return fxcg100_input_maps_valid(config->keymap, config->hotkey_map) &&
     config_options_valid(config);
 }
 
@@ -167,10 +172,13 @@ static int read_config(fxcg100_config_file *config)
     return 0;
 
   file_size = os_bfile_size(fd);
-  if (file_size == (int)sizeof(*config) &&
-      os_bfile_read(fd, config, (int)sizeof(*config), 0) ==
-        (int)sizeof(*config))
-    ok = 1;
+  memset(config, 0, sizeof(*config));
+
+  if (file_size == (int)sizeof(*config)) {
+    int read_result = os_bfile_read(fd, config, (int)sizeof(*config), 0);
+
+    ok = bfile_read_exact_ok(read_result, (int)sizeof(*config));
+  }
 
   os_bfile_close(fd);
   return ok;
@@ -249,8 +257,8 @@ int fxcg100_config_save(const fxcg100_menu_state *state)
 {
   fxcg100_config_file config;
 
-  if (!state || !fxcg100_keymap_valid(state->keymap) ||
-      !fxcg100_hotkey_map_valid(state->hotkey_map))
+  if (!state ||
+      !fxcg100_input_maps_valid(state->keymap, state->hotkey_map))
     return 0;
 
   config_from_state(&config, state);

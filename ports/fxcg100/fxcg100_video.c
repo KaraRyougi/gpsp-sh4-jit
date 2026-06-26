@@ -3,6 +3,7 @@
 #define LCD_PRDR (*(volatile uint8_t *)0xa405013c)
 #define LCD_DATA (*(volatile uint16_t *)0xb4000000)
 
+#define LCD_REG_DATA       0x202
 #define LCD_VISIBLE_WIDTH 396
 #define LCD_VISIBLE_HEIGHT 224
 #define LCD_PANEL_BORDER_X 0
@@ -23,6 +24,8 @@ static void lcd_index(uint16_t reg)
   LCD_PRDR &= (uint8_t)~0x10;
   lcd_sync();
   LCD_DATA = reg;
+  lcd_sync();
+  LCD_PRDR |= 0x10;
   lcd_sync();
 }
 
@@ -51,7 +54,7 @@ static void lcd_set_window(unsigned x, unsigned y, unsigned w, unsigned h)
   lcd_write(0x213, (uint16_t)(y + h - 1));
   lcd_write(0x200, 0);
   lcd_write(0x201, 0);
-  lcd_index(0x202);
+  lcd_index(LCD_REG_DATA);
 }
 
 static uint64_t glyph5(char ch)
@@ -132,7 +135,12 @@ static void lcd_draw_char(unsigned x, unsigned y, char ch,
 
 void fxcg100_lcd_init(void)
 {
-  lcd_write(0x003, 0x1030);
+  lcd_set_window(0, 0, LCD_VISIBLE_WIDTH, LCD_VISIBLE_HEIGHT);
+}
+
+void fxcg100_lcd_shutdown(void)
+{
+  lcd_set_window(0, 0, LCD_VISIBLE_WIDTH, LCD_VISIBLE_HEIGHT);
 }
 
 void fxcg100_lcd_fill_rect(unsigned x, unsigned y, unsigned w, unsigned h,

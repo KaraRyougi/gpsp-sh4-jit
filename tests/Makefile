@@ -11,9 +11,9 @@ CFLAGS  ?= -std=c11 -Wall -Wextra
 ROOT    := ..
 BIN     := /tmp/cgba-sh4
 
-.PHONY: all smoke audit core thumb clean
+.PHONY: all smoke audit core thumb input clean
 
-all: smoke core thumb audit
+all: smoke core thumb input audit
 
 smoke: $(ROOT)/tests/sh4_codegen_smoke.c $(ROOT)/ports/fxcg100/sh4/sh4_codegen.h
 	$(CC) $(CFLAGS) -I$(ROOT) $(ROOT)/tests/sh4_codegen_smoke.c -o $(BIN)-smoke
@@ -31,10 +31,16 @@ thumb: $(ROOT)/tests/sh4_thumb_mvp_audit.c $(ROOT)/ports/fxcg100/sh4/sh4_thumb_m
 	$(CC) $(CFLAGS) -I$(ROOT) $(ROOT)/tests/sh4_thumb_mvp_audit.c -o $(BIN)-thumb
 	$(BIN)-thumb
 
+input: $(ROOT)/tests/fxcg100_input_maps_test.c \
+       $(ROOT)/ports/fxcg100/fxcg100_keys.c \
+       $(ROOT)/ports/fxcg100/fxcg100_platform.h
+	$(CC) $(CFLAGS) -I$(ROOT) $(ROOT)/tests/fxcg100_input_maps_test.c -o $(BIN)-input
+	$(BIN)-input
+
 # Requires sh-elf-as + sh-elf-objcopy on PATH.
 audit: $(ROOT)/tests/sh4_codegen_audit.c $(ROOT)/ports/fxcg100/sh4/sh4_codegen.h
 	$(CC) $(CFLAGS) -I$(ROOT) $(ROOT)/tests/sh4_codegen_audit.c -o $(BIN)-audit
 	$(BIN)-audit
 
 clean:
-	rm -f $(BIN)-smoke $(BIN)-audit
+	rm -f $(BIN)-smoke $(BIN)-core $(BIN)-thumb $(BIN)-input $(BIN)-audit

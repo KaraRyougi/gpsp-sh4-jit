@@ -25,7 +25,7 @@ extern char cgba_highbss_end[];
 
 static uint16_t cgba_framebuffer[CGBA_GBA_BUFFER_PIXELS] CGBA_HIGH_BSS;
 
-/* FPS metrics meter (emulated + rendered frame rate), shown when the menu's
+/* FPS metrics meter (emulated + drawn frame rate), shown when the menu's
  * "SHOW FPS" option is on. Reset on each gameplay entry. */
 static cgba_fps_meter cgba_fps;
 
@@ -92,6 +92,12 @@ static void wait_for_keys_released(void)
 		for(volatile unsigned i = 0; i < 2000; i++)
 			;
 	}
+}
+
+static int exit_to_os(int code)
+{
+	fxcg100_lcd_shutdown();
+	return code;
 }
 
 static unsigned normalize_rom_id(unsigned rom_id)
@@ -200,13 +206,19 @@ static int cgba_headless_test(uint16_t *framebuffer)
 
 		cgba_gpsp_run_frame(FXCG100_GBA_BUTTON_NONE, rendered);
 		cgba_fps_tick(&cgba_fps, rendered);
+		if(rendered) {
+			/* Exercise the real blit path incl. the no-final-wait DMA overlap. */
+			fxcg100_lcd_overlay_fps(framebuffer, cgba_fps.emu_fps,
+				cgba_fps.draw_fps);
+			fxcg100_lcd_blit_gba(framebuffer);
+		}
 	}
 
 	/* Exercise the FPS overlay so the font + framebuffer write are validated;
 	 * px[1,1] should become white (0xFFFF, the 'F' glyph), px[0,0] black. */
-	fxcg100_lcd_overlay_fps(framebuffer, cgba_fps.emu_fps, cgba_fps.vid_fps);
-	snprintf(buf, sizeof buf, "fps emu=%u vid=%u px00=%04X px11=%04X",
-		(unsigned)cgba_fps.emu_fps, (unsigned)cgba_fps.vid_fps,
+	fxcg100_lcd_overlay_fps(framebuffer, cgba_fps.emu_fps, cgba_fps.draw_fps);
+	snprintf(buf, sizeof buf, "fps emu=%u draw=%u px00=%04X px11=%04X",
+		(unsigned)cgba_fps.emu_fps, (unsigned)cgba_fps.draw_fps,
 		framebuffer[0], framebuffer[1 * 240 + 1]);
 	hputs_dbg(buf);
 
@@ -251,7 +263,7 @@ int main(void)
 
 	menu_result = fxcg100_menu_run(&menu_state, 0, 0);
 	if(menu_result == FXCG100_MENU_QUIT)
-		return 1;
+		return exit_to_os(1);
 	wait_for_keys_released();
 	previous_hotkeys = fxcg100_poll_hotkeys_mapped(menu_state.hotkey_map);
 
@@ -263,7 +275,7 @@ int main(void)
 	}
 
 	if(start_gpsp(framebuffer, current_rom) != 0)
-		return 1;
+		return exit_to_os(1);
 
 #ifdef CGBA_GPSP_DIAG
 	show_diag_overlay();
@@ -296,7 +308,7 @@ int main(void)
 			if(result == FXCG100_MENU_RESET) {
 				cgba_gpsp_shutdown();
 				if(start_gpsp(framebuffer, current_rom) != 0)
-					return 1;
+					return exit_to_os(1);
 				frame = 1;
 				enter_gameplay_display(framebuffer, frame);
 				continue;
@@ -305,7 +317,7 @@ int main(void)
 				current_rom = normalize_rom_id(menu_state.rom_source);
 				cgba_gpsp_shutdown();
 				if(start_gpsp(framebuffer, current_rom) != 0)
-					return 1;
+					return exit_to_os(1);
 				frame = 1;
 				enter_gameplay_display(framebuffer, frame);
 				continue;
@@ -373,7 +385,7 @@ int main(void)
 		if(render_video) {
 			if(menu_state.show_fps)
 				fxcg100_lcd_overlay_fps(framebuffer,
-					cgba_fps.emu_fps, cgba_fps.vid_fps);
+					cgba_fps.emu_fps, cgba_fps.draw_fps);
 			blit_gba_frame(framebuffer, frame, gba_buttons);
 		}
 		previous_app_keys = app_keys;
@@ -381,5 +393,5 @@ int main(void)
 	}
 
 	cgba_gpsp_shutdown();
-	return 1;
+	return exit_to_os(1);
 }
