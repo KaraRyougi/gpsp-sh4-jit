@@ -32,6 +32,20 @@
 #include "ports/fxcg100/sh4/sh4_codegen.h"
 #include "ports/fxcg100/sh4/sh4_emit_core.h"
 
+/* ---- back-patch I-cache sync --------------------------------------------- *
+ * generate_branch_patch_{unconditional,conditional} rewrite a literal/disp in a
+ * block that was already emitted AND already I-cache-synced (translate_icache_
+ * sync only flushes the forward-growing tail). On the SH-4A's split I/D caches
+ * the patched word can otherwise execute stale -> non-deterministic wrong
+ * chaining. So each patch site must re-sync its own line(s). The host build of
+ * the encoder has no caches, so this is a no-op there. */
+#if defined(CGBA_FXCG100)
+#include "ports/fxcg100/sh4/sh4_cache.h"
+#define SH4G_RESYNC(p, n) cgba_sh4_cache_sync((void *)(p), (void *)((u8 *)(p) + (n)))
+#else
+#define SH4G_RESYNC(p, n) ((void)0)
+#endif
+
 /* ---- transient-cursor wrapper -------------------------------------------- */
 
 /* A single emitted instruction/sequence is tiny; the driver enforces the real
@@ -362,6 +376,7 @@ static inline void sh4g_patch_jump(u8 *site, const void *target)
   lit[1] = (uint8_t)((uintptr_t)target >> 16);
   lit[2] = (uint8_t)((uintptr_t)target >> 8);
   lit[3] = (uint8_t)((uintptr_t)target);
+  SH4G_RESYNC(lit, 4);            /* re-sync the patched literal's line */
 }
 
 /* Materialize a guest PC value into R4 (ARG0) and store it to reg[REG_PC]. */
@@ -455,6 +470,7 @@ static inline void sh4g_patch_cond(u8 *site, const void *target)
 {
   long d = ((long)(uintptr_t)target - ((long)(uintptr_t)site + 4)) / 2;
   site[1] = (uint8_t)(d & 0xFF);
+  SH4G_RESYNC(site, 2);            /* BT/BF is an instruction: re-fetch it */
 }
 
 #endif /* CGBA_SH4_EMIT_GLUE_H */
