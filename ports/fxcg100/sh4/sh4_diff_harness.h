@@ -34,6 +34,10 @@ const char *cgba_sh4_diff_kind_name(int kind);
  * r0..r15 (oracle vs dynarec) into out, up to max_lines. Returns lines used. */
 unsigned cgba_sh4_diff_dump(uint32_t cycles, char out[][48], unsigned max_lines);
 
+/* Run one window under both cores and report which regions (IWRAM/EWRAM/VRAM/IO)
+ * diverge plus the first diverging IWRAM word, for classifying a content diff. */
+unsigned cgba_sh4_diff_regions(uint32_t cycles, char out[][48], unsigned max_lines);
+
 /* Single-block lockstep diff from a clean reset: report the first block whose
  * dynarec translation disagrees with the interpreter (block PC + divergent
  * register or next-PC). Returns lines used. */

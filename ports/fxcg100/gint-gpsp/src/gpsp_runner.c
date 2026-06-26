@@ -306,10 +306,12 @@ unsigned cgba_gpsp_diag(char out[][CGBA_DIAG_LINE_MAX], unsigned max_lines)
 			(unsigned long)(fb ? cgba_gpsp_frame_hash(fb) : 0u),
 			fb ? fb[80 * CGBA_GBA_PITCH + 120] : 0);
 #ifdef CGBA_DYNAREC
-	/* Short interp-vs-dynarec comparison so the diag overlay surfaces dynarec
-	 * health on hardware/casio-emu: start/interp/dynarec PC + divergent regs. */
+	/* One-frame interp-vs-dynarec diff so the diag overlay surfaces dynarec health
+	 * on hardware/casio-emu: PCs + first divergent reg, then per-region (IWRAM /
+	 * EWRAM / VRAM / IO) so a benign sound-buffer-only IWRAM diff is distinguishable
+	 * at a glance from a real CPU/display divergence. */
 	if(n < max_lines)
-		n += cgba_sh4_diff_dump(280896, out + n, max_lines - n);
+		n += cgba_sh4_diff_regions(280896, out + n, max_lines - n);
 #endif
 	return n;
 }
