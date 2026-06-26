@@ -43,10 +43,12 @@ SECTIONS
 
 		_gint_exch_start = . ;
 		KEEP(*(.gint.exch))
+		_gint_exch_end = . ;
 		_gint_exch_size = ABSOLUTE(. - _gint_exch_start);
 
 		_gint_tlbh_start = . ;
 		KEEP(*(.gint.tlbh))
+		_gint_tlbh_end = . ;
 		_gint_tlbh_size = ABSOLUTE(. - _gint_tlbh_start);
 
 		*(.text .text.*)

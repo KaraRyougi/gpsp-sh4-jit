@@ -139,6 +139,11 @@ target_link_libraries(cgba-gint-gpsp Gint::Gint)
 target_link_options(cgba-gint-gpsp PRIVATE
   -Wl,--gc-sections
   -Wl,-Map=${CMAKE_CURRENT_BINARY_DIR}/cgba-gint-gpsp.map
+  # The port's no_osheap.c intentionally re-implements the Casio syscall stubs
+  # (___malloc, BFile_*, Timer_*, ...) to avoid the OS heap. With current gint,
+  # the kernel pulls in libgint's own syscalls.S, which redefines them; allow the
+  # port's (first-linked) definitions to win the override.
+  -Wl,--allow-multiple-definition
 )
 
 generate_g3a(TARGET cgba-gint-gpsp OUTPUT "CGBA-GPSP.g3a"
