@@ -33,12 +33,20 @@
 #include "ports/fxcg100/sh4/sh4_emit_core.h"
 
 /* ---- back-patch I-cache sync --------------------------------------------- *
- * generate_branch_patch_{unconditional,conditional} rewrite a literal/disp in a
- * block that was already emitted AND already I-cache-synced (translate_icache_
- * sync only flushes the forward-growing tail). On the SH-4A's split I/D caches
- * the patched word can otherwise execute stale -> non-deterministic wrong
- * chaining. So each patch site must re-sync its own line(s). The host build of
- * the encoder has no caches, so this is a no-op there. */
+ * Re-sync a patched line on the SH-4A's split I/D caches. Used only by
+ * sh4g_patch_cond: it rewrites the disp8 of a BT/BF, which is fetched and
+ * executed as an INSTRUCTION, so a stale I-cache copy would branch wrong. (Today
+ * every conditional patch is intra-block, inside the forward range the post-block
+ * translate_icache_sync already covers, so this is belt-and-suspenders; it stays
+ * because the moment a conditional patch ever targets an already-synced block it
+ * becomes load-bearing, and an instruction patch is the one case where it must.)
+ *
+ * It is deliberately NOT used by sh4g_patch_jump. That patches the .long target
+ * of `MOV.L @(d,PC),R0; JMP @R0` — a LITERAL read as DATA via the operand cache,
+ * never fetched as an instruction (the JMP leaves before reaching it). Patch
+ * store and MOV.L load are D-cache-coherent on one core, so the read sees the
+ * new value with no flush; an OCBWB+ICBI there is pure waste on the hottest
+ * (every-chain) path. The host build of the encoder has no caches: no-op. */
 #if defined(CGBA_FXCG100)
 #include "ports/fxcg100/sh4/sh4_cache.h"
 #define SH4G_RESYNC(p, n) cgba_sh4_cache_sync((void *)(p), (void *)((u8 *)(p) + (n)))
@@ -376,7 +384,8 @@ static inline void sh4g_patch_jump(u8 *site, const void *target)
   lit[1] = (uint8_t)((uintptr_t)target >> 16);
   lit[2] = (uint8_t)((uintptr_t)target >> 8);
   lit[3] = (uint8_t)((uintptr_t)target);
-  SH4G_RESYNC(lit, 4);            /* re-sync the patched literal's line */
+  /* No I-cache re-sync: the literal is read as data (D-cache-coherent), never
+   * executed as an instruction. See the SH4G_RESYNC note above. */
 }
 
 /* Materialize a guest PC value into R4 (ARG0) and store it to reg[REG_PC]. */
