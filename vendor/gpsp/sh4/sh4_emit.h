@@ -25,6 +25,7 @@
 
 #include "ports/fxcg100/sh4/sh4_emit_glue.h"
 #include "ports/fxcg100/sh4/sh4_thumb_dp_emit.h"
+#include "ports/fxcg100/sh4/sh4_arm_ldst_emit.h"
 
 /* ------------------------------------------------------------------ */
 /* Runtime symbols (sh4/sh4_stub.S, cpu.cc, cpu_threaded.c, helpers).  */
@@ -426,7 +427,8 @@ extern void *tmemst[4][16];
   SH4_CALL_OP2_PC(cgba_sh4_thumb_block)
 #define arm_access_memory(access_type, direction, adjust_op, mem_type,        \
                           offset_type)                                        \
-  SH4_CALL_OP2_PC(cgba_sh4_arm_ldst)
+  do { if(!sh4g_arm_ldst_native(&translation_ptr, (u32)opcode, (u32)pc))       \
+         SH4_CALL_OP2_PC(cgba_sh4_arm_ldst); } while(0)
 #define arm_block_memory(access_type, offset_type, writeback_type, s_bit)     \
   SH4_CALL_OP2_PC(cgba_sh4_arm_block)
 
