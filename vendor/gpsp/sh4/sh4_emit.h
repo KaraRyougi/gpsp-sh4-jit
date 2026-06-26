@@ -374,12 +374,14 @@ extern void *tmemst[4][16];
 #define arm_bx()                                                              \
   do { u32 rn = opcode & 0x0F;                                                \
        generate_load_reg_pc(SH4_REG_ARG0, rn, 8);                            \
-       /* The interpreter's ARM->Thumb BX path jumps to thumb_loop before the \
-        * normal post-instruction sequential charge. The bring-up trampoline  \
-        * cannot yet specialize on the runtime target bit, so compensate the   \
-        * common GBA boot path here and let the differential harness keep us   \
-        * honest as this grows into a runtime dual-path emitter. */            \
+       /* The interpreter attributes the post-BX sequential fetch to the      \
+        * TARGET region (charged by the target block itself), so cancel this   \
+        * instruction's own arm_base_cycles fetch; then add the runtime        \
+        * pipeline refill, which depends on the target's mode/region: an ARM   \
+        * target costs ws_cyc_nseq[target][1], an ARM->Thumb BX costs none     \
+        * (it falls into thumb_loop with no refill). */                        \
        cycle_count -= ws_cyc_seq[(pc >> 24) & 0x0F][1];                       \
+       sh4g_charge_indirect_refill(&translation_ptr, SH4_REG_ARG0);           \
        generate_indirect_branch_dual(); } while(0)
 
 #define arm_swi()                                                             \
