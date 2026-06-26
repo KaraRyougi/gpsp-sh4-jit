@@ -463,24 +463,36 @@ void cgba_sh4_arm_multiply_long(u32 opcode, u32 pc)
 
 void cgba_sh4_arm_psr(u32 opcode, u32 pc)
 {
-  /* Bring-up: only the common MRS/MSR-cpsr forms; SPSR + mode banking TODO. */
-  u32 to_psr = (opcode >> 21) & 1;
+  u32 is_msr   = (opcode >> 21) & 1;   /* 0 = MRS (read), 1 = MSR (write) */
+  u32 use_spsr = (opcode >> 22) & 1;   /* 0 = CPSR, 1 = SPSR of cur mode  */
   (void)pc;
-  if (!to_psr) {                                     /* MRS Rd, CPSR */
+
+  if (!is_msr) {                                     /* MRS Rd, <psr> */
     u32 rd = (opcode >> 12) & 0xF;
-    reg[rd] = reg[REG_CPSR];
-  } else {                                           /* MSR CPSR, ... */
-    u32 val;
-    u32 mask = 0;
+    reg[rd] = use_spsr ? REG_SPSR(reg[CPU_MODE]) : reg[REG_CPSR];
+    return;
+  }
+
+  {                                                  /* MSR <psr>, val */
+    u32 val, mask = 0;
     if (opcode & 0x02000000) {
       u32 imm = opcode & 0xFF, rot = ((opcode >> 8) & 0xF) * 2;
       val = rot ? ((imm >> rot) | (imm << (32 - rot))) : imm;
     } else {
       val = reg[opcode & 0xF];
     }
-    if (opcode & 0x00080000) mask |= 0xFF000000u;     /* flags field */
+    if (opcode & 0x00080000) mask |= 0xFF000000u;     /* flags field   */
     if (opcode & 0x00010000) mask |= 0x000000FFu;     /* control field */
-    reg[REG_CPSR] = (reg[REG_CPSR] & ~mask) | (val & mask);
+
+    if (use_spsr) {
+      REG_SPSR(reg[CPU_MODE]) = (REG_SPSR(reg[CPU_MODE]) & ~mask) | (val & mask);
+    } else {
+      /* TODO(mode-banking): an MSR that changes the mode bits should re-bank the
+       * registers via set_cpu_mode, but doing so here desyncs reg[CPU_MODE] from
+       * the dynarec's other mode-change paths and hangs. Needs to route CPSR
+       * writes through gpSP's execute_store_cpsr instead. */
+      reg[REG_CPSR] = (reg[REG_CPSR] & ~mask) | (val & mask);
+    }
   }
 }
 
