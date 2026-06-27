@@ -82,9 +82,9 @@ Runtime shape:
 - Uses gint display calls for all calculator LCD output
 - Opens the settings menu as the first screen; physical `ON` reopens it after
   returning to the game
-- Builds with direct storage access disabled by default. `CGBA_FXCG100_STORAGE`
-  is currently an emulator/harness opt-in because the direct BFile entry points
-  are not safe to call from inside gint on hardware.
+- Builds with storage access enabled by default. BFile calls are wrapped in
+  `gint_world_switch()` so ROM scanning/config I/O do not run inside gint's
+  hardware world.
 - Reserves only `ON` during gameplay; all other fx-CG100 keys are bindable as
   GBA inputs or gpSP hotkeys through the settings menu
 - Keeps gpSP's large GBA memories, framebuffer, and embedded smoke ROM buffer in
@@ -230,12 +230,12 @@ Experimental NOR input-probe ROM:
 ports/fxcg100/test_rom/CGBAINP.GBA
 ```
 
-The direct NOR loader is disabled in the default calculator build because the
-underlying BFile entry points can crash when called from inside gint. Emulator
-diagnostic builds can opt in with `-DCGBA_FXCG100_STORAGE=ON`; in that mode,
-copy `CGBAINP.GBA` to the storage root, choose `ROM SOURCE: NOR CGBAINP.GBA`,
-then `LOAD NEW GAME`. The loader opens `\\fls0\CGBAINP.GBA`, resolves its
-fx-CG100 NOR blocks through the direct OS block-address function, and maps
+Copy `CGBAINP.GBA` to the storage root, choose
+`ROM SOURCE: NOR CGBAINP.GBA`, then `LOAD NEW GAME`. The default calculator
+build enables `CGBA_FXCG100_STORAGE` and runs the BFile calls through
+`gint_world_switch()`; this avoids calling the OS storage entry points while
+gint owns the hardware state. The loader opens `\\fls0\CGBAINP.GBA`, resolves
+its fx-CG100 NOR blocks through the direct OS block-address function, and maps
 gpSP's 32 KiB GBA ROM pages directly to cached NOR aliases when each page is
 physically contiguous. The bundled test ROM is padded to exactly one 32 KiB GBA
 page.

@@ -53,7 +53,7 @@ option(CGBA_SH4_ARM_LDST_NATIVE
 option(CGBA_SH4_THUMB_LDST_NATIVE
   "Enable experimental SH4 native Thumb byte load/store fast path" ON)
 option(CGBA_FXCG100_STORAGE
-  "Enable direct fx-CG100 BFile storage access for ROM/config files" OFF)
+  "Enable gint_world_switch-backed fx-CG100 BFile storage for ROM/config files" ON)
 set(CGBA_GPSP_ROM_TRANSLATION_CACHE_SIZE "524288" CACHE STRING
   "SH4 dynarec ROM translation cache size in bytes")
 set(CGBA_GPSP_RAM_TRANSLATION_CACHE_SIZE "262144" CACHE STRING
