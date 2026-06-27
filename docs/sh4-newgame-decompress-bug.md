@@ -83,9 +83,36 @@ So the bug is in machinery shared by both builds and applied around the conditio
 **ARM conditional execution / flag handling** in this loop (`generate_cond_emit_far` /
 `sh4g_cond_to_T`, or a flag set by `subs`/`tst` that a following condition reads).
 
+## Mechanism (observed)
+
+The block `0xB5C` is the unpacker prologue + first inner iteration (it ends at the inner
+loop's backward branch `0xBFC`). At the block end (same end-PC as the interpreter) the
+**dyn registers match the LITERAL-byte path** (`r2` = byte loaded at `0xBC0`, `ip`=8,
+`r4`=1, `fp` decremented) while the **interp registers match the BACK-REFERENCE / early
+path** (`r2`/`ip`/`r4`/`fp` unchanged — the path taken when `0xBBC tst r7,#0x80; bne 0xC5C`
+branches). So the JIT and interpreter take **opposite literal-vs-back-reference branches**
+on the flag byte's high bit. A flag/condition feeding that decision (the `tst`/`bne`, or
+the header value that seeds it: `r5` came out `0x7FFF` vs `0x8000`) is mistranslated →
+literal↔back-ref flip → corrupt decode → off-by-one cascade → wild jump.
+
+## Instruction-level pin: tooling notes
+
+- Forcing **one-instruction gpSP blocks globally** mis-diffs: it splits a 2-halfword
+  **Thumb BL** (`0x8000B66`) into two blocks → wrong LR (an artifact). Gate the force to
+  ARM/BIOS code only.
+- Forcing one-insn blocks for the **whole BIOS** is too slow to reach the divergent call:
+  the LZ77 inner loop runs thousands of times first, each instruction a block.
+- Working diagnostic recipe (all reverted; re-derive as needed): block-diff harness with
+  the cycle + DMA-halt/sleep diffs ignored and halts processed (`update_gba`) so it runs
+  deep, then `-DCGBA_DIAG_SINGLE_INSN` gating `scan_block` to one-insn blocks **only for
+  `block_end_pc < 0x4000`**.
+
 ## Next steps
 
-1. Instruction-granular pin: force ~1-instruction gpSP blocks so the block-diff resolves
-   to the single mistranslated op (the block-level diff stops at the whole `0xB5C` block).
-2. Fix the SH4 codegen / flag handling for it.
+1. Make the one-insn force fire **only at the divergent `0xB5C` call instance** (a hit
+   counter, or flush+retranslate just before it) so the diff resolves the single opcode
+   without drowning in the matching loop iterations; or add a register trace inside the
+   single divergent block.
+2. Fix the SH4 codegen / flag handling for that op (suspect: a conditional/flag around the
+   `tst r7,#0x80` literal/back-ref branch, or the shift/`bic` header parse that yields `r5`).
 3. Re-verify the full new-game → gameplay path, interp vs JIT.
