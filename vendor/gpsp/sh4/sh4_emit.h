@@ -430,6 +430,8 @@ extern void *tmemst[4][16];
 #define thumb_bx()                                                            \
   do { thumb_decode_hireg_op();                                               \
        generate_load_reg_pc(SH4_REG_ARG0, rs, 4);                            \
+       cycle_count -= ws_cyc_seq[(pc >> 24) & 0x0F][0];                      \
+       sh4g_charge_thumb_bx_target_fetch(&translation_ptr, SH4_REG_ARG0);     \
        generate_indirect_branch_cycle_update(dual); } while(0)
 
 #define thumb_conditional_branch(condition)                                   \
@@ -444,6 +446,7 @@ extern void *tmemst[4][16];
 #define thumb_swi()                                                           \
   do { sh4g_const(&translation_ptr, (u32)(pc + 2), SH4_REG_ARG0);             \
        sh4g_far_call(&translation_ptr, (const void *)execute_swi);            \
+       cycle_count -= ws_cyc_seq[(pc >> 24) & 0x0F][0];                      \
        generate_branch_current_update(                                        \
          block_exits[block_exit_position].branch_source,                      \
          block_exits[block_exit_position].branch_target);                     \

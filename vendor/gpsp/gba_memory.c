@@ -20,6 +20,54 @@
 #include "common.h"
 #include "streams/file_stream.h"
 
+#if defined(CGBA_GPSP_HEADLESS_TEST) && CGBA_GPSP_HEADLESS_TRACE_TIMER_IO
+extern s32 video_count;
+extern timer_type timer[4];
+
+static void cgba_timer_trace_putc(char c)
+{
+  volatile unsigned char *port = (volatile unsigned char *)0xb7000000u;
+  *port = (unsigned char)c;
+}
+
+static void cgba_timer_trace_puts(const char *s)
+{
+  while (*s)
+    cgba_timer_trace_putc(*s++);
+}
+
+static void cgba_timer_trace_hex32(u32 v)
+{
+  static const char hex[] = "0123456789ABCDEF";
+  int i;
+  for (i = 7; i >= 0; i--)
+    cgba_timer_trace_putc(hex[(v >> (i * 4)) & 0x0F]);
+}
+
+static void cgba_timer_trace_io_write(u32 ioreg, u32 value)
+{
+  if (ioreg < REG_TM0D || ioreg > REG_TM3CNT)
+    return;
+  cgba_timer_trace_puts("TW r");
+  cgba_timer_trace_hex32(ioreg);
+  cgba_timer_trace_puts(" v");
+  cgba_timer_trace_hex32(value & 0xffffu);
+  cgba_timer_trace_puts(" pc");
+  cgba_timer_trace_hex32(reg[REG_PC]);
+  cgba_timer_trace_puts(" ticks");
+  cgba_timer_trace_hex32(cpu_ticks);
+  cgba_timer_trace_puts(" exec");
+  cgba_timer_trace_hex32(execute_cycles);
+  cgba_timer_trace_puts(" video");
+  cgba_timer_trace_hex32((u32)video_count);
+  cgba_timer_trace_puts(" t0");
+  cgba_timer_trace_hex32((u32)timer[0].count);
+  cgba_timer_trace_putc('\n');
+}
+#else
+#define cgba_timer_trace_io_write(ioreg, value) ((void)0)
+#endif
+
 /* Sound */
 #define gbc_sound_tone_control_low(channel, regn)                             \
 {                                                                             \
@@ -862,6 +910,7 @@ cpu_alert_type function_cc write_io_register16(u32 address, u32 value)
 {
   uint32_t ioreg = ((address & 0xffffff) >> 1);
   value &= 0xffff;
+  cgba_timer_trace_io_write(ioreg, value);
   switch(ioreg)
   {
     case REG_DISPCNT:

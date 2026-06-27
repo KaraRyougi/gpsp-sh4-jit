@@ -403,11 +403,38 @@ static inline void sh4g_charge_mem_run(u8 **tp, unsigned addr_reg, int seq,
     sh4g_close(tp, &cg); }
 }
 
-/* Charge the indirect-branch (BX / computed PC) pipeline refill at RUNTIME to
- * match the interpreter: an ARM target costs ws_cyc_nseq[target>>24][1]; a Thumb
- * target (bit 0 set) costs nothing -- the interp's ARM->Thumb BX falls straight
- * into thumb_loop and takes no refill (cpu.cc). `target_reg` holds the runtime
- * target and is preserved; clobbers R0/T1/T2. */
+/* Thumb BX-to-Thumb reaches the normal end-of-Thumb-instruction accounting in
+ * the interpreter, so its sequential fetch is charged from the target region.
+ * Thumb BX-to-ARM jumps straight to arm_loop and leaves the target fetch to the
+ * ARM stream. `target_reg` is preserved; clobbers R0/T1/T2. */
+static inline void sh4g_charge_thumb_bx_target_fetch(u8 **tp, unsigned target_reg)
+{
+  u8 *bt;
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_reg(&cg, target_reg, SH4_REG_RET);      /* R0 = target            */
+    sh4g_close(tp, &cg); }
+  sh4g_u16(tp, (uint16_t)(0xC800 | 0x01));               /* TST #1,R0 -> T=ARM target*/
+  bt = *tp;
+  sh4g_u16(tp, 0x8900);                                  /* BT skip (ARM target)   */
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_shlr16(&cg, SH4_REG_RET);
+    sh4_emit_shlr8(&cg, SH4_REG_RET);                    /* R0 = target >> 24      */
+    sh4_emit_shll(&cg, SH4_REG_RET);                     /* R0 = region * 2        */
+    sh4g_close(tp, &cg); }
+  sh4g_const(tp, (uint32_t)(uintptr_t)ws_cyc_seq, SH4_REG_T2);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_b_load_r0(&cg, SH4_REG_T2, SH4_REG_T1); /* seq[region][halfword]  */
+    sh4_emit_extu_b(&cg, SH4_REG_T1, SH4_REG_T1);
+    sh4_emit_sub(&cg, SH4_REG_T1, SH4_REG_CYCLES);
+    sh4g_close(tp, &cg); }
+  { long d = ((long)(*tp) - ((long)bt + 4)) / 2; bt[1] = (uint8_t)(d & 0xFF); }
+}
+
+/* Charge ARM BX / computed-PC timing at RUNTIME to match the interpreter. An
+ * ARM target costs the nonsequential refill plus the target sequential fetch:
+ * cpu.cc falls through skip_instruction after the refill. A Thumb target (bit 0
+ * set) costs nothing -- cpu.cc jumps straight into thumb_loop before either
+ * charge. `target_reg` is preserved; clobbers R0/T1/T2. */
 static inline void sh4g_charge_indirect_refill(u8 **tp, unsigned target_reg)
 {
   u8 *bf;
@@ -428,6 +455,12 @@ static inline void sh4g_charge_indirect_refill(u8 **tp, unsigned target_reg)
     sh4_emit_mov_b_load_r0(&cg, SH4_REG_T2, SH4_REG_T1); /* T1 = ws_cyc_nseq[reg][1] */
     sh4_emit_extu_b(&cg, SH4_REG_T1, SH4_REG_T1);
     sh4_emit_sub(&cg, SH4_REG_T1, SH4_REG_CYCLES);       /* R13 -= refill            */
+    sh4g_close(tp, &cg); }
+  sh4g_const(tp, (uint32_t)(uintptr_t)ws_cyc_seq, SH4_REG_T2);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_b_load_r0(&cg, SH4_REG_T2, SH4_REG_T1); /* T1 = ws_cyc_seq[reg][1]  */
+    sh4_emit_extu_b(&cg, SH4_REG_T1, SH4_REG_T1);
+    sh4_emit_sub(&cg, SH4_REG_T1, SH4_REG_CYCLES);       /* R13 -= target fetch      */
     sh4g_close(tp, &cg); }
   { long d = ((long)(*tp) - ((long)bf + 4)) / 2; bf[1] = (uint8_t)(d & 0xFF); }
 }

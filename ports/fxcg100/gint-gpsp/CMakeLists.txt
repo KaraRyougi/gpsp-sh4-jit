@@ -54,6 +54,8 @@ option(CGBA_SH4_THUMB_LDST_NATIVE
   "Enable experimental SH4 native Thumb byte load/store fast path" ON)
 option(CGBA_SH4_EXACT_CYCLE_BOUNDARIES
   "Headless/debug: check the SH4 dynarec cycle budget at each translated instruction boundary" OFF)
+option(CGBA_SH4_DIFF_DUMP_OPS
+  "Headless/debug: dump block-diff op/cycle diagnostics" OFF)
 set(CGBA_GPSP_ROM_TRANSLATION_CACHE_SIZE "524288" CACHE STRING
   "SH4 dynarec ROM translation cache size in bytes")
 set(CGBA_GPSP_RAM_TRANSLATION_CACHE_SIZE "262144" CACHE STRING
@@ -127,6 +129,9 @@ if(CGBA_DYNAREC)
   if(CGBA_SH4_EXACT_CYCLE_BOUNDARIES)
     target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_SH4_EXACT_CYCLE_BOUNDARIES=1)
   endif()
+  if(CGBA_SH4_DIFF_DUMP_OPS)
+    target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_SH4_DIFF_DUMP_OPS=1)
+  endif()
 endif()
 
 # Hardware debug: show an on-screen pipeline snapshot after loading a game (EXE
@@ -179,6 +184,8 @@ set(CGBA_GPSP_HEADLESS_TRACE_MASK "4095" CACHE STRING
   "Headless debug: log trace-PC helper state when (++count & mask) == 0")
 set(CGBA_GPSP_HEADLESS_TRACE_JIT "0" CACHE STRING
   "Headless debug: log per-frame JIT pc/cpsr/cycle state; 0 disables")
+set(CGBA_GPSP_HEADLESS_TRACE_TIMER_IO "0" CACHE STRING
+  "Headless debug: log writes to GBA timer IO registers; 0 disables")
 set(CGBA_GPSP_HEADLESS_BENCH_FRAMES "0" CACHE STRING
   "Headless debug: run interpreter-vs-JIT throughput bench for this many frames; 0 disables")
 if(CGBA_GPSP_HEADLESS_TEST)
@@ -204,6 +211,7 @@ if(CGBA_GPSP_HEADLESS_TEST)
     CGBA_GPSP_HEADLESS_TRACE_PC=${CGBA_GPSP_HEADLESS_TRACE_PC}
     CGBA_GPSP_HEADLESS_TRACE_MASK=${CGBA_GPSP_HEADLESS_TRACE_MASK}
     CGBA_GPSP_HEADLESS_TRACE_JIT=${CGBA_GPSP_HEADLESS_TRACE_JIT}
+    CGBA_GPSP_HEADLESS_TRACE_TIMER_IO=${CGBA_GPSP_HEADLESS_TRACE_TIMER_IO}
     CGBA_GPSP_HEADLESS_BENCH_FRAMES=${CGBA_GPSP_HEADLESS_BENCH_FRAMES})
 endif()
 
