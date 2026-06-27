@@ -52,6 +52,8 @@ option(CGBA_SH4_ARM_LDST_NATIVE
   "Enable experimental SH4 native ARM single load/store fast path" OFF)
 option(CGBA_SH4_THUMB_LDST_NATIVE
   "Enable experimental SH4 native Thumb byte load/store fast path" ON)
+option(CGBA_FXCG100_STORAGE
+  "Enable direct fx-CG100 BFile storage access for ROM/config files" OFF)
 set(CGBA_GPSP_ROM_TRANSLATION_CACHE_SIZE "524288" CACHE STRING
   "SH4 dynarec ROM translation cache size in bytes")
 set(CGBA_GPSP_RAM_TRANSLATION_CACHE_SIZE "262144" CACHE STRING
@@ -100,6 +102,9 @@ target_compile_definitions(cgba-gint-gpsp PRIVATE
   ROM_BUFFER_SIZE=1
   dma_transfer=gpsp_dma_transfer
 )
+if(CGBA_FXCG100_STORAGE)
+  target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_FXCG100_STORAGE=1)
+endif()
 
 if(CGBA_DYNAREC)
   # SH4_ARCH selects the SH4 host emitter in cpu_threaded.c. The code caches live

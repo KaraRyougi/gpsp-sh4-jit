@@ -35,6 +35,10 @@ typedef int (*cgba_bfile_find_close_t)(int handle);
 #define CGBA_BFILE_FIND_NEXT         ((uintptr_t)0x80334846u)
 #define CGBA_BFILE_FIND_CLOSE        ((uintptr_t)0x80334950u)
 
+#ifndef CGBA_FXCG100_STORAGE
+#define CGBA_FXCG100_STORAGE 0
+#endif
+
 #ifdef CGBA_FXCG100
 #define CGBA_HIGH_BSS __attribute__((section(".cgba.highbss"), aligned(32)))
 #else
@@ -79,20 +83,39 @@ static const uint16_t cgba_storage_fallback_rom[] = {
 
 static int os_bfile_open(const uint16_t *path, int mode)
 {
+#if CGBA_FXCG100_STORAGE
 	cgba_bfile_open_t fn = (cgba_bfile_open_t)CGBA_BFILE_OPEN;
 	return fn(path, mode);
+#else
+	(void)path;
+	(void)mode;
+	return -1;
+#endif
 }
 
 static int os_bfile_size(int fd)
 {
+#if CGBA_FXCG100_STORAGE
 	cgba_bfile_size_t fn = (cgba_bfile_size_t)CGBA_BFILE_SIZE;
 	return fn(fd);
+#else
+	(void)fd;
+	return -1;
+#endif
 }
 
 static int os_bfile_read(int fd, void *dst, int size, int offset)
 {
+#if CGBA_FXCG100_STORAGE
 	cgba_bfile_read_t fn = (cgba_bfile_read_t)CGBA_BFILE_READ;
 	return fn(fd, dst, size, offset);
+#else
+	(void)fd;
+	(void)dst;
+	(void)size;
+	(void)offset;
+	return -1;
+#endif
 }
 
 static int bfile_read_exact_ok(int result, int size)
@@ -103,39 +126,69 @@ static int bfile_read_exact_ok(int result, int size)
 
 static void os_bfile_close(int fd)
 {
+#if CGBA_FXCG100_STORAGE
 	cgba_bfile_close_t fn = (cgba_bfile_close_t)CGBA_BFILE_CLOSE;
 	fn(fd);
+#else
+	(void)fd;
+#endif
 }
 
 static int os_bfile_get_block_address(int fd, int offset,
 	unsigned char **address)
 {
+#if CGBA_FXCG100_STORAGE
 	cgba_bfile_get_block_address_t fn =
 		(cgba_bfile_get_block_address_t)CGBA_BFILE_GET_BLOCK_ADDRESS;
 	return fn(fd, offset, address);
+#else
+	(void)fd;
+	(void)offset;
+	(void)address;
+	return -1;
+#endif
 }
 
 static int os_bfile_find_first(const uint16_t *pattern, int *handle,
 	uint16_t *found, struct BFile_FileInfo *fileinfo)
 {
+#if CGBA_FXCG100_STORAGE
 	cgba_bfile_find_first_t fn =
 		(cgba_bfile_find_first_t)CGBA_BFILE_FIND_FIRST;
 	return fn(pattern, handle, found, fileinfo);
+#else
+	(void)pattern;
+	(void)handle;
+	(void)found;
+	(void)fileinfo;
+	return -1;
+#endif
 }
 
 static int os_bfile_find_next(int handle, uint16_t *found,
 	struct BFile_FileInfo *fileinfo)
 {
+#if CGBA_FXCG100_STORAGE
 	cgba_bfile_find_next_t fn =
 		(cgba_bfile_find_next_t)CGBA_BFILE_FIND_NEXT;
 	return fn(handle, found, fileinfo);
+#else
+	(void)handle;
+	(void)found;
+	(void)fileinfo;
+	return -1;
+#endif
 }
 
 static void os_bfile_find_close(int handle)
 {
+#if CGBA_FXCG100_STORAGE
 	cgba_bfile_find_close_t fn =
 		(cgba_bfile_find_close_t)CGBA_BFILE_FIND_CLOSE;
 	fn(handle);
+#else
+	(void)handle;
+#endif
 }
 
 static char ascii_upper(char c)
