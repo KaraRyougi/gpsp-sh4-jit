@@ -190,19 +190,43 @@ defsymbl(sh4_block_exit)
   bra     lookup_pc               /* always re-dispatch on reg[REG_PC] */
   nop
 
-/* ---- indirect branches (BX, computed PC); R4 = target GBA address ---- */
+/* ---- indirect branches (BX, computed PC); R4 = target GBA address ----
+ * block_lookup_address_* commits reg[REG_PC] (see cpu_threaded.c), so after the
+ * lookup the single-block diff mode can return to the C caller with PC correct,
+ * exactly like sh4_block_exit. R0 = resolved host block; R13 = remaining cycles. */
 defsymbl(sh4_indirect_branch_arm)
   CALL    block_lookup_address_arm
+  mov.l   sb_flag, r1
+  mov.l   @r1, r1
+  tst     r1, r1
+  bt      1f                      /* not single-block -> dispatch */
+  bra     return_to_main          /* single-block diff: stop after this block */
+  mov     r13, r0                 /* delay slot: return remaining cycles */
+1:
   jmp     @r0
   nop
 
 defsymbl(sh4_indirect_branch_thumb)
   CALL    block_lookup_address_thumb
+  mov.l   sb_flag, r1
+  mov.l   @r1, r1
+  tst     r1, r1
+  bt      1f
+  bra     return_to_main
+  mov     r13, r0
+1:
   jmp     @r0
   nop
 
 defsymbl(sh4_indirect_branch_dual)
   CALL    block_lookup_address_dual
+  mov.l   sb_flag, r1
+  mov.l   @r1, r1
+  tst     r1, r1
+  bt      1f
+  bra     return_to_main
+  mov     r13, r0
+1:
   jmp     @r0
   nop
 

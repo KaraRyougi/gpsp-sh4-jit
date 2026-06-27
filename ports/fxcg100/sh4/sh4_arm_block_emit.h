@@ -61,12 +61,17 @@ static inline int sh4g_arm_block_native(u8 **tp, u32 opcode, u32 pc,
   u32 s_bit     = (opcode >> 22) & 1;
   u32 count = 0, i, lowest = 16;
   int offset_a, offset_nb, do_wb;
-  u8 *guards[3]; int ng = 0;
+  u8 *guards[4]; int ng = 0;
   u8 *bra_done;
 
   if (s_bit)                 return 0;         /* user-bank / SPSR restore -> C */
   if (rlist & 0x8000)        return 0;         /* PC in list -> C (redispatch)  */
   if (rn == 15)              return 0;         /* base = PC -> C */
+  /* STM writes EWRAM/IWRAM directly, bypassing the SMC tag check in
+   * execute_store_*; route block STORES through the C helper so self-modifying
+   * writes still flush the RAM cache. LDM (reads) stay native. (When an inline
+   * tag check + smc_write branch is added, the STM emission below re-enables.) */
+  if (!is_load)              return 0;
 
   for (i = 0; i < 16; i++)
     if (rlist & (1u << i)) { count++; if (lowest == 16) lowest = i; }
@@ -98,6 +103,16 @@ static inline int sh4g_arm_block_native(u8 **tp, u32 opcode, u32 pc,
   guards[ng++] = sh4g_block_guard(tp, 0);            /* straddle (T==0) -> slow */
 
   if (is_load) {
+    /* upper-bound guard: A < 0x10000000. memory_map_read[] only covers the GBA
+     * 0x00000000..0x0FFFFFFF space (8192 32 KB pages), so a high / open-bus base
+     * would index past the table into host memory. The single-access path guards
+     * this; the STM branch is already bounded by its A>>25==1 (EWRAM/IWRAM) check. */
+    sh4g_const(tp, 0x10000000u, SH4_REG_T2);
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_cmphs(&cg, SH4_REG_T2, SH4_REG_ARG1); /* T = (A >= 0x10000000) */
+      sh4g_close(tp, &cg); }
+    guards[ng++] = sh4g_block_guard(tp, 1);          /* out of map -> slow */
+
     /* region guard: A >> 24 != 0 (exclude BIOS / region 0) */
     { sh4_codegen cg = sh4g_open(tp);
       sh4_emit_mov_reg(&cg, SH4_REG_ARG1, SH4_REG_T2);

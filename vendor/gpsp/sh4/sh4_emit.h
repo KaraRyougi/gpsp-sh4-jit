@@ -134,7 +134,7 @@ extern void *tmemst[4][16];
   do { if(!cgba_dynarec_single_block)                                         \
          sh4g_patch_jump((u8 *)(dest), (const void *)(offset)); } while(0)
 #define generate_branch_patch_conditional(dest, offset)                       \
-  sh4g_patch_cond((u8 *)(dest), (const void *)(offset))
+  sh4g_patch_cond_skip((u8 *)(dest), (const void *)(offset))
 
 /* Re-dispatch the block at `pc` (used when a block runs off its end or hits a
  * translation gate). Flush accumulated block cycles first so run-off/gate loops
@@ -222,12 +222,21 @@ extern void *tmemst[4][16];
 #define CGBA_CC_gt 0xC
 #define CGBA_CC_le 0xD
 
-/* T = condition satisfied, then BF skips the predicated body when false. */
+/* T = condition satisfied, then the skip jumps over the predicated body when
+ * false. generate_cond_emit uses a disp8 BF — fine for the bounded Thumb-branch
+ * body. The ARM same-condition run is unbounded, so generate_condition() uses
+ * generate_cond_emit_far (a far literal jump) which reaches any distance and
+ * cannot wrap the skip target; both close via generate_branch_patch_conditional
+ * (sh4g_patch_cond_skip dispatches on the placeholder). */
 #define generate_cond_emit(cc_value)                                          \
   do { sh4g_cond_to_T(&translation_ptr, (cc_value));                          \
        backpatch_address = sh4g_emit_bf_placeholder(&translation_ptr); } while(0)
 
-#define generate_condition()        generate_cond_emit(condition)
+#define generate_cond_emit_far(cc_value)                                      \
+  do { sh4g_cond_to_T(&translation_ptr, (cc_value));                          \
+       backpatch_address = sh4g_emit_cond_skip_far(&translation_ptr); } while(0)
+
+#define generate_condition()        generate_cond_emit_far(condition)
 #define generate_condition_eq()     generate_cond_emit(CGBA_CC_eq)
 #define generate_condition_ne()     generate_cond_emit(CGBA_CC_ne)
 #define generate_condition_cs()     generate_cond_emit(CGBA_CC_cs)

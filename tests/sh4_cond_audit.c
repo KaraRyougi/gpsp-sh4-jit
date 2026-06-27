@@ -94,6 +94,60 @@ static int run_sh4(const u8 *code, size_t n, int *ok)
   return T;
 }
 
+/* ---- conditional-skip reach test ----------------------------------------- *
+ * sh4g_emit_cond_skip_far must let the condition-FALSE path reach a post-body
+ * target at ANY distance (the [P1] bug: a disp8/disp12 skip silently wraps once
+ * the predicated run is large). Emit the skip, a body bigger than the disp12
+ * range, patch, and confirm the far jump stores the full 32-bit target and the
+ * BT lands on the body. Also confirm the shared patcher still fixes a disp8 BF
+ * (the bounded Thumb path). */
+static int test_cond_skip(void)
+{
+  static _Alignas(32) u8 buf[16384];
+  size_t body_bytes[] = { 8, 300, 4096, 9000 };   /* incl. > disp8 and > disp12 */
+  int fail = 0;
+
+  for (unsigned t = 0; t < sizeof body_bytes / sizeof body_bytes[0]; t++) {
+    u8 *p = buf;
+    sh4g_cond_to_T(&p, 0x0 /*EQ*/);
+    u8 *bt = p;
+    u8 *site = sh4g_emit_cond_skip_far(&p);
+    u8 *body = p;
+
+    u16 btop = (u16)((bt[0] << 8) | bt[1]);       /* BT must hop to the body */
+    u8 *bt_target = bt + 4 + (signed char)bt[1] * 2;
+    if ((btop & 0xFF00) != 0x8900) { fprintf(stderr, "skip: BT missing\n"); fail = 1; }
+    if (bt_target != body) { fprintf(stderr, "skip: BT misses body\n"); fail = 1; }
+
+    for (size_t i = 0; i < body_bytes[t]; i += 2) sh4g_u16(&p, 0x0009);
+    u8 *target = p;
+    sh4g_patch_cond_skip(site, target);
+
+    u8 *lit = (u8 *)(((uintptr_t)(site + 6) + 3u) & ~(uintptr_t)3u);
+    uint32_t stored = ((uint32_t)lit[0] << 24) | ((uint32_t)lit[1] << 16) |
+                      ((uint32_t)lit[2] << 8) | lit[3];
+    if (stored != (uint32_t)(uintptr_t)target) {
+      fprintf(stderr, "skip: body=%zu far target truncated (%08X != %08X)\n",
+              body_bytes[t], stored, (uint32_t)(uintptr_t)target);
+      fail = 1;
+    }
+  }
+
+  {                                               /* shared patcher still does disp8 BF */
+    u8 *p = buf;
+    u8 *bf = sh4g_emit_bf_placeholder(&p);
+    for (int i = 0; i < 20; i++) sh4g_u16(&p, 0x0009);
+    u8 *target = p;
+    sh4g_patch_cond_skip(bf, target);
+    if (((bf[0] << 8 | bf[1]) & 0xFF00) != 0x8B00) { fprintf(stderr, "skip: BF clobbered\n"); fail = 1; }
+    if (bf + 4 + (signed char)bf[1] * 2 != target) { fprintf(stderr, "skip: BF disp8 wrong\n"); fail = 1; }
+  }
+
+  if (!fail)
+    printf("SH4 conditional-skip reach test passed (disp8 BF + far jump past disp12)\n");
+  return fail;
+}
+
 int main(void)
 {
   static _Alignas(32) u8 code[128];
@@ -132,6 +186,8 @@ int main(void)
       }
     }
   }
+
+  if (test_cond_skip()) fail = 1;
 
   if (fail) { fprintf(stderr, "SH4 condition audit FAILED\n"); return 1; }
   printf("SH4 condition audit passed (%d cases: 16 conds x 16 NZCV)\n", checks);

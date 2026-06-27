@@ -502,6 +502,23 @@ static inline void sh4g_patch_jump(u8 *site, const void *target)
    * executed as an instruction. See the SH4G_RESYNC note above. */
 }
 
+/* Conditional skip over a predicated body of UNBOUNDED length (the ARM
+ * same-condition run, which can be many instructions). sh4g_cond_to_T has left
+ * T = (ARM condition satisfied): emit BT over a far (literal) jump, so when the
+ * condition is TRUE the BT branches into the body, and when FALSE the far jump
+ * is taken to the post-body skip target (back-patched by sh4g_patch_jump at run
+ * close). Unlike a disp8/disp12 branch this reaches any distance, so a long run
+ * can never wrap the skip target. The BT itself only hops the fixed-size jump,
+ * so its disp8 is always tiny. Returns the literal patch site. */
+static inline u8 *sh4g_emit_cond_skip_far(u8 **tp)
+{
+  u8 *bt = *tp, *site;
+  sh4g_u16(tp, 0x8900);                          /* BT body (cond true)         */
+  site = sh4g_emit_patch_jump(tp);               /* cond false -> jump to target */
+  { long d = ((long)(*tp) - ((long)bt + 4)) / 2; bt[1] = (uint8_t)(d & 0xFF); }
+  return site;
+}
+
 /* Materialize a guest PC value into R4 (ARG0) and store it to reg[REG_PC]. */
 static inline void sh4g_store_pc_imm(u8 **tp, uint32_t new_pc)
 {
@@ -666,6 +683,18 @@ static inline void sh4g_patch_cond(u8 *site, const void *target)
   long d = ((long)(uintptr_t)target - ((long)(uintptr_t)site + 4)) / 2;
   site[1] = (uint8_t)(d & 0xFF);
   SH4G_RESYNC(site, 2);            /* BT/BF is an instruction: re-fetch it */
+}
+
+/* Patch a conditional skip back to `target`. One close path serves both skip
+ * forms, dispatched on the placeholder opcode: a BT/BF disp8 (0x8?00 — the
+ * bounded Thumb-branch body) vs a far jump's MOV.L @(d,PC),R0 (0xD?00 — the
+ * unbounded ARM run from sh4g_emit_cond_skip_far). */
+static inline void sh4g_patch_cond_skip(u8 *site, const void *target)
+{
+  if ((site[0] & 0xF0) == 0x80)
+    sh4g_patch_cond(site, target);               /* disp8 BT/BF */
+  else
+    sh4g_patch_jump(site, target);               /* far literal jump */
 }
 
 /* Emit an unconditional local forward branch placeholder (BRA 0 + delay NOP);

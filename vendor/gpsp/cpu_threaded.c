@@ -2670,6 +2670,14 @@ u8 function_cc *block_lookup_address_dual(u32 pc)
 u8 function_cc *block_lookup_address_arm(u32 pc)
 {
   unsigned i;
+#ifdef SH4_ARCH
+  /* Commit the resolved PC. lookup_pc already has reg[REG_PC] == pc (no-op), but
+   * the BX / computed-PC trampolines jump straight here without storing it, so
+   * an indirect branch would otherwise leave reg[REG_PC] stale — which defeats
+   * cgba_dynarec_single_block (the diff harness reads reg[REG_PC] as the block
+   * end) and would mis-bank an IRQ taken right after the branch. */
+  reg[REG_PC] = pc;
+#endif
   for (i = 0; i < 4; i++) {
     u8 *ret = block_lookup_translate_arm(pc);
     if (ret) {
@@ -2686,6 +2694,9 @@ u8 function_cc *block_lookup_address_arm(u32 pc)
 u8 function_cc *block_lookup_address_thumb(u32 pc)
 {
   unsigned i;
+#ifdef SH4_ARCH
+  reg[REG_PC] = pc;   /* see block_lookup_address_arm: commit PC for indirect/BX */
+#endif
   for (i = 0; i < 4; i++) {
     u8 *ret = block_lookup_translate_thumb(pc);
     if (ret) {

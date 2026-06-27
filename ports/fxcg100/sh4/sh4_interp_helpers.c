@@ -123,6 +123,10 @@ u32 function_cc execute_load_s16(u32 address) { cgba_sh4_charge_mem(address, 0);
 static cpu_alert_type cgba_sh4_smc_check(u32 address, unsigned bytes)
 {
   const u8 *tag;
+  /* Width-align like the ARM bus (and the gpSP interpreter's fast_write_memory,
+   * cpu.cc) so the tag read lands on the same code bytes the access really hits
+   * and never walks past the end of the mirror for an unaligned half/word. */
+  address &= ~(u32)(bytes - 1);
   switch (address >> 24) {
   case 0x03: tag = iwram + (address & 0x7FFF); break;              /* 32 KB  */
   case 0x02: tag = ewram + (address & 0x3FFFF) + 0x40000; break;   /* 256 KB */
@@ -628,8 +632,17 @@ int cgba_sh4_arm_block(u32 opcode, u32 pc)
 
   cgba_sh4_reset_mem_cycles(1);
 
-  /* TODO(S-bit): with the S bit set and r15 NOT in the list, LDM/STM transfer
-     the USER-mode banked registers — not handled here (rare). */
+  /* S-bit LDM/STM WITHOUT r15 in the list architecturally transfers the
+     USER-mode banked registers (r8..r14), not the current mode's. We deliberately
+     transfer the current bank instead: that is correct in User/System mode (where
+     GBA code runs essentially always) and, crucially, it matches the gpSP
+     interpreter oracle, whose LDM/STM path likewise ignores the S bit for bank
+     selection (cpu.cc special-cases only the S-bit-WITH-r15 exception return, via
+     execute_spsr_restore above). Keeping both cores identical here preserves the
+     differential harness; a true fix would have to land in BOTH the interpreter
+     and this helper. It only diverges for an LDM/STM^-without-PC executed from a
+     privileged banked mode (FIQ/IRQ/SVC/...), which the BIOS and normal games do
+     not do. The native fast path bails here on the S bit for the same reason. */
 
   for (i = 0; i < 16; i++)
     if (rlist & (1u << i)) { count++; if (lowest == 16) lowest = i; }
