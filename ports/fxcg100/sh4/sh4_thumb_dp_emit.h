@@ -277,6 +277,13 @@ static inline int sh4g_thumb_ldst_native(u8 **tp, u32 opcode, u32 pc,
   imm5 = (opcode >> 6) & 0x1F;
   is_load = (opcode >> 11) & 1;
 
+  /* STRB writes EWRAM/IWRAM directly, which would bypass the SMC tag check that
+   * only runs inside execute_store_*; route byte STORES through the C helper so a
+   * self-modifying write still flushes the RAM translation cache. LDRB (a read)
+   * has no such hazard and stays native. */
+  if (!is_load)
+    return 0;
+
   { sh4_codegen cg = sh4g_open(tp);
     sh4_emit_load_greg(&cg, rb, SH4_REG_T0);       /* R1 = base */
     sh4g_close(tp, &cg); }
