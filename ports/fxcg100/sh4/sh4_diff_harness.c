@@ -316,6 +316,7 @@ const char *cgba_sh4_diff_kind_name(int kind)
  * signal that the residual is timing, not per-block logic, not a bug to chase. */
 
 static u32 dyn_reg[64];
+static u32 input_reg[64];   /* DIAG: starting state S of each diffed block */
 
 extern u32 cgba_diff_stop_pc;     /* cpu.cc: execute_arm "run until reg[15]==pc" hook */
 extern int cgba_diff_stop_active;
@@ -357,6 +358,16 @@ static int interp_run_to_pc(u32 target_pc, u32 cycles, int skip_initial)
   return reg[REG_PC] == target_pc;
 }
 
+/* True iff the dynarec's block-end registers differ from the interpreter's
+ * (r0..r15 + CPSR; cycle/halt/sleep are timing residue, intentionally ignored). */
+static int regs_diverge(void)
+{
+  int i;
+  for (i = 0; i < 16; i++)
+    if (dyn_reg[i] != oracle_reg[i]) return 1;
+  return dyn_reg[REG_CPSR] != oracle_reg[REG_CPSR];
+}
+
 static unsigned cgba_sh4_diff_blocks_core(unsigned max_blocks, char out[][48],
   unsigned max_lines, int reset_first)
 {
@@ -390,10 +401,14 @@ static unsigned cgba_sh4_diff_blocks_core(unsigned max_blocks, char out[][48],
     u32 dret, dused, iused;
     int i, diverged = 0;
 
-    if (reg[CPU_HALT_STATE] != 0)
-      break;                       /* halt: frame-level diff handles those */
+    if (reg[CPU_HALT_STATE] != 0) {   /* DIAG: process the halt/wait + keep diffing */
+      if (update_gba(-64) & 0x80000000u)
+        break;                       /* frame complete */
+      continue;
+    }
 
     capture_full();                /* shared starting state S (= interp baseline) */
+    memcpy(input_reg, reg, sizeof input_reg);   /* DIAG: starting state S */
     dbg_tag('D', pc0);
 
     /* Dynarec: one block from S. Its end PC is the lockstep target. */
@@ -416,7 +431,7 @@ static unsigned cgba_sh4_diff_blocks_core(unsigned max_blocks, char out[][48],
     memcpy(oracle_reg, reg, sizeof oracle_reg);
     dbg_tag('I', reg[REG_PC]);
 
-    if (iused != dused && n < max_lines) {
+    if (0 && iused != dused && n < max_lines) {   /* DIAG: ignore benign cycle diffs */
       diverged = 1;
       snprintf(out[n++], 48, "B%u p%lX cyc i%lu d%lu", b,
         (unsigned long)pc0, (unsigned long)iused, (unsigned long)dused);
@@ -441,35 +456,69 @@ static unsigned cgba_sh4_diff_blocks_core(unsigned max_blocks, char out[][48],
 #endif
     }
 
-    for (i = 0; i < 16; i++) {     /* r0..r15 (r15 = PC, already aligned by both) */
-      if (dyn_reg[i] != oracle_reg[i] && n < max_lines) {
-        diverged = 1;
-        snprintf(out[n++], 48, "B%u p%lX r%d i%lX d%lX", b,
-          (unsigned long)pc0, i, (unsigned long)oracle_reg[i],
-          (unsigned long)dyn_reg[i]);
+    /* Compare; on a mismatch, check for a backward-branch-into-block (loop)
+     * artifact. Under single-block mode the dyn exits such a block at the
+     * backward branch AFTER one body pass, but interp_run_to_pc stops at the
+     * FIRST time PC==dpc -- the loop-body entry, reached sequentially BEFORE the
+     * branch. Retry the interp skipping one dpc occurrence (= one body pass); if
+     * THAT matches, the first compare was the harness artifact, not a codegen
+     * bug, and the one-body-pass state is the correct baseline for the next
+     * block. Real (non-loop) divergences fail the retry and are still reported. */
+    diverged = regs_diverge();
+    if (diverged && dpc != pc0) {
+      u32 saved_oracle[64];
+      memcpy(saved_oracle, oracle_reg, sizeof saved_oracle);
+      restore_full();
+      if (interp_run_to_pc(dpc, 0x4000u, 1)) {       /* skip the body-start dpc */
+        memcpy(oracle_reg, reg, sizeof oracle_reg);
+        if (!regs_diverge())
+          diverged = 0;                              /* loop artifact, not a bug */
+      }
+      if (diverged) {                                /* real: restore natural compare */
+        restore_full();
+        interp_run_to_pc(dpc, 0x4000u, dpc == pc0);
+        memcpy(oracle_reg, saved_oracle, sizeof oracle_reg);
       }
     }
-    if (!diverged && dyn_reg[REG_CPSR] != oracle_reg[REG_CPSR] && n < max_lines) {
-      diverged = 1;                /* mode/flags divergence */
-      snprintf(out[n++], 48, "B%u p%lX cpsr i%lX d%lX", b, (unsigned long)pc0,
-        (unsigned long)oracle_reg[REG_CPSR], (unsigned long)dyn_reg[REG_CPSR]);
-    }
-    if (!diverged && dyn_reg[CPU_HALT_STATE] != oracle_reg[CPU_HALT_STATE] &&
-        n < max_lines) {
-      diverged = 1;
-      snprintf(out[n++], 48, "B%u p%lX halt i%lX d%lX", b,
-        (unsigned long)pc0, (unsigned long)oracle_reg[CPU_HALT_STATE],
-        (unsigned long)dyn_reg[CPU_HALT_STATE]);
-    }
-    if (!diverged && dyn_reg[REG_SLEEP_CYCLES] != oracle_reg[REG_SLEEP_CYCLES] &&
-        n < max_lines) {
-      diverged = 1;
-      snprintf(out[n++], 48, "B%u p%lX sleep i%lX d%lX", b,
-        (unsigned long)pc0, (unsigned long)oracle_reg[REG_SLEEP_CYCLES],
-        (unsigned long)dyn_reg[REG_SLEEP_CYCLES]);
-    }
-    if (diverged)
+    if (diverged) {
+      for (i = 0; i < 16; i++)
+        if (dyn_reg[i] != oracle_reg[i] && n < max_lines)
+          snprintf(out[n++], 48, "B%u p%lX r%d i%lX d%lX", b,
+            (unsigned long)pc0, i, (unsigned long)oracle_reg[i],
+            (unsigned long)dyn_reg[i]);
+      if (dyn_reg[REG_CPSR] != oracle_reg[REG_CPSR] && n < max_lines)
+        snprintf(out[n++], 48, "B%u p%lX cpsr i%lX d%lX", b, (unsigned long)pc0,
+          (unsigned long)oracle_reg[REG_CPSR], (unsigned long)dyn_reg[REG_CPSR]);
+      if (n < max_lines)
+        snprintf(out[n++], 48, "IO dpc%lX du%lu iu%lu cI%lX cD%lX",
+          (unsigned long)dpc, (unsigned long)dused, (unsigned long)iused,
+          (unsigned long)oracle_reg[REG_CPSR], (unsigned long)dyn_reg[REG_CPSR]);
+      if (n < max_lines)
+        snprintf(out[n++], 48, "IN r0%lX r1%lX r4%lX ip%lX",
+          (unsigned long)input_reg[0], (unsigned long)input_reg[1],
+          (unsigned long)input_reg[4], (unsigned long)input_reg[12]);
+      if (n < max_lines)
+        snprintf(out[n++], 48, "IN r5%lX r6%lX r7%lX cP%lX",
+          (unsigned long)input_reg[5], (unsigned long)input_reg[6],
+          (unsigned long)input_reg[7], (unsigned long)input_reg[REG_CPSR]);
       break;
+    }
+    /* A self-loop that matches the interpreter (dpc == pc0) is a VCOUNT/idle
+     * wait the dynarec also spins on. Single-block mode can't advance VCOUNT, so
+     * step the interpreter freely until it leaves the loop, then resume the
+     * lockstep from there (the spin's own wait blocks go undiffed -- they are
+     * not the codegen under test). Without this the diff hangs on the per-frame
+     * VBlank wait and never reaches the real divergence. */
+    if (dpc == pc0) {
+      int guard = 300000;
+      while (reg[REG_PC] == pc0 && guard-- > 0) {
+        if (reg[CPU_HALT_STATE] != CPU_ACTIVE) {
+          if (update_gba(-64) & 0x80000000u) break;   /* frame complete */
+        } else {
+          execute_arm(256);                            /* advance VCOUNT/timers */
+        }
+      }
+    }
     /* reg[] is now the interpreter state at dpc -> next iteration's baseline. */
   }
   cgba_dynarec_single_block = 0;
