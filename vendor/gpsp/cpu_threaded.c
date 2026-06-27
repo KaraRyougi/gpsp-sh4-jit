@@ -2670,6 +2670,9 @@ static void cgba_wj_note(u32 pc)
   cgba_wj_putc('@'); cgba_wj_putc('@'); cgba_wj_putc('W'); cgba_wj_putc('J');
   cgba_wj_putc(' '); cgba_wj_hex(pc);
   cgba_wj_putc(' '); cgba_wj_putc('l'); cgba_wj_putc('r'); cgba_wj_hex(reg[14]);
+  cgba_wj_putc(' '); cgba_wj_putc('s'); cgba_wj_putc('p'); cgba_wj_hex(reg[13]);
+  cgba_wj_putc(' '); cgba_wj_putc('['); cgba_wj_hex(read_memory32(reg[13] - 4));
+  cgba_wj_putc(','); cgba_wj_hex(read_memory32(reg[13])); cgba_wj_putc(']');
   cgba_wj_putc(':');
   for (i = 0; i < 24; i++) { cgba_wj_hex(cgba_wj_ring[(cgba_wj_pos + i) % 24]); cgba_wj_putc(' '); }
   cgba_wj_putc('\n');
