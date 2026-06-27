@@ -63,9 +63,29 @@ flag in the unpack loop, not the load itself.
   `src/interpreter.c` (low-PC `BADJUMP` ring) for SH4-side wild jumps, and
   `block_lookup_address` (not `translate_block`) for guest-PC traces.
 
+## Narrowing (done)
+
+The full routine (`0xB5C`–`0xC4C`) is a Huffman/bit-stream unpacker: an outer byte loop
+(`0xBA4`–`0xC08`) and an inner 8-bit loop (`0xBB8`–`0xBFC`) with a 2-state accumulator
+built from **conditional data-proc** (`cmp r4,#1; strheq/moveq … addne/movne …`) and
+`subs`-driven loop counters (`subs r5,#1`, `subs fp,#1`). The JIT runs the loop **one
+iteration off** (dyn ran the full inner body where the interp took an early exit), so it
+is a control-flow / flag divergence, not a value op.
+
+Ruled out by experiment:
+- **Native ARM emitters** (dp / block / multiply): building with `-DCGBA_DIAG_NO_ARM_NATIVE=1`
+  (short-circuit all three to the C helpers) leaves the divergence **byte-identical** →
+  not a native emitter.
+- **The C load helper** `cgba_sh4_arm_ldst`: post-indexed writeback (`ldr r5,[r0],#4`,
+  `ldrb`) is handled correctly (`!pre → reg[rn] = base±offset`).
+
+So the bug is in machinery shared by both builds and applied around the conditional run:
+**ARM conditional execution / flag handling** in this loop (`generate_cond_emit_far` /
+`sh4g_cond_to_T`, or a flag set by `subs`/`tst` that a following condition reads).
+
 ## Next steps
 
-1. Pin the exact mistranslated instruction in `0xB5C` (instruction-granular diff or
-   native-path bisection: ARM dp / block / multiply natives).
-2. Fix the SH4 codegen for it.
+1. Instruction-granular pin: force ~1-instruction gpSP blocks so the block-diff resolves
+   to the single mistranslated op (the block-level diff stops at the whole `0xB5C` block).
+2. Fix the SH4 codegen / flag handling for it.
 3. Re-verify the full new-game → gameplay path, interp vs JIT.
