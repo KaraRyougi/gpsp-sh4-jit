@@ -18,8 +18,9 @@
 #     FRAMES(540) DUMP_EVERY(60) STAT_EVERY(20)   # how long / how often to snapshot
 #     START_FRAME(30) START_HOLD(8)               # press START
 #     A_FRAME(120) A_HOLD(420) A_PERIOD(120) A_PRESS(6)   # tap A to navigate menus
-#     ROM_CACHE(131072) RAM_CACHE(65536)          # small cache: survives casio-emu past ~frame 200
-#     SECS(460)                                   # wall-clock cap per emulator run
+#     ROM_CACHE(524288) RAM_CACHE(262144)         # match the build default; a small cache thrashes
+#                                                 # (flush+re-translate) once blocks grow (native LDST)
+#     SECS(540)                                   # wall-clock cap per emulator run
 #     CASIO_EMU(~/Dev/casio-emu)  FXSDK_PREFIX(~/.local)  OUT(/tmp/cgba-playtest)
 set -euo pipefail
 
@@ -34,7 +35,7 @@ OUT="${OUT:-/tmp/cgba-playtest}"
 FRAMES="${FRAMES:-540}"; DUMP_EVERY="${DUMP_EVERY:-60}"; STAT_EVERY="${STAT_EVERY:-20}"
 START_FRAME="${START_FRAME:-30}"; START_HOLD="${START_HOLD:-8}"
 A_FRAME="${A_FRAME:-120}"; A_HOLD="${A_HOLD:-420}"; A_PERIOD="${A_PERIOD:-120}"; A_PRESS="${A_PRESS:-6}"
-ROM_CACHE="${ROM_CACHE:-131072}"; RAM_CACHE="${RAM_CACHE:-65536}"; SECS="${SECS:-460}"
+ROM_CACHE="${ROM_CACHE:-524288}"; RAM_CACHE="${RAM_CACHE:-262144}"; SECS="${SECS:-540}"
 
 [ -x "$CALCEMU" ] || { echo "casio-emu not built at $CALCEMU"; exit 1; }
 [ -f "$ROM" ]     || { echo "ROM not found: $ROM"; exit 1; }
