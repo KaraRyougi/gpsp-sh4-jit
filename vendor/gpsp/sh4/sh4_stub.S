@@ -66,6 +66,23 @@
 9:
 .endm
 
+/* After a block_lookup_address_* call (host block in R0): a NULL result means the
+ * translation cache overflowed mid-translate and was flushed (translate_block
+ * returns false -> the resolver returns NULL, cpu_threaded.c:3167-3172 / 2604 /
+ * 2642). The block must be re-translated into the now-empty cache. The resolver
+ * has already committed reg[REG_PC] to the target, so "pedal out to the beginning"
+ * by branching back to lookup_pc instead of jumping to NULL (which lands on PC=0/
+ * garbage). One flush+retry always suffices: a single block fits the fresh cache.
+ * Without this, any cache overflow is a hard crash -- latent in upstream gpSP, hit
+ * here once blocks grow large enough (e.g. the native Thumb byte-LDR fast path). */
+.macro REDISPATCH_IF_NULL
+  tst     r0, r0
+  bf      7f                      /* R0 != 0: resolved host block -> jump to it */
+  bra     lookup_pc               /* R0 == 0: re-dispatch (BRA disp12 reaches) */
+  nop
+7:
+.endm
+
 /* ---- main entry: execute_arm_translate_internal(cycles, reg_ptr) ---- */
 /* R4 = cycle counter, R5 = pointer to reg[] */
 
@@ -140,12 +157,14 @@ lookup_pc:
   mov     #REG_PC, r0
   mov.l   @(r0,r14), r4
   CALL    block_lookup_address_thumb
+  REDISPATCH_IF_NULL
   jmp     @r0
   nop
 1:
   mov     #REG_PC, r0
   mov.l   @(r0,r14), r4
   CALL    block_lookup_address_arm
+  REDISPATCH_IF_NULL
   jmp     @r0
   nop
 
@@ -203,6 +222,7 @@ defsymbl(sh4_indirect_branch_arm)
   bra     return_to_main          /* single-block diff: stop after this block */
   mov     r13, r0                 /* delay slot: return remaining cycles */
 1:
+  REDISPATCH_IF_NULL
   jmp     @r0
   nop
 
@@ -215,6 +235,7 @@ defsymbl(sh4_indirect_branch_thumb)
   bra     return_to_main
   mov     r13, r0
 1:
+  REDISPATCH_IF_NULL
   jmp     @r0
   nop
 
@@ -227,6 +248,7 @@ defsymbl(sh4_indirect_branch_dual)
   bra     return_to_main
   mov     r13, r0
 1:
+  REDISPATCH_IF_NULL
   jmp     @r0
   nop
 
