@@ -45,6 +45,7 @@ cond: $(ROOT)/tests/sh4_cond_audit.c $(ROOT)/ports/fxcg100/sh4/sh4_emit_glue.h \
 
 native-ldst: $(ROOT)/tests/sh4_native_ldst_audit.c \
 	      $(ROOT)/ports/fxcg100/sh4/sh4_arm_ldst_emit.h \
+	      $(ROOT)/ports/fxcg100/sh4/sh4_arm_block_emit.h \
 	      $(ROOT)/ports/fxcg100/sh4/sh4_thumb_dp_emit.h \
 	      $(ROOT)/ports/fxcg100/sh4/sh4_emit_glue.h \
 	      $(ROOT)/ports/fxcg100/sh4/sh4_emit_core.h \

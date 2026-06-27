@@ -2,25 +2,20 @@
 #define CGBA_SH4_ARM_BLOCK_EMIT_H
 
 /*
- * Native SH-4A emission for ARM block transfer LDM/STM (cgba_sh4_arm_block), the
- * #3 remaining lever (~194k C-dispatches/window). The register list is a
- * translate-time constant, so the transfer UNROLLS into a straight-line run of
- * fast-path word accesses instead of the C helper's popcount loop + per-word
- * execute_load/store region switch.
+ * Native SH-4A emission for ARM block loads (LDM), the #3 remaining lever
+ * (~194k C-dispatches/window). The register list is a translate-time constant,
+ * so the transfer UNROLLS into a straight-line run of fast-path word reads
+ * instead of the C helper's popcount loop + per-word execute_load region switch.
  *
  * LDM (load) reads through any mapped host page (EWRAM/IWRAM/IO/VRAM/paged-ROM,
- * memory_map_read non-NULL, region != 0). STM (store) writes through the SAME
- * backing pointer but is restricted to EWRAM/IWRAM (region 2/3): those raise no
- * cpu_alert (write_memory returns CPU_ALERT_NONE) and the SH4 path tracks no SMC,
- * so an inline store there is equivalent to the C path; VRAM/IO/ROM stores have
- * side effects / are read-only and fall to C.
+ * memory_map_read non-NULL, region != 0). STM (store) routes to the C helper so
+ * stores keep execute_store_* side effects, alerts, and SMC invalidation.
  *
  * Address model (matches the oracle exactly): lowest-numbered register <-> lowest
  * address; the run is `count` contiguous ascending words from A = (base & ~3) +
  * offset, offset = IA:0 IB:+4 DB:-count*4 DA:-count*4+4. Writeback stores
- * new_base = base +/- count*4 (from the UNALIGNED base): suppressed for LDM when
- * the base is in the list, never suppressed for STM. STM stores new_base for the
- * base register when it is in the list and not the lowest, else the old reg value.
+ * new_base = base +/- count*4 (from the UNALIGNED base), suppressed for LDM when
+ * the base is in the list.
  *
  * The whole run is guarded into ONE mapped host page (single resolve covers every
  * word); a straddle / wrong-region / unmapped run falls to the C helper. Guards
@@ -28,7 +23,7 @@
  * long conditional branch over a count-sized fast path would be unsafe).
  *
  * Bails to C: r15 in the list (PC redispatch / ^ SPSR), the S bit (user-bank),
- * rn==15, empty list, STM outside EWRAM/IWRAM, any straddle/unmapped run.
+ * rn==15, empty list, all STM, any straddle/unmapped run.
  */
 
 #include "ports/fxcg100/sh4/sh4_emit_glue.h"
@@ -48,7 +43,7 @@ static inline u8 *sh4g_block_guard(u8 **tp, int slow_if_t)
   return sh4g_emit_bra_placeholder(tp);       /* BRA 0 + NOP delay -> slow      */
 }
 
-/* Native ARM LDM/STM, or 0 to fall back to C. */
+/* Native ARM LDM, or 0 to fall back to C. */
 static inline int sh4g_arm_block_native(u8 **tp, u32 opcode, u32 pc,
   int cycle_count)
 {
@@ -59,7 +54,7 @@ static inline int sh4g_arm_block_native(u8 **tp, u32 opcode, u32 pc,
   u32 pre       = (opcode >> 24) & 1;
   u32 up        = (opcode >> 23) & 1;
   u32 s_bit     = (opcode >> 22) & 1;
-  u32 count = 0, i, lowest = 16;
+  u32 count = 0, i;
   int offset_a, offset_nb, do_wb;
   u8 *guards[4]; int ng = 0;
   u8 *bra_done;
@@ -67,19 +62,16 @@ static inline int sh4g_arm_block_native(u8 **tp, u32 opcode, u32 pc,
   if (s_bit)                 return 0;         /* user-bank / SPSR restore -> C */
   if (rlist & 0x8000)        return 0;         /* PC in list -> C (redispatch)  */
   if (rn == 15)              return 0;         /* base = PC -> C */
-  /* STM writes EWRAM/IWRAM directly, bypassing the SMC tag check in
-   * execute_store_*; route block STORES through the C helper so self-modifying
-   * writes still flush the RAM cache. LDM (reads) stay native. (When an inline
-   * tag check + smc_write branch is added, the STM emission below re-enables.) */
+  /* Stores need helper-side alerts and SMC invalidation. */
   if (!is_load)              return 0;
 
   for (i = 0; i < 16; i++)
-    if (rlist & (1u << i)) { count++; if (lowest == 16) lowest = i; }
+    if (rlist & (1u << i)) count++;
   if (count == 0)            return 0;         /* empty list -> C (rare) */
 
   offset_a  = up ? (pre ? 4 : 0) : (pre ? -(int)(count * 4) : -(int)(count * 4) + 4);
   offset_nb = up ? (int)(count * 4) : -(int)(count * 4);
-  do_wb = writeback && !(is_load && (rlist & (1u << rn)));
+  do_wb = writeback && !(rlist & (1u << rn));
 
   /* base = reg[rn] in R1; A = (base & ~3) + offset_a in R5 */
   { sh4_codegen cg = sh4g_open(tp);
@@ -102,34 +94,22 @@ static inline int sh4g_arm_block_native(u8 **tp, u32 opcode, u32 pc,
     sh4g_close(tp, &cg); }
   guards[ng++] = sh4g_block_guard(tp, 0);            /* straddle (T==0) -> slow */
 
-  if (is_load) {
-    /* upper-bound guard: A < 0x10000000. memory_map_read[] only covers the GBA
-     * 0x00000000..0x0FFFFFFF space (8192 32 KB pages), so a high / open-bus base
-     * would index past the table into host memory. The single-access path guards
-     * this; the STM branch is already bounded by its A>>25==1 (EWRAM/IWRAM) check. */
-    sh4g_const(tp, 0x10000000u, SH4_REG_T2);
-    { sh4_codegen cg = sh4g_open(tp);
-      sh4_emit_cmphs(&cg, SH4_REG_T2, SH4_REG_ARG1); /* T = (A >= 0x10000000) */
-      sh4g_close(tp, &cg); }
-    guards[ng++] = sh4g_block_guard(tp, 1);          /* out of map -> slow */
+  /* upper-bound guard: A < 0x10000000. memory_map_read[] only covers the GBA
+   * 0x00000000..0x0FFFFFFF space (8192 32 KB pages), so a high / open-bus base
+   * would index past the table into host memory. */
+  sh4g_const(tp, 0x10000000u, SH4_REG_T2);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_cmphs(&cg, SH4_REG_T2, SH4_REG_ARG1); /* T = (A >= 0x10000000) */
+    sh4g_close(tp, &cg); }
+  guards[ng++] = sh4g_block_guard(tp, 1);          /* out of map -> slow */
 
-    /* region guard: A >> 24 != 0 (exclude BIOS / region 0) */
-    { sh4_codegen cg = sh4g_open(tp);
-      sh4_emit_mov_reg(&cg, SH4_REG_ARG1, SH4_REG_T2);
-      sh4_emit_shlr16(&cg, SH4_REG_T2); sh4_emit_shlr8(&cg, SH4_REG_T2);
-      sh4_emit_tst(&cg, SH4_REG_T2, SH4_REG_T2);     /* T = (region == 0) */
-      sh4g_close(tp, &cg); }
-    guards[ng++] = sh4g_block_guard(tp, 1);
-  } else {
-    /* STM region guard: (A >> 25) == 1, i.e. EWRAM (0x02) or IWRAM (0x03) only */
-    { sh4_codegen cg = sh4g_open(tp);
-      sh4_emit_mov_reg(&cg, SH4_REG_ARG1, SH4_REG_RET);
-      sh4_emit_mov_imm(&cg, -25, SH4_REG_T1);
-      sh4_emit_shld(&cg, SH4_REG_T1, SH4_REG_RET);   /* R0 = A >> 25 */
-      sh4_emit_cmpeq_imm(&cg, 1);                     /* T = (== 1) */
-      sh4g_close(tp, &cg); }
-    guards[ng++] = sh4g_block_guard(tp, 0);          /* not EWRAM/IWRAM -> slow */
-  }
+  /* region guard: A >> 24 != 0 (exclude BIOS / region 0) */
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_reg(&cg, SH4_REG_ARG1, SH4_REG_T2);
+    sh4_emit_shlr16(&cg, SH4_REG_T2); sh4_emit_shlr8(&cg, SH4_REG_T2);
+    sh4_emit_tst(&cg, SH4_REG_T2, SH4_REG_T2);     /* T = (region == 0) */
+    sh4g_close(tp, &cg); }
+  guards[ng++] = sh4g_block_guard(tp, 1);
 
   /* page = memory_map_read[A >> 15] in R3 */
   { sh4_codegen cg = sh4g_open(tp);
@@ -141,9 +121,9 @@ static inline int sh4g_arm_block_native(u8 **tp, u32 opcode, u32 pc,
   sh4g_const(tp, (u32)(uintptr_t)memory_map_read, SH4_REG_T2);
   { sh4_codegen cg = sh4g_open(tp);
     sh4_emit_mov_l_load_r0(&cg, SH4_REG_T2, SH4_REG_T2);  /* R3 = page base */
-    if (is_load) sh4_emit_tst(&cg, SH4_REG_T2, SH4_REG_T2);  /* T = (page==NULL) */
+    sh4_emit_tst(&cg, SH4_REG_T2, SH4_REG_T2);             /* T = (page==NULL) */
     sh4g_close(tp, &cg); }
-  if (is_load) guards[ng++] = sh4g_block_guard(tp, 1);  /* STM region==2/3 => mapped */
+  guards[ng++] = sh4g_block_guard(tp, 1);
 
   /* R0 = A & 0x7FFF (in-page offset of the first word) */
   { sh4_codegen cg = sh4g_open(tp);
@@ -156,26 +136,12 @@ static inline int sh4g_arm_block_native(u8 **tp, u32 opcode, u32 pc,
   { sh4_codegen cg = sh4g_open(tp);
     for (i = 0; i < 16; i++) {
       if (!(rlist & (1u << i))) continue;
-      if (is_load) {
-        sh4_emit_mov_l_load_r0(&cg, SH4_REG_T2, SH4_REG_T1);  /* R2 = page[R0] (raw BE) */
-        sh4_emit_add_imm(&cg, 4, SH4_REG_RET);
-        sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_ARG0);       /* byte-reverse to LE */
-        sh4_emit_swap_w(&cg, SH4_REG_ARG0, SH4_REG_ARG0);
-        sh4_emit_swap_b(&cg, SH4_REG_ARG0, SH4_REG_T1);
-        sh4_emit_store_greg(&cg, SH4_REG_T1, i);              /* reg[i] = value */
-      } else {
-        if (i == rn && writeback && i != lowest) {            /* base-in-list: new_base */
-          sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_T1);
-          sh4_emit_add_imm(&cg, offset_nb, SH4_REG_T1);
-        } else {
-          sh4_emit_load_greg(&cg, i, SH4_REG_T1);             /* value = reg[i] */
-        }
-        sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_ARG0);       /* host LE -> guest order */
-        sh4_emit_swap_w(&cg, SH4_REG_ARG0, SH4_REG_ARG0);
-        sh4_emit_swap_b(&cg, SH4_REG_ARG0, SH4_REG_T1);
-        sh4_emit_mov_l_store_r0(&cg, SH4_REG_T1, SH4_REG_T2); /* page[R0] = value */
-        sh4_emit_add_imm(&cg, 4, SH4_REG_RET);
-      }
+      sh4_emit_mov_l_load_r0(&cg, SH4_REG_T2, SH4_REG_T1);  /* R2 = page[R0] (raw BE) */
+      sh4_emit_add_imm(&cg, 4, SH4_REG_RET);
+      sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_ARG0);       /* byte-reverse to LE */
+      sh4_emit_swap_w(&cg, SH4_REG_ARG0, SH4_REG_ARG0);
+      sh4_emit_swap_b(&cg, SH4_REG_ARG0, SH4_REG_T1);
+      sh4_emit_store_greg(&cg, SH4_REG_T1, i);              /* reg[i] = value */
     }
     if (do_wb) {                                              /* reg[rn] = base +/- count*4 */
       sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_T1);
