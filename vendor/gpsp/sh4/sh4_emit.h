@@ -435,6 +435,7 @@ extern void *tmemst[4][16];
          block_exits[block_exit_position].branch_source,                      \
          block_exits[block_exit_position].branch_target);                     \
        generate_branch_patch_conditional(backpatch_address, translation_ptr); \
+       cycle_count += ws_cyc_nseq[((u32)(pc + 2) >> 24) & 0x0F][0];          \
        block_exit_position++; } while(0)
 
 #define thumb_swi()                                                           \

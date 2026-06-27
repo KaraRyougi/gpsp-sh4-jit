@@ -19,6 +19,7 @@
  *   - per instruction (skip_instruction 3095/3600): ws_cyc_seq[POST-pc][word?1:0]
  *   - single ld/st (862/887): + ws_cyc_nseq[data][word?1:0]
  *   - LDM/STM per reg (902/922): + ws_cyc_seq[data][1]
+ *   - Thumb conditional B, taken or not (1347): + ws_cyc_nseq[new_pc][0]
  *   - taken B/BL/BX-to-ARM (3060/3070/2140): + ws_cyc_nseq[target][word?1:0]
  *   - BX-to-Thumb (2134 goto thumb_loop): no refill, no post-pc fetch.
  *
@@ -71,7 +72,10 @@ static void reload_timing(u32 waitcnt)
 
 #define REGION(addr) (((addr) >> 24) & 0xF)
 
-enum kind { K_DP, K_LD, K_ST, K_LDM, K_STM, K_B, K_BX_ARM, K_BX_THUMB };
+enum kind {
+  K_DP, K_LD, K_ST, K_LDM, K_STM, K_B, K_BCOND_T, K_BCOND_NT,
+  K_BX_ARM, K_BX_THUMB
+};
 typedef struct {
   u32 pc; int kind; u32 data; int width; int nregs; u32 target;
 } insn;
@@ -85,7 +89,9 @@ static int interp_mb(const insn *in, int col)
   switch (in->kind) {
     case K_LD: case K_ST:   return ws_nseq[REGION(in->data)][in->width];
     case K_LDM: case K_STM: return in->nregs * ws_seq[REGION(in->data)][1];
-    case K_B: case K_BX_ARM:return ws_nseq[REGION(in->target)][in->kind==K_B?col:1];
+    case K_B: case K_BCOND_T: case K_BCOND_NT:
+      return ws_nseq[REGION(in->target)][col];
+    case K_BX_ARM:           return ws_nseq[REGION(in->target)][1];
     default:                return 0;  /* DP, BX_THUMB: none */
   }
 }
@@ -93,7 +99,7 @@ static int interp_mb(const insn *in, int col)
  * mem / sh4g_charge_mem_run / generate_branch_cycle_update / sh4g_charge_
  * indirect_refill). Equal to the oracle for correct code; `inject` reproduces a
  * historical backend bug so the audit's detection can be self-validated. */
-enum bug { BUG_NONE, BUG_B1_BLOCK_FREE, BUG_REFILL_WRONG_COL };
+enum bug { BUG_NONE, BUG_B1_BLOCK_FREE, BUG_REFILL_WRONG_COL, BUG_COND_NT_FREE };
 static enum bug g_inject;
 static int dyn_mb(const insn *in, int col)
 {
@@ -102,9 +108,17 @@ static int dyn_mb(const insn *in, int col)
     case K_LDM: case K_STM:
       if (g_inject == BUG_B1_BLOCK_FREE) return 0;   /* pre-B1: native path charged nothing */
       return in->nregs * ws_seq[REGION(in->data)][1];
-    case K_B: case K_BX_ARM:
+    case K_B:
       if (g_inject == BUG_REFILL_WRONG_COL) return ws_nseq[REGION(in->target)][0];
-      return ws_nseq[REGION(in->target)][in->kind==K_B?col:1];
+      return ws_nseq[REGION(in->target)][col];
+    case K_BCOND_T:
+      return ws_nseq[REGION(in->target)][col];
+    case K_BCOND_NT:
+      if (g_inject == BUG_COND_NT_FREE) return 0;
+      return ws_nseq[REGION(in->target)][col];
+    case K_BX_ARM:
+      if (g_inject == BUG_REFILL_WRONG_COL) return ws_nseq[REGION(in->target)][0];
+      return ws_nseq[REGION(in->target)][1];
     default:                return 0;
   }
 }
@@ -184,6 +198,13 @@ static void run_suite(void)
   check("Thumb-resident ROM blk", &(block){.thumb=1,.n=3,.dpc=0x08000600,.ins={
     {.pc=0x08000400,.kind=K_DP},{.pc=0x08000402,.kind=K_DP},
     {.pc=0x08000404,.kind=K_B,.target=0x08000600}}});
+
+  check("Thumb cond not-taken ROM refill", &(block){.thumb=1,.n=7,.dpc=0x08003044,.ins={
+    {.pc=0x08003066,.kind=K_DP}, {.pc=0x08003068,.kind=K_DP},
+    {.pc=0x0800306A,.kind=K_BCOND_NT,.target=0x0800306C},
+    {.pc=0x0800306C,.kind=K_LD,.data=0x08003074,.width=1},
+    {.pc=0x0800306E,.kind=K_DP}, {.pc=0x08003070,.kind=K_DP},
+    {.pc=0x08003072,.kind=K_B,.target=0x08003044}}});
 }
 
 /* Self-validation: inject a known historical backend bug and confirm the audit
@@ -193,17 +214,24 @@ static int self_test(void)
   int fails = 0;
   /* branch target in EWRAM ({3,6}) so a wrong bus-width column is visible
    * (in IWRAM both columns are 1 and the bug would hide). */
-  block blk = {.thumb=0,.n=2,.dpc=0x02000100,.ins={
+  block refill_blk = {.thumb=0,.n=2,.dpc=0x02000100,.ins={
     {.pc=0x03000000,.kind=K_STM,.data=0x03007F00,.nregs=6},
     {.pc=0x03000004,.kind=K_B,.target=0x02000100}}};
-  struct { enum bug b; const char *name; } cases[] = {
-    { BUG_B1_BLOCK_FREE,     "native block transfer charges no wait-states (pre-B1)" },
-    { BUG_REFILL_WRONG_COL,  "branch refill uses the wrong bus-width column" },
+  block cond_blk = {.thumb=1,.n=1,.dpc=0x0800306C,.ins={
+    {.pc=0x0800306A,.kind=K_BCOND_NT,.target=0x0800306C}}};
+  struct { enum bug b; const char *name; const block *blk; } cases[] = {
+    { BUG_B1_BLOCK_FREE,     "native block transfer charges no wait-states (pre-B1)", &refill_blk },
+    { BUG_REFILL_WRONG_COL,  "branch refill uses the wrong bus-width column", &refill_blk },
+    { BUG_COND_NT_FREE,      "not-taken Thumb conditional branch skips refill", &cond_blk },
   };
   for (unsigned i = 0; i < sizeof cases/sizeof cases[0]; i++) {
     g_inject = cases[i].b;
-    int col = 1, imb = 0, dmb = 0;
-    for (int k = 0; k < blk.n; k++) { imb += interp_mb(&blk.ins[k],col); dmb += dyn_mb(&blk.ins[k],col); }
+    const block *blk = cases[i].blk;
+    int col = fcol(blk->thumb), imb = 0, dmb = 0;
+    for (int k = 0; k < blk->n; k++) {
+      imb += interp_mb(&blk->ins[k], col);
+      dmb += dyn_mb(&blk->ins[k], col);
+    }
     int detected = (dmb - imb) != 0;
     printf("  [%s] would detect: %s\n", detected ? "OK  " : "MISS", cases[i].name);
     if (!detected) fails++;

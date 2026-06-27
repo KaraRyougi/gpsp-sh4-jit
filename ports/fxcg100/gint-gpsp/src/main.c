@@ -417,10 +417,12 @@ static void headless_log_phase(unsigned frame, const char *phase)
 
 static int headless_log_frame(unsigned frame)
 {
-	if(CGBA_GPSP_HEADLESS_LOG_EVERY == 0)
-		return frame + 1 == CGBA_GPSP_HEADLESS_FRAMES;
+#if CGBA_GPSP_HEADLESS_LOG_EVERY == 0
+	return frame + 1 == CGBA_GPSP_HEADLESS_FRAMES;
+#else
 	return (frame % (unsigned)CGBA_GPSP_HEADLESS_LOG_EVERY) == 0 ||
 		frame + 1 == CGBA_GPSP_HEADLESS_FRAMES;
+#endif
 }
 
 static int headless_a_down(unsigned frame)

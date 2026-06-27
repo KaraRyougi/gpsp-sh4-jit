@@ -57,6 +57,7 @@ static u32 oracle_h_pal, oracle_h_oam;
 /* Byte copy of the interpreter's IWRAM, so a divergence can be located to an
  * address (not just a hash mismatch). 64 KiB; in the high arena. */
 static u8 oracle_iwram[1024 * 32 * 2] CGBA_HIGH_BSS_LOCAL;
+static u16 oracle_io[512] CGBA_HIGH_BSS_LOCAL;
 
 static void capture_full(void)  { gba_save_state(snap_buf); }
 static void restore_full(void)  { gba_load_state(snap_buf); }
@@ -171,6 +172,7 @@ unsigned cgba_sh4_diff_regions(uint32_t cycles, char out[][48], unsigned max_lin
   ipc = reg[REG_PC];
   memcpy(oracle_reg, reg, sizeof oracle_reg);
   memcpy(oracle_iwram, iwram, sizeof oracle_iwram);
+  memcpy(oracle_io, io_registers, sizeof oracle_io);
   hew = fnv1a(ewram, 1024 * 256 * 2);
   hvr = fnv1a(vram, 1024 * 96);
   hio = fnv1a(io_registers, sizeof io_registers);
@@ -208,6 +210,16 @@ unsigned cgba_sh4_diff_regions(uint32_t cycles, char out[][48], unsigned max_lin
   if (cnt && n < max_lines)
     snprintf(out[n++], 48, "iw@%lX i%08lX d%08lX", (unsigned long)first,
       (unsigned long)iv, (unsigned long)dv);
+  if (fnv1a(io_registers, sizeof io_registers) != hio && n < max_lines) {
+    for (i = 0; i < sizeof oracle_io / sizeof oracle_io[0]; i++) {
+      if (oracle_io[i] != io_registers[i]) {
+        snprintf(out[n++], 48, "io@%lX i%04lX d%04lX", (unsigned long)(i * 2),
+          (unsigned long)eswap16(oracle_io[i]),
+          (unsigned long)eswap16(io_registers[i]));
+        break;
+      }
+    }
+  }
   return n;
 }
 
@@ -307,6 +319,7 @@ static u32 dyn_reg[64];
 
 extern u32 cgba_diff_stop_pc;     /* cpu.cc: execute_arm "run until reg[15]==pc" hook */
 extern int cgba_diff_stop_active;
+extern int cgba_diff_stop_skip_initial;
 extern s32 cgba_diff_stop_cycles_remaining;
 
 /* Incremental trace to the casio-emu debug-putchar port (0xb7000000), so if a
@@ -332,13 +345,15 @@ static void dbg_tag(char c, u32 v)
  * generous instruction budget is spent. Returns nonzero iff it reached
  * target_pc. Failing to reach it means the dynarec branched somewhere the
  * interpreter does not — a real control-flow divergence. */
-static int interp_run_to_pc(u32 target_pc, u32 cycles)
+static int interp_run_to_pc(u32 target_pc, u32 cycles, int skip_initial)
 {
   cgba_diff_stop_pc = target_pc;
   cgba_diff_stop_active = 1;
+  cgba_diff_stop_skip_initial = skip_initial;
   cgba_diff_stop_cycles_remaining = (s32)cycles;
   execute_arm(cycles);             /* hook returns early the instant PC == target */
   cgba_diff_stop_active = 0;
+  cgba_diff_stop_skip_initial = 0;
   return reg[REG_PC] == target_pc;
 }
 
@@ -390,7 +405,7 @@ static unsigned cgba_sh4_diff_blocks_core(unsigned max_blocks, char out[][48],
 
     /* Interpreter (oracle): rewind to S, run to the dynarec's block-end PC. */
     restore_full();
-    if (!interp_run_to_pc(dpc, 0x4000u)) {
+    if (!interp_run_to_pc(dpc, 0x4000u, dpc == pc0)) {
       if (n < max_lines)          /* dynarec went where the interpreter does not */
         snprintf(out[n++], 48, "B%u p%lX PC i%lX d%lX h%d", b,
           (unsigned long)pc0, (unsigned long)reg[REG_PC], (unsigned long)dpc,
