@@ -11,9 +11,9 @@ CFLAGS  ?= -std=c11 -Wall -Wextra
 ROOT    := ..
 BIN     := /tmp/cgba-sh4
 
-.PHONY: all smoke audit core thumb cond input cycle clean
+.PHONY: all smoke audit core thumb cond native-ldst input cycle clean
 
-all: smoke core thumb cond input cycle audit
+all: smoke core thumb cond native-ldst input cycle audit
 
 smoke: $(ROOT)/tests/sh4_codegen_smoke.c $(ROOT)/ports/fxcg100/sh4/sh4_codegen.h
 	$(CC) $(CFLAGS) -I$(ROOT) $(ROOT)/tests/sh4_codegen_smoke.c -o $(BIN)-smoke
@@ -43,6 +43,15 @@ cond: $(ROOT)/tests/sh4_cond_audit.c $(ROOT)/ports/fxcg100/sh4/sh4_emit_glue.h \
 	$(CC) $(CFLAGS) -I$(ROOT) $(ROOT)/tests/sh4_cond_audit.c -o $(BIN)-cond
 	$(BIN)-cond
 
+native-ldst: $(ROOT)/tests/sh4_native_ldst_audit.c \
+	      $(ROOT)/ports/fxcg100/sh4/sh4_arm_ldst_emit.h \
+	      $(ROOT)/ports/fxcg100/sh4/sh4_thumb_dp_emit.h \
+	      $(ROOT)/ports/fxcg100/sh4/sh4_emit_glue.h \
+	      $(ROOT)/ports/fxcg100/sh4/sh4_emit_core.h \
+	      $(ROOT)/ports/fxcg100/sh4/sh4_codegen.h
+	$(CC) $(CFLAGS) -I$(ROOT) $(ROOT)/tests/sh4_native_ldst_audit.c -o $(BIN)-native-ldst
+	$(BIN)-native-ldst
+
 # Static GBA-cycle audit: dynarec emitted charge vs interpreter formula, per
 # instruction class (host-only, no toolchain dep, no emulator).
 cycle: $(ROOT)/tests/sh4_cycle_audit.c
@@ -55,4 +64,4 @@ audit: $(ROOT)/tests/sh4_codegen_audit.c $(ROOT)/ports/fxcg100/sh4/sh4_codegen.h
 	$(BIN)-audit
 
 clean:
-	rm -f $(BIN)-smoke $(BIN)-core $(BIN)-thumb $(BIN)-cond $(BIN)-input $(BIN)-cycle $(BIN)-audit
+	rm -f $(BIN)-smoke $(BIN)-core $(BIN)-thumb $(BIN)-cond $(BIN)-native-ldst $(BIN)-input $(BIN)-cycle $(BIN)-audit
