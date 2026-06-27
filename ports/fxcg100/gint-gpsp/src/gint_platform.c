@@ -4,6 +4,7 @@
 #include <gint/display.h>
 #include <gint/drivers/r61524.h>
 #include <gint/keyboard.h>
+#include <gint/keycodes.h>
 
 #include <stdio.h>
 #include <string.h>
@@ -61,20 +62,39 @@ static void restore_full_window(void)
 	lcd_window_partial = 0;
 }
 
-static int keycode_from_cg100_matrix_code(int basic_keycode)
+static int keycode_from_cg100_skin_code(int basic_keycode)
 {
+	static const int cg100_rows_9_to_5[][6] = {
+		{ KEY_PAGEUP, KEY_NEXTTAB, KEY_UP, KEY_PREVTAB, KEY_HOME, KEY_ON },
+		{ KEY_PAGEDOWN, KEY_RIGHT, KEY_OK, KEY_LEFT, KEY_BACK, KEY_SETTINGS },
+		{ KEY_TOOLS, KEY_CATALOG, KEY_DOWN, KEY_VARS, KEY_ALPHA, KEY_SHIFT },
+		{ KEY_EXPFUN, KEY_SQUARE, KEY_POWER, KEY_SQRT, KEY_FRAC, KEY_XOT },
+		{ KEY_RIGHTP, KEY_LEFTP, KEY_TAN, KEY_COS, KEY_SIN, KEY_COMMA },
+	};
 	int row = basic_keycode % 10;
 	int col = basic_keycode / 10 - 1;
 
-	if(row < 0 || row > 9 || col < 0 || col > 6)
+	if(row < 0 || row > 9 || col < 1 || col > 6)
 		return 0;
+
+	/*
+	 * Keymaps are stored as CG100 skin positions (eg. 49 = Up,
+	 * 48 = OK, 79 = ON). gint's keyboard API expects logical keycodes on
+	 * Graph Math+, not raw fx-CG20-style matrix positions.
+	 */
+	if(row >= 5)
+		return cg100_rows_9_to_5[9 - row][col - 1];
+	if(basic_keycode == 34)
+		return KEY_ACON;
+	if(basic_keycode == 41)
+		return KEY_FORMAT;
 
 	return (row << 4) + (7 - col);
 }
 
 int fxcg100_key_down(int basic_keycode)
 {
-	int keycode = keycode_from_cg100_matrix_code(basic_keycode);
+	int keycode = keycode_from_cg100_skin_code(basic_keycode);
 
 	return keycode ? keydown(keycode) : 0;
 }
