@@ -19,6 +19,10 @@
 #define CGBA_BFILE_WRITE  ((uintptr_t)0x80333f9eu)
 #define CGBA_BFILE_CLOSE  ((uintptr_t)0x80333a4eu)
 
+#ifndef CGBA_FXCG100_STORAGE
+#define CGBA_FXCG100_STORAGE 0
+#endif
+
 typedef int (*cgba_bfile_open_t)(const uint16_t *path, int mode);
 typedef int (*cgba_bfile_size_t)(int fd);
 typedef int (*cgba_bfile_create_t)(const uint16_t *path, int type, int *size);
@@ -52,32 +56,62 @@ static const uint16_t config_path[] = {
 
 static int os_bfile_open(const uint16_t *path, int mode)
 {
+#if CGBA_FXCG100_STORAGE
   cgba_bfile_open_t fn = (cgba_bfile_open_t)CGBA_BFILE_OPEN;
   return fn(path, mode);
+#else
+  (void)path;
+  (void)mode;
+  return -1;
+#endif
 }
 
 static int os_bfile_size(int fd)
 {
+#if CGBA_FXCG100_STORAGE
   cgba_bfile_size_t fn = (cgba_bfile_size_t)CGBA_BFILE_SIZE;
   return fn(fd);
+#else
+  (void)fd;
+  return -1;
+#endif
 }
 
 static int os_bfile_create(const uint16_t *path, int type, int *size)
 {
+#if CGBA_FXCG100_STORAGE
   cgba_bfile_create_t fn = (cgba_bfile_create_t)CGBA_BFILE_CREATE;
   return fn(path, type, size);
+#else
+  (void)path;
+  (void)type;
+  (void)size;
+  return -1;
+#endif
 }
 
 static void os_bfile_remove(const uint16_t *path)
 {
+#if CGBA_FXCG100_STORAGE
   cgba_bfile_remove_t fn = (cgba_bfile_remove_t)CGBA_BFILE_REMOVE;
   fn(path);
+#else
+  (void)path;
+#endif
 }
 
 static int os_bfile_read(int fd, void *dst, int size, int offset)
 {
+#if CGBA_FXCG100_STORAGE
   cgba_bfile_read_t fn = (cgba_bfile_read_t)CGBA_BFILE_READ;
   return fn(fd, dst, size, offset);
+#else
+  (void)fd;
+  (void)dst;
+  (void)size;
+  (void)offset;
+  return -1;
+#endif
 }
 
 static int bfile_read_exact_ok(int result, int size)
@@ -88,14 +122,25 @@ static int bfile_read_exact_ok(int result, int size)
 
 static int os_bfile_write(int fd, const void *src, int size)
 {
+#if CGBA_FXCG100_STORAGE
   cgba_bfile_write_t fn = (cgba_bfile_write_t)CGBA_BFILE_WRITE;
   return fn(fd, src, size);
+#else
+  (void)fd;
+  (void)src;
+  (void)size;
+  return -1;
+#endif
 }
 
 static void os_bfile_close(int fd)
 {
+#if CGBA_FXCG100_STORAGE
   cgba_bfile_close_t fn = (cgba_bfile_close_t)CGBA_BFILE_CLOSE;
   fn(fd);
+#else
+  (void)fd;
+#endif
 }
 
 static int config_options_valid(const fxcg100_config_file *config)
