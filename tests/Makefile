@@ -11,9 +11,9 @@ CFLAGS  ?= -std=c11 -Wall -Wextra
 ROOT    := ..
 BIN     := /tmp/cgba-sh4
 
-.PHONY: all smoke audit core thumb input cycle clean
+.PHONY: all smoke audit core thumb cond input cycle clean
 
-all: smoke core thumb input cycle audit
+all: smoke core thumb cond input cycle audit
 
 smoke: $(ROOT)/tests/sh4_codegen_smoke.c $(ROOT)/ports/fxcg100/sh4/sh4_codegen.h
 	$(CC) $(CFLAGS) -I$(ROOT) $(ROOT)/tests/sh4_codegen_smoke.c -o $(BIN)-smoke
@@ -37,6 +37,12 @@ input: $(ROOT)/tests/fxcg100_input_maps_test.c \
 	$(CC) $(CFLAGS) -I$(ROOT) $(ROOT)/tests/fxcg100_input_maps_test.c -o $(BIN)-input
 	$(BIN)-input
 
+# ARM condition-code -> SH4 T-bit emission, every cond x every NZCV (host-only).
+cond: $(ROOT)/tests/sh4_cond_audit.c $(ROOT)/ports/fxcg100/sh4/sh4_emit_glue.h \
+      $(ROOT)/ports/fxcg100/sh4/sh4_emit_core.h $(ROOT)/ports/fxcg100/sh4/sh4_codegen.h
+	$(CC) $(CFLAGS) -I$(ROOT) $(ROOT)/tests/sh4_cond_audit.c -o $(BIN)-cond
+	$(BIN)-cond
+
 # Static GBA-cycle audit: dynarec emitted charge vs interpreter formula, per
 # instruction class (host-only, no toolchain dep, no emulator).
 cycle: $(ROOT)/tests/sh4_cycle_audit.c
@@ -49,4 +55,4 @@ audit: $(ROOT)/tests/sh4_codegen_audit.c $(ROOT)/ports/fxcg100/sh4/sh4_codegen.h
 	$(BIN)-audit
 
 clean:
-	rm -f $(BIN)-smoke $(BIN)-core $(BIN)-thumb $(BIN)-input $(BIN)-cycle $(BIN)-audit
+	rm -f $(BIN)-smoke $(BIN)-core $(BIN)-thumb $(BIN)-cond $(BIN)-input $(BIN)-cycle $(BIN)-audit

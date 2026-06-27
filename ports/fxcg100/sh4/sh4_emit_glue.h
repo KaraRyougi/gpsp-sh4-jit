@@ -573,21 +573,26 @@ static inline void sh4g_redispatch_if_r0_debit(u8 **tp, int cycle_count,
 
 /* ---- conditional skip (BT/BF over predicated body) ----------------------- *
  * Emit a test that leaves T = (ARM condition satisfied); the header then emits
- * BF to skip the predicated body when the condition is false. Only N(31)/Z(30)
- * are reliable in bring-up; C(29)/V(28) are not maintained yet, so the C/V and
- * compound conditions are intentionally approximated by their primary flag and
- * will be corrected once flag synthesis lands (the differential harness flags
- * them). emits to R0/R3.                                                      */
+ * BF to skip the predicated body when the condition is false. CPSR carries the
+ * full flag set in its canonical bits (N=31, Z=30, C=29, V=28; written by
+ * set_nzcv / the shifter carry-out in sh4_interp_helpers.c), so every ARM
+ * condition is evaluated exactly:
+ *
+ *   single-flag (EQ..VC): T = (CPSR[pos] == want);
+ *   compound: build a value whose sign bit (bit31) is the "positive" member of
+ *   the pair, then read it with SHLL (T = sign) or CMP/PZ (T = !sign):
+ *     HI = C & !Z     (LS = !HI)
+ *     LT = N ^ V      (GE = !LT)
+ *     LE = Z | (N^V)  (GT = !LE)
+ *
+ * Scratch: R0 (RET) accumulator, R1 (T0) holds CPSR, R2 (T1) temp.            */
 static inline void sh4g_cond_to_T(u8 **tp, unsigned cond)
 {
-  static const struct { unsigned char pos, want; } cc[14] = {
-    {30, 1}, /* EQ: Z set      */ {30, 0}, /* NE: Z clear    */
-    {29, 1}, /* CS: C set      */ {29, 0}, /* CC: C clear    */
-    {31, 1}, /* MI: N set      */ {31, 0}, /* PL: N clear    */
-    {28, 1}, /* VS: V set      */ {28, 0}, /* VC: V clear    */
-    {29, 1}, /* HI: ~C&Z aprx  */ {29, 0}, /* LS: ~C|Z aprx  */
-    {31, 1}, /* GE: N==V  aprx */ {31, 0}, /* LT: N!=V  aprx */
-    {30, 0}, /* GT: ~Z..  aprx */ {30, 1}, /* LE: Z..   aprx */
+  static const struct { unsigned char pos, want; } cc[8] = {
+    {30, 1}, /* EQ: Z set */ {30, 0}, /* NE: Z clear */
+    {29, 1}, /* CS: C set */ {29, 0}, /* CC: C clear */
+    {31, 1}, /* MI: N set */ {31, 0}, /* PL: N clear */
+    {28, 1}, /* VS: V set */ {28, 0}, /* VC: V clear */
   };
   sh4_codegen cg = sh4g_open(tp);
   unsigned cc4 = cond & 0x0F;
@@ -595,11 +600,47 @@ static inline void sh4g_cond_to_T(u8 **tp, unsigned cond)
   if (cc4 == 0x0E) { sh4_emit_sett(&cg); sh4g_close(tp, &cg); return; }   /* AL */
   if (cc4 == 0x0F) { sh4_emit_clrt(&cg); sh4g_close(tp, &cg); return; }   /* NV */
 
-  sh4_emit_load_greg(&cg, SH4_GREG_CPSR, SH4_REG_RET);          /* R0 = CPSR */
-  sh4_emit_mov_imm(&cg, -(int)cc[cc4].pos, SH4_REG_T2);         /* R3 = -pos */
-  sh4_emit_shld(&cg, SH4_REG_T2, SH4_REG_RET);                  /* R0 >>= pos */
-  sh4_emit_and_imm(&cg, 1);                                     /* R0 &= 1 (flag) */
-  sh4_emit_cmpeq_imm(&cg, cc[cc4].want);                        /* T = (flag==want) */
+  if (cc4 < 8) {                                          /* single-flag */
+    sh4_emit_load_greg(&cg, SH4_GREG_CPSR, SH4_REG_RET);         /* R0 = CPSR */
+    sh4_emit_mov_imm(&cg, -(int)cc[cc4].pos, SH4_REG_T2);        /* R3 = -pos */
+    sh4_emit_shld(&cg, SH4_REG_T2, SH4_REG_RET);                 /* R0 >>= pos */
+    sh4_emit_and_imm(&cg, 1);                                    /* R0 &= 1 */
+    sh4_emit_cmpeq_imm(&cg, cc[cc4].want);                       /* T = flag==want */
+    sh4g_close(tp, &cg);
+    return;
+  }
+
+  /* Compound: R1 = CPSR, build the pair's "positive form" into R0's sign bit. */
+  sh4_emit_load_greg(&cg, SH4_GREG_CPSR, SH4_REG_T0);            /* R1 = CPSR */
+  switch (cc4) {
+  case 0x8: /* HI */ case 0x9: /* LS */
+    sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);             /* R0 = CPSR    */
+    sh4_emit_shll2(&cg, SH4_REG_RET);                           /* R0 = C<<31.. */
+    sh4_emit_not(&cg, SH4_REG_T0, SH4_REG_T1);                  /* R2 = ~CPSR   */
+    sh4_emit_shll(&cg, SH4_REG_T1);                             /* R2 sign = !Z */
+    sh4_emit_and(&cg, SH4_REG_T1, SH4_REG_RET);                 /* R0 sign = HI */
+    break;
+  case 0xA: /* GE */ case 0xB: /* LT */
+    sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);             /* R0 = CPSR    */
+    sh4_emit_shll2(&cg, SH4_REG_RET);
+    sh4_emit_shll(&cg, SH4_REG_RET);                            /* R0 sign = V  */
+    sh4_emit_xor(&cg, SH4_REG_T0, SH4_REG_RET);                 /* R0 sign = LT */
+    break;
+  default:  /* 0xC GT / 0xD LE */
+    sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);             /* R0 = CPSR    */
+    sh4_emit_shll2(&cg, SH4_REG_RET);
+    sh4_emit_shll(&cg, SH4_REG_RET);                            /* R0 sign = V  */
+    sh4_emit_xor(&cg, SH4_REG_T0, SH4_REG_RET);                 /* R0 sign = N^V*/
+    sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_T1);              /* R2 = CPSR    */
+    sh4_emit_shll(&cg, SH4_REG_T1);                             /* R2 sign = Z  */
+    sh4_emit_or(&cg, SH4_REG_T1, SH4_REG_RET);                  /* R0 sign = LE */
+    break;
+  }
+  /* HI/LT/LE read the sign directly; LS/GE/GT take its complement. */
+  if (cc4 == 0x8 || cc4 == 0xB || cc4 == 0xD)
+    sh4_emit_shll(&cg, SH4_REG_RET);                            /* T = sign  */
+  else
+    sh4_emit_cmppz(&cg, SH4_REG_RET);                           /* T = !sign */
   sh4g_close(tp, &cg);
 }
 

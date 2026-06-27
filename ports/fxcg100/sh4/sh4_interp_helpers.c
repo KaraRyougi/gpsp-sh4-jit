@@ -111,10 +111,33 @@ u32 function_cc execute_load_u16(u32 address) { cgba_sh4_charge_mem(address, 0);
 u32 function_cc execute_load_u32(u32 address) { cgba_sh4_charge_mem(address, 1); return read_memory32(address); }
 u32 function_cc execute_load_s8(u32 address)  { cgba_sh4_charge_mem(address, 0); return read_memory8s(address); }
 u32 function_cc execute_load_s16(u32 address) { cgba_sh4_charge_mem(address, 0); return read_memory16s(address); }
-void function_cc execute_store_u8(u32 address, u32 source)  { cgba_sh4_charge_mem(address, 0); cgba_store_alert |= write_memory8(address, (u8)source); }
-void function_cc execute_store_u16(u32 address, u32 source) { cgba_sh4_charge_mem(address, 0); cgba_store_alert |= write_memory16(address, (u16)source); }
-void function_cc execute_store_u32(u32 address, u32 source) { cgba_sh4_charge_mem(address, 1); cgba_store_alert |= write_memory32(address, source); }
-void function_cc execute_store_aligned_u32(u32 address, u32 source) { cgba_sh4_charge_mem(address, 1); cgba_store_alert |= write_memory32(address, source); }
+/* Self-modifying-code detection for RAM stores. gpSP marks every byte that
+ * belongs to a translated block in a parallel "tag" mirror (IWRAM: iwram[off];
+ * EWRAM: ewram[off + 0x40000]); a nonzero tag over the written range means the
+ * guest just overwrote code, so the RAM translation cache must be dropped (done
+ * by cgba_store_alert_break on CPU_ALERT_SMC). write_memory*() returns
+ * CPU_ALERT_NONE for RAM — the native gpSP backends do this check inline, but the
+ * SH4 port stores through these C helpers, so it lives here. The tag is read
+ * byte-wise (the target faults on unaligned wide loads). Mirrors
+ * dma_write_iwram / dma_write_ewram in gba_memory.c. */
+static cpu_alert_type cgba_sh4_smc_check(u32 address, unsigned bytes)
+{
+  const u8 *tag;
+  switch (address >> 24) {
+  case 0x03: tag = iwram + (address & 0x7FFF); break;              /* 32 KB  */
+  case 0x02: tag = ewram + (address & 0x3FFFF) + 0x40000; break;   /* 256 KB */
+  default:   return CPU_ALERT_NONE;
+  }
+  u32 hit = 0;
+  for (unsigned k = 0; k < bytes; k++)
+    hit |= tag[k];
+  return hit ? CPU_ALERT_SMC : CPU_ALERT_NONE;
+}
+
+void function_cc execute_store_u8(u32 address, u32 source)  { cgba_sh4_charge_mem(address, 0); cgba_store_alert |= write_memory8(address, (u8)source);   cgba_store_alert |= cgba_sh4_smc_check(address, 1); }
+void function_cc execute_store_u16(u32 address, u32 source) { cgba_sh4_charge_mem(address, 0); cgba_store_alert |= write_memory16(address, (u16)source); cgba_store_alert |= cgba_sh4_smc_check(address, 2); }
+void function_cc execute_store_u32(u32 address, u32 source) { cgba_sh4_charge_mem(address, 1); cgba_store_alert |= write_memory32(address, source);      cgba_store_alert |= cgba_sh4_smc_check(address, 4); }
+void function_cc execute_store_aligned_u32(u32 address, u32 source) { cgba_sh4_charge_mem(address, 1); cgba_store_alert |= write_memory32(address, source); cgba_store_alert |= cgba_sh4_smc_check(address, 4); }
 
 /* Consume any pending store alert. If set, point PC at the next instruction,
  * flush the RAM code cache on SMC, and return 1 so the emitter glue redispatches
@@ -791,14 +814,13 @@ int cgba_sh4_arm_psr(u32 opcode, u32 pc)
   return 0;
 }
 
-void cgba_sh4_arm_swap(u32 opcode, u32 pc)
+int cgba_sh4_arm_swap(u32 opcode, u32 pc)
 {
   u32 rn = (opcode >> 16) & 0xF;
   u32 rd = (opcode >> 12) & 0xF;
   u32 rm = opcode & 0xF;
   u32 is_byte = (opcode >> 22) & 1;
   u32 addr = reg[rn];
-  (void)pc;
   cgba_sh4_reset_mem_cycles(0);
   if (is_byte) {
     u32 tmp = execute_load_u8(addr);
@@ -809,6 +831,9 @@ void cgba_sh4_arm_swap(u32 opcode, u32 pc)
     execute_store_u32(addr, reg[rm]);
     reg[rd] = tmp;
   }
+  /* The store may have hit I/O (IRQ/HALT) or code (SMC); drain it so the block
+   * exits with PC at the next instruction, like the normal store helpers. */
+  return cgba_store_alert_break(pc + 4);
 }
 
 /* SWI 0x06/0x07 divide HLE (operands in r0/r1). */
