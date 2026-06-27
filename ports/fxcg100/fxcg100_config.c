@@ -4,6 +4,14 @@
 #include <stdint.h>
 #include <string.h>
 
+#ifndef CGBA_FXCG100_STORAGE
+#define CGBA_FXCG100_STORAGE 0
+#endif
+
+#if CGBA_FXCG100_STORAGE
+#include <gint/gint.h>
+#endif
+
 #define CGBA_CONFIG_MAGIC 0x43474241u
 #define CGBA_CONFIG_VERSION 2u
 
@@ -18,18 +26,6 @@
 #define CGBA_BFILE_READ   ((uintptr_t)0x80333dc2u)
 #define CGBA_BFILE_WRITE  ((uintptr_t)0x80333f9eu)
 #define CGBA_BFILE_CLOSE  ((uintptr_t)0x80333a4eu)
-
-#ifndef CGBA_FXCG100_STORAGE
-#define CGBA_FXCG100_STORAGE 0
-#endif
-
-typedef int (*cgba_bfile_open_t)(const uint16_t *path, int mode);
-typedef int (*cgba_bfile_size_t)(int fd);
-typedef int (*cgba_bfile_create_t)(const uint16_t *path, int type, int *size);
-typedef int (*cgba_bfile_remove_t)(const uint16_t *path);
-typedef int (*cgba_bfile_read_t)(int fd, void *dst, int size, int offset);
-typedef int (*cgba_bfile_write_t)(int fd, const void *src, int size);
-typedef int (*cgba_bfile_close_t)(int fd);
 
 typedef struct fxcg100_config_file {
   uint32_t magic;
@@ -57,8 +53,7 @@ static const uint16_t config_path[] = {
 static int os_bfile_open(const uint16_t *path, int mode)
 {
 #if CGBA_FXCG100_STORAGE
-  cgba_bfile_open_t fn = (cgba_bfile_open_t)CGBA_BFILE_OPEN;
-  return fn(path, mode);
+  return gint_world_switch(GINT_CALL((void *)CGBA_BFILE_OPEN, path, mode));
 #else
   (void)path;
   (void)mode;
@@ -69,8 +64,7 @@ static int os_bfile_open(const uint16_t *path, int mode)
 static int os_bfile_size(int fd)
 {
 #if CGBA_FXCG100_STORAGE
-  cgba_bfile_size_t fn = (cgba_bfile_size_t)CGBA_BFILE_SIZE;
-  return fn(fd);
+  return gint_world_switch(GINT_CALL((void *)CGBA_BFILE_SIZE, fd));
 #else
   (void)fd;
   return -1;
@@ -80,8 +74,8 @@ static int os_bfile_size(int fd)
 static int os_bfile_create(const uint16_t *path, int type, int *size)
 {
 #if CGBA_FXCG100_STORAGE
-  cgba_bfile_create_t fn = (cgba_bfile_create_t)CGBA_BFILE_CREATE;
-  return fn(path, type, size);
+  return gint_world_switch(GINT_CALL((void *)CGBA_BFILE_CREATE,
+                                     path, type, size));
 #else
   (void)path;
   (void)type;
@@ -93,8 +87,7 @@ static int os_bfile_create(const uint16_t *path, int type, int *size)
 static void os_bfile_remove(const uint16_t *path)
 {
 #if CGBA_FXCG100_STORAGE
-  cgba_bfile_remove_t fn = (cgba_bfile_remove_t)CGBA_BFILE_REMOVE;
-  fn(path);
+  (void)gint_world_switch(GINT_CALL((void *)CGBA_BFILE_REMOVE, path));
 #else
   (void)path;
 #endif
@@ -103,8 +96,8 @@ static void os_bfile_remove(const uint16_t *path)
 static int os_bfile_read(int fd, void *dst, int size, int offset)
 {
 #if CGBA_FXCG100_STORAGE
-  cgba_bfile_read_t fn = (cgba_bfile_read_t)CGBA_BFILE_READ;
-  return fn(fd, dst, size, offset);
+  return gint_world_switch(GINT_CALL((void *)CGBA_BFILE_READ,
+                                     fd, dst, size, offset));
 #else
   (void)fd;
   (void)dst;
@@ -123,8 +116,8 @@ static int bfile_read_exact_ok(int result, int size)
 static int os_bfile_write(int fd, const void *src, int size)
 {
 #if CGBA_FXCG100_STORAGE
-  cgba_bfile_write_t fn = (cgba_bfile_write_t)CGBA_BFILE_WRITE;
-  return fn(fd, src, size);
+  return gint_world_switch(GINT_CALL((void *)CGBA_BFILE_WRITE,
+                                     fd, src, size));
 #else
   (void)fd;
   (void)src;
@@ -136,8 +129,7 @@ static int os_bfile_write(int fd, const void *src, int size)
 static void os_bfile_close(int fd)
 {
 #if CGBA_FXCG100_STORAGE
-  cgba_bfile_close_t fn = (cgba_bfile_close_t)CGBA_BFILE_CLOSE;
-  fn(fd);
+  (void)gint_world_switch(GINT_CALL((void *)CGBA_BFILE_CLOSE, fd));
 #else
   (void)fd;
 #endif

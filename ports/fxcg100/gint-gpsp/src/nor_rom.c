@@ -1,6 +1,7 @@
 #include "nor_rom.h"
 
 #include <gint/bfile.h>
+#include <gint/gint.h>
 
 #include <stdio.h>
 #include <string.h>
@@ -13,18 +14,6 @@
 #define CGBA_NOR_BASE_P2 ((uintptr_t)0xa0b00000u)
 #define CGBA_NOR_END_P1  ((uintptr_t)0x81500000u)
 #define CGBA_NOR_END_P2  ((uintptr_t)0xa1500000u)
-
-typedef int (*cgba_bfile_open_t)(const uint16_t *path, int mode);
-typedef int (*cgba_bfile_size_t)(int fd);
-typedef int (*cgba_bfile_read_t)(int fd, void *dst, int size, int offset);
-typedef int (*cgba_bfile_close_t)(int fd);
-typedef int (*cgba_bfile_get_block_address_t)(int fd, int offset,
-	unsigned char **address);
-typedef int (*cgba_bfile_find_first_t)(const uint16_t *pattern, int *handle,
-	uint16_t *found, struct BFile_FileInfo *fileinfo);
-typedef int (*cgba_bfile_find_next_t)(int handle, uint16_t *found,
-	struct BFile_FileInfo *fileinfo);
-typedef int (*cgba_bfile_find_close_t)(int handle);
 
 #define CGBA_BFILE_OPEN              ((uintptr_t)0x803338d0u)
 #define CGBA_BFILE_SIZE              ((uintptr_t)0x80333b04u)
@@ -84,8 +73,8 @@ static const uint16_t cgba_storage_fallback_rom[] = {
 static int os_bfile_open(const uint16_t *path, int mode)
 {
 #if CGBA_FXCG100_STORAGE
-	cgba_bfile_open_t fn = (cgba_bfile_open_t)CGBA_BFILE_OPEN;
-	return fn(path, mode);
+	return gint_world_switch(GINT_CALL((void *)CGBA_BFILE_OPEN,
+		path, mode));
 #else
 	(void)path;
 	(void)mode;
@@ -96,8 +85,7 @@ static int os_bfile_open(const uint16_t *path, int mode)
 static int os_bfile_size(int fd)
 {
 #if CGBA_FXCG100_STORAGE
-	cgba_bfile_size_t fn = (cgba_bfile_size_t)CGBA_BFILE_SIZE;
-	return fn(fd);
+	return gint_world_switch(GINT_CALL((void *)CGBA_BFILE_SIZE, fd));
 #else
 	(void)fd;
 	return -1;
@@ -107,8 +95,8 @@ static int os_bfile_size(int fd)
 static int os_bfile_read(int fd, void *dst, int size, int offset)
 {
 #if CGBA_FXCG100_STORAGE
-	cgba_bfile_read_t fn = (cgba_bfile_read_t)CGBA_BFILE_READ;
-	return fn(fd, dst, size, offset);
+	return gint_world_switch(GINT_CALL((void *)CGBA_BFILE_READ,
+		fd, dst, size, offset));
 #else
 	(void)fd;
 	(void)dst;
@@ -127,8 +115,7 @@ static int bfile_read_exact_ok(int result, int size)
 static void os_bfile_close(int fd)
 {
 #if CGBA_FXCG100_STORAGE
-	cgba_bfile_close_t fn = (cgba_bfile_close_t)CGBA_BFILE_CLOSE;
-	fn(fd);
+	(void)gint_world_switch(GINT_CALL((void *)CGBA_BFILE_CLOSE, fd));
 #else
 	(void)fd;
 #endif
@@ -138,9 +125,9 @@ static int os_bfile_get_block_address(int fd, int offset,
 	unsigned char **address)
 {
 #if CGBA_FXCG100_STORAGE
-	cgba_bfile_get_block_address_t fn =
-		(cgba_bfile_get_block_address_t)CGBA_BFILE_GET_BLOCK_ADDRESS;
-	return fn(fd, offset, address);
+	return gint_world_switch(GINT_CALL(
+		(void *)CGBA_BFILE_GET_BLOCK_ADDRESS,
+		fd, offset, (void *)address));
 #else
 	(void)fd;
 	(void)offset;
@@ -153,9 +140,8 @@ static int os_bfile_find_first(const uint16_t *pattern, int *handle,
 	uint16_t *found, struct BFile_FileInfo *fileinfo)
 {
 #if CGBA_FXCG100_STORAGE
-	cgba_bfile_find_first_t fn =
-		(cgba_bfile_find_first_t)CGBA_BFILE_FIND_FIRST;
-	return fn(pattern, handle, found, fileinfo);
+	return gint_world_switch(GINT_CALL((void *)CGBA_BFILE_FIND_FIRST,
+		pattern, handle, found, (void *)fileinfo));
 #else
 	(void)pattern;
 	(void)handle;
@@ -169,9 +155,8 @@ static int os_bfile_find_next(int handle, uint16_t *found,
 	struct BFile_FileInfo *fileinfo)
 {
 #if CGBA_FXCG100_STORAGE
-	cgba_bfile_find_next_t fn =
-		(cgba_bfile_find_next_t)CGBA_BFILE_FIND_NEXT;
-	return fn(handle, found, fileinfo);
+	return gint_world_switch(GINT_CALL((void *)CGBA_BFILE_FIND_NEXT,
+		handle, found, (void *)fileinfo));
 #else
 	(void)handle;
 	(void)found;
@@ -183,9 +168,8 @@ static int os_bfile_find_next(int handle, uint16_t *found,
 static void os_bfile_find_close(int handle)
 {
 #if CGBA_FXCG100_STORAGE
-	cgba_bfile_find_close_t fn =
-		(cgba_bfile_find_close_t)CGBA_BFILE_FIND_CLOSE;
-	fn(handle);
+	(void)gint_world_switch(GINT_CALL(
+		(void *)CGBA_BFILE_FIND_CLOSE, handle));
 #else
 	(void)handle;
 #endif
