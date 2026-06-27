@@ -44,9 +44,21 @@ The guest jumps to **`0x0` (reset)** from Thumb game code at **`0x08002248`**
 
 `lr` at the jump is `0x08001873` (not 0), so it is NOT `bx lr`; a **stack slot
 that should hold a return/code address is 0**. The `pop {r0}; bx r0` is a
-function epilogue returning to a pushed address (likely the saved LR), so either
-that LR was 0 at the matching `push` (a call set LR=0, or the fn was entered by
-a branch leaving LR stale) or a push/store wrote 0 onto the stack.
+function epilogue returning to a pushed address (saved LR or a continuation).
+
+Adding SP + stack words to the tracer:
+
+```
+@@WJ 00000000 lr08001873 sp03007E24 [00000000,00000000]
+```
+
+**SP (`0x03007E24`) is sane** (in the IWRAM stack), and the popped word
+`[sp-4] == 0`. So it is the **stored value** that is 0, NOT the stack pointer —
+this is *not* a PUSH/POP SP-writeback miscalculation (which the register diff
+would catch as an r13 divergence anyway). A code pointer (the saved LR, or a
+function-pointer/continuation the caller passed in r0) was written to the stack
+as 0 — i.e. a `push`/`str` stored 0, or the source register was already 0 when
+pushed (a load/computation that should yield a code address produced 0).
 
 ### Ruled out
 
