@@ -39,6 +39,12 @@ void reset_gba(void);                      /* main.c */
 extern int cgba_dynarec_single_block;      /* sh4_interp_helpers.c / sh4_stub.S */
 extern u32 execute_cycles;                 /* gpSP per-frame cycle budget (main.c) */
 extern u32 skip_next_frame;                /* gpSP: 1 = skip the renderer */
+#if defined(CGBA_GPSP_HEADLESS_TEST)
+extern int cgba_sh4_trace_update_gba;      /* main.c headless scheduler trace */
+extern int cgba_sh4_trace_update_tag;
+extern int cgba_sh4_trace_update_count;
+extern int cgba_sh4_trace_update_limit;
+#endif
 
 #define CGBA_HIGH_BSS_LOCAL __attribute__((section(".cgba.highbss"), aligned(32)))
 
@@ -62,6 +68,25 @@ static u16 oracle_io[512] CGBA_HIGH_BSS_LOCAL;
 static void capture_full(void)  { gba_save_state(snap_buf); }
 static void restore_full(void)  { gba_load_state(snap_buf); }
 
+static void trace_update_begin(char tag)
+{
+#if defined(CGBA_GPSP_HEADLESS_TEST)
+  cgba_sh4_trace_update_tag = tag;
+  cgba_sh4_trace_update_count = 0;
+  cgba_sh4_trace_update_limit = 96;
+  cgba_sh4_trace_update_gba = 1;
+#else
+  (void)tag;
+#endif
+}
+
+static void trace_update_end(void)
+{
+#if defined(CGBA_GPSP_HEADLESS_TEST)
+  cgba_sh4_trace_update_gba = 0;
+#endif
+}
+
 static u32 fnv1a(const void *p, u32 n)
 {
   const u8 *b = (const u8 *)p;
@@ -82,7 +107,9 @@ int cgba_sh4_diff_run(uint32_t cycles, cgba_diff_result *out)
   capture_full();
 
   /* 2. reference run: interpreter -> oracle reg[] + region hashes */
+  trace_update_begin('I');
   execute_arm(cycles);
+  trace_update_end();
   out->interp_pc = reg[REG_PC];
   memcpy(oracle_reg, reg, sizeof oracle_reg);
   oracle_h_iwram = fnv1a(iwram, 1024 * 32 * 2);
@@ -95,7 +122,9 @@ int cgba_sh4_diff_run(uint32_t cycles, cgba_diff_result *out)
   /* 3. rewind and run the dynarec from the identical starting state */
   restore_full();
   flush_dynarec_caches();
+  trace_update_begin('D');
   execute_arm_translate(cycles);
+  trace_update_end();
   out->dynarec_pc = reg[REG_PC];
 
   /* 4. compare the register file first (most actionable) */
@@ -168,7 +197,9 @@ unsigned cgba_sh4_diff_regions(uint32_t cycles, char out[][48], unsigned max_lin
   int rdiff = -1;
 
   capture_full();
+  trace_update_begin('I');
   execute_arm(cycles);
+  trace_update_end();
   ipc = reg[REG_PC];
   memcpy(oracle_reg, reg, sizeof oracle_reg);
   memcpy(oracle_iwram, iwram, sizeof oracle_iwram);
@@ -181,7 +212,9 @@ unsigned cgba_sh4_diff_regions(uint32_t cycles, char out[][48], unsigned max_lin
 
   restore_full();
   flush_dynarec_caches();
+  trace_update_begin('D');
   execute_arm_translate(cycles);
+  trace_update_end();
   dpc = reg[REG_PC];
 
   for (i = 0; i < 16; i++)

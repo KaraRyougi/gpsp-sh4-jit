@@ -8,12 +8,10 @@
  *     / refill charges. This is the fxcg100 dynarec's own accounting and MUST be
  *     zero; a nonzero EMIT gap fails the audit.
  *   - FETCH gap (TOLERATED): the dynarec charges each instruction's fetch from
- *     def_seq_cycles[OWN-pc] (arm_base_cycles, cpu_threaded.c:2793 -- GENERIC
- *     gpSP, every backend) while the interpreter uses the live ws_cyc_seq[POST-pc]
- *     (cpu.cc:3095). They differ for ROM/gamepak once a game speeds up WAITCNT,
- *     and at region boundaries. This divergence is INHERENT to stock gpSP's
- *     dynarec (which boots games anyway), so it is reported but not a failure --
- *     it means "bit-exact vs the interpreter" is a stricter bar than "boots".
+ *     ws_cyc_seq[OWN-pc] while the interpreter uses ws_cyc_seq[POST-pc]
+ *     (cpu.cc:3095). They can still differ at region boundaries or for indirect
+ *     branches whose target fetch is attributed to the next block, but ordinary
+ *     ROM/gamepak fetches now track the game's live WAITCNT-derived timings.
  *
  * Interpreter (oracle), vendor/gpsp/cpu.cc:
  *   - per instruction (skip_instruction 3095/3600): ws_cyc_seq[POST-pc][word?1:0]
@@ -24,12 +22,14 @@
  *   - BX-to-Thumb (2134 goto thumb_loop): no refill, no post-pc fetch.
  *
  * Dynarec, vendor/gpsp/cpu_threaded.c + vendor/gpsp/sh4/sh4_emit.h + the helpers:
- *   - per instruction: def_seq_cycles[OWN-pc][word?1:0]
+ *   - per instruction: ws_cyc_seq[OWN-pc][word?1:0]
  *   - memory (cgba_sh4_charge_mem, sh4_interp_helpers.c:100; native
  *     sh4g_charge_mem_run): ws_cyc[region][size_index], seq for block / nseq for
  *     single -- mirrors the interpreter.
  *   - taken refill (generate_branch_cycle_update sh4_emit.h:173): ws_cyc_nseq
- *     [target][word?1:0]; BX via sh4g_charge_indirect_refill (ARM target only).
+ *     [target][word?1:0]; an exhausted internal-branch gate also charges the
+ *     target sequential fetch before update_gba; BX via sh4g_charge_indirect_
+ *     refill (ARM target only).
  */
 #include <stdio.h>
 #include <stdint.h>
@@ -47,12 +47,6 @@ static u8 ws_seq[16][2] = {
 static u8 ws_nseq[16][2] = {
   {1,1},{1,1},{3,6},{1,1},{1,1},{1,2},{1,2},{1,2},
   {0,0},{0,0},{0,0},{0,0},{0,0},{0,0},{1,1},{1,1},
-};
-/* The DEFAULT (baked-at-translate) fetch table the dynarec uses, == ws_cyc at
- * WAITCNT=0 (the slowest gamepak timing). Never tracks a sped-up WAITCNT. */
-static const u8 def_seq[16][2] = {
-  {1,1},{1,1},{3,6},{1,1},{1,1},{1,2},{1,2},{1,2},
-  {3,6},{3,6},{5,9},{5,9},{9,17},{9,17},{1,1},{1,1},
 };
 static const u8 ws012_nonseq[] = {4,3,2,8};
 static const u8 ws0_seq[] = {2,1}, ws1_seq[] = {4,1}, ws2_seq[] = {8,1};
@@ -99,7 +93,13 @@ static int interp_mb(const insn *in, int col)
  * mem / sh4g_charge_mem_run / generate_branch_cycle_update / sh4g_charge_
  * indirect_refill). Equal to the oracle for correct code; `inject` reproduces a
  * historical backend bug so the audit's detection can be self-validated. */
-enum bug { BUG_NONE, BUG_B1_BLOCK_FREE, BUG_REFILL_WRONG_COL, BUG_COND_NT_FREE };
+enum bug {
+  BUG_NONE,
+  BUG_B1_BLOCK_FREE,
+  BUG_REFILL_WRONG_COL,
+  BUG_COND_NT_FREE,
+  BUG_GATE_FETCH_FREE
+};
 static enum bug g_inject;
 static int dyn_mb(const insn *in, int col)
 {
@@ -122,6 +122,7 @@ static int dyn_mb(const insn *in, int col)
     default:                return 0;
   }
 }
+
 /* interpreter fetch model: POST-pc region, live ws_cyc_seq; BX->Thumb takes none */
 static int interp_fetch(const block *b, int i, int col)
 {
@@ -130,15 +131,30 @@ static int interp_fetch(const block *b, int i, int col)
   u32 next = (i+1 < b->n) ? b->ins[i+1].pc : b->dpc;
   return ws_seq[REGION(next)][col];
 }
-/* dynarec fetch model: OWN-pc region, baked def_seq; BX cancels its own fetch */
+/* dynarec fetch model: OWN-pc region, live ws_cyc_seq; BX cancels its own fetch */
 static int dyn_fetch(const block *b, int i, int col)
 {
   const insn *in = &b->ins[i];
   if (in->kind == K_BX_ARM || in->kind == K_BX_THUMB) return 0;
-  return def_seq[REGION(in->pc)][col];
+  return ws_seq[REGION(in->pc)][col];
 }
 
 static int n_pass, n_real, scenario_waitcnt;
+
+static void check_gate(const char *name, u32 target, int col)
+{
+  int interp = ws_nseq[REGION(target)][col] + ws_seq[REGION(target)][col];
+  int dyn = ws_nseq[REGION(target)][col];
+  if (g_inject != BUG_GATE_FETCH_FREE)
+    dyn += ws_seq[REGION(target)][col];
+
+  int emit_gap = dyn - interp;
+  if (emit_gap) n_real++; else n_pass++;
+  printf("  [%-9s] %-34s interp=%-3d dynarec=%-3d  fetch_gap=%+d  emit_gap=%+d%s\n",
+         emit_gap ? "REAL-BUG" : "ok", name, interp, dyn, 0, emit_gap,
+         emit_gap ? "  <== backend bug" : "");
+}
+
 static void check(const char *name, const block *b)
 {
   int col = fcol(b->thumb);
@@ -205,6 +221,9 @@ static void run_suite(void)
     {.pc=0x0800306C,.kind=K_LD,.data=0x08003074,.width=1},
     {.pc=0x0800306E,.kind=K_DP}, {.pc=0x08003070,.kind=K_DP},
     {.pc=0x08003072,.kind=K_B,.target=0x08003044}}});
+
+  check_gate("Thumb loop gate fetch", 0x08004C76, 0);
+  check_gate("ARM loop gate fetch",   0x03000100, 1);
 }
 
 /* Self-validation: inject a known historical backend bug and confirm the audit
@@ -219,18 +238,27 @@ static int self_test(void)
     {.pc=0x03000004,.kind=K_B,.target=0x02000100}}};
   block cond_blk = {.thumb=1,.n=1,.dpc=0x0800306C,.ins={
     {.pc=0x0800306A,.kind=K_BCOND_NT,.target=0x0800306C}}};
+  block gate_blk = {.thumb=1,.n=1,.dpc=0x08004C76,.ins={
+    {.pc=0x08004C82,.kind=K_BCOND_T,.target=0x08004C76}}};
   struct { enum bug b; const char *name; const block *blk; } cases[] = {
     { BUG_B1_BLOCK_FREE,     "native block transfer charges no wait-states (pre-B1)", &refill_blk },
     { BUG_REFILL_WRONG_COL,  "branch refill uses the wrong bus-width column", &refill_blk },
     { BUG_COND_NT_FREE,      "not-taken Thumb conditional branch skips refill", &cond_blk },
+    { BUG_GATE_FETCH_FREE,   "exhausted loop gate skips target fetch", &gate_blk },
   };
   for (unsigned i = 0; i < sizeof cases/sizeof cases[0]; i++) {
     g_inject = cases[i].b;
     const block *blk = cases[i].blk;
     int col = fcol(blk->thumb), imb = 0, dmb = 0;
-    for (int k = 0; k < blk->n; k++) {
-      imb += interp_mb(&blk->ins[k], col);
-      dmb += dyn_mb(&blk->ins[k], col);
+    if (cases[i].b == BUG_GATE_FETCH_FREE) {
+      imb = ws_nseq[REGION(blk->ins[0].target)][col] +
+            ws_seq[REGION(blk->ins[0].target)][col];
+      dmb = ws_nseq[REGION(blk->ins[0].target)][col];
+    } else {
+      for (int k = 0; k < blk->n; k++) {
+        imb += interp_mb(&blk->ins[k], col);
+        dmb += dyn_mb(&blk->ins[k], col);
+      }
     }
     int detected = (dmb - imb) != 0;
     printf("  [%s] would detect: %s\n", detected ? "OK  " : "MISS", cases[i].name);
@@ -244,10 +272,8 @@ int main(void)
 {
   printf("== SH4 dynarec static cycle audit ==\n");
   printf("REAL-BUG = SH4 backend mem/branch mis-charge (must be zero).\n"
-         "tolerated = gpSP-generic def_seq[own-pc] vs live ws_cyc[post-pc] fetch\n"
-         "model -- also present in stock gpSP's dynarec, which boots games anyway,\n"
-         "so this is NOT a bug: it means \"bit-exact vs the interpreter\" is a\n"
-         "stricter bar than \"boots correctly\".\n");
+         "tolerated = live ws_cyc[own-pc] vs live ws_cyc[post-pc] fetch model,\n"
+         "mainly at region crossings or indirect-branch block boundaries.\n");
 
   scenario_waitcnt = 0x0000; reload_timing(scenario_waitcnt); run_suite();
   scenario_waitcnt = 0x4014; reload_timing(scenario_waitcnt); run_suite();  /* fast WS0 */

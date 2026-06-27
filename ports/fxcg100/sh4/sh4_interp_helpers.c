@@ -37,7 +37,7 @@ static void sh4_headless_hex32(u32 v)
     sh4_headless_putc(hex[(v >> (i * 4)) & 0x0F]);
 }
 
-static void sh4_headless_trace_ldst(u32 pc, u32 opcode)
+static void sh4_headless_trace_op(char tag, u32 pc, u32 opcode)
 {
   static u32 count;
   if ((u32)CGBA_GPSP_HEADLESS_TRACE_PC != 0xffffffffu &&
@@ -47,7 +47,7 @@ static void sh4_headless_trace_ldst(u32 pc, u32 opcode)
   if ((count & (u32)CGBA_GPSP_HEADLESS_TRACE_MASK) != 0)
     return;
 
-  sh4_headless_puts("T");
+  sh4_headless_putc(tag);
   sh4_headless_hex32(count);
   sh4_headless_puts(" p");
   sh4_headless_hex32(pc);
@@ -61,13 +61,18 @@ static void sh4_headless_trace_ldst(u32 pc, u32 opcode)
   sh4_headless_hex32(reg[4]);
   sh4_headless_puts(" r5");
   sh4_headless_hex32(reg[5]);
+  sh4_headless_puts(" r9");
+  sh4_headless_hex32(reg[9]);
+  sh4_headless_puts(" cpsr");
+  sh4_headless_hex32(reg[REG_CPSR]);
   sh4_headless_puts(" pc");
   sh4_headless_hex32(reg[REG_PC]);
   sh4_headless_putc('\n');
 }
 #else
-static void sh4_headless_trace_ldst(u32 pc, u32 opcode)
+static void sh4_headless_trace_op(char tag, u32 pc, u32 opcode)
 {
+  (void)tag;
   (void)pc;
   (void)opcode;
 }
@@ -298,7 +303,7 @@ int cgba_sh4_thumb_ldst(u32 opcode, u32 pc)
 {
   cgba_sh4_reset_mem_cycles(0);
   cgba_sh4_thumb_ldst_do(opcode, pc);
-  sh4_headless_trace_ldst(pc, opcode);
+  sh4_headless_trace_op('L', pc, opcode);
   return cgba_store_alert_break(pc + 2);
 }
 
@@ -483,10 +488,19 @@ int cgba_sh4_thumb_dp(u32 opcode, u32 pc)
     u32 a = (rd == 15) ? (pc + 4) : reg[rd];          /* Thumb R15 reads PC+4 */
     u32 b = (rs == 15) ? (pc + 4) : reg[rs];
     u32 res;
-    if (op == 1) { do_addc(a, ~b, 1, 1); return 0; }  /* CMP sets flags only */
+    if (op == 1) {                                    /* CMP sets flags only */
+      do_addc(a, ~b, 1, 1);
+      sh4_headless_trace_op('D', pc, opcode);
+      return 0;
+    }
     res = (op == 0) ? (a + b) : b;                     /* ADD / MOV: no flags */
-    if (rd == 15) { reg[REG_PC] = res & ~1u; return 1; }
+    if (rd == 15) {
+      reg[REG_PC] = res & ~1u;
+      sh4_headless_trace_op('D', pc, opcode);
+      return 1;
+    }
     reg[rd] = res;
+    sh4_headless_trace_op('D', pc, opcode);
     return 0;
   }
   return 0;

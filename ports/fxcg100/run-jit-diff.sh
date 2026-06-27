@@ -25,6 +25,10 @@
 #     DIFF_FRAME(120) DIFF_BLOCKS(256)        # in-emu lockstep block diff
 #     WINDOW_DIFF_FRAME(-1)                   # preserving one-frame diff
 #     THUMB_LDST_NATIVE(ON)                   # toggle native Thumb byte LDR fast path
+#     EXACT_CYCLES(ON)                        # harness-only Thumb instruction
+#                                                boundary checks for cycle diffing
+#     TRACE_PC(0) TRACE_MASK(4095) TRACE_JIT(0)
+#                                                targeted helper/JIT debug trace
 #     SECS_INTERP(240) SECS_JIT(240) SECS_DIFF(SECS_INTERP)
 #                                                wall-clock caps per run
 #     CASIO_EMU(~/Dev/casio-emu)              # uses build-hle/calcemu
@@ -48,6 +52,10 @@ SHIFT_PRESS="${SHIFT_PRESS:-${A_PRESS:-2}}"
 DIFF_FRAME="${DIFF_FRAME:-120}";    DIFF_BLOCKS="${DIFF_BLOCKS:-256}"
 WINDOW_DIFF_FRAME="${WINDOW_DIFF_FRAME:--1}"
 THUMB_LDST_NATIVE="${THUMB_LDST_NATIVE:-ON}"
+EXACT_CYCLES="${EXACT_CYCLES:-ON}"
+TRACE_PC="${TRACE_PC:-0}"
+TRACE_MASK="${TRACE_MASK:-4095}"
+TRACE_JIT="${TRACE_JIT:-0}"
 SECS_INTERP="${SECS_INTERP:-240}";  SECS_JIT="${SECS_JIT:-240}"
 SECS_DIFF="${SECS_DIFF:-$SECS_INTERP}"
 
@@ -66,6 +74,7 @@ cfg() { # build_dir dynarec(0|1) [extra diff args...]
     -DFXSDK_CMAKE_MODULE_PATH="$FXSDK_PREFIX/lib/cmake/fxsdk" \
     -DCGBA_DYNAREC=ON -DCGBA_GPSP_HEADLESS_TEST=ON \
     -DCGBA_SH4_THUMB_LDST_NATIVE="$THUMB_LDST_NATIVE" \
+    -DCGBA_SH4_EXACT_CYCLE_BOUNDARIES="$EXACT_CYCLES" \
     -DCGBA_GPSP_HEADLESS_FRAMES="$FRAMES" \
     -DCGBA_GPSP_HEADLESS_STATE_EVERY="$STATE_EVERY" \
     -DCGBA_GPSP_HEADLESS_LOG_EVERY=0 \
@@ -79,6 +88,9 @@ cfg() { # build_dir dynarec(0|1) [extra diff args...]
     -DCGBA_GPSP_HEADLESS_DIFF_FRAME=-1 \
     -DCGBA_GPSP_HEADLESS_DIFF_BLOCKS=0 \
     -DCGBA_GPSP_HEADLESS_WINDOW_DIFF_FRAME=-1 \
+    -DCGBA_GPSP_HEADLESS_TRACE_PC="$TRACE_PC" \
+    -DCGBA_GPSP_HEADLESS_TRACE_MASK="$TRACE_MASK" \
+    -DCGBA_GPSP_HEADLESS_TRACE_JIT="$TRACE_JIT" \
     "${@:3}" >/dev/null
 }
 
@@ -93,13 +105,15 @@ run() { # g3a logfile secs
 }
 
 post_hashes() { # logfile
-  grep -oE "CGBA_HASH frame=[0-9]+ phase=post iw=[0-9A-F]+ ew=[0-9A-F]+ vr=[0-9A-F]+ pal=[0-9A-F]+ oam=[0-9A-F]+ io=[0-9A-F]+ fb=[0-9A-F]+" "$1" \
+  grep -oE "CGBA_HASH frame=[0-9]+ phase=post iw=[0-9A-F]+ ew=[0-9A-F]+ vr=[0-9A-F]+ pal=[0-9A-F]+ pconv=[0-9A-F]+ oam=[0-9A-F]+ io=[0-9A-F]+ fb=[0-9A-F]+" "$1" \
     | sed -E 's/ phase=post//'
 }
 
 echo "harness output dir: $OUT"
 echo "ROM: $ROM   frames: $FRAMES   sample: every $STATE_EVERY"
 echo "input: START frame $START_FRAME hold $START_HOLD; SHIFT frame $SHIFT_FRAME hold $SHIFT_HOLD period $SHIFT_PERIOD press $SHIFT_PRESS"
+echo "jit knobs: thumb_ldst=$THUMB_LDST_NATIVE exact_cycles=$EXACT_CYCLES"
+echo "trace: pc=$TRACE_PC mask=$TRACE_MASK jit=$TRACE_JIT"
 
 run_block_diff=0
 if [[ "$DIFF_BLOCKS" != "0" && "$DIFF_FRAME" -ge 0 ]]; then

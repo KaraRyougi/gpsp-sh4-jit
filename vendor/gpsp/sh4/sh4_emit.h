@@ -113,8 +113,9 @@ extern void *tmemst[4][16];
                       (const void *)sh4_block_exit); cycle_count = 0; } while(0)
 
 /* Loop-break gate only (no flush) emitted AT a block-entry / loop-back target. */
-#define generate_cycle_gate()                                                 \
-  sh4g_cycle_gate(&translation_ptr, (u32)pc, (const void *)sh4_block_exit)
+#define generate_cycle_gate(is_word)                                          \
+  sh4g_cycle_gate(&translation_ptr, (u32)pc, (is_word),                       \
+                  (const void *)sh4_block_exit)
 
 /* materialize an immediate / PC value into a host register */
 #define generate_load_pc(hostreg, value)                                      \
@@ -133,6 +134,8 @@ extern void *tmemst[4][16];
 #define generate_branch_patch_unconditional(dest, offset)                     \
   do { if(!cgba_dynarec_single_block)                                         \
          sh4g_patch_jump((u8 *)(dest), (const void *)(offset)); } while(0)
+#define generate_branch_patch_internal(dest, offset)                          \
+  sh4g_patch_jump((u8 *)(dest), (const void *)(offset))
 #define generate_branch_patch_conditional(dest, offset)                       \
   sh4g_patch_cond_skip((u8 *)(dest), (const void *)(offset))
 
