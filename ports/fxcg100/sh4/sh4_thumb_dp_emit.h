@@ -164,21 +164,22 @@ static inline void sh4g_dp_carry(u8 **tp, int is_sub, unsigned rd,
 }
 
 /* Emit native SH4 for the Thumb data-proc `opcode`, or return 0 to fall back to
- * the C helper. flag_status is gpSP's per-instruction dead-flag mask (bits N=8
- * Z=4 C=2 V=1): when the flags this op sets are all dead, the flag emission is
- * skipped — the big win, since the eager NZCV pack dominates the op's cost. */
+ * the C helper. flag_status is gpSP's per-instruction dead-flag mask, but the
+ * SH4 path deliberately ignores it for now: memory/DMA/IRQ exits can expose CPSR
+ * between a "dead" flag write and the next in-block consumer. Exact flags are
+ * the correctness baseline; safe exit-aware flag liveness can come later. */
 static inline int sh4g_thumb_dp_native(u8 **tp, u32 opcode, u32 pc, u32 flag_status)
 {
   u32 hi = (opcode >> 8) & 0xFF;
   (void)pc;
+  (void)flag_status;
 
   /* fmt3 MOV Rd,#imm8  (001 00 ddd iiiiiiii) — N/Z only, C/V preserved. */
   if (hi >= 0x20 && hi <= 0x27) {
     unsigned rd = (opcode >> 8) & 7;
     sh4g_const(tp, opcode & 0xFF, SH4_REG_T0);
     sh4g_store_greg(tp, SH4_REG_T0, rd);
-    if (flag_status & 0xC)
-      sh4g_set_nz(tp, SH4_REG_T0);
+    sh4g_set_nz(tp, SH4_REG_T0);
     return 1;
   }
 
@@ -186,13 +187,12 @@ static inline int sh4g_thumb_dp_native(u8 **tp, u32 opcode, u32 pc, u32 flag_sta
   if (hi >= 0x28 && hi <= 0x3F) {
     unsigned sub = (opcode >> 11) & 3;
     unsigned rd  = (opcode >> 8) & 7;
-    int sf = (flag_status & 0xF) != 0;
     { sh4_codegen cg = sh4g_open(tp);
       sh4_emit_load_greg(&cg, rd, SH4_REG_T0);          /* a = reg[rd] */
       sh4g_close(tp, &cg); }
     sh4g_const(tp, opcode & 0xFF, SH4_REG_T1);          /* b = imm8 */
-    if (sub == 2) sh4g_dp_addsub(tp, 0, rd, 1, sf);     /* ADD */
-    else          sh4g_dp_addsub(tp, 1, rd, sub == 3, sf); /* CMP (no wb) / SUB */
+    if (sub == 2) sh4g_dp_addsub(tp, 0, rd, 1, 1);      /* ADD */
+    else          sh4g_dp_addsub(tp, 1, rd, sub == 3, 1); /* CMP (no wb) / SUB */
     return 1;
   }
 
@@ -211,7 +211,7 @@ static inline int sh4g_thumb_dp_native(u8 **tp, u32 opcode, u32 pc, u32 flag_sta
     else { sh4_codegen cg = sh4g_open(tp);
       sh4_emit_load_greg(&cg, arg, SH4_REG_T1);         /* b = reg[Rm] */
       sh4g_close(tp, &cg); }
-    sh4g_dp_addsub(tp, is_sub, rd, 1, (flag_status & 0xF) != 0);
+    sh4g_dp_addsub(tp, is_sub, rd, 1, 1);
     return 1;
   }
 
@@ -242,8 +242,7 @@ static inline int sh4g_thumb_dp_native(u8 **tp, u32 opcode, u32 pc, u32 flag_sta
       if (write)
         sh4_emit_store_greg(&cg, SH4_REG_T0, rd);
       sh4g_close(tp, &cg); }
-    if (flag_status & 0xC)
-      sh4g_set_nz(tp, SH4_REG_T0);
+    sh4g_set_nz(tp, SH4_REG_T0);
     return 1;
   }
 

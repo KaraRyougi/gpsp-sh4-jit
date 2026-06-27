@@ -3,10 +3,10 @@
 Tracks execution of [docs/sh4-jit-optimization-plan.md](sh4-jit-optimization-plan.md).
 Overclock is out of scope (set externally on the calculator).
 
-Dev environment has the full SH4 cross toolchain (`sh-elf-gcc/as/objdump`) and
-`fxsdk`, so encoder output is checked byte-for-byte against the real assembler
-and builds are compiled — but on-hardware / casio-emu **runtime** validation of
-the dynarec is still pending.
+Dev environment has the full SH4 cross toolchain (`sh-elf-gcc/as/objdump`),
+`fxsdk`, and casio-emu. Encoder output is checked byte-for-byte against the real
+assembler, builds are compiled, and the Metroid interp-vs-JIT harness now runs
+under casio-emu.
 
 ## Done and verified
 
@@ -38,10 +38,12 @@ cd ports/fxcg100/gint-gpsp && fxsdk build-cg   # -> CGBA-GPSP.g3a
 
 - **All guest ARM registers stay in `reg[]`**; load → op → store per instruction.
   No host-resident hot registers yet.
-- **Flags materialized directly in `REG_CPSR`** (N/Z implemented; C/V are TODO).
-  No flag caching; gpSP's dead-flag elimination will make this cheap.
-- **Memory through C helpers** (`execute_load_*` / `execute_store_*`); no inline
-  fast paths yet.
+- **Flags materialized directly in `REG_CPSR`**. Native Thumb data-processing
+  emits exact flags for the supported op set; unsupported/rarer forms route
+  through the interpreter helpers.
+- **Memory mostly through C helpers** (`execute_load_*` / `execute_store_*`);
+  the native Thumb byte-load fast path is guarded by the diff harness
+  (`THUMB_LDST_NATIVE=OFF`) so it can be isolated.
 - Register model: `R14`=reg[] base, `R13`=cycle counter (both callee-saved),
   `R0` kept free (forced index/operand), `R1–R7` scratch / C-args.
 
@@ -72,18 +74,27 @@ Build it: `cmake -B build-cg -DCGBA_DYNAREC=ON && cmake --build build-cg`
   data-proc, multiply(-long), PSR, SWAP route to C helpers
   ([sh4_interp_helpers.c](../ports/fxcg100/sh4/sh4_interp_helpers.c), correct by
   reuse of `read_memory`/`write_memory`).
-- **Known-incorrect until follow-up** (the harness exists to drive these): C/V
-  flags + C/V-dependent conditions, SWI/BIOS HLE (stubbed), SMC RAM-code
-  invalidation on stores, PC-write redispatch edge cases. On-device / casio-emu
-  runtime validation is still pending.
+- **Current Metroid result** (`ports/fxcg100/run-jit-diff.sh
+  ~/Downloads/Metroid.gba`, `SHIFT` pressed every 200 frames): the early native
+  flag-liveness and not-taken Thumb conditional-branch cycle bugs are fixed.
+  The remaining first end-to-end divergence is frame 11, isolated by the
+  preserving window diff to `REG_TM0D` (`io@100`) with registers and main memory
+  matching. Disabling native Thumb byte loads leaves the same timer skew, so the
+  residual is the coarse loop/event boundary around the tight byte-copy loop at
+  `08004C76`, not the native LDRB fast path.
 
 ## Remaining (next milestones)
 
-1. **Run the differential harness** on casio-emu / hardware and close the
-   known-incorrect gaps it surfaces (C/V flags first — they break ~10/14
-   conditions and the carry-dependent ALU ops).
-2. **SWI / BIOS HLE** and **SMC RAM-code invalidation** in the store path.
-3. **Idle-loop emit path** (Part B) — already wired in the interpreter; emit the
+1. **Tighten cycle/event boundary accuracy** for hot Thumb loops. The current
+   diagnostic target is the frame-11 Metroid timer skew at `08004C76`, where the
+   JIT and interpreter reach equivalent CPU/memory state but stop on different
+   instruction boundaries inside a byte-copy loop.
+2. **Run the differential harness longer** on casio-emu / hardware after the
+   timer skew is closed. The harness is
+   `ports/fxcg100/run-jit-diff.sh ~/Downloads/Metroid.gba`; it advances the
+   title/game flow with `SHIFT`'s default GBA `A` binding every 200 frames.
+3. **SWI / BIOS HLE** and additional PC-write redispatch edge cases.
+4. **Idle-loop emit path** (Part B) — already wired in the interpreter; emit the
    cycle-zeroing skip in the SH4 branch path when `pc == idle_loop_target_pc`.
-4. **Optimize**: resident hot registers, lazy/dead-flag elimination, inline
+5. **Optimize**: resident hot registers, lazy/dead-flag elimination, inline
    memory fast paths, real block chaining (replace the C-helper handlers).

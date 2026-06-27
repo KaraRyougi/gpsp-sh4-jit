@@ -1485,10 +1485,15 @@ u16 io_registers[512] CGBA_HIGH_BSS;
 extern "C" {
 u32 cgba_diff_stop_pc;
 int cgba_diff_stop_active;
+int cgba_diff_stop_skip_initial;
 s32 cgba_diff_stop_cycles_remaining;
 }
 #define CGBA_DIFF_STOP_CHECK()                                                \
   do { if(cgba_diff_stop_active && reg[REG_PC] == cgba_diff_stop_pc) {        \
+         if(cgba_diff_stop_skip_initial) {                                     \
+           cgba_diff_stop_skip_initial = 0;                                    \
+           break;                                                             \
+         }                                                                    \
          cgba_diff_stop_cycles_remaining = cycles_remaining; return;          \
        } }                                                                    \
   while(0)

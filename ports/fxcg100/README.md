@@ -176,6 +176,24 @@ Expected log shape:
 [EXIT] HLE_EXIT_AT=120000 ticks reached
 ```
 
+JIT-vs-interpreter Metroid accuracy harness:
+
+```sh
+ports/fxcg100/run-jit-diff.sh ~/Downloads/Metroid.gba
+```
+
+This builds two headless `gint-gpsp` add-ins that differ only by
+`dynarec_enable`, runs both under `~/Dev/casio-emu/build-hle/calcemu`, and
+diffs sampled post-frame memory/framebuffer hashes. It can also run separate
+diagnostic passes for live block lockstep (`DIFF_FRAME`/`DIFF_BLOCKS`) and a
+state-preserving one-frame diff (`WINDOW_DIFF_FRAME`), so diagnostic stepping
+does not contaminate the clean interpreter/JIT A/B run. The default input stream
+presses calculator `SHIFT`'s default GBA binding (`A`) for two frames every
+200 GBA frames, after a short `START` press to leave the title flow. Tune with
+`SHIFT_FRAME`, `SHIFT_HOLD`, `SHIFT_PERIOD`, and `SHIFT_PRESS`; the older
+`A_*` environment variable names still work. `THUMB_LDST_NATIVE=OFF` disables
+the native Thumb byte-load fast path for isolation runs.
+
 The full MPM flow is scaffolded in `run-mpm-smoke.sh`. It provisions a temporary
 flash image under `/tmp`, installs `MPM.BIN`, attempts to install `CGBA.G3A`,
 then boots the patched OS image and launches through TOOLS/EXE.
