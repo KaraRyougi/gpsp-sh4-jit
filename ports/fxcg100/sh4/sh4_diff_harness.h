@@ -10,6 +10,9 @@ enum {
   CGBA_DIFF_IWRAM,
   CGBA_DIFF_EWRAM,
   CGBA_DIFF_IO,
+  CGBA_DIFF_VRAM,
+  CGBA_DIFF_PAL,
+  CGBA_DIFF_OAM,
 };
 
 typedef struct {

@@ -52,6 +52,7 @@ static u8 snap_buf[GBA_STATE_MEM_SIZE] CGBA_HIGH_BSS_LOCAL;
 /* Interpreter result (the oracle): full reg[] + region hashes. */
 static u32 oracle_reg[64];
 static u32 oracle_h_iwram, oracle_h_ewram, oracle_h_vram, oracle_h_io;
+static u32 oracle_h_pal, oracle_h_oam;
 
 /* Byte copy of the interpreter's IWRAM, so a divergence can be located to an
  * address (not just a hash mismatch). 64 KiB; in the high arena. */
@@ -87,6 +88,8 @@ int cgba_sh4_diff_run(uint32_t cycles, cgba_diff_result *out)
   oracle_h_ewram = fnv1a(ewram, 1024 * 256 * 2);
   oracle_h_vram  = fnv1a(vram, 1024 * 96);
   oracle_h_io    = fnv1a(io_registers, sizeof io_registers);
+  oracle_h_pal   = fnv1a(palette_ram, sizeof palette_ram);
+  oracle_h_oam   = fnv1a(oam_ram, sizeof oam_ram);
 
   /* 3. rewind and run the dynarec from the identical starting state */
   restore_full();
@@ -114,10 +117,16 @@ int cgba_sh4_diff_run(uint32_t cycles, cgba_diff_result *out)
     out->diverged = 1; out->kind = CGBA_DIFF_EWRAM; return 1;
   }
   if (fnv1a(vram, 1024 * 96) != oracle_h_vram) {
-    out->diverged = 1; out->kind = CGBA_DIFF_EWRAM; out->index = -1; return 1;
+    out->diverged = 1; out->kind = CGBA_DIFF_VRAM; return 1;
   }
   if (fnv1a(io_registers, sizeof io_registers) != oracle_h_io) {
     out->diverged = 1; out->kind = CGBA_DIFF_IO; return 1;
+  }
+  if (fnv1a(palette_ram, sizeof palette_ram) != oracle_h_pal) {
+    out->diverged = 1; out->kind = CGBA_DIFF_PAL; return 1;
+  }
+  if (fnv1a(oam_ram, sizeof oam_ram) != oracle_h_oam) {
+    out->diverged = 1; out->kind = CGBA_DIFF_OAM; return 1;
   }
 
   out->diverged = 0;
@@ -153,7 +162,7 @@ unsigned cgba_sh4_diff_regions(uint32_t cycles, char out[][48], unsigned max_lin
 {
   unsigned n = 0, i;
   u32 start_pc = reg[REG_PC], ipc, dpc;
-  u32 hew, hvr, hio;
+  u32 hew, hvr, hio, hpal, hoam;
   u32 first = 0xFFFFFFFFu, cnt = 0, iv = 0, dv = 0;
   int rdiff = -1;
 
@@ -165,6 +174,8 @@ unsigned cgba_sh4_diff_regions(uint32_t cycles, char out[][48], unsigned max_lin
   hew = fnv1a(ewram, 1024 * 256 * 2);
   hvr = fnv1a(vram, 1024 * 96);
   hio = fnv1a(io_registers, sizeof io_registers);
+  hpal = fnv1a(palette_ram, sizeof palette_ram);
+  hoam = fnv1a(oam_ram, sizeof oam_ram);
 
   restore_full();
   flush_dynarec_caches();
@@ -186,9 +197,11 @@ unsigned cgba_sh4_diff_regions(uint32_t cycles, char out[][48], unsigned max_lin
     snprintf(out[n++], 48, "p%lX i%lX d%lX r%d", (unsigned long)start_pc,
       (unsigned long)ipc, (unsigned long)dpc, rdiff);
   if (n < max_lines)        /* iw = diverging IWRAM words; the rest are 0/1 flags */
-    snprintf(out[n++], 48, "iw%lu ew%d vr%d io%d", (unsigned long)cnt,
+    snprintf(out[n++], 48, "iw%lu ew%d vr%d io%d pa%d oa%d", (unsigned long)cnt,
       fnv1a(ewram, 1024 * 256 * 2) != hew, fnv1a(vram, 1024 * 96) != hvr,
-      fnv1a(io_registers, sizeof io_registers) != hio);
+      fnv1a(io_registers, sizeof io_registers) != hio,
+      fnv1a(palette_ram, sizeof palette_ram) != hpal,
+      fnv1a(oam_ram, sizeof oam_ram) != hoam);
   /* First diverging IWRAM word (GBA addr = 0x03000000 + off). Audio-like packed
    * sample bytes vs a silent oracle => a sound buffer (cosmetic); structured
    * data => a real store bug worth the single-block lockstep hunt. */
@@ -262,6 +275,9 @@ const char *cgba_sh4_diff_kind_name(int kind)
   case CGBA_DIFF_REG:   return "reg";
   case CGBA_DIFF_IWRAM: return "iwram";
   case CGBA_DIFF_EWRAM: return "ewram";
+  case CGBA_DIFF_VRAM:  return "vram";
+  case CGBA_DIFF_PAL:   return "pal";
+  case CGBA_DIFF_OAM:   return "oam";
   case CGBA_DIFF_IO:    return "io";
   default:              return "none";
   }

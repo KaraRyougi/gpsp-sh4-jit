@@ -66,7 +66,7 @@ int  cgba_sh4_arm_block(u32 opcode, u32 pc);
 void cgba_sh4_arm_multiply(u32 opcode, u32 pc);
 void cgba_sh4_arm_multiply_long(u32 opcode, u32 pc);
 int  cgba_sh4_arm_psr(u32 opcode, u32 pc);   /* returns 1 if an IRQ changed PC */
-void cgba_sh4_arm_swap(u32 opcode, u32 pc);
+int cgba_sh4_arm_swap(u32 opcode, u32 pc);
 void cgba_sh4_hle_div(u32 cpu_mode, u32 pc);
 int  cgba_sh4_thumb_dp(u32 opcode, u32 pc);
 void cgba_sh4_thumb_shift_reg(u32 opcode, u32 pc);
@@ -508,7 +508,7 @@ extern void *tmemst[4][16];
   do { if(!sh4g_arm_multiply_long_native(&translation_ptr, (u32)opcode))      \
          SH4_CALL_OP2(cgba_sh4_arm_multiply_long); } while(0)
 #define arm_psr(op_type, transfer_type, psr_reg)   SH4_CALL_OP2_PC(cgba_sh4_arm_psr)
-#define arm_swap(type)                             SH4_CALL_OP2_MEM(cgba_sh4_arm_swap)
+#define arm_swap(type)                             SH4_CALL_OP2_PC_MEM(cgba_sh4_arm_swap)
 
 #define arm_hle_div(cpu_mode)                                                 \
   do { sh4g_const(&translation_ptr, 0u, SH4_REG_ARG0);                        \
