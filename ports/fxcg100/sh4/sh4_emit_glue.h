@@ -449,12 +449,26 @@ static inline void sh4g_cycle_sub(u8 **tp, int n, uint32_t pc,
   { long d = ((long)(*tp) - ((long)bt + 4)) / 2; bt[1] = (uint8_t)(d & 0xFF); }
 }
 
-/* Loop-break GATE only (no debit, no zero): exit to update_gba() if the cycle
- * counter has gone negative, so a wait/idle loop can't spin past its budget.
+/* Loop-break GATE: exit to update_gba() if the cycle counter has gone negative,
+ * so a wait/idle loop can't spin past its budget.
  * Placed AT a branch-target block entry (loop-back lands here). The accounting
- * flush is a separate, earlier step that loop-back deliberately bypasses, so
- * this must not itself touch the counter. */
-static inline void sh4g_cycle_gate(u8 **tp, uint32_t pc, const void *block_exit_fn)
+ * flush is a separate, earlier step that loop-back deliberately bypasses. On
+ * the exhausted path we still charge the target fetch before update_gba(),
+ * matching the interpreter's taken-branch refill + sequential target fetch
+ * before it checks the event boundary. */
+static inline void sh4g_charge_fetch_cell(u8 **tp, uint32_t pc, int is_word)
+{
+  const u8 *cell = &ws_cyc_seq[(pc >> 24) & 0x0F][is_word ? 1 : 0];
+  sh4g_const(tp, (uint32_t)(uintptr_t)cell, SH4_REG_T2);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_b_load(&cg, SH4_REG_T2, SH4_REG_T1);
+    sh4_emit_extu_b(&cg, SH4_REG_T1, SH4_REG_T1);
+    sh4_emit_sub(&cg, SH4_REG_T1, SH4_REG_CYCLES);
+    sh4g_close(tp, &cg); }
+}
+
+static inline void sh4g_cycle_gate(u8 **tp, uint32_t pc, int is_word,
+                                   const void *block_exit_fn)
 {
   u8 *bt;
   { sh4_codegen cg = sh4g_open(tp);
@@ -462,6 +476,7 @@ static inline void sh4g_cycle_gate(u8 **tp, uint32_t pc, const void *block_exit_
     sh4g_close(tp, &cg); }
   bt = *tp;
   sh4g_u16(tp, 0x8900);                        /* BT skip (budget remains) */
+  sh4g_charge_fetch_cell(tp, pc, is_word);
   sh4g_const(tp, pc, SH4_REG_ARG0);
   sh4g_far_jmp(tp, block_exit_fn);
   { long d = ((long)(*tp) - ((long)bt + 4)) / 2; bt[1] = (uint8_t)(d & 0xFF); }
@@ -532,7 +547,8 @@ static inline void sh4g_store_pc_imm(u8 **tp, uint32_t new_pc)
  * the driver back-patches to the resolved target block for direct chaining
  * (initialized to `block_exit_fn` so the unpatched path is still correct).
  * Returns the patch site. */
-static inline u8 *sh4g_branch_exit(u8 **tp, uint32_t new_pc, const void *block_exit_fn)
+static inline u8 *sh4g_branch_exit(u8 **tp, uint32_t new_pc,
+                                   const void *block_exit_fn)
 {
   u8 *bt, *site;
   sh4g_store_pc_imm(tp, new_pc);                /* R4 = reg[REG_PC] = new_pc */

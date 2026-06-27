@@ -2801,8 +2801,13 @@ u8 function_cc *block_lookup_address_thumb(u32 pc)
 
 #define arm_instruction_width 4
 
+#ifdef SH4_ARCH
 #define arm_base_cycles()                                                     \
-  cycle_count += def_seq_cycles[pc >> 24][1]                                  \
+  cycle_count += ws_cyc_seq[(pc >> 24) & 0x0F][1]
+#else
+#define arm_base_cycles()                                                     \
+  cycle_count += def_seq_cycles[pc >> 24][1]
+#endif
 
 // For now this just sets a variable that says flags should always be
 // computed.
@@ -2870,8 +2875,13 @@ u8 function_cc *block_lookup_address_thumb(u32 pc)
 
 #define thumb_instruction_width 2
 
+#ifdef SH4_ARCH
 #define thumb_base_cycles()                                                   \
-  cycle_count += def_seq_cycles[pc >> 24][0]                                  \
+  cycle_count += ws_cyc_seq[(pc >> 24) & 0x0F][0]
+#else
+#define thumb_base_cycles()                                                   \
+  cycle_count += def_seq_cycles[pc >> 24][0]
+#endif
 
 // Here's how this works: each instruction has three different sets of flag
 // attributes, each consisiting of a 4bit mask describing how that instruction
@@ -3139,7 +3149,7 @@ bool translate_block_arm(u32 pc, bool ram_region)
       }
       generate_cycle_update();
       block_data[block_data_position].block_offset = translation_ptr;
-      generate_cycle_gate();
+      generate_cycle_gate(1);
     }
     else
     {
@@ -3157,6 +3167,9 @@ bool translate_block_arm(u32 pc, bool ram_region)
 
     update_pc_limits();
     translate_arm_instruction();
+#ifdef CGBA_SH4_EXACT_CYCLE_BOUNDARIES
+    generate_cycle_update();
+#endif
     block_data_position++;
 
     /* If it went too far the cache needs to be flushed and the process
@@ -3203,8 +3216,13 @@ bool translate_block_arm(u32 pc, bool ram_region)
        block_data[(branch_target - block_start_pc) /
         arm_instruction_width].block_offset;
 
+#ifdef SH4_ARCH
+      generate_branch_patch_internal(block_exits[i].branch_source,
+       translation_target);
+#else
       generate_branch_patch_unconditional(block_exits[i].branch_source,
        translation_target);
+#endif
     }
     else
     {
@@ -3334,7 +3352,7 @@ bool translate_block_thumb(u32 pc, bool ram_region)
     {
       generate_cycle_update();
       block_data[block_data_position].block_offset = translation_ptr;
-      generate_cycle_gate();
+      generate_cycle_gate(0);
     }
     else
     {
@@ -3352,6 +3370,9 @@ bool translate_block_thumb(u32 pc, bool ram_region)
 
     update_pc_limits();
     translate_thumb_instruction();
+#ifdef CGBA_SH4_EXACT_CYCLE_BOUNDARIES
+    generate_cycle_update();
+#endif
     block_data_position++;
 
     /* If it went too far the cache needs to be flushed and the process
@@ -3394,8 +3415,13 @@ bool translate_block_thumb(u32 pc, bool ram_region)
        block_data[(branch_target - block_start_pc) /
         thumb_instruction_width].block_offset;
 
+#ifdef SH4_ARCH
+      generate_branch_patch_internal(block_exits[i].branch_source,
+       translation_target);
+#else
       generate_branch_patch_unconditional(block_exits[i].branch_source,
        translation_target);
+#endif
     }
     else
     {

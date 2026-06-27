@@ -36,6 +36,54 @@ char main_path[512];
 
 static u32 random_state = 0;
 
+#if defined(CGBA_GPSP_HEADLESS_TEST) && defined(CGBA_DYNAREC)
+int cgba_sh4_trace_update_gba;
+int cgba_sh4_trace_update_tag;
+int cgba_sh4_trace_update_count;
+int cgba_sh4_trace_update_limit;
+
+static void cgba_trace_putc(char c)
+{
+  *(volatile unsigned char *)0xb7000000u = (unsigned char)c;
+}
+
+static void cgba_trace_puts(const char *s)
+{
+  while (*s)
+    cgba_trace_putc(*s++);
+}
+
+static void cgba_trace_hex32(u32 v)
+{
+  static const char hex[] = "0123456789ABCDEF";
+  int i;
+  for (i = 7; i >= 0; i--)
+    cgba_trace_putc(hex[(v >> (i * 4)) & 0x0F]);
+}
+
+static void cgba_trace_update_gba(int remaining_cycles)
+{
+  if (!cgba_sh4_trace_update_gba)
+    return;
+  if (cgba_sh4_trace_update_limit > 0 &&
+      cgba_sh4_trace_update_count++ >= cgba_sh4_trace_update_limit)
+    return;
+  cgba_trace_putc('U');
+  cgba_trace_putc((char)cgba_sh4_trace_update_tag);
+  cgba_trace_puts(" pc");
+  cgba_trace_hex32(reg[REG_PC]);
+  cgba_trace_puts(" rem");
+  cgba_trace_hex32((u32)remaining_cycles);
+  cgba_trace_puts(" exec");
+  cgba_trace_hex32(execute_cycles);
+  cgba_trace_puts(" t0");
+  cgba_trace_hex32((u32)timer[0].count);
+  cgba_trace_putc('\n');
+}
+#else
+#define cgba_trace_update_gba(x) ((void)0)
+#endif
+
 // Generate 16 random bits.
 u16 rand_gen() {
   random_state = ((random_state * 1103515245) + 12345) & 0x7fffffff;
@@ -124,6 +172,7 @@ u32 function_cc update_gba(int remaining_cycles)
   irq_type irq_raised = IRQ_NONE;
   int dma_cycles;
   trace_update_gba(remaining_cycles);
+  cgba_trace_update_gba(remaining_cycles);
 
   remaining_cycles = MAX(remaining_cycles, -64);
 
@@ -452,4 +501,3 @@ unsigned main_write_savestate(u8* dst)
 
   return (unsigned int)(dst - startp);
 }
-

@@ -3108,6 +3108,7 @@ skip_instruction:
        if(cgba_diff_trace_cycles){ cgba_trace_putc('c'); cgba_trace_hex(reg[REG_PC]);
          cgba_trace_putc(':'); cgba_trace_hex((u32)cycles_remaining); cgba_trace_putc('\n'); }
 #endif
+       CGBA_DIFF_STOP_CHECK();
 
        if ((reg[REG_PC] == idle_loop_target_pc
 #ifdef CGBA_FXCG100
@@ -3603,6 +3604,7 @@ thumb_loop:
 
        /* End of Execute THUMB instruction */
        cycles_remaining -= ws_cyc_seq[(reg[REG_PC] >> 24) & 0xF][0];
+       CGBA_DIFF_STOP_CHECK();
 
        if ((reg[REG_PC] == idle_loop_target_pc
 #ifdef CGBA_FXCG100
