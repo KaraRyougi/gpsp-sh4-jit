@@ -111,6 +111,12 @@ u32 function_cc execute_load_u16(u32 address) { cgba_sh4_charge_mem(address, 0);
 u32 function_cc execute_load_u32(u32 address) { cgba_sh4_charge_mem(address, 1); return read_memory32(address); }
 u32 function_cc execute_load_s8(u32 address)  { cgba_sh4_charge_mem(address, 0); return read_memory8s(address); }
 u32 function_cc execute_load_s16(u32 address) { cgba_sh4_charge_mem(address, 0); return read_memory16s(address); }
+
+static u32 cgba_sh4_align_store_address(u32 address, unsigned bytes)
+{
+  return address & ~(u32)(bytes - 1);
+}
+
 /* Self-modifying-code detection for RAM stores. gpSP marks every byte that
  * belongs to a translated block in a parallel "tag" mirror (IWRAM: iwram[off];
  * EWRAM: ewram[off + 0x40000]); a nonzero tag over the written range means the
@@ -126,7 +132,7 @@ static cpu_alert_type cgba_sh4_smc_check(u32 address, unsigned bytes)
   /* Width-align like the ARM bus (and the gpSP interpreter's fast_write_memory,
    * cpu.cc) so the tag read lands on the same code bytes the access really hits
    * and never walks past the end of the mirror for an unaligned half/word. */
-  address &= ~(u32)(bytes - 1);
+  address = cgba_sh4_align_store_address(address, bytes);
   switch (address >> 24) {
   case 0x03: tag = iwram + (address & 0x7FFF); break;              /* 32 KB  */
   case 0x02: tag = ewram + (address & 0x3FFFF) + 0x40000; break;   /* 256 KB */
@@ -138,10 +144,36 @@ static cpu_alert_type cgba_sh4_smc_check(u32 address, unsigned bytes)
   return hit ? CPU_ALERT_SMC : CPU_ALERT_NONE;
 }
 
-void function_cc execute_store_u8(u32 address, u32 source)  { cgba_sh4_charge_mem(address, 0); cgba_store_alert |= write_memory8(address, (u8)source);   cgba_store_alert |= cgba_sh4_smc_check(address, 1); }
-void function_cc execute_store_u16(u32 address, u32 source) { cgba_sh4_charge_mem(address, 0); cgba_store_alert |= write_memory16(address, (u16)source); cgba_store_alert |= cgba_sh4_smc_check(address, 2); }
-void function_cc execute_store_u32(u32 address, u32 source) { cgba_sh4_charge_mem(address, 1); cgba_store_alert |= write_memory32(address, source);      cgba_store_alert |= cgba_sh4_smc_check(address, 4); }
-void function_cc execute_store_aligned_u32(u32 address, u32 source) { cgba_sh4_charge_mem(address, 1); cgba_store_alert |= write_memory32(address, source); cgba_store_alert |= cgba_sh4_smc_check(address, 4); }
+void function_cc execute_store_u8(u32 address, u32 source)
+{
+  cgba_sh4_charge_mem(address, 0);
+  cgba_store_alert |= write_memory8(address, (u8)source);
+  cgba_store_alert |= cgba_sh4_smc_check(address, 1);
+}
+
+void function_cc execute_store_u16(u32 address, u32 source)
+{
+  u32 aligned = cgba_sh4_align_store_address(address, 2);
+  cgba_sh4_charge_mem(aligned, 0);
+  cgba_store_alert |= write_memory16(aligned, (u16)source);
+  cgba_store_alert |= cgba_sh4_smc_check(aligned, 2);
+}
+
+void function_cc execute_store_u32(u32 address, u32 source)
+{
+  u32 aligned = cgba_sh4_align_store_address(address, 4);
+  cgba_sh4_charge_mem(aligned, 1);
+  cgba_store_alert |= write_memory32(aligned, source);
+  cgba_store_alert |= cgba_sh4_smc_check(aligned, 4);
+}
+
+void function_cc execute_store_aligned_u32(u32 address, u32 source)
+{
+  u32 aligned = cgba_sh4_align_store_address(address, 4);
+  cgba_sh4_charge_mem(aligned, 1);
+  cgba_store_alert |= write_memory32(aligned, source);
+  cgba_store_alert |= cgba_sh4_smc_check(aligned, 4);
+}
 
 /* Consume any pending store alert. If set, point PC at the next instruction,
  * flush the RAM code cache on SMC, and return 1 so the emitter glue redispatches

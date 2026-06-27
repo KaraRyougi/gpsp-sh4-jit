@@ -2,7 +2,7 @@
 #define CGBA_SH4_ARM_LDST_EMIT_H
 
 /*
- * Native SH-4A emission for ARM single load/store (the #2 hottest class), with an
+ * Native SH-4A emission for ARM single loads (the #2 hottest class), with an
  * inline memory fast path: for the always-mapped data regions EWRAM (0x02) and
  * IWRAM (0x03) the access goes straight through gpSP's memory_map_read host-page
  * table instead of a C call into read_memory. Every other region (I/O, ROM,
@@ -29,10 +29,11 @@ void sh4_block_exit(u32 pc);
 /* Access kinds (the load width/sign we natively fast-path). */
 enum { LDK_W = 0, LDK_B, LDK_UH, LDK_SH, LDK_SB };
 
-/* Emit native SH4 for the ARM ld/st `opcode`, or return 0 to fall back to C.
- * Handles pre-indexed, no-writeback LOADS/STORES (word/byte/halfword/signed),
+/* Emit native SH4 for the ARM load `opcode`, or return 0 to fall back to C.
+ * Handles pre-indexed, no-writeback LOADS (word/byte/halfword/signed),
  * immediate or register (no-shift) offset, through gpSP's memory_map_read
- * host-page table for EWRAM/IWRAM only; else the C helper. */
+ * host-page table for EWRAM/IWRAM only; stores and side-effecting regions use
+ * the C helper. */
 static inline int sh4g_arm_ldst_native(u8 **tp, u32 opcode, u32 pc,
   int cycle_count)
 {
@@ -54,6 +55,7 @@ static inline int sh4g_arm_ldst_native(u8 **tp, u32 opcode, u32 pc,
 
   if (!pre || writeback)    return 0;   /* pre-indexed, no writeback */
   if (rd == 15 || rn == 15) return 0;   /* PC operand (incl. STR pc) -> C */
+  if (!is_load)             return 0;   /* stores need helper-side SMC/alerts */
 
   if ((opcode & 0x0E000090) == 0x00000090) {           /* halfword / signed form */
     u32 signed_ld = (opcode >> 6) & 1, half_w = (opcode >> 5) & 1;
@@ -63,7 +65,7 @@ static inline int sh4g_arm_ldst_native(u8 **tp, u32 opcode, u32 pc,
       { reg_offset = 1; rm = opcode & 0xF; }
     if (signed_ld && half_w) { kind = LDK_SH; align_mask = 1; }   /* LDRSH */
     else if (signed_ld)      { kind = LDK_SB; align_mask = 0; }   /* LDRSB */
-    else                     { kind = LDK_UH; align_mask = 1; }   /* LDRH/STRH */
+    else                     { kind = LDK_UH; align_mask = 1; }   /* LDRH */
   } else {                                             /* normal word / byte form */
     if (opcode & 0x02000000) {                         /* register offset */
       u32 st = (opcode >> 5) & 3, sa = (opcode >> 7) & 0x1F;
@@ -75,11 +77,10 @@ static inline int sh4g_arm_ldst_native(u8 **tp, u32 opcode, u32 pc,
     } else {
       offset = opcode & 0xFFF;                          /* 12-bit immediate */
     }
-    if ((opcode >> 22) & 1)  { kind = LDK_B; align_mask = 0; }    /* LDRB/STRB */
-    else                     { kind = LDK_W; align_mask = 3; }    /* LDR/STR  */
+    if ((opcode >> 22) & 1)  { kind = LDK_B; align_mask = 0; }    /* LDRB */
+    else                     { kind = LDK_W; align_mask = 3; }    /* LDR  */
   }
   if ((reg_offset || shift_offset) && rm == 15) return 0;  /* PC offset register -> C */
-  if (!is_load && (kind == LDK_SH || kind == LDK_SB)) return 0;   /* LDRD/STRD -> C */
 
   /* addr = reg[rn] +/- offset, in R1; then page = memory_map_read[addr>>15] in R3 */
   { sh4_codegen cg = sh4g_open(tp);
@@ -139,56 +140,37 @@ static inline int sh4g_arm_ldst_native(u8 **tp, u32 opcode, u32 pc,
     guards[ng++] = sh4g_emit_bf_placeholder(tp);          /* misaligned -> slow */
   }
 
-  /* --- fast path: load reg[rd] from / store reg[rd] to page[addr & 0x7FFF] --- */
+  /* --- fast path: load reg[rd] from page[addr & 0x7FFF] --- */
   { sh4_codegen cg = sh4g_open(tp);
     sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);       /* R0 = addr & 0x7FFF */
     sh4_emit_shll16(&cg, SH4_REG_RET); sh4_emit_shll(&cg, SH4_REG_RET);
     sh4_emit_shlr16(&cg, SH4_REG_RET); sh4_emit_shlr(&cg, SH4_REG_RET);
-    if (is_load) {
-      switch (kind) {                                  /* guest is little-endian */
-      case LDK_W:                                       /* word: read + byte-reverse */
-        sh4_emit_mov_l_load_r0(&cg, SH4_REG_T2, SH4_REG_T1);
-        sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_ARG0);
-        sh4_emit_swap_w(&cg, SH4_REG_ARG0, SH4_REG_ARG0);
-        sh4_emit_swap_b(&cg, SH4_REG_ARG0, SH4_REG_T1);
-        break;
-      case LDK_B:                                       /* LDRB: zero-extend byte */
-        sh4_emit_mov_b_load_r0(&cg, SH4_REG_T2, SH4_REG_T1);
-        sh4_emit_extu_b(&cg, SH4_REG_T1, SH4_REG_T1);
-        break;
-      case LDK_UH:                                      /* LDRH: swap + zero-extend */
-        sh4_emit_mov_w_load_r0(&cg, SH4_REG_T2, SH4_REG_T1);
-        sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
-        sh4_emit_extu_w(&cg, SH4_REG_T1, SH4_REG_T1);
-        break;
-      case LDK_SH:                                      /* LDRSH: swap + sign-extend */
-        sh4_emit_mov_w_load_r0(&cg, SH4_REG_T2, SH4_REG_T1);
-        sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
-        sh4_emit_exts_w(&cg, SH4_REG_T1, SH4_REG_T1);
-        break;
-      default:                                          /* LDRSB: mov.b sign-extends */
-        sh4_emit_mov_b_load_r0(&cg, SH4_REG_T2, SH4_REG_T1);
-        break;
-      }
-      sh4_emit_store_greg(&cg, SH4_REG_T1, rd);
-    } else {                                            /* store: reg[rd] -> guest order */
-      sh4_emit_load_greg(&cg, rd, SH4_REG_T1);
-      switch (kind) {
-      case LDK_W:                                       /* STR: byte-reverse + word store */
-        sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_ARG0);
-        sh4_emit_swap_w(&cg, SH4_REG_ARG0, SH4_REG_ARG0);
-        sh4_emit_swap_b(&cg, SH4_REG_ARG0, SH4_REG_T1);
-        sh4_emit_mov_l_store_r0(&cg, SH4_REG_T1, SH4_REG_T2);
-        break;
-      case LDK_UH:                                      /* STRH: swap low16 + halfword store */
-        sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
-        sh4_emit_mov_w_store_r0(&cg, SH4_REG_T1, SH4_REG_T2);
-        break;
-      default:                                          /* STRB: low byte (no reverse) */
-        sh4_emit_mov_b_store_r0(&cg, SH4_REG_T1, SH4_REG_T2);
-        break;
-      }
+    switch (kind) {                                  /* guest is little-endian */
+    case LDK_W:                                       /* word: read + byte-reverse */
+      sh4_emit_mov_l_load_r0(&cg, SH4_REG_T2, SH4_REG_T1);
+      sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_ARG0);
+      sh4_emit_swap_w(&cg, SH4_REG_ARG0, SH4_REG_ARG0);
+      sh4_emit_swap_b(&cg, SH4_REG_ARG0, SH4_REG_T1);
+      break;
+    case LDK_B:                                       /* LDRB: zero-extend byte */
+      sh4_emit_mov_b_load_r0(&cg, SH4_REG_T2, SH4_REG_T1);
+      sh4_emit_extu_b(&cg, SH4_REG_T1, SH4_REG_T1);
+      break;
+    case LDK_UH:                                      /* LDRH: swap + zero-extend */
+      sh4_emit_mov_w_load_r0(&cg, SH4_REG_T2, SH4_REG_T1);
+      sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
+      sh4_emit_extu_w(&cg, SH4_REG_T1, SH4_REG_T1);
+      break;
+    case LDK_SH:                                      /* LDRSH: swap + sign-extend */
+      sh4_emit_mov_w_load_r0(&cg, SH4_REG_T2, SH4_REG_T1);
+      sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
+      sh4_emit_exts_w(&cg, SH4_REG_T1, SH4_REG_T1);
+      break;
+    default:                                          /* LDRSB: mov.b sign-extends */
+      sh4_emit_mov_b_load_r0(&cg, SH4_REG_T2, SH4_REG_T1);
+      break;
     }
+    sh4_emit_store_greg(&cg, SH4_REG_T1, rd);
     sh4g_close(tp, &cg); }
   /* Charge the single access (nonseq; word column for LDR/STR, else byte/half);
    * addr is still in T0. The slow path charges the same via extra_cycles. */
