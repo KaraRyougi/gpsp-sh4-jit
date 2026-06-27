@@ -423,8 +423,15 @@ static unsigned cgba_sh4_diff_blocks_core(unsigned max_blocks, char out[][48],
     u32 dret, dused, iused;
     int i, diverged = 0;
 
-    if (reg[CPU_HALT_STATE] != 0)
-      break;                       /* halt: frame-level diff handles those */
+    if (reg[CPU_HALT_STATE] != 0) {
+      u32 ret;
+      dbg_tag('H', reg[REG_PC]);
+      ret = update_gba(-64);
+      dbg_tag('W', reg[REG_PC]);
+      if (ret & 0x80000000u)
+        break;
+      continue;
+    }
 
     capture_full();                /* shared starting state S (= interp baseline) */
     dbg_tag('D', pc0);

@@ -68,7 +68,7 @@ static void reload_timing(u32 waitcnt)
 
 enum kind {
   K_DP, K_LD, K_ST, K_LDM, K_STM, K_B, K_BCOND_T, K_BCOND_NT,
-  K_BX_ARM, K_BX_THUMB
+  K_BX_ARM, K_BX_THUMB, K_TBX_THUMB, K_TMUL, K_TSWI
 };
 typedef struct {
   u32 pc; int kind; u32 data; int width; int nregs; u32 target;
@@ -85,7 +85,8 @@ static int interp_mb(const insn *in, int col)
     case K_LDM: case K_STM: return in->nregs * ws_seq[REGION(in->data)][1];
     case K_B: case K_BCOND_T: case K_BCOND_NT:
       return ws_nseq[REGION(in->target)][col];
-    case K_BX_ARM:           return ws_nseq[REGION(in->target)][1];
+    case K_BX_ARM:
+      return ws_nseq[REGION(in->target)][1] + ws_seq[REGION(in->target)][1];
     default:                return 0;  /* DP, BX_THUMB: none */
   }
 }
@@ -98,7 +99,10 @@ enum bug {
   BUG_B1_BLOCK_FREE,
   BUG_REFILL_WRONG_COL,
   BUG_COND_NT_FREE,
-  BUG_GATE_FETCH_FREE
+  BUG_GATE_FETCH_FREE,
+  BUG_THUMB_MUL_EXTRA,
+  BUG_THUMB_SWI_FETCH,
+  BUG_ARM_BX_TARGET_FETCH_FREE
 };
 static enum bug g_inject;
 static int dyn_mb(const insn *in, int col)
@@ -118,7 +122,10 @@ static int dyn_mb(const insn *in, int col)
       return ws_nseq[REGION(in->target)][col];
     case K_BX_ARM:
       if (g_inject == BUG_REFILL_WRONG_COL) return ws_nseq[REGION(in->target)][0];
-      return ws_nseq[REGION(in->target)][1];
+      return ws_nseq[REGION(in->target)][1] +
+        ((g_inject == BUG_ARM_BX_TARGET_FETCH_FREE) ? 0 : ws_seq[REGION(in->target)][1]);
+    case K_TMUL:
+      return (g_inject == BUG_THUMB_MUL_EXTRA) ? 2 : 0;
     default:                return 0;
   }
 }
@@ -127,7 +134,10 @@ static int dyn_mb(const insn *in, int col)
 static int interp_fetch(const block *b, int i, int col)
 {
   const insn *in = &b->ins[i];
+  if (in->kind == K_TSWI) return 0;
+  if (in->kind == K_BX_ARM) return 0;
   if (in->kind == K_BX_THUMB) return 0;
+  if (in->kind == K_TBX_THUMB) return ws_seq[REGION(in->target)][0];
   u32 next = (i+1 < b->n) ? b->ins[i+1].pc : b->dpc;
   return ws_seq[REGION(next)][col];
 }
@@ -135,7 +145,10 @@ static int interp_fetch(const block *b, int i, int col)
 static int dyn_fetch(const block *b, int i, int col)
 {
   const insn *in = &b->ins[i];
+  if (in->kind == K_TSWI)
+    return (g_inject == BUG_THUMB_SWI_FETCH) ? ws_seq[REGION(in->pc)][0] : 0;
   if (in->kind == K_BX_ARM || in->kind == K_BX_THUMB) return 0;
+  if (in->kind == K_TBX_THUMB) return ws_seq[REGION(in->target)][0];
   return ws_seq[REGION(in->pc)][col];
 }
 
@@ -204,6 +217,9 @@ static void run_suite(void)
   check("IWRAM blk, BX->Thumb(ROM) (B3)", &(block){.thumb=0,.n=2,.dpc=0x08000400,.ins={
     {.pc=0x03000300,.kind=K_DP},{.pc=0x03000304,.kind=K_BX_THUMB,.target=0x08000400}}});
 
+  check("Thumb BX->Thumb(IWRAM)", &(block){.thumb=1,.n=1,.dpc=0x03007D24,.ins={
+    {.pc=0x080A3438,.kind=K_TBX_THUMB,.target=0x03007D24}}});
+
   check("IWRAM blk, BX->ARM(ROM)", &(block){.thumb=0,.n=2,.dpc=0x08000500,.ins={
     {.pc=0x03000400,.kind=K_DP},{.pc=0x03000404,.kind=K_BX_ARM,.target=0x08000500}}});
 
@@ -214,6 +230,13 @@ static void run_suite(void)
   check("Thumb-resident ROM blk", &(block){.thumb=1,.n=3,.dpc=0x08000600,.ins={
     {.pc=0x08000400,.kind=K_DP},{.pc=0x08000402,.kind=K_DP},
     {.pc=0x08000404,.kind=K_B,.target=0x08000600}}});
+
+  check("Thumb MUL has no SH4 extra", &(block){.thumb=1,.n=3,.dpc=0x0800252C,.ins={
+    {.pc=0x08002526,.kind=K_DP}, {.pc=0x08002528,.kind=K_DP},
+    {.pc=0x0800252A,.kind=K_TMUL}}});
+
+  check("Thumb SWI vectors with no fetch", &(block){.thumb=1,.n=1,.dpc=0x00000008,.ins={
+    {.pc=0x08004B9C,.kind=K_TSWI,.target=0x00000008}}});
 
   check("Thumb cond not-taken ROM refill", &(block){.thumb=1,.n=7,.dpc=0x08003044,.ins={
     {.pc=0x08003066,.kind=K_DP}, {.pc=0x08003068,.kind=K_DP},
@@ -240,11 +263,20 @@ static int self_test(void)
     {.pc=0x0800306A,.kind=K_BCOND_NT,.target=0x0800306C}}};
   block gate_blk = {.thumb=1,.n=1,.dpc=0x08004C76,.ins={
     {.pc=0x08004C82,.kind=K_BCOND_T,.target=0x08004C76}}};
+  block tmul_blk = {.thumb=1,.n=1,.dpc=0x0800252C,.ins={
+    {.pc=0x0800252A,.kind=K_TMUL}}};
+  block tswi_blk = {.thumb=1,.n=1,.dpc=0x00000008,.ins={
+    {.pc=0x08004B9C,.kind=K_TSWI,.target=0x00000008}}};
+  block abx_blk = {.thumb=0,.n=1,.dpc=0x00000720,.ins={
+    {.pc=0x00000090,.kind=K_BX_ARM,.target=0x00000720}}};
   struct { enum bug b; const char *name; const block *blk; } cases[] = {
     { BUG_B1_BLOCK_FREE,     "native block transfer charges no wait-states (pre-B1)", &refill_blk },
     { BUG_REFILL_WRONG_COL,  "branch refill uses the wrong bus-width column", &refill_blk },
     { BUG_COND_NT_FREE,      "not-taken Thumb conditional branch skips refill", &cond_blk },
     { BUG_GATE_FETCH_FREE,   "exhausted loop gate skips target fetch", &gate_blk },
+    { BUG_THUMB_MUL_EXTRA,   "Thumb MUL carries the old +2 threaded approximation", &tmul_blk },
+    { BUG_THUMB_SWI_FETCH,   "Thumb SWI charges its skipped instruction fetch", &tswi_blk },
+    { BUG_ARM_BX_TARGET_FETCH_FREE, "ARM BX-to-ARM skips target fetch", &abx_blk },
   };
   for (unsigned i = 0; i < sizeof cases/sizeof cases[0]; i++) {
     g_inject = cases[i].b;
@@ -256,8 +288,8 @@ static int self_test(void)
       dmb = ws_nseq[REGION(blk->ins[0].target)][col];
     } else {
       for (int k = 0; k < blk->n; k++) {
-        imb += interp_mb(&blk->ins[k], col);
-        dmb += dyn_mb(&blk->ins[k], col);
+        imb += interp_mb(&blk->ins[k], col) + interp_fetch(blk, k, col);
+        dmb += dyn_mb(&blk->ins[k], col) + dyn_fetch(blk, k, col);
       }
     }
     int detected = (dmb - imb) != 0;
@@ -282,9 +314,9 @@ int main(void)
   int st = self_test();
 
   printf("\nModeled classes: ARM/Thumb fetch, single load/store, LDM/STM, B/BL,\n"
-         "BX (ARM & Thumb targets), branch refill. NOT yet modeled (add here if a\n"
-         "residual per-block gap appears): MSR/MRS, SWP, MUL/MLA internal cycles,\n"
-         "SWI, conditional-fail instruction fetch accounting.\n");
+         "BX (ARM & Thumb targets), Thumb MUL no-extra, Thumb SWI, branch refill. NOT yet\n"
+         "modeled (add here if a residual per-block gap appears): MSR/MRS, SWP,\n"
+         "ARM MUL/MLA internal cycles, SWI, conditional-fail instruction fetch accounting.\n");
 
   printf("\n== %d ok/tolerated, %d REAL backend bug(s); self-test %s ==\n",
          n_pass, n_real, st ? "FAILED" : "passed");

@@ -23,12 +23,14 @@
 #       Presses calculator SHIFT's default GBA binding (A) on exact frame counts.
 #       Legacy A_FRAME/A_HOLD/A_PERIOD/A_PRESS aliases are still accepted.
 #     DIFF_FRAME(120) DIFF_BLOCKS(256)        # in-emu lockstep block diff
+#     DIFF_DUMP_OPS(OFF)                      # dump block ops/cycle trace
 #     WINDOW_DIFF_FRAME(-1)                   # preserving one-frame diff
 #     THUMB_LDST_NATIVE(ON)                   # toggle native Thumb byte LDR fast path
 #     EXACT_CYCLES(ON)                        # harness-only Thumb instruction
 #                                                boundary checks for cycle diffing
 #     TRACE_PC(0) TRACE_MASK(4095) TRACE_JIT(0)
 #                                                targeted helper/JIT debug trace
+#     TRACE_TIMER_IO(0)                          timer register write trace
 #     SECS_INTERP(240) SECS_JIT(240) SECS_DIFF(SECS_INTERP)
 #                                                wall-clock caps per run
 #     CASIO_EMU(~/Dev/casio-emu)              # uses build-hle/calcemu
@@ -50,12 +52,14 @@ SHIFT_HOLD="${SHIFT_HOLD:-${A_HOLD:-$FRAMES}}"
 SHIFT_PERIOD="${SHIFT_PERIOD:-${A_PERIOD:-200}}"
 SHIFT_PRESS="${SHIFT_PRESS:-${A_PRESS:-2}}"
 DIFF_FRAME="${DIFF_FRAME:-120}";    DIFF_BLOCKS="${DIFF_BLOCKS:-256}"
+DIFF_DUMP_OPS="${DIFF_DUMP_OPS:-OFF}"
 WINDOW_DIFF_FRAME="${WINDOW_DIFF_FRAME:--1}"
 THUMB_LDST_NATIVE="${THUMB_LDST_NATIVE:-ON}"
 EXACT_CYCLES="${EXACT_CYCLES:-ON}"
 TRACE_PC="${TRACE_PC:-0}"
 TRACE_MASK="${TRACE_MASK:-4095}"
 TRACE_JIT="${TRACE_JIT:-0}"
+TRACE_TIMER_IO="${TRACE_TIMER_IO:-0}"
 SECS_INTERP="${SECS_INTERP:-240}";  SECS_JIT="${SECS_JIT:-240}"
 SECS_DIFF="${SECS_DIFF:-$SECS_INTERP}"
 
@@ -75,6 +79,7 @@ cfg() { # build_dir dynarec(0|1) [extra diff args...]
     -DCGBA_DYNAREC=ON -DCGBA_GPSP_HEADLESS_TEST=ON \
     -DCGBA_SH4_THUMB_LDST_NATIVE="$THUMB_LDST_NATIVE" \
     -DCGBA_SH4_EXACT_CYCLE_BOUNDARIES="$EXACT_CYCLES" \
+    -DCGBA_SH4_DIFF_DUMP_OPS="$DIFF_DUMP_OPS" \
     -DCGBA_GPSP_HEADLESS_FRAMES="$FRAMES" \
     -DCGBA_GPSP_HEADLESS_STATE_EVERY="$STATE_EVERY" \
     -DCGBA_GPSP_HEADLESS_LOG_EVERY=0 \
@@ -91,11 +96,15 @@ cfg() { # build_dir dynarec(0|1) [extra diff args...]
     -DCGBA_GPSP_HEADLESS_TRACE_PC="$TRACE_PC" \
     -DCGBA_GPSP_HEADLESS_TRACE_MASK="$TRACE_MASK" \
     -DCGBA_GPSP_HEADLESS_TRACE_JIT="$TRACE_JIT" \
+    -DCGBA_GPSP_HEADLESS_TRACE_TIMER_IO="$TRACE_TIMER_IO" \
     "${@:3}" >/dev/null
 }
 
 build() { # build_dir tag
+  cmake --build "$1" --target clean >/dev/null
+  rm -f "$GG/CGBA-GPSP.g3a"
   cmake --build "$1" -j4 >/dev/null
+  [[ -r "$GG/CGBA-GPSP.g3a" ]] || { echo "build did not produce $GG/CGBA-GPSP.g3a" >&2; exit 1; }
   cp "$GG/CGBA-GPSP.g3a" "$OUT/$2.g3a"
 }
 
@@ -113,7 +122,7 @@ echo "harness output dir: $OUT"
 echo "ROM: $ROM   frames: $FRAMES   sample: every $STATE_EVERY"
 echo "input: START frame $START_FRAME hold $START_HOLD; SHIFT frame $SHIFT_FRAME hold $SHIFT_HOLD period $SHIFT_PERIOD press $SHIFT_PRESS"
 echo "jit knobs: thumb_ldst=$THUMB_LDST_NATIVE exact_cycles=$EXACT_CYCLES"
-echo "trace: pc=$TRACE_PC mask=$TRACE_MASK jit=$TRACE_JIT"
+echo "trace: pc=$TRACE_PC mask=$TRACE_MASK jit=$TRACE_JIT timer_io=$TRACE_TIMER_IO"
 
 run_block_diff=0
 if [[ "$DIFF_BLOCKS" != "0" && "$DIFF_FRAME" -ge 0 ]]; then

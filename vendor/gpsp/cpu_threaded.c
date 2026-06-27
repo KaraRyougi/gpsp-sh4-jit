@@ -101,6 +101,12 @@ typedef struct
 // Div (6) and DivArm (7)
 #define is_div_swi(swinum) (((swinum) & 0xFE) == 0x06)
 
+#ifdef SH4_ARCH
+#define SH4_THUMB_MUL_EXTRA_CYCLES 0
+#else
+#define SH4_THUMB_MUL_EXTRA_CYCLES 2
+#endif
+
 #define arm_decode_data_proc_reg(opcode)                                      \
   u32 rn = (opcode >> 16) & 0x0F;                                             \
   u32 rd = (opcode >> 12) & 0x0F;                                             \
@@ -1933,7 +1939,7 @@ void translate_icache_sync() {
         case 0x01:                                                            \
           /* MUL rd, rs */                                                    \
           thumb_data_proc(alu_op, muls, reg, rd, rs, rd);                     \
-          cycle_count += 2;  /* Between 1 and 4 extra cycles */               \
+          cycle_count += SH4_THUMB_MUL_EXTRA_CYCLES;                          \
           break;                                                              \
                                                                               \
         case 0x02:                                                            \
