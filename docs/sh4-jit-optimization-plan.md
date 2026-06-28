@@ -362,6 +362,18 @@ dynarec) and treat Phase 1 as the make-or-break milestone.
 - **Perf:** per-frame timing via the free-running TMU; report fps + dynarec/render
   split (prizoop's `perfnotes.txt` methodology). Use `mode3_smoke` / `input_probe`
   test ROMs, then a light commercial 2D title.
+- **Current JIT performance warning:** do not assume the correctness MVP speeds
+  up real hardware yet. The user reports no noticeable JIT improvement during
+  the Metroid intro cutscene. First confirm the tested `.g3a` was configured
+  with `-DCGBA_DYNAREC=ON`; the normal `fxsdk build-cg` path is still
+  interpreter-only because the dynarec is default-off. Then measure interpreter
+  vs JIT on the physical fx-CG100 with the same ROM, scene, frameskip/display
+  settings, and overlay metric before optimizing. Also log
+  translation/cache-flush counters; the 4099-frame Metroid JIT harness showed
+  heavy translation churn
+  (`rom_flush=1780`, `arm_tx=13640`, `thumb_tx=604734`), which can erase native
+  execution gains until cache sizing, block reuse, block chaining, resident
+  regs, inline memory, and idle-loop emit are implemented.
 - **Harnesses:** the existing `~/Dev/casio-emu` flow (`run-zelda-flash.sh`,
   framebuffer/PPM dumps, GRAM-write logging) before physical hardware.
 
