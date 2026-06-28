@@ -4,6 +4,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "fxcg100_platform.h"
+
 #define CGBA_GBA_WIDTH 240
 #define CGBA_GBA_HEIGHT 160
 #define CGBA_GBA_PITCH 240
@@ -24,6 +26,9 @@ const char *cgba_gpsp_last_error(void);
 void cgba_gpsp_run_frame(uint32_t gba_buttons, int render_video);
 uint32_t cgba_gpsp_keyinput(void);
 uint32_t cgba_gpsp_frame_hash(const uint16_t *pixels);
+void cgba_gpsp_debug_menu(fxcg100_debug_info *debug, unsigned frame,
+	uint32_t last_hash, unsigned emu_fps, unsigned draw_fps,
+	const uint16_t *framebuffer, uint32_t host_sp);
 void cgba_gpsp_shutdown(void);
 
 /* Fill up to max_lines short strings with a pipeline snapshot (ROM load result,

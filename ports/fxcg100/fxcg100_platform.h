@@ -70,6 +70,15 @@ typedef enum fxcg100_menu_result {
   FXCG100_MENU_SAVE_STATE
 } fxcg100_menu_result;
 
+#define FXCG100_MENU_PAGE_SLOTS 5
+#define FXCG100_DEBUG_MENU_LINES 20
+#define FXCG100_DEBUG_MENU_LINE_MAX 64
+
+typedef struct fxcg100_debug_info {
+  uint32_t count;
+  char lines[FXCG100_DEBUG_MENU_LINES][FXCG100_DEBUG_MENU_LINE_MAX];
+} fxcg100_debug_info;
+
 typedef struct fxcg100_menu_state {
   uint32_t rom_source;
   uint32_t screen_scale;
@@ -84,8 +93,8 @@ typedef struct fxcg100_menu_state {
   uint16_t keymap[FXCG100_GBA_KEY_COUNT];
   uint16_t hotkey_map[FXCG100_HOTKEY_COUNT];
   uint32_t cheat_active[10];
-  uint32_t selected[4];
-  uint32_t scroll[4];
+  uint32_t selected[FXCG100_MENU_PAGE_SLOTS];
+  uint32_t scroll[FXCG100_MENU_PAGE_SLOTS];
   uint32_t random_lfsr;
 } fxcg100_menu_state;
 
@@ -111,7 +120,8 @@ int fxcg100_config_save(const fxcg100_menu_state *state);
 
 void fxcg100_menu_init(fxcg100_menu_state *state);
 fxcg100_menu_result fxcg100_menu_run(fxcg100_menu_state *state,
-                                     uint32_t frame, uint32_t last_hash);
+                                     uint32_t frame, uint32_t last_hash,
+                                     const fxcg100_debug_info *debug);
 int fxcg100_menu_should_blit(fxcg100_menu_state *state, uint32_t frame);
 uint32_t fxcg100_rom_source_count(void);
 const char *fxcg100_rom_source_label(uint32_t index);
