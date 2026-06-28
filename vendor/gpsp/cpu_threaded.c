@@ -231,6 +231,10 @@ typedef struct
   #include "x86/x86_emit.h"
 #endif
 
+#ifndef thumb_bl_prefix
+#define thumb_bl_prefix() do {} while(0)
+#endif
+
 /* Cache invalidation */
 
 #if defined(PSP)
@@ -2337,9 +2341,9 @@ void translate_icache_sync() {
                                                                               \
     case 0xF0 ... 0xF7:                                                       \
     {                                                                         \
-      /* (low word) BL label */                                               \
-      /* This should possibly generate code if not in conjunction with a BLH  \
-         next, but I don't think anyone will do that. */                      \
+      /* BL prefix: emitters may materialize the temporary LR here so a       \
+         cycle exit between the BL halves can resume at the suffix. */        \
+      thumb_bl_prefix();                                                      \
       break;                                                                  \
     }                                                                         \
                                                                               \
