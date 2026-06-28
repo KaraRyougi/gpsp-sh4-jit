@@ -60,6 +60,36 @@ function-pointer/continuation the caller passed in r0) was written to the stack
 as 0 — i.e. a `push`/`str` stored 0, or the source register was already 0 when
 pushed (a load/computation that should yield a code address produced 0).
 
+### Update (2026-06-27, later): it is a CONTROL-FLOW divergence, not a value bug
+
+A multi-agent code audit pointed at an S-bit `LDM{pc}^` bank-restore bug in
+`cgba_sh4_arm_block` (the helper loaded r13/r14 into the privileged bank instead
+of bracketing the transfer in USER mode like the interpreter). That **is a real
+latent bug** (fixed — see below) but is **not** this freeze: instrumenting the
+helper showed **zero** `LDM{pc}^`-with-r14 events near frame 700 (the BIOS IRQ
+returns use `subs pc,lr,#4`, not `ldm^`), and the fix does not change the freeze.
+
+Direct watchpoints then settled it:
+- A store watchpoint on `0x03007E20`: the slot is written `0` by the prologue
+  `push {r5,r6,r7}` at game `0x080015DC` — and the **interpreter writes exactly
+  the same 0 there** (635 vs 643 instances, all 0). **The stack value 0 is
+  legitimate, not corrupted.**
+- A read/PC watchpoint: the **interpreter NEVER executes `0x08002248`** (count 0),
+  while the JIT jumps there. So `0x08002248 pop {r0}; bx r0` is code the game
+  never runs — the JIT branched into it wrongly, popped a *stale* (legitimately 0)
+  stack slot — last written by an unrelated function (`0x080015DC`), not by the
+  function owning the `pop` — and `bx 0`.
+
+So the root is a **wrong-computed branch/return target** that lands the JIT in
+dead code at `0x0800223E`/`0x08002248`. The `@@WJ` ring even shows the chain
+passing through `0x08001870` (the middle of the Thumb `bl @0x0800186E`), i.e. an
+indirect-branch target that is off / mid-instruction. This is an accumulated
+control-flow divergence (a register holding a branch target is wrong), which the
+state-reseeding per-block register diff cannot see and which the cutscene's frame
+waits keep it from reaching. Pinning the FIRST wrong branch needs a **true-
+lockstep diff** (run both cores with independent register files, compare after
+every block, no per-block reseed) — the documented next step.
+
 ### Ruled out
 
 - **Native LDST emitters are NOT the cause.** Building with
@@ -131,26 +161,34 @@ positives) and advances through the per-frame BIOS waits.
   `src/interpreter.c`, or gpSP's `block_lookup_address` resolver (NOT
   `translate_block`) to log guest jumps into the BIOS boot (`0x0`/`0x200`).
 
+## Fixed along the way (not the freeze)
+
+`cgba_sh4_arm_block` now brackets S-bit block transfers in USER mode to match the
+interpreter (`set_cpu_mode(MODE_USER)` around the transfer when `s_bit && (store
+|| rn != r15)`), so an `LDM{pc}^` exception return preserves the popped user
+sp/lr. Real latent bug; regression-neutral here (the path doesn't fire in this
+ROM near the freeze).
+
 ## Next steps
 
-The manifestation is pinned (`0x08002248 pop {r0}; bx r0`, r0==0). The open
-question is **where the stack 0 comes from**. The register-only block-diff can't
-see it (wrong-value *store*, not a register), so:
+The freeze is a **control-flow divergence** (the JIT branches into dead code the
+interpreter never runs). The register-only, state-reseeding per-block diff cannot
+see it, and the cutscene's frame/IntrWait waits keep it from reaching the
+divergence. So:
 
-1. **Trace the stack slot.** Instrument the dynarec to log `[sp]` (and sp, LR)
-   when the guest reaches `0x08002248`, and the value + sp at the matching
-   `push`/`str` that fills it, in BOTH the JIT and an interp build; diff the two
-   to find the block that writes 0 where the interp writes a code address.
-2. **Or extend the block-diff to compare memory writes** (a store log per block),
-   not just registers — then the corrupting store shows up directly. It also
-   needs to cross the cutscene's frame/IntrWait waits (the current spin-advance
-   only handles `dpc==pc0` self-loops).
-3. Once the corrupting op is found, fix its SH4 codegen and re-verify the full
-   new-game → gameplay path, interp vs JIT, frame-by-frame.
-
-Note: native LDST off freezes too, so look at machinery shared by both builds
-(stores/PUSH-POP block transfers, conditional/flag handling, or an
-IRQ/timing-dependent path that feeds the bad value).
+1. **Build a true-lockstep diff.** Run the dynarec and interpreter with
+   *independent* register files + memory, stepping both block-by-block WITHOUT
+   reseeding from a shared state, and compare the full state after each block.
+   The first register/PC divergence is the wrong branch's cause. (The existing
+   block-diff reseeds every block, which is exactly why it misses an accumulated
+   control-flow drift.) It must advance through IRQ/IntrWait waits naturally
+   (drive both cores with their own `update_gba`).
+2. With the first wrong branch pinned, identify the SH4 codegen for the
+   branch/return that computes the bad target (suspect: an indirect branch /
+   `pop {pc}` / `bx` whose target register drifts, possibly Thumb-BL LR handling
+   given the chain lands at `0x08001870` mid-BL, or an IRQ taken at a block
+   boundary that mis-saves the return PC). Fix it and re-verify new-game →
+   gameplay, interp vs JIT, frame-by-frame past frame 700/1000.
 
 See [[sh4-newgame-decompress-bug]], [[casio-emu-timing-not-cycle-accurate]],
 [[dynarec-cycle-accuracy-practice]], [[dispatch-null-overflow-crash]].
