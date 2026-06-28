@@ -18,10 +18,14 @@
 typedef enum menu_page_id {
   MENU_PAGE_MAIN = 0,
   MENU_PAGE_GRAPHICS,
+  MENU_PAGE_DEBUG,
   MENU_PAGE_GAMEPAD,
   MENU_PAGE_CHEATS,
   MENU_PAGE_COUNT
 } menu_page_id;
+
+typedef char menu_state_page_slots_mismatch[
+  FXCG100_MENU_PAGE_SLOTS >= MENU_PAGE_COUNT ? 1 : -1];
 
 typedef enum menu_value_id {
   MENU_VALUE_NONE = 0,
@@ -43,6 +47,7 @@ typedef enum menu_item_kind {
   MENU_ITEM_NUMBER_ACTION,
   MENU_ITEM_GBA_KEY,
   MENU_ITEM_HOTKEY,
+  MENU_ITEM_DEBUG,
   MENU_ITEM_INFO
 } menu_item_kind;
 
@@ -71,6 +76,8 @@ typedef struct menu_item {
   uint32_t count;
   const char *info;
 } menu_item;
+
+static const fxcg100_debug_info *menu_debug_info;
 
 static const char * const scale_options[] = {
   "UNSCALED 3:2",
@@ -126,6 +133,8 @@ static const menu_item main_items[] = {
     sizeof(rom_options) / sizeof(rom_options[0]), NULL },
   { "GRAPHICS OPTIONS", MENU_ITEM_SUBMENU, MENU_ACTION_NONE,
     MENU_PAGE_GRAPHICS, MENU_VALUE_NONE, NULL, 0, NULL },
+  { "DEBUG INFO", MENU_ITEM_SUBMENU, MENU_ACTION_NONE,
+    MENU_PAGE_DEBUG, MENU_VALUE_NONE, NULL, 0, NULL },
   { "LOAD STATE FROM SLOT", MENU_ITEM_NUMBER_ACTION, MENU_ACTION_LOAD_STATE,
     MENU_PAGE_MAIN, MENU_VALUE_SAVE_SLOT, NULL, 10, NULL },
   { "SAVE STATE TO SLOT", MENU_ITEM_NUMBER_ACTION, MENU_ACTION_SAVE_STATE,
@@ -163,6 +172,37 @@ static const menu_item graphics_items[] = {
   { "BACK", MENU_ITEM_ACTION, MENU_ACTION_BACK,
     MENU_PAGE_MAIN, MENU_VALUE_NONE, NULL, 0, NULL }
 };
+
+#define DEBUG_ITEM(index) \
+  { "", MENU_ITEM_DEBUG, MENU_ACTION_NONE, \
+    MENU_PAGE_DEBUG, MENU_VALUE_NONE, NULL, (index), NULL }
+
+static const menu_item debug_items[] = {
+  DEBUG_ITEM(0),
+  DEBUG_ITEM(1),
+  DEBUG_ITEM(2),
+  DEBUG_ITEM(3),
+  DEBUG_ITEM(4),
+  DEBUG_ITEM(5),
+  DEBUG_ITEM(6),
+  DEBUG_ITEM(7),
+  DEBUG_ITEM(8),
+  DEBUG_ITEM(9),
+  DEBUG_ITEM(10),
+  DEBUG_ITEM(11),
+  DEBUG_ITEM(12),
+  DEBUG_ITEM(13),
+  DEBUG_ITEM(14),
+  DEBUG_ITEM(15),
+  DEBUG_ITEM(16),
+  DEBUG_ITEM(17),
+  DEBUG_ITEM(18),
+  DEBUG_ITEM(19),
+  { "BACK", MENU_ITEM_ACTION, MENU_ACTION_BACK,
+    MENU_PAGE_MAIN, MENU_VALUE_NONE, NULL, 0, NULL }
+};
+
+#undef DEBUG_ITEM
 
 static const menu_item gamepad_items[] = {
   { "MENU", MENU_ITEM_INFO, MENU_ACTION_NONE,
@@ -283,6 +323,10 @@ static const menu_item *menu_page_items(menu_page_id page, size_t *count,
     *count = sizeof(graphics_items) / sizeof(graphics_items[0]);
     *title = "GRAPHICS OPTIONS";
     return graphics_items;
+  case MENU_PAGE_DEBUG:
+    *count = sizeof(debug_items) / sizeof(debug_items[0]);
+    *title = "DEBUG INFO";
+    return debug_items;
   case MENU_PAGE_GAMEPAD:
     *count = sizeof(gamepad_items) / sizeof(gamepad_items[0]);
     *title = "MAP GAMEPAD INPUT";
@@ -426,6 +470,15 @@ static void menu_format_item(fxcg100_menu_state *state, const menu_item *item,
                fxcg100_key_label(state->hotkey_map[item->count]));
     else
       snprintf(line, line_size, "%s: ?", item->label);
+    break;
+  case MENU_ITEM_DEBUG:
+    if (menu_debug_info && item->count < menu_debug_info->count)
+      snprintf(line, line_size, "%s", menu_debug_info->lines[item->count]);
+    else if (item->count == 0)
+      snprintf(line, line_size, "NO DEBUG SNAPSHOT");
+    else
+      if (line_size)
+        line[0] = '\0';
     break;
   case MENU_ITEM_INFO:
     snprintf(line, line_size, "%s: %s", item->label,
@@ -605,6 +658,7 @@ static fxcg100_menu_result menu_activate_item(fxcg100_menu_state *state,
       *message = "HOTKEY MAPPING CANCELLED";
     return FXCG100_MENU_CONTINUE;
   case MENU_ITEM_INFO:
+  case MENU_ITEM_DEBUG:
     break;
   default:
     break;
@@ -668,12 +722,14 @@ void fxcg100_menu_init(fxcg100_menu_state *state)
 }
 
 fxcg100_menu_result fxcg100_menu_run(fxcg100_menu_state *state,
-                                     uint32_t frame, uint32_t last_hash)
+                                     uint32_t frame, uint32_t last_hash,
+                                     const fxcg100_debug_info *debug)
 {
   menu_page_id page = MENU_PAGE_MAIN;
   const char *message = "";
   uint32_t previous = fxcg100_poll_app_keys();
 
+  menu_debug_info = debug;
   for (;;) {
     const menu_item *items;
     const char *title;

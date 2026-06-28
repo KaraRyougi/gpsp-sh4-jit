@@ -63,6 +63,18 @@ static void wait_briefly(void)
 		;
 }
 
+static uint32_t read_stack_pointer(void)
+{
+	uint32_t sp;
+
+#if defined(__sh__)
+	__asm__ volatile("mov r15, %0" : "=r"(sp));
+#else
+	sp = (uint32_t)(uintptr_t)&sp;
+#endif
+	return sp;
+}
+
 static int gpsp_highbss_range_ok(void)
 {
 	uintptr_t start = (uintptr_t)cgba_highbss_start;
@@ -993,6 +1005,7 @@ int main(void)
 	unsigned frame = 1;
 	fxcg100_menu_result menu_result;
 	cgba_pacer pacer;
+	static fxcg100_debug_info debug_info;
 
 	cgba_pacer_init(&pacer, 60, 9);
 
@@ -1002,7 +1015,7 @@ int main(void)
 	if(cgba_gpsp_rom_count() > CGBA_GPSP_ROM_BUILTIN_COUNT)
 		menu_state.rom_source = CGBA_GPSP_ROM_BUILTIN_COUNT;
 
-	menu_result = fxcg100_menu_run(&menu_state, 0, 0);
+	menu_result = fxcg100_menu_run(&menu_state, 0, 0, NULL);
 	if(menu_result == FXCG100_MENU_QUIT)
 		return exit_to_os(1);
 	wait_for_keys_released();
@@ -1037,8 +1050,11 @@ int main(void)
 			last_hash = cgba_gpsp_frame_hash(framebuffer);
 			cgba_gpsp_refresh_roms();
 			menu_state.rom_source = normalize_rom_id(menu_state.rom_source);
+			cgba_gpsp_debug_menu(&debug_info, frame, last_hash,
+				cgba_fps.emu_fps, cgba_fps.draw_fps, framebuffer,
+				read_stack_pointer());
 			fxcg100_menu_result result =
-				fxcg100_menu_run(&menu_state, frame, last_hash);
+				fxcg100_menu_run(&menu_state, frame, last_hash, &debug_info);
 
 			wait_for_keys_released();
 			previous_app_keys = fxcg100_poll_app_keys();

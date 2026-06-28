@@ -1,5 +1,6 @@
 #include "gpsp_runner.h"
 
+#include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -42,7 +43,32 @@ static int cgba_storage_roms_scanned;
 static char cgba_last_error[96];
 static int cgba_lcd_test_active;
 static int cgba_mode3_debug_copy_active;
+static unsigned cgba_loaded_rom_id;
 static uint16_t *cgba_active_framebuffer;
+
+static void debug_line(fxcg100_debug_info *debug, const char *fmt, ...)
+{
+	va_list ap;
+
+	if(!debug || debug->count >= FXCG100_DEBUG_MENU_LINES)
+		return;
+	va_start(ap, fmt);
+	vsnprintf(debug->lines[debug->count],
+		sizeof(debug->lines[debug->count]), fmt, ap);
+	va_end(ap);
+	debug->count++;
+}
+
+static unsigned framebuffer_black_pixels(const uint16_t *framebuffer)
+{
+	unsigned black = 0;
+
+	if(!framebuffer)
+		return 0;
+	for(unsigned i = 0; i < CGBA_GBA_WIDTH * CGBA_GBA_HEIGHT; i++)
+		black += framebuffer[i] == 0;
+	return black;
+}
 
 #if defined(CGBA_DYNAREC) && CGBA_GPSP_HEADLESS_TRACE_JIT
 static void hputc_dbg(char c)
@@ -141,6 +167,7 @@ int cgba_gpsp_init(uint16_t *framebuffer, unsigned rom_id)
 	cgba_active_framebuffer = framebuffer;
 	cgba_lcd_test_active = rom ? rom->lcd_test : 0;
 	cgba_mode3_debug_copy_active = rom ? rom->mode3_debug_copy : 0;
+	cgba_loaded_rom_id = rom_id;
 
 	if(rom && rom->lcd_test)
 		return 0;
@@ -428,6 +455,82 @@ uint32_t cgba_gpsp_frame_hash(const uint16_t *pixels)
 	}
 
 	return hash;
+}
+
+static uint32_t mode_sp(uint32_t mode)
+{
+	return reg[CPU_MODE] == mode ? reg[REG_SP] : REG_MODE(mode)[5];
+}
+
+static uint32_t mode_lr(uint32_t mode)
+{
+	return reg[CPU_MODE] == mode ? reg[REG_LR] : REG_MODE(mode)[6];
+}
+
+void cgba_gpsp_debug_menu(fxcg100_debug_info *debug, unsigned frame,
+	uint32_t last_hash, unsigned emu_fps, unsigned draw_fps,
+	const uint16_t *framebuffer, uint32_t host_sp)
+{
+	const uint16_t *fb = framebuffer ? framebuffer : cgba_active_framebuffer;
+	uint16_t center = fb ?
+		fb[(CGBA_GBA_HEIGHT / 2) * CGBA_GBA_PITCH +
+			(CGBA_GBA_WIDTH / 2)] : 0;
+	unsigned black = framebuffer_black_pixels(fb);
+
+	if(!debug)
+		return;
+	memset(debug, 0, sizeof(*debug));
+	debug_line(debug, "ROM %s", cgba_gpsp_rom_name(cgba_loaded_rom_id));
+	debug_line(debug, "FRAME %u HASH %08lX", frame, (unsigned long)last_hash);
+	debug_line(debug, "FPS EMU=%u DRAW=%u", emu_fps, draw_fps);
+	debug_line(debug, "HOST SP=%08lX", (unsigned long)host_sp);
+	debug_line(debug, "PC=%08lX CPSR=%08lX",
+		(unsigned long)reg[REG_PC], (unsigned long)reg[REG_CPSR]);
+	debug_line(debug, "MODE=%02lX HALT=%lu SLEEP=%08lX",
+		(unsigned long)reg[CPU_MODE],
+		(unsigned long)reg[CPU_HALT_STATE],
+		(unsigned long)reg[REG_SLEEP_CYCLES]);
+	debug_line(debug, "GBA SP=%08lX LR=%08lX",
+		(unsigned long)reg[REG_SP], (unsigned long)reg[REG_LR]);
+	debug_line(debug, "SVC SP=%08lX LR=%08lX",
+		(unsigned long)mode_sp(MODE_SUPERVISOR),
+		(unsigned long)mode_lr(MODE_SUPERVISOR));
+	debug_line(debug, "IRQ SP=%08lX LR=%08lX",
+		(unsigned long)mode_sp(MODE_IRQ),
+		(unsigned long)mode_lr(MODE_IRQ));
+	debug_line(debug, "R0=%08lX R1=%08lX",
+		(unsigned long)reg[0], (unsigned long)reg[1]);
+	debug_line(debug, "R2=%08lX R3=%08lX",
+		(unsigned long)reg[2], (unsigned long)reg[3]);
+	debug_line(debug, "IO DISP=%04X STAT=%04X VCNT=%u",
+		read_ioreg(REG_DISPCNT), read_ioreg(REG_DISPSTAT),
+		read_ioreg(REG_VCOUNT));
+	debug_line(debug, "IRQ IE=%04X IF=%04X IME=%04X",
+		read_ioreg(REG_IE), read_ioreg(REG_IF), read_ioreg(REG_IME));
+	debug_line(debug, "KEYIN=%03lX WAIT=%04X OAM=%lu",
+		(unsigned long)cgba_gpsp_keyinput(), read_ioreg(REG_WAITCNT),
+		(unsigned long)reg[OAM_UPDATED]);
+	debug_line(debug, "FB BLACK=%u/%u C=%04X",
+		black, (unsigned)(CGBA_GBA_WIDTH * CGBA_GBA_HEIGHT), center);
+	debug_line(debug, "DMA3 ST=%lu LEN=%lu",
+		(unsigned long)dma[3].start_type, (unsigned long)dma[3].length);
+	debug_line(debug, "TMR0=%ld TMR1=%ld",
+		(long)timer[0].count, (long)timer[1].count);
+	debug_line(debug, "TMR2=%ld TMR3=%ld",
+		(long)timer[2].count, (long)timer[3].count);
+#ifdef CGBA_DYNAREC
+	debug_line(debug, "CORE=%s ECYC=%lu",
+		dynarec_enable ? "JIT" : "INT", (unsigned long)execute_cycles);
+	debug_line(debug, "JIT ROM=%luk/%luk RAM=%luk/%luk",
+		(unsigned long)((uintptr_t)rom_translation_ptr -
+			(uintptr_t)rom_translation_cache) / 1024u,
+		(unsigned long)ROM_TRANSLATION_CACHE_SIZE / 1024u,
+		(unsigned long)((uintptr_t)ram_translation_ptr -
+			(uintptr_t)ram_translation_cache) / 1024u,
+		(unsigned long)RAM_TRANSLATION_CACHE_SIZE / 1024u);
+#else
+	debug_line(debug, "CORE=INTERPRETER");
+#endif
 }
 
 unsigned cgba_gpsp_diag(char out[][CGBA_DIAG_LINE_MAX], unsigned max_lines)
