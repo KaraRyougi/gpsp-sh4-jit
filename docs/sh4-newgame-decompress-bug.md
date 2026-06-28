@@ -70,32 +70,64 @@ correct end — it structurally **cannot see accumulated drift**. It also compar
 per-frame `IntrWait`/VCOUNT waits before it ever reaches the divergence. Pinning
 the **first** wrong branch therefore needs a true-lockstep diff (see Next steps).
 
+### The corrupt branch is an indirect branch on the native LDST path
+
+Further watchpoints narrowed *how* `0x08001870` is reached:
+
+- It is **not a translation-gate re-dispatch.** `@@GATE` instrumentation in
+  `generate_translation_gate` never fired for `0x08001870`, and no block ends at
+  the BL prefix `0x0800186E` (`MAX_BLOCK_SIZE`=1024 rules out a size split of a
+  ~20-instruction region). So it is a genuine **indirect branch to `0x08001871`**
+  (a `bx`/`pop {pc}`/computed target), not a fall-through.
+- The corrupt pointer is **not on the C-path.** Value + load watchpoints on
+  `write_memory32`/`read_memory32` for `0x08001870`..`0x08001873` show the JIT
+  stores/loads the *correct* `0x08001873` identically to the interpreter and
+  **never** touches the corrupt `0x08001871` through the C helpers. So the bad
+  pointer is created/consumed on the **native single LDST path** (which bypasses
+  `write_memory32`/`read_memory32`) or computed in a register.
+- **Native LDST off is a *different* bug.** With both LDST natives disabled the
+  freeze moves to **frame 696** with `@@WJ`=0 (NO jump into the boot region at
+  all) and zero `0x0800187x` C-path traffic. So there appear to be **two distinct
+  bugs**; the frame-700 one is tied to the native LDST path, and native-off
+  exposes a separate, earlier one.
+
 ## Ruled out
 
-- **Native LDST emitters are not the cause.**
-  `-DCGBA_SH4_THUMB_LDST_NATIVE=OFF -DCGBA_SH4_ARM_LDST_NATIVE=OFF` still freezes
-  — *earlier* (frame 696) and *differently* (no BIOS storm). So native LDST only
-  perturbs which value happens to be live; the bug is in shared machinery.
+- **Native LDST is not a *uniform* cause, but the frame-700 freeze IS tied to it**
+  (see above): disabling it moves the failure to a *different* frame-696 bug, so
+  it is not a clean bisect. Treat them as two bugs.
 - **Value/stack corruption** of the popped slot (the 0 is written identically by
   both cores) and a **PUSH/POP SP-writeback miscalc** (SP is sane at the jump,
   `0x03007E24` in the IWRAM stack; a wrong r13 would show in the register diff).
 - **The BIOS LZ77 unpack at `0xB5C`** — the earlier "first divergence here" was a
   harness artifact (see History below).
 
-## Fixed along the way (a real bug, but NOT this freeze)
+## Fixed along the way (real bugs, but NOT this freeze)
 
-A multi-agent audit found that `cgba_sh4_arm_block` transferred the
-current/privileged register bank for S-bit block transfers, whereas the gpSP
-interpreter (`cpu.cc` `exec_arm_block_mem`, ~1010/1041) brackets the transfer in
-USER mode whenever `s_bit && (store || rn != r15)`. For an `LDM{pc}^` exception
-return that loaded the popped user `r13`/`r14` into the wrong bank, then the SPSR
-re-bank discarded them and reloaded stale USER `sp`/`lr`.
+Two genuine latent bugs were found and fixed during the hunt. Neither changes the
+frame-700 freeze (confirmed by instrumentation / re-test), but both are correct.
 
-**Fixed** (`ports/fxcg100/sh4/sh4_interp_helpers.c`): `set_cpu_mode(MODE_USER)`
-around the transfer, restore the entry mode after, matching the interpreter
-exactly. Genuine latent bug; **regression-neutral on this ROM** (instrumentation
-showed **zero** `LDM{pc}^`-with-r13/r14 opcodes fire near the freeze — the BIOS
-IRQ returns use `subs pc,lr,#4`, not `ldm^`), so it does not change the freeze.
+1. **S-bit `LDM{pc}^` USER-bank restore** (`cgba_sh4_arm_block`,
+   `ports/fxcg100/sh4/sh4_interp_helpers.c`). The helper transferred the
+   current/privileged bank, whereas the interpreter (`cpu.cc` `exec_arm_block_mem`
+   ~1010/1041) brackets the transfer in USER mode when `s_bit && (store ||
+   rn != r15)`; for an exception return that put the popped user `r13`/`r14` in
+   the wrong bank and the SPSR re-bank then discarded them. Fixed by
+   `set_cpu_mode(MODE_USER)` around the transfer. Regression-neutral here: **zero**
+   `LDM{pc}^`-with-r13/r14 opcodes fire near the freeze (BIOS IRQ returns use
+   `subs pc,lr,#4`).
+
+2. **Thumb BL split across a block boundary** (`thumb_blh_setup` in
+   `vendor/gpsp/sh4/sh4_emit.h`, called from `cpu_threaded.c`). The BL prefix
+   (`0xF0-0xF7`) normally emits nothing because the suffix folds into the same
+   block via `thumb_bl()`. But if a block ends *exactly* at the prefix
+   (`MAX_BLOCK_SIZE` hit there), the suffix is a separate `thumb_blh()` block that
+   reads a **stale LR** → wild branch. Fixed by emitting `LR = (PC+4) +
+   signext(offset)<<12` at the prefix when `pc + 2 == block_end_pc`. **Defensive:
+   it does not fire on this ROM** (`@@GATE`=0; a split needs a ~1024-instruction
+   straight-line block ending at a BL prefix, which essentially never happens), so
+   it is not the frame-700 freeze either — but it is a correct fix for a real
+   latent gpSP gap (the upstream `// I don't think anyone will do that` TODO).
 
 ## Diagnostic tooling (durable)
 
@@ -134,20 +166,29 @@ IRQ returns use `subs pc,lr,#4`, not `ldm^`), so it does not change the freeze.
 
 ## Next steps
 
-1. **Build a true-lockstep diff.** Run the dynarec and interpreter with
-   **independent register files + memory**, stepping both block-by-block with
-   **no per-block reseed**, comparing full state after each block. The first
-   register/PC divergence is the wrong branch's cause. It must advance through
-   IRQ/`IntrWait` waits naturally (each core drives its own `update_gba`). A
-   full-memory-snapshot version likely won't fit the fx-CG100 add-in, so this
-   probably has to run host-side / inside casio-emu rather than in the add-in.
-2. With the first wrong branch pinned, fix the SH4 codegen that computes the bad
-   target. Given the off-by-2-into-mid-BL signature, the suspects are: Thumb-BL
-   `lr`/return handling (esp. a BL split across a block boundary — the prefix
-   `0xF0-0xF7` case generates no code, so a stale `lr` could reach `thumb_blh`),
-   an indirect branch / `pop {pc}` / `bx` whose target register drifts, or an IRQ
-   taken at a block boundary that mis-saves the return PC. Then re-verify
-   new-game → gameplay, interp vs JIT, frame-by-frame past frame 700/1000.
+The corrupt branch target is created on the **native single LDST path** (it is
+invisible to the C-path watchpoints), reached by an indirect branch. So:
+
+1. **Instrument the native LDST path.** `sh4g_thumb_ldst_native` /
+   `sh4g_arm_ldst_native` (`ports/fxcg100/sh4/sh4_*_ldst_emit.h`,
+   `sh4_thumb_dp_emit.h`) emit inline SH4 that bypasses `write_memory32`/
+   `read_memory32`. Make the native path call (or mirror into) a C value-watch for
+   the corrupt `0x08001870`/`0x08001871` (or, generically, any store/load of a
+   Thumb code-pointer that points mid-instruction), capturing the guest PC. That
+   directly finds the native ldr/str that produces the bad pointer — compare its
+   address/value against the interpreter at the same instruction. Suspect a native
+   single ldr/str reading/writing a **wrong address** (off by 2/halfword) for a
+   function-pointer/jump-table access.
+2. **Or build a true-lockstep diff** (the general tool): dynarec and interpreter
+   with **independent register files + memory**, no per-block reseed, comparing
+   full state after each block and advancing through IRQ/`IntrWait` waits with
+   each core's own `update_gba`. The first PC/register divergence is the cause. A
+   full-memory-snapshot version likely won't fit the add-in, so run it host-side /
+   inside casio-emu.
+3. Separately, the **native-LDST-off frame-696 freeze** (`@@WJ`=0, a different
+   failure) is a *second* bug — pin it the same way.
+4. With each wrong branch pinned, fix the SH4 codegen and re-verify new-game →
+   gameplay, interp vs JIT, frame-by-frame past frame 700/1000.
 
 ## History / superseded
 

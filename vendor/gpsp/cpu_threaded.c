@@ -2337,9 +2337,13 @@ void translate_icache_sync() {
                                                                               \
     case 0xF0 ... 0xF7:                                                       \
     {                                                                         \
-      /* (low word) BL label */                                               \
-      /* This should possibly generate code if not in conjunction with a BLH  \
-         next, but I don't think anyone will do that. */                      \
+      /* BL prefix (high word). Normally the suffix follows in the same block  \
+         and thumb_bl() folds both, so the prefix emits nothing. But if the    \
+         block ends EXACTLY here (MAX_BLOCK_SIZE hit at the prefix), the suffix \
+         is translated as a separate thumb_blh() block that would read a stale  \
+         LR -> wild branch; set LR here in that case. */                       \
+      if (pc + 2 == block_end_pc)                                             \
+        thumb_blh_setup();                                                    \
       break;                                                                  \
     }                                                                         \
                                                                               \
