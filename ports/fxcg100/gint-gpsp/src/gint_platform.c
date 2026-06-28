@@ -61,21 +61,8 @@ static void restore_full_window(void)
 	lcd_window_partial = 0;
 }
 
-static int keycode_from_cg100_matrix_code(int basic_keycode)
+int fxcg100_key_down(int keycode)
 {
-	int row = basic_keycode % 10;
-	int col = basic_keycode / 10 - 1;
-
-	if(row < 0 || row > 9 || col < 0 || col > 6)
-		return 0;
-
-	return (row << 4) + (7 - col);
-}
-
-int fxcg100_key_down(int basic_keycode)
-{
-	int keycode = keycode_from_cg100_matrix_code(basic_keycode);
-
 	return keycode ? keydown(keycode) : 0;
 }
 
@@ -85,25 +72,26 @@ uint32_t fxcg100_poll_app_keys(void)
 
 	clearevents();
 
-	if(fxcg100_key_down(77))
+	if(fxcg100_key_down(FXCG100_KEY_SHIFT))
 		keys |= FXCG100_APPKEY_SHIFT;
-	if(fxcg100_key_down(69))
+	if(fxcg100_key_down(FXCG100_KEY_HOME))
 		keys |= FXCG100_APPKEY_HOME;
-	if(fxcg100_key_down(34))
+	if(fxcg100_key_down(FXCG100_KEY_AC))
 		keys |= FXCG100_APPKEY_AC;
-	if(fxcg100_key_down(31) || fxcg100_key_down(48))
+	if(fxcg100_key_down(FXCG100_KEY_EXE) ||
+			fxcg100_key_down(FXCG100_KEY_OK))
 		keys |= FXCG100_APPKEY_EXE;
-	if(fxcg100_key_down(27))
+	if(fxcg100_key_down(FXCG100_KEY_TOOLS))
 		keys |= FXCG100_APPKEY_MENU;
-	if(fxcg100_key_down(49))
+	if(fxcg100_key_down(FXCG100_KEY_UP))
 		keys |= FXCG100_APPKEY_UP;
-	if(fxcg100_key_down(47))
+	if(fxcg100_key_down(FXCG100_KEY_DOWN))
 		keys |= FXCG100_APPKEY_DOWN;
-	if(fxcg100_key_down(58))
+	if(fxcg100_key_down(FXCG100_KEY_LEFT))
 		keys |= FXCG100_APPKEY_LEFT;
-	if(fxcg100_key_down(38))
+	if(fxcg100_key_down(FXCG100_KEY_RIGHT))
 		keys |= FXCG100_APPKEY_RIGHT;
-	if(fxcg100_key_down(68))
+	if(fxcg100_key_down(FXCG100_KEY_BACK))
 		keys |= FXCG100_APPKEY_BACK;
 	if(fxcg100_key_down(FXCG100_PHYSKEY_ON))
 		keys |= FXCG100_APPKEY_ON;

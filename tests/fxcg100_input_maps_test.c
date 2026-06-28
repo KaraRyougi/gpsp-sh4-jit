@@ -3,9 +3,9 @@
 
 #include "ports/fxcg100/fxcg100_platform.h"
 
-int fxcg100_key_down(int basic_keycode)
+int fxcg100_key_down(int keycode)
 {
-  (void)basic_keycode;
+  (void)keycode;
   return 0;
 }
 
@@ -43,13 +43,13 @@ int main(void)
   check(!fxcg100_keymap_valid(keymap), "duplicate GBA key is invalid");
   fxcg100_keymap_defaults(keymap);
 
-  hotkeys[FXCG100_HOTKEY_FAST_FORWARD] = 48;
-  hotkeys[FXCG100_HOTKEY_LOAD_STATE] = 48;
+  hotkeys[FXCG100_HOTKEY_FAST_FORWARD] = FXCG100_KEY_OK;
+  hotkeys[FXCG100_HOTKEY_LOAD_STATE] = FXCG100_KEY_OK;
   check(!fxcg100_hotkey_map_valid(hotkeys),
         "duplicate nonzero hotkey is invalid");
   fxcg100_hotkey_defaults(hotkeys);
 
-  hotkeys[FXCG100_HOTKEY_FAST_FORWARD] = 48;
+  hotkeys[FXCG100_HOTKEY_FAST_FORWARD] = FXCG100_KEY_OK;
   check(fxcg100_hotkey_map_valid(hotkeys), "single hotkey is valid");
   check(fxcg100_input_maps_valid(keymap, hotkeys),
         "non-overlapping hotkey is valid with GBA map");
