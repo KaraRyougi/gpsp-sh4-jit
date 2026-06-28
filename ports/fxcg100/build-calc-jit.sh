@@ -35,11 +35,18 @@ TC="$PREFIX/lib/cmake/fxsdk/FXCG50.cmake"
 
 JOBS="$( (sysctl -n hw.ncpu 2>/dev/null) || (nproc 2>/dev/null) || echo 4 )"
 
+# Perf config (see docs/sh4-jit-optimization-plan.md / the HW-perf diagnosis):
+#  - ARM_LDST_NATIVE=ON  : native ARM load/store, avoids per-op far-call into a
+#    NOR C helper (verified pixel-identical to the interpreter).
+#  - ROM_BRANCH_HASH_BITS : defaults to 13 (32KB) in CMakeLists so the branch hash
+#    fits the SH7305 cache instead of thrashing it at the upstream 16 (256KB).
+#    Sweep with -DCGBA_GPSP_ROM_BRANCH_HASH_BITS=N below.
 cmake -S "$GG" -B "$GG/$BUILD" \
   -DCMAKE_MODULE_PATH="$PREFIX/lib/cmake/fxsdk" \
   -DCMAKE_TOOLCHAIN_FILE="$TC" \
   -DFXSDK_CMAKE_MODULE_PATH="$PREFIX/lib/cmake/fxsdk" \
-  -DCGBA_DYNAREC=ON
+  -DCGBA_DYNAREC=ON \
+  -DCGBA_SH4_ARM_LDST_NATIVE=ON
 cmake --build "$GG/$BUILD" -j"$JOBS"
 
 G3A="$(find "$GG/$BUILD" "$GG" -maxdepth 1 -name 'CGBA-GPSP.g3a' 2>/dev/null | head -1)"
