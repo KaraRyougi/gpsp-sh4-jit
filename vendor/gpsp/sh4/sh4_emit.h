@@ -424,6 +424,19 @@ extern void *tmemst[4][16];
        sh4g_store_greg(&translation_ptr, SH4_REG_T0, REG_LR);                 \
        generate_indirect_branch_cycle_update(thumb); } while(0)
 
+/* BL prefix (high word, 0xF000-0xF7FF) standing alone at the end of a block:
+ * set LR = (PC+4) + sign_extend(offset11) << 12 -- the intermediate value the
+ * suffix's thumb_blh() adds the low offset to. Normally prefix+suffix fold into
+ * one thumb_bl() in the same block and the prefix emits nothing, but if the
+ * block ends exactly at the prefix (MAX_BLOCK_SIZE) the suffix is translated as
+ * a separate thumb_blh() block which would otherwise read a STALE LR and branch
+ * wild. */
+#define thumb_blh_setup()                                                     \
+  do { sh4g_const(&translation_ptr,                                           \
+         (u32)((pc + 4) + ((s32)((opcode & 0x07FF) << 21) >> 9)),             \
+         SH4_REG_T0);                                                         \
+       sh4g_store_greg(&translation_ptr, SH4_REG_T0, REG_LR); } while(0)
+
 #define thumb_bx()                                                            \
   do { thumb_decode_hireg_op();                                               \
        generate_load_reg_pc(SH4_REG_ARG0, rs, 4);                            \
