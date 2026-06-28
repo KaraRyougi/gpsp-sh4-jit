@@ -1,10 +1,16 @@
 # SH4 dynarec: new-game freeze (Metroid Fusion)
 
-Status: **OPEN.** The dynarec renders the new-game intro cutscene, then **freezes
-~frame 700 on a control-flow divergence** — it branches into code the game never
-executes, pops a (legitimately) zero stack word as a code pointer, and `bx 0` →
-guest reset → BIOS boot → frozen. Distinct from the cache-overflow crash fixed in
-`d3fb4f8`.
+Status: **FIXED for the frame-700 freeze** by
+`b665a78 Fix SH4 Thumb BL prefix resume state`. The dynarec now reaches frame
+3000 in the paired Metroid harness without crashing. A separate later
+dynarec-only blackout remains open between frames 3875 and 3900; see
+[sh4-jit-status.md](sh4-jit-status.md#current-metroid-fusion-harness-findings-2026-06-28).
+
+Historical symptom: the dynarec rendered the new-game intro cutscene, then
+**froze ~frame 700 on a control-flow divergence** — it branched into code the
+game never executes, popped a (legitimately) zero stack word as a code pointer,
+and `bx 0` → guest reset → BIOS boot → frozen. Distinct from the cache-overflow
+crash fixed in `d3fb4f8`.
 
 > The filename says "decompress" — that was the **original, wrong** hypothesis
 > (kept so the memory `[[sh4-newgame-decompress-bug]]` links and git history stay
@@ -134,20 +140,15 @@ IRQ returns use `subs pc,lr,#4`, not `ldm^`), so it does not change the freeze.
 
 ## Next steps
 
-1. **Build a true-lockstep diff.** Run the dynarec and interpreter with
-   **independent register files + memory**, stepping both block-by-block with
-   **no per-block reseed**, comparing full state after each block. The first
-   register/PC divergence is the wrong branch's cause. It must advance through
-   IRQ/`IntrWait` waits naturally (each core drives its own `update_gba`). A
-   full-memory-snapshot version likely won't fit the fx-CG100 add-in, so this
-   probably has to run host-side / inside casio-emu rather than in the add-in.
-2. With the first wrong branch pinned, fix the SH4 codegen that computes the bad
-   target. Given the off-by-2-into-mid-BL signature, the suspects are: Thumb-BL
-   `lr`/return handling (esp. a BL split across a block boundary — the prefix
-   `0xF0-0xF7` case generates no code, so a stale `lr` could reach `thumb_blh`),
-   an indirect branch / `pop {pc}` / `bx` whose target register drifts, or an IRQ
-   taken at a block boundary that mis-saves the return PC. Then re-verify
-   new-game → gameplay, interp vs JIT, frame-by-frame past frame 700/1000.
+Done for this bug: Thumb-BL prefix handling was the bad target source. The SH4
+emitter now materializes the prefix LR so exits between the BL halves resume at
+the suffix with the right temporary link state. Keep this file as the historical
+record for the frame-700 failure.
+
+For the next Metroid issue, continue from the current finding in
+[sh4-jit-status.md](sh4-jit-status.md#current-metroid-fusion-harness-findings-2026-06-28):
+the dynarec still blacks out between frames 3875 and 3900 while the interpreter
+continues rendering.
 
 ## History / superseded
 
