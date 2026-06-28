@@ -213,31 +213,116 @@ defsymbl(sh4_block_exit)
  * block_lookup_address_* commits reg[REG_PC] (see cpu_threaded.c), so after the
  * lookup the single-block diff mode can return to the C caller with PC correct,
  * exactly like sh4_block_exit. R0 = resolved host block; R13 = remaining cycles. */
+/* Inline ROM branch-hash fast path (chaining for indirect branches). The C
+ * resolver block_lookup_address_* is a far call + chain-walk paid on EVERY BX
+ * and function return; here we replicate block_lookup_translate's ROM-hash probe
+ * inline (key = pc&~3 ARM / pc|1 Thumb; hash = (key*0x9E3779B1)>>(32-BITS); walk
+ * rom_branch_hash[]; hit = rom_translation_cache + blk_offset + sizeof(hashhdr)).
+ * rom_branch_hash holds only ROM/BIOS blocks, so a RAM target just misses the
+ * pc_value compare and takes the slow C path -- no region check needed. Skipped
+ * in single-block diff mode (sb_flag) so the harness keeps the exact old path.
+ * R4 = target PC (preserved), R13 = cycles, R14 = reg[]; r0-r3,r5-r7 scratch. */
 defsymbl(sh4_indirect_branch_arm)
+  mov.l   sb_flag, r1
+  mov.l   @r1, r1
+  tst     r1, r1
+  bf      iba_slow                /* single-block diff -> unchanged C path */
+  mov     r4, r2
+  shlr2   r2
+  shll2   r2                      /* key = pc & ~3 (ARM) */
+  mov.l   ibh_mul, r3
+  dmulu.l r2, r3
+  sts     macl, r0
+  mov     #-(32-ROM_BRANCH_HASH_BITS), r1
+  shld    r1, r0                  /* hash index = product >> (32-BITS) */
+  shll2   r0                      /* * sizeof(u32) */
+  mov.l   ibh_hash, r1
+  mov.l   @(r0,r1), r5            /* blk_offset = rom_branch_hash[hash] */
+  mov.l   ibh_tcache, r6
+iba_walk:
+  tst     r5, r5
+  bt      iba_slow                /* blk_offset == 0 -> miss */
+  mov     r5, r7
+  add     r6, r7                  /* r7 = &rom_translation_cache[blk_offset] */
+  mov.l   @r7, r0                 /* bhdr->pc_value */
+  cmp/eq  r2, r0
+  bt      iba_hit
+  mov.l   @(4,r7), r5            /* blk_offset = bhdr->next_entry (off 4) */
+  bra     iba_walk
+  nop
+iba_hit:
+  mov     #REG_PC, r0
+  mov.l   r4, @(r0,r14)          /* commit reg[REG_PC] = pc (match resolver) */
+  add     #8, r7                 /* + sizeof(hashhdr_type) + block_prologue_size */
+  jmp     @r7
+  nop
+iba_slow:
   CALL    block_lookup_address_arm
   mov.l   sb_flag, r1
   mov.l   @r1, r1
   tst     r1, r1
-  bt      1f                      /* not single-block -> dispatch */
+  bt      iba_disp                /* not single-block -> dispatch */
   bra     return_to_main          /* single-block diff: stop after this block */
   mov     r13, r0                 /* delay slot: return remaining cycles */
-1:
+iba_disp:
   REDISPATCH_IF_NULL
   jmp     @r0
   nop
 
 defsymbl(sh4_indirect_branch_thumb)
+  mov.l   sb_flag, r1
+  mov.l   @r1, r1
+  tst     r1, r1
+  bf      ibt_slow
+  mov     r4, r0
+  or      #1, r0
+  mov     r0, r2                  /* key = pc | 1 (Thumb) */
+  mov.l   ibh_mul, r3
+  dmulu.l r2, r3
+  sts     macl, r0
+  mov     #-(32-ROM_BRANCH_HASH_BITS), r1
+  shld    r1, r0
+  shll2   r0
+  mov.l   ibh_hash, r1
+  mov.l   @(r0,r1), r5
+  mov.l   ibh_tcache, r6
+ibt_walk:
+  tst     r5, r5
+  bt      ibt_slow
+  mov     r5, r7
+  add     r6, r7
+  mov.l   @r7, r0
+  cmp/eq  r2, r0
+  bt      ibt_hit
+  mov.l   @(4,r7), r5
+  bra     ibt_walk
+  nop
+ibt_hit:
+  mov     #REG_PC, r0
+  mov.l   r4, @(r0,r14)
+  add     #8, r7
+  jmp     @r7
+  nop
+ibt_slow:
   CALL    block_lookup_address_thumb
   mov.l   sb_flag, r1
   mov.l   @r1, r1
   tst     r1, r1
-  bt      1f
+  bt      ibt_disp
   bra     return_to_main
   mov     r13, r0
-1:
+ibt_disp:
   REDISPATCH_IF_NULL
   jmp     @r0
   nop
+
+  .align 2
+ibh_mul:
+  .long   0x9E3779B1              /* 2654435761 (Knuth multiplicative hash) */
+ibh_hash:
+  .long   _rom_branch_hash
+ibh_tcache:
+  .long   _rom_translation_cache
 
 defsymbl(sh4_indirect_branch_dual)
   CALL    block_lookup_address_dual
