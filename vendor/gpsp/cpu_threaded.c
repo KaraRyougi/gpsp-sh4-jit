@@ -231,6 +231,11 @@ typedef struct
   #include "x86/x86_emit.h"
 #endif
 
+/* Backends that fold the whole Thumb BL into the suffix need no prefix code. */
+#ifndef thumb_bl_prefix
+#define thumb_bl_prefix() do {} while(0)
+#endif
+
 /* Cache invalidation */
 
 #if defined(PSP)
@@ -2337,13 +2342,11 @@ void translate_icache_sync() {
                                                                               \
     case 0xF0 ... 0xF7:                                                       \
     {                                                                         \
-      /* BL prefix (high word). Normally the suffix follows in the same block  \
-         and thumb_bl() folds both, so the prefix emits nothing. But if the    \
-         block ends EXACTLY here (MAX_BLOCK_SIZE hit at the prefix), the suffix \
-         is translated as a separate thumb_blh() block that would read a stale  \
-         LR -> wild branch; set LR here in that case. */                       \
-      if (pc + 2 == block_end_pc)                                             \
-        thumb_blh_setup();                                                    \
+      /* BL prefix (high word). Emitters materialize the temporary LR here so  \
+         a cycle-budget exit between the BL halves can resume at the suffix     \
+         (thumb_blh) with the correct LR instead of a stale one. Combined BLs   \
+         overwrite this LR in thumb_bl(). */                                   \
+      thumb_bl_prefix();                                                       \
       break;                                                                  \
     }                                                                         \
                                                                               \
