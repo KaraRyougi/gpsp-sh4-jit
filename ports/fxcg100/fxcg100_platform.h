@@ -21,7 +21,69 @@ void fxcg100_panic(const char *text);
 #define FXCG100_APPKEY_BACK   (1u << 9)
 #define FXCG100_APPKEY_ON     (1u << 10)
 
-#define FXCG100_PHYSKEY_ON 79u
+#define FXCG100_KEY_F1       0x91u
+#define FXCG100_KEY_F2       0x92u
+#define FXCG100_KEY_F3       0x93u
+#define FXCG100_KEY_F4       0x94u
+#define FXCG100_KEY_F5       0x95u
+#define FXCG100_KEY_F6       0x96u
+
+#define FXCG100_KEY_SHIFT    0x81u
+#define FXCG100_KEY_TOOLS    0x82u
+#define FXCG100_KEY_VARS     0x83u
+#define FXCG100_KEY_HOME     0x84u
+#define FXCG100_KEY_LEFT     0x85u
+#define FXCG100_KEY_UP       0x86u
+
+#define FXCG100_KEY_ALPHA    0x71u
+#define FXCG100_KEY_SQUARE   0x72u
+#define FXCG100_KEY_POWER    0x73u
+#define FXCG100_KEY_BACK     0x74u
+#define FXCG100_KEY_DOWN     0x75u
+#define FXCG100_KEY_RIGHT    0x76u
+
+#define FXCG100_KEY_XOT      0x61u
+#define FXCG100_KEY_FRAC     0x51u
+#define FXCG100_KEY_SQRT     0xaeu
+#define FXCG100_KEY_EXP_FUN  0xafu
+#define FXCG100_KEY_SIN      0x64u
+#define FXCG100_KEY_COS      0x65u
+#define FXCG100_KEY_TAN      0x66u
+#define FXCG100_KEY_COMMA    0x55u
+#define FXCG100_KEY_LEFTP    0x53u
+#define FXCG100_KEY_RIGHTP   0x54u
+
+#define FXCG100_KEY_7        0x41u
+#define FXCG100_KEY_8        0x42u
+#define FXCG100_KEY_9        0x43u
+#define FXCG100_KEY_DEL      0x44u
+#define FXCG100_KEY_AC       0x45u
+#define FXCG100_KEY_4        0x31u
+#define FXCG100_KEY_5        0x32u
+#define FXCG100_KEY_6        0x33u
+#define FXCG100_KEY_MUL      0x34u
+#define FXCG100_KEY_DIV      0x35u
+#define FXCG100_KEY_1        0x21u
+#define FXCG100_KEY_2        0x22u
+#define FXCG100_KEY_3        0x23u
+#define FXCG100_KEY_ADD      0x24u
+#define FXCG100_KEY_SUB      0x25u
+#define FXCG100_KEY_0        0x11u
+#define FXCG100_KEY_DOT      0x12u
+#define FXCG100_KEY_EXP      0x13u
+#define FXCG100_KEY_EXE      0x15u
+
+#define FXCG100_KEY_ON       0xa6u
+#define FXCG100_KEY_PREVTAB  0xa7u
+#define FXCG100_KEY_NEXTTAB  0xa8u
+#define FXCG100_KEY_PAGEUP   0xa9u
+#define FXCG100_KEY_PAGEDOWN 0xaau
+#define FXCG100_KEY_SETTINGS 0xabu
+#define FXCG100_KEY_OK       0xacu
+#define FXCG100_KEY_CATALOG  0xadu
+#define FXCG100_KEY_FORMAT   0x52u
+
+#define FXCG100_PHYSKEY_ON FXCG100_KEY_ON
 
 #define FXCG100_GBA_BUTTON_L      0x200u
 #define FXCG100_GBA_BUTTON_R      0x100u
@@ -89,7 +151,7 @@ typedef struct fxcg100_menu_state {
   uint32_t random_lfsr;
 } fxcg100_menu_state;
 
-int fxcg100_key_down(int basic_keycode);
+int fxcg100_key_down(int keycode);
 uint32_t fxcg100_poll_app_keys(void);
 uint16_t fxcg100_poll_physical_key(void);
 uint32_t fxcg100_poll_gba_buttons(void);
