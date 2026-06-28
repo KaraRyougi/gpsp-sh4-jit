@@ -17,6 +17,26 @@ extern uint32_t cgba_dynarec_rom_flush_count;
 extern uint32_t cgba_dynarec_ram_flush_count;
 extern uint32_t cgba_dynarec_arm_translate_count;
 extern uint32_t cgba_dynarec_thumb_translate_count;
+extern uint32_t cgba_sh4_helper_thumb_ldst_count;
+extern uint32_t cgba_sh4_helper_thumb_block_count;
+extern uint32_t cgba_sh4_helper_thumb_shift_count;
+extern uint32_t cgba_sh4_helper_thumb_dp_count;
+extern uint32_t cgba_sh4_helper_arm_ldst_count;
+extern uint32_t cgba_sh4_helper_arm_block_count;
+extern uint32_t cgba_sh4_helper_arm_dp_count;
+extern uint32_t cgba_sh4_helper_arm_mul_count;
+extern uint32_t cgba_sh4_helper_arm_psr_count;
+extern uint32_t cgba_sh4_helper_arm_swap_count;
+extern uint32_t cgba_sh4_helper_hle_div_count;
+extern uint32_t cgba_sh4_helper_arm_ldst_load_count;
+extern uint32_t cgba_sh4_helper_arm_ldst_store_count;
+extern uint32_t cgba_sh4_helper_arm_ldst_ram_count;
+extern uint32_t cgba_sh4_helper_arm_ldst_io_count;
+extern uint32_t cgba_sh4_helper_arm_ldst_video_count;
+extern uint32_t cgba_sh4_helper_arm_ldst_rom_count;
+extern uint32_t cgba_sh4_helper_arm_ldst_other_count;
+extern uint32_t cgba_sh4_helper_arm_block_load_count;
+extern uint32_t cgba_sh4_helper_arm_block_store_count;
 #endif
 #endif
 
@@ -743,6 +763,26 @@ static int cgba_headless_test(uint16_t *framebuffer)
 	cgba_dynarec_ram_flush_count = 0;
 	cgba_dynarec_arm_translate_count = 0;
 	cgba_dynarec_thumb_translate_count = 0;
+	cgba_sh4_helper_thumb_ldst_count = 0;
+	cgba_sh4_helper_thumb_block_count = 0;
+	cgba_sh4_helper_thumb_shift_count = 0;
+	cgba_sh4_helper_thumb_dp_count = 0;
+	cgba_sh4_helper_arm_ldst_count = 0;
+	cgba_sh4_helper_arm_block_count = 0;
+	cgba_sh4_helper_arm_dp_count = 0;
+	cgba_sh4_helper_arm_mul_count = 0;
+	cgba_sh4_helper_arm_psr_count = 0;
+	cgba_sh4_helper_arm_swap_count = 0;
+	cgba_sh4_helper_hle_div_count = 0;
+	cgba_sh4_helper_arm_ldst_load_count = 0;
+	cgba_sh4_helper_arm_ldst_store_count = 0;
+	cgba_sh4_helper_arm_ldst_ram_count = 0;
+	cgba_sh4_helper_arm_ldst_io_count = 0;
+	cgba_sh4_helper_arm_ldst_video_count = 0;
+	cgba_sh4_helper_arm_ldst_rom_count = 0;
+	cgba_sh4_helper_arm_ldst_other_count = 0;
+	cgba_sh4_helper_arm_block_load_count = 0;
+	cgba_sh4_helper_arm_block_store_count = 0;
 	#endif
 	snprintf(buf, sizeof buf, "input START f=%u h=%u A/SHIFT f=%u h=%u p=%u w=%u",
 		(unsigned)CGBA_GPSP_HEADLESS_START_FRAME,
@@ -856,6 +896,37 @@ static int cgba_headless_test(uint16_t *framebuffer)
 		(unsigned long)cgba_dynarec_arm_translate_count,
 		(unsigned long)cgba_dynarec_thumb_translate_count);
 	hputs_dbg(buf);
+	snprintf(buf, sizeof buf,
+		"jit helpers arm ldst=%lu blk=%lu dp=%lu mul=%lu psr=%lu swp=%lu",
+		(unsigned long)cgba_sh4_helper_arm_ldst_count,
+		(unsigned long)cgba_sh4_helper_arm_block_count,
+		(unsigned long)cgba_sh4_helper_arm_dp_count,
+		(unsigned long)cgba_sh4_helper_arm_mul_count,
+		(unsigned long)cgba_sh4_helper_arm_psr_count,
+		(unsigned long)cgba_sh4_helper_arm_swap_count);
+	hputs_dbg(buf);
+	snprintf(buf, sizeof buf,
+		"jit helpers thumb ldst=%lu blk=%lu shift=%lu dp=%lu div=%lu",
+		(unsigned long)cgba_sh4_helper_thumb_ldst_count,
+		(unsigned long)cgba_sh4_helper_thumb_block_count,
+		(unsigned long)cgba_sh4_helper_thumb_shift_count,
+		(unsigned long)cgba_sh4_helper_thumb_dp_count,
+		(unsigned long)cgba_sh4_helper_hle_div_count);
+	hputs_dbg(buf);
+	snprintf(buf, sizeof buf,
+		"jit arm ldst detail load=%lu store=%lu ram=%lu io=%lu vid=%lu rom=%lu other=%lu",
+		(unsigned long)cgba_sh4_helper_arm_ldst_load_count,
+		(unsigned long)cgba_sh4_helper_arm_ldst_store_count,
+		(unsigned long)cgba_sh4_helper_arm_ldst_ram_count,
+		(unsigned long)cgba_sh4_helper_arm_ldst_io_count,
+		(unsigned long)cgba_sh4_helper_arm_ldst_video_count,
+		(unsigned long)cgba_sh4_helper_arm_ldst_rom_count,
+		(unsigned long)cgba_sh4_helper_arm_ldst_other_count);
+	hputs_dbg(buf);
+	snprintf(buf, sizeof buf, "jit arm block detail load=%lu store=%lu",
+		(unsigned long)cgba_sh4_helper_arm_block_load_count,
+		(unsigned long)cgba_sh4_helper_arm_block_store_count);
+	hputs_dbg(buf);
 	hputs_dbg("=== throughput bench ===");
 	n = cgba_sh4_bench(CGBA_GPSP_HEADLESS_BENCH_FRAMES, lines, 20);
 	for(i = 0; i < n; i++)
@@ -867,6 +938,37 @@ static int cgba_headless_test(uint16_t *framebuffer)
 		(unsigned long)cgba_dynarec_ram_flush_count,
 		(unsigned long)cgba_dynarec_arm_translate_count,
 		(unsigned long)cgba_dynarec_thumb_translate_count);
+	hputs_dbg(buf);
+	snprintf(buf, sizeof buf,
+		"jit helpers arm ldst=%lu blk=%lu dp=%lu mul=%lu psr=%lu swp=%lu",
+		(unsigned long)cgba_sh4_helper_arm_ldst_count,
+		(unsigned long)cgba_sh4_helper_arm_block_count,
+		(unsigned long)cgba_sh4_helper_arm_dp_count,
+		(unsigned long)cgba_sh4_helper_arm_mul_count,
+		(unsigned long)cgba_sh4_helper_arm_psr_count,
+		(unsigned long)cgba_sh4_helper_arm_swap_count);
+	hputs_dbg(buf);
+	snprintf(buf, sizeof buf,
+		"jit helpers thumb ldst=%lu blk=%lu shift=%lu dp=%lu div=%lu",
+		(unsigned long)cgba_sh4_helper_thumb_ldst_count,
+		(unsigned long)cgba_sh4_helper_thumb_block_count,
+		(unsigned long)cgba_sh4_helper_thumb_shift_count,
+		(unsigned long)cgba_sh4_helper_thumb_dp_count,
+		(unsigned long)cgba_sh4_helper_hle_div_count);
+	hputs_dbg(buf);
+	snprintf(buf, sizeof buf,
+		"jit arm ldst detail load=%lu store=%lu ram=%lu io=%lu vid=%lu rom=%lu other=%lu",
+		(unsigned long)cgba_sh4_helper_arm_ldst_load_count,
+		(unsigned long)cgba_sh4_helper_arm_ldst_store_count,
+		(unsigned long)cgba_sh4_helper_arm_ldst_ram_count,
+		(unsigned long)cgba_sh4_helper_arm_ldst_io_count,
+		(unsigned long)cgba_sh4_helper_arm_ldst_video_count,
+		(unsigned long)cgba_sh4_helper_arm_ldst_rom_count,
+		(unsigned long)cgba_sh4_helper_arm_ldst_other_count);
+	hputs_dbg(buf);
+	snprintf(buf, sizeof buf, "jit arm block detail load=%lu store=%lu",
+		(unsigned long)cgba_sh4_helper_arm_block_load_count,
+		(unsigned long)cgba_sh4_helper_arm_block_store_count);
 	hputs_dbg(buf);
 	#endif
 	#endif

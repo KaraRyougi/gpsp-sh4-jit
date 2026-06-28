@@ -329,11 +329,26 @@ extern void *tmemst[4][16];
          SH4_CALL_OP2_PC(cgba_sh4_thumb_dp); } while(0)
 
 /* ================================================================== */
-/* Thumb shifts — routed to C for correct N/Z/C (immediate and register). */
+/* Thumb shifts. Immediate shifts are exact native N/Z/C; register shifts keep */
+/* the C helper because full ARM amount>=32/ROR carry semantics are branchy.   */
 /* ================================================================== */
 
+#define SH4_THUMB_SHIFT_imm(decode_type, op_type)                             \
+  do { u32 _sh_op = ((u32)opcode >> 11) & 3;                                  \
+       if (_sh_op <= 2)                                                        \
+         sh4g_shift_imm(&translation_ptr, (int)_sh_op,                         \
+                        (unsigned)((u32)opcode & 7),                           \
+                        (unsigned)(((u32)opcode >> 3) & 7),                    \
+                        (unsigned)(((u32)opcode >> 6) & 0x1F), 1);             \
+       else                                                                    \
+         SH4_CALL_OP2(cgba_sh4_thumb_shift_imm);                               \
+  } while(0)
+
+#define SH4_THUMB_SHIFT_reg(decode_type, op_type)                             \
+  SH4_CALL_OP2(cgba_sh4_thumb_shift_reg)
+
 #define thumb_shift(decode_type, op_type, value_type)                         \
-  SH4_CALL_OP2(cgba_sh4_thumb_shift_##value_type)
+  SH4_THUMB_SHIFT_##value_type(decode_type, op_type)
 
 /* ================================================================== */
 /* Thumb loads of PC/SP-relative addresses, SP adjust, pool const      */

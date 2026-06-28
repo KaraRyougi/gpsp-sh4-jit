@@ -18,7 +18,7 @@
  *                    V via `subv` on a copy.
  *   logical        : N/Z only; C and V are left untouched (the op doesn't move
  *                    them — the shifter does, handled elsewhere).
- * ADC/SBC (carry-in) and the MUL/hi-reg-PC forms stay on the C path for now.
+ * Register-specified shifts and hi-reg-PC forms stay on the C path for now.
  *
  * Correctness gate: the single-block lockstep and the frame diff both compare
  * reg[REG_CPSR], so C and V must be exact, not just N/Z.
@@ -215,18 +215,38 @@ static inline int sh4g_thumb_dp_native(u8 **tp, u32 opcode, u32 pc, u32 flag_sta
     return 1;
   }
 
-  /* fmt4 logical ALU reg  (010000 op sss ddd) — N/Z only, C/V preserved.
-   * Arithmetic (NEG/CMP/CMN/ADC/SBC), shifts and MUL stay on the C path. */
+  /* fmt4 ALU reg  (010000 op sss ddd). Register-specified shifts stay on the
+   * C path; the rest are exact native NZCV or N/Z as appropriate. */
   if (hi >= 0x40 && hi <= 0x43) {
     unsigned alu = (opcode >> 6) & 0xF;
     unsigned rs  = (opcode >> 3) & 7;
     unsigned rd  = opcode & 7;
     int op, write = 1;
+    if (alu == 0x5 || alu == 0x6) {                     /* ADC / SBC */
+      { sh4_codegen cg = sh4g_open(tp);
+        sh4_emit_load_greg(&cg, rd, SH4_REG_T0);
+        sh4_emit_load_greg(&cg, rs, SH4_REG_T1);
+        sh4g_close(tp, &cg); }
+      sh4g_dp_carry(tp, alu == 0x6, rd, 1, 1);
+      return 1;
+    }
+    if (alu == 0x9 || alu == 0xA || alu == 0xB) {       /* NEG / CMP / CMN */
+      { sh4_codegen cg = sh4g_open(tp);
+        if (alu == 0x9)
+          sh4_emit_mov_imm(&cg, 0, SH4_REG_T0);
+        else
+          sh4_emit_load_greg(&cg, rd, SH4_REG_T0);
+        sh4_emit_load_greg(&cg, rs, SH4_REG_T1);
+        sh4g_close(tp, &cg); }
+      sh4g_dp_addsub(tp, alu != 0xB, rd, alu == 0x9, 1);
+      return 1;
+    }
     switch (alu) {
     case 0x0: op = SH4DP_AND; break;                    /* AND */
     case 0x1: op = SH4DP_EOR; break;                    /* EOR */
     case 0x8: op = SH4DP_TST; write = 0; break;         /* TST (no wb) */
     case 0xC: op = SH4DP_ORR; break;                    /* ORR */
+    case 0xD: op = SH4DP_MUL; break;                    /* MUL */
     case 0xE: op = SH4DP_BIC; break;                    /* BIC */
     case 0xF: op = SH4DP_MVN; break;                    /* MVN: Rd = ~Rs */
     default:  return 0;
@@ -244,6 +264,39 @@ static inline int sh4g_thumb_dp_native(u8 **tp, u32 opcode, u32 pc, u32 flag_sta
       sh4g_close(tp, &cg); }
     sh4g_set_nz(tp, SH4_REG_T0);
     return 1;
+  }
+
+  /* fmt5 hi-reg ADD/CMP/MOV. PC operands/writes stay on the C path because the
+   * helper handles Thumb's PC+4 read and redispatch semantics. */
+  if (hi >= 0x44 && hi <= 0x46) {
+    unsigned op = (opcode >> 8) & 3;                     /* 0 ADD, 1 CMP, 2 MOV */
+    unsigned rd = (opcode & 7) | ((opcode >> 4) & 8);
+    unsigned rs = (opcode >> 3) & 0xF;
+    if (rd == 15 || rs == 15)
+      return 0;
+    if (op == 1) {                                       /* CMP */
+      { sh4_codegen cg = sh4g_open(tp);
+        sh4_emit_load_greg(&cg, rd, SH4_REG_T0);
+        sh4_emit_load_greg(&cg, rs, SH4_REG_T1);
+        sh4g_close(tp, &cg); }
+      sh4g_dp_addsub(tp, 1, rd, 0, 1);
+      return 1;
+    }
+    if (op == 0) {                                       /* ADD */
+      { sh4_codegen cg = sh4g_open(tp);
+        sh4_emit_load_greg(&cg, rd, SH4_REG_T0);
+        sh4_emit_load_greg(&cg, rs, SH4_REG_T1);
+        sh4g_close(tp, &cg); }
+      sh4g_dp_addsub(tp, 0, rd, 1, 0);
+      return 1;
+    }
+    if (op == 2) {                                       /* MOV */
+      { sh4_codegen cg = sh4g_open(tp);
+        sh4_emit_load_greg(&cg, rs, SH4_REG_T0);
+        sh4_emit_store_greg(&cg, SH4_REG_T0, rd);
+        sh4g_close(tp, &cg); }
+      return 1;
+    }
   }
 
   return 0;
@@ -268,9 +321,10 @@ static inline u8 *sh4g_thumb_ldst_guard(u8 **tp, int slow_if_t)
   return sh4g_emit_bra_placeholder(tp);
 }
 
-/* Native Thumb RAM loads. Only EWRAM/IWRAM are fast-pathed; all stores and all
- * side-effecting regions fall back to cgba_sh4_thumb_ldst so DMA/IRQ alerts,
- * I/O semantics, ROM paging, backup and SMC invalidation stay helper-owned. */
+/* Native Thumb RAM transfers. Only EWRAM/IWRAM are fast-pathed; side-effecting
+ * regions fall back to cgba_sh4_thumb_ldst so DMA/IRQ alerts, I/O semantics,
+ * ROM paging and backup stay helper-owned. Stores additionally check the SMC tag
+ * mirror before touching RAM, falling back if translated code would be hit. */
 static inline int sh4g_thumb_ldst_native(u8 **tp, u32 opcode, u32 pc,
   int cycle_count)
 {
@@ -284,8 +338,8 @@ static inline int sh4g_thumb_ldst_native(u8 **tp, u32 opcode, u32 pc,
   u32 hi = (opcode >> 8) & 0xFF;
   u32 rd = opcode & 7, rb = (opcode >> 3) & 7;
   u32 offset = 0, ro = 0, reg_offset = 0;
-  int kind = SH4_THUMB_LDK_W, align_mask = 3;
-  u8 *guards[4]; int ng = 0;
+  int kind = SH4_THUMB_LDK_W, align_mask = 3, is_load = 1;
+  u8 *guards[5]; int ng = 0;
   u8 *bra_done;
 
   if (hi >= 0x50 && hi <= 0x5F) {                    /* register-offset forms */
@@ -294,36 +348,33 @@ static inline int sh4g_thumb_ldst_native(u8 **tp, u32 opcode, u32 pc,
     reg_offset = 1;
     if (opcode & 0x0200) {                            /* format 8: H/S */
       switch (op) {
+      case 0: kind = SH4_THUMB_LDK_UH; align_mask = 1; is_load = 0; break; /* STRH */
       case 1: kind = SH4_THUMB_LDK_SB; align_mask = 0; break;  /* LDRSB */
       case 2: kind = SH4_THUMB_LDK_UH; align_mask = 1; break;  /* LDRH */
       case 3: kind = SH4_THUMB_LDK_SH; align_mask = 1; break;  /* LDRSH */
-      default: return 0;                                        /* STRH */
       }
     } else {                                          /* format 7: L/B */
       switch (op) {
+      case 0: kind = SH4_THUMB_LDK_W; align_mask = 3; is_load = 0; break;  /* STR */
+      case 1: kind = SH4_THUMB_LDK_B; align_mask = 0; is_load = 0; break;  /* STRB */
       case 2: kind = SH4_THUMB_LDK_W; align_mask = 3; break;   /* LDR */
       case 3: kind = SH4_THUMB_LDK_B; align_mask = 0; break;   /* LDRB */
-      default: return 0;                                        /* STR/STRB */
       }
     }
   } else if (hi >= 0x60 && hi <= 0x7F) {             /* imm5 word/byte */
     u32 imm5 = (opcode >> 6) & 0x1F;
     u32 is_byte = (opcode >> 12) & 1;
-    u32 is_load = (opcode >> 11) & 1;
-    if (!is_load)
-      return 0;
+    is_load = (opcode >> 11) & 1;
     offset = imm5 << (is_byte ? 0 : 2);
     kind = is_byte ? SH4_THUMB_LDK_B : SH4_THUMB_LDK_W;
     align_mask = is_byte ? 0 : 3;
   } else if (hi >= 0x80 && hi <= 0x8F) {             /* imm5 halfword */
-    if ((opcode & 0x0800) == 0)
-      return 0;
+    is_load = (opcode >> 11) & 1;
     offset = ((opcode >> 6) & 0x1F) << 1;
     kind = SH4_THUMB_LDK_UH;
     align_mask = 1;
   } else if (hi >= 0x90 && hi <= 0x9F) {             /* SP-relative word */
-    if ((opcode & 0x0800) == 0)
-      return 0;
+    is_load = (opcode >> 11) & 1;
     rd = (opcode >> 8) & 7;
     rb = 13;                                         /* REG_SP */
     offset = (opcode & 0xFF) << 2;
@@ -383,8 +434,49 @@ static inline int sh4g_thumb_ldst_native(u8 **tp, u32 opcode, u32 pc,
     sh4_emit_shll(&cg, SH4_REG_RET);
     sh4_emit_shlr16(&cg, SH4_REG_RET);
     sh4_emit_shlr(&cg, SH4_REG_RET);
+    sh4g_close(tp, &cg); }
 
-    switch (kind) {
+  if (!is_load) {
+    u8 *bf_iwram, *bra_tag_ready;
+    /* Build SMC tag page in R5:
+     *   EWRAM: data page + 0x40000, IWRAM: data page - 0x8000. */
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_reg(&cg, SH4_REG_T2, SH4_REG_ARG1);
+      sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_T1);
+      sh4_emit_shlr16(&cg, SH4_REG_T1);
+      sh4_emit_shlr8(&cg, SH4_REG_T1);                  /* R2 = addr >> 24 */
+      sh4_emit_mov_imm(&cg, 2, SH4_REG_ARG0);
+      sh4_emit_cmpeq(&cg, SH4_REG_ARG0, SH4_REG_T1);    /* T = EWRAM */
+      sh4g_close(tp, &cg); }
+    bf_iwram = sh4g_emit_bf_placeholder(tp);
+    sh4g_const(tp, 0x40000u, SH4_REG_ARG0);
+    sh4g_add_reg(tp, SH4_REG_ARG0, SH4_REG_ARG1);
+    bra_tag_ready = sh4g_emit_bra_placeholder(tp);
+    sh4g_patch_cond(bf_iwram, *tp);
+    sh4g_const(tp, (u32)-0x8000, SH4_REG_ARG0);
+    sh4g_add_reg(tp, SH4_REG_ARG0, SH4_REG_ARG1);
+    sh4g_patch_bra(bra_tag_ready, *tp);
+
+    { sh4_codegen cg = sh4g_open(tp);
+      switch (kind) {
+      case SH4_THUMB_LDK_W:
+        sh4_emit_mov_l_load_r0(&cg, SH4_REG_ARG1, SH4_REG_ARG0);
+        break;
+      case SH4_THUMB_LDK_UH:
+        sh4_emit_mov_w_load_r0(&cg, SH4_REG_ARG1, SH4_REG_ARG0);
+        break;
+      default:
+        sh4_emit_mov_b_load_r0(&cg, SH4_REG_ARG1, SH4_REG_ARG0);
+        break;
+      }
+      sh4_emit_tst(&cg, SH4_REG_ARG0, SH4_REG_ARG0);    /* T = tag == 0 */
+      sh4g_close(tp, &cg); }
+    guards[ng++] = sh4g_thumb_ldst_guard(tp, 0);         /* SMC -> slow */
+  }
+
+  { sh4_codegen cg = sh4g_open(tp);
+    if (is_load) {
+      switch (kind) {
     case SH4_THUMB_LDK_W:
       sh4_emit_mov_l_load_r0(&cg, SH4_REG_T2, SH4_REG_T1);
       sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_ARG0);
@@ -408,10 +500,28 @@ static inline int sh4g_thumb_ldst_native(u8 **tp, u32 opcode, u32 pc,
     default:                                        /* LDRSB: mov.b sign-extends */
       sh4_emit_mov_b_load_r0(&cg, SH4_REG_T2, SH4_REG_T1);
       break;
+      }
+      sh4_emit_store_greg(&cg, SH4_REG_T1, rd);
+    } else {
+      sh4_emit_load_greg(&cg, rd, SH4_REG_T1);
+      switch (kind) {
+      case SH4_THUMB_LDK_W:
+        sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_ARG0);
+        sh4_emit_swap_w(&cg, SH4_REG_ARG0, SH4_REG_ARG0);
+        sh4_emit_swap_b(&cg, SH4_REG_ARG0, SH4_REG_T1);
+        sh4_emit_mov_l_store_r0(&cg, SH4_REG_T1, SH4_REG_T2);
+        break;
+      case SH4_THUMB_LDK_UH:
+        sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
+        sh4_emit_mov_w_store_r0(&cg, SH4_REG_T1, SH4_REG_T2);
+        break;
+      default:
+        sh4_emit_mov_b_store_r0(&cg, SH4_REG_T1, SH4_REG_T2);
+        break;
+      }
     }
-    sh4_emit_store_greg(&cg, SH4_REG_T1, rd);
     sh4g_close(tp, &cg); }
-  /* Charge the single access (nonseq; word column only for LDR). */
+  /* Charge the single access (nonseq; word column only for word transfer). */
   sh4g_charge_mem_run(tp, SH4_REG_T0, /*seq=*/0,
     /*is_word=*/(kind == SH4_THUMB_LDK_W), 1);
   bra_done = sh4g_emit_bra_placeholder(tp);

@@ -56,8 +56,8 @@ set(CGBA_GPSP_ROM_TRANSLATION_CACHE_SIZE "786432" CACHE STRING
   "SH4 dynarec ROM translation cache size in bytes")
 set(CGBA_GPSP_RAM_TRANSLATION_CACHE_SIZE "262144" CACHE STRING
   "SH4 dynarec RAM translation cache size in bytes")
-set(CGBA_GPSP_ROM_BRANCH_HASH_BITS "13" CACHE STRING
-  "SH4 dynarec ROM branch-hash = 2^N u32 entries; 13 is 32 KiB, which is friendlier to the SH7305 cache than the upstream 16 / 256 KiB table")
+set(CGBA_GPSP_ROM_BRANCH_HASH_BITS "12" CACHE STRING
+  "SH4 dynarec ROM branch-hash = 2^N u32 entries; 12 is 16 KiB, which is friendlier to the SH7305 cache than the upstream 16 / 256 KiB table")
 if(CGBA_DYNAREC)
   list(APPEND GPSP_C_SOURCES
     ${GPSP}/cpu_threaded.c

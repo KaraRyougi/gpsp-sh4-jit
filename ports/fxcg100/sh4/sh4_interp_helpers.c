@@ -82,6 +82,50 @@ static void sh4_headless_trace_ldst(u32 pc, u32 opcode)
  * (the differential harness uses this to step the dynarec one block at a time). */
 int cgba_dynarec_single_block = 0;
 
+#ifdef CGBA_GPSP_HEADLESS_TEST
+u32 cgba_sh4_helper_thumb_ldst_count;
+u32 cgba_sh4_helper_thumb_block_count;
+u32 cgba_sh4_helper_thumb_shift_count;
+u32 cgba_sh4_helper_thumb_dp_count;
+u32 cgba_sh4_helper_arm_ldst_count;
+u32 cgba_sh4_helper_arm_block_count;
+u32 cgba_sh4_helper_arm_dp_count;
+u32 cgba_sh4_helper_arm_mul_count;
+u32 cgba_sh4_helper_arm_psr_count;
+u32 cgba_sh4_helper_arm_swap_count;
+u32 cgba_sh4_helper_hle_div_count;
+u32 cgba_sh4_helper_arm_ldst_load_count;
+u32 cgba_sh4_helper_arm_ldst_store_count;
+u32 cgba_sh4_helper_arm_ldst_ram_count;
+u32 cgba_sh4_helper_arm_ldst_io_count;
+u32 cgba_sh4_helper_arm_ldst_video_count;
+u32 cgba_sh4_helper_arm_ldst_rom_count;
+u32 cgba_sh4_helper_arm_ldst_other_count;
+u32 cgba_sh4_helper_arm_block_load_count;
+u32 cgba_sh4_helper_arm_block_store_count;
+#define CGBA_SH4_HELPER_HIT(name) (cgba_sh4_helper_##name##_count++)
+static void cgba_sh4_helper_arm_ldst_detail(u32 is_load, u32 address)
+{
+  u32 region = address >> 24;
+  if (is_load) cgba_sh4_helper_arm_ldst_load_count++;
+  else         cgba_sh4_helper_arm_ldst_store_count++;
+  if (region == 0x02 || region == 0x03) cgba_sh4_helper_arm_ldst_ram_count++;
+  else if (region == 0x04)              cgba_sh4_helper_arm_ldst_io_count++;
+  else if (region >= 0x05 && region <= 0x07) cgba_sh4_helper_arm_ldst_video_count++;
+  else if (region >= 0x08 && region <= 0x0E) cgba_sh4_helper_arm_ldst_rom_count++;
+  else                                  cgba_sh4_helper_arm_ldst_other_count++;
+}
+static void cgba_sh4_helper_arm_block_detail(u32 is_load)
+{
+  if (is_load) cgba_sh4_helper_arm_block_load_count++;
+  else         cgba_sh4_helper_arm_block_store_count++;
+}
+#else
+#define CGBA_SH4_HELPER_HIT(name) ((void)0)
+#define cgba_sh4_helper_arm_ldst_detail(is_load, address) ((void)0)
+#define cgba_sh4_helper_arm_block_detail(is_load) ((void)0)
+#endif
+
 /* ---- guest memory accessors (backend-provided wrappers over gba_memory.c) --
  * The MIPS/ARM/x86 backends supply the execute_load / execute_store family that
  * translated code calls. For SH4, the C wrappers also accumulate the GBA memory
@@ -301,6 +345,7 @@ static void cgba_sh4_thumb_ldst_do(u32 opcode, u32 pc)
  * if a store raised an alert (DMA/HALT idle, IRQ, SMC). */
 int cgba_sh4_thumb_ldst(u32 opcode, u32 pc)
 {
+  CGBA_SH4_HELPER_HIT(thumb_ldst);
   cgba_sh4_reset_mem_cycles(0);
   cgba_sh4_thumb_ldst_do(opcode, pc);
   sh4_headless_trace_ldst(pc, opcode);
@@ -311,6 +356,7 @@ int cgba_sh4_thumb_ldst(u32 opcode, u32 pc)
 
 int cgba_sh4_thumb_block(u32 opcode, u32 pc)
 {
+  CGBA_SH4_HELPER_HIT(thumb_block);
   u32 hi = (opcode >> 8) & 0xFF;
   u32 rlist = opcode & 0xFF;
   int wrote_pc = 0;
@@ -359,6 +405,7 @@ int cgba_sh4_thumb_block(u32 opcode, u32 pc)
  * ROR-as-rotate must be done in C. Sets N/Z/C exactly. */
 void cgba_sh4_thumb_shift_reg(u32 opcode, u32 pc)
 {
+  CGBA_SH4_HELPER_HIT(thumb_shift);
   u32 rd = opcode & 7;
   u32 rs = (opcode >> 3) & 7;
   u32 sub = (opcode >> 6) & 0xF;     /* 0x2=LSL 0x3=LSR 0x4=ASR 0x7=ROR */
@@ -405,6 +452,7 @@ void cgba_sh4_thumb_shift_reg(u32 opcode, u32 pc)
 /* Thumb format 1 immediate shift (LSL/LSR/ASR Rd,Rs,#imm5), N/Z/C. */
 void cgba_sh4_thumb_shift_imm(u32 opcode, u32 pc)
 {
+  CGBA_SH4_HELPER_HIT(thumb_shift);
   u32 op = (opcode >> 11) & 3;       /* 0=LSL 1=LSR 2=ASR */
   u32 imm5 = (opcode >> 6) & 0x1F;
   u32 rs = (opcode >> 3) & 7, rd = opcode & 7;
@@ -441,6 +489,7 @@ void cgba_sh4_thumb_shift_imm(u32 opcode, u32 pc)
  * Returns 1 if it wrote PC (hi-register ADD/MOV) so the caller re-dispatches. */
 int cgba_sh4_thumb_dp(u32 opcode, u32 pc)
 {
+  CGBA_SH4_HELPER_HIT(thumb_dp);
   u32 hi  = (opcode >> 8) & 0xFF;
   u32 cin = (reg[REG_CPSR] >> 29) & 1;
 
@@ -548,6 +597,7 @@ static u32 arm_shifter_operand(u32 opcode, u32 pc, u32 *carry_out)
 
 int cgba_sh4_arm_ldst(u32 opcode, u32 pc)
 {
+  CGBA_SH4_HELPER_HIT(arm_ldst);
   u32 rn = (opcode >> 16) & 0xF;
   u32 rd = (opcode >> 12) & 0xF;
   u32 base = (rn == 15) ? (pc + 8) : reg[rn];
@@ -585,6 +635,7 @@ int cgba_sh4_arm_ldst(u32 opcode, u32 pc)
   }
 
   addr = pre ? (up ? base + offset : base - offset) : base;
+  cgba_sh4_helper_arm_ldst_detail(is_load, addr);
 
   if (is_load) {
     u32 v;
@@ -656,6 +707,7 @@ u32 execute_spsr_restore(u32 address)
 
 int cgba_sh4_arm_block(u32 opcode, u32 pc)
 {
+  CGBA_SH4_HELPER_HIT(arm_block);
   u32 rn = (opcode >> 16) & 0xF;
   u32 rlist = opcode & 0xFFFF;
   u32 is_load = (opcode >> 20) & 1;
@@ -680,6 +732,7 @@ int cgba_sh4_arm_block(u32 opcode, u32 pc)
   u32 old_cpsr = reg[REG_CPSR];
 
   cgba_sh4_reset_mem_cycles(1);
+  cgba_sh4_helper_arm_block_detail(is_load);
 
   for (i = 0; i < 16; i++)
     if (rlist & (1u << i)) { count++; if (lowest == 16) lowest = i; }
@@ -728,6 +781,7 @@ int cgba_sh4_arm_block(u32 opcode, u32 pc)
 
 int cgba_sh4_arm_dp(u32 opcode, u32 pc)
 {
+  CGBA_SH4_HELPER_HIT(arm_dp);
   u32 op = (opcode >> 21) & 0xF;
   u32 set_flags = (opcode >> 20) & 1;
   u32 rn = (opcode >> 16) & 0xF;
@@ -792,6 +846,7 @@ int cgba_sh4_arm_dp(u32 opcode, u32 pc)
 
 void cgba_sh4_arm_multiply(u32 opcode, u32 pc)
 {
+  CGBA_SH4_HELPER_HIT(arm_mul);
   u32 rd = (opcode >> 16) & 0xF;
   u32 rs = (opcode >> 8) & 0xF;
   u32 rm = opcode & 0xF;
@@ -805,6 +860,7 @@ void cgba_sh4_arm_multiply(u32 opcode, u32 pc)
 
 void cgba_sh4_arm_multiply_long(u32 opcode, u32 pc)
 {
+  CGBA_SH4_HELPER_HIT(arm_mul);
   u32 rdhi = (opcode >> 16) & 0xF;
   u32 rdlo = (opcode >> 12) & 0xF;
   u32 rs = (opcode >> 8) & 0xF;
@@ -828,6 +884,7 @@ void cgba_sh4_arm_multiply_long(u32 opcode, u32 pc)
 
 int cgba_sh4_arm_psr(u32 opcode, u32 pc)
 {
+  CGBA_SH4_HELPER_HIT(arm_psr);
   u32 is_msr   = (opcode >> 21) & 1;   /* 0 = MRS (read), 1 = MSR (write) */
   u32 use_spsr = (opcode >> 22) & 1;   /* 0 = CPSR, 1 = SPSR of cur mode  */
 
@@ -870,6 +927,7 @@ int cgba_sh4_arm_psr(u32 opcode, u32 pc)
 
 int cgba_sh4_arm_swap(u32 opcode, u32 pc)
 {
+  CGBA_SH4_HELPER_HIT(arm_swap);
   u32 rn = (opcode >> 16) & 0xF;
   u32 rd = (opcode >> 12) & 0xF;
   u32 rm = opcode & 0xF;
@@ -893,6 +951,7 @@ int cgba_sh4_arm_swap(u32 opcode, u32 pc)
 /* SWI 0x06/0x07 divide HLE (operands in r0/r1). */
 void cgba_sh4_hle_div(u32 cpu_mode, u32 pc)
 {
+  CGBA_SH4_HELPER_HIT(hle_div);
   s32 num = (s32)reg[0];
   s32 den = (s32)reg[1];
   (void)cpu_mode; (void)pc;
