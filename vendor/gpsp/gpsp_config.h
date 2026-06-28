@@ -34,8 +34,13 @@
    instruction can take. STM/LDM are tipically the biggest ones */
 #define TRANSLATION_CACHE_LIMIT_THRESHOLD (1024 * 2)
 
-/* Hash table size for ROM trans cache lookups */
+/* Hash table size for ROM trans cache lookups. The upstream default 16
+   (64K * 4 = 256KB) dwarfs the SH7305's ~32KB I/D-cache and is index+chain-walked
+   on every indirect-branch resolve, so the fx-CG100 build overrides it down
+   (~13 = 32KB) to keep the table cache-resident. Override-able from the build. */
+#ifndef ROM_BRANCH_HASH_BITS
 #define ROM_BRANCH_HASH_BITS                           16
+#endif
 #define ROM_BRANCH_HASH_SIZE   (1 << ROM_BRANCH_HASH_BITS)
 
 /* RFU Multiplayer config, do not mess around too much with it */
