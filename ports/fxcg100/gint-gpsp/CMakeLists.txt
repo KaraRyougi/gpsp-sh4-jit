@@ -46,13 +46,13 @@ set(GPSP_C_SOURCES
 # SH4 dynarec bring-up (opt-in). Adds the threaded recompiler, its SH4 host
 # emitter, the entry/exit trampoline, the executable code-cache placement and
 # the C instruction helpers. Default OFF so the interpreter build stays the
-# shipping target until the dynarec is differentially validated.
+# conservative shipping target; turn CGBA_DYNAREC on for hardware JIT artifacts.
 option(CGBA_DYNAREC "Build the SH4 dynamic recompiler (bring-up)" OFF)
 option(CGBA_SH4_ARM_LDST_NATIVE
-  "Enable experimental SH4 native ARM single load/store fast path" OFF)
+  "Enable SH4 native ARM single load fast path" ON)
 option(CGBA_SH4_THUMB_LDST_NATIVE
-  "Enable experimental SH4 native Thumb byte load/store fast path" ON)
-set(CGBA_GPSP_ROM_TRANSLATION_CACHE_SIZE "524288" CACHE STRING
+  "Enable SH4 native Thumb RAM load fast path" ON)
+set(CGBA_GPSP_ROM_TRANSLATION_CACHE_SIZE "786432" CACHE STRING
   "SH4 dynarec ROM translation cache size in bytes")
 set(CGBA_GPSP_RAM_TRANSLATION_CACHE_SIZE "262144" CACHE STRING
   "SH4 dynarec RAM translation cache size in bytes")
