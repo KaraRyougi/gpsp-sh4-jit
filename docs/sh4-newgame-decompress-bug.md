@@ -1,194 +1,168 @@
 # SH4 dynarec: new-game freeze (Metroid Fusion)
 
-Status: **cutscene now renders; the dynarec freezes ~frame 700 on a wild jump
-into the BIOS boot.** Distinct from the cache-overflow crash fixed in `d3fb4f8`.
+Status: **OPEN.** The dynarec renders the new-game intro cutscene, then **freezes
+~frame 700 on a control-flow divergence** — it branches into code the game never
+executes, pops a (legitimately) zero stack word as a code pointer, and `bx 0` →
+guest reset → BIOS boot → frozen. Distinct from the cache-overflow crash fixed in
+`d3fb4f8`.
 
-> NB the filename says "decompress" — that was the original (wrong) hypothesis.
-> The decompression codegen is **fine**; see "Correction" below. Kept for history.
+> The filename says "decompress" — that was the **original, wrong** hypothesis
+> (kept so the memory `[[sh4-newgame-decompress-bug]]` links and git history stay
+> intact). The decompression codegen is fine; see "History / superseded" below.
 
-## Symptom (updated 2026-06-27)
+## Symptom
 
-Driving Metroid Fusion past the file-select into a new game, the dynarec **does**
-render the intro: a frame-by-frame framebuffer compare (interp build vs JIT
-build, both via casio-emu, `STAT_EVERY=1`) is pixel-identical (matching FBSTAT
-black-pixel counts and hashes) from the menu through **frame ~699** — the JIT
-plays the cutscene. Then at **frame 700** it diverges hard: the interpreter keeps
-animating (`black=0`, cutscene continues) while the JIT jumps to a mostly-black
-screen (`black=32412`) whose two hashes (`9C795F0E`/`87F1677A`) then **repeat
-frame 700→720** = the JIT is frozen. Disassembly of where it lands (BIOS
-`0x200`–`0x258`: `bl 0xB5C` decompress, set DISPCNT, then a `r1=0x77`
-count-down VBlank wait at `0x22C`–`0x24C`) shows it is the **BIOS boot/logo
-sequence** — i.e. the guest control flow went *wild* and re-entered the BIOS
-boot. Not a SoftReset SWI (a SWI trace showed none).
+Driving Metroid Fusion past the file-select into a new game (tolerant input:
+`START_FRAME=30 START_HOLD=8`, `A_FRAME=120 A_PERIOD=120 A_PRESS=6 A_HOLD=900`):
 
-So the real blocker is a corrupted return/jump value in frame ~697 → the guest
-branches to `0x0` (reset) → BIOS boot → freeze.
+- The JIT **renders the intro cutscene correctly**: a per-frame framebuffer
+  compare against the interpreter build (`STAT_EVERY=1`) is pixel-identical
+  (matching FBSTAT black-pixel counts and hashes) from the menu through
+  **frame ~699**.
+- At **frame ~700** it freezes: the interpreter keeps animating (`black=0`),
+  while the JIT jumps to a mostly-black screen (`black=32412`) whose two hashes
+  (`9C795F0E`/`87F1677A`) then repeat 700→720. Disassembly of where it lands
+  (BIOS `0x200`–`0x258`: `bl 0xB5C`, set DISPCNT, a `r1=0x77` count-down VBlank
+  wait at `0x22C`–`0x24C`) shows it re-entered the **BIOS boot/logo sequence**.
+  Not a SoftReset SWI (a SWI trace showed none).
 
-## Pinned: the wild jump (resolver tracer)
+## Root cause (as far as pinned): a control-flow divergence
 
-Instrumenting `block_lookup_address_arm/thumb` (`cpu_threaded.c`, gated on
-`CGBA_GPSP_HEADLESS_TEST`) to log guest jumps into the boot/vector region
-(`pc < 0x260`) with a ring of recent block PCs + LR caught it at frame ~697:
-
-```
-@@WJ 00000000 lr08001873 : … 08001846 08001870 0800223F 00000000
-```
-
-The guest jumps to **`0x0` (reset)** from Thumb game code at **`0x08002248`**
-(Metroid Fusion ROM):
+The guest reaches the BIOS boot via a **wild jump to reset (`0x0`)** from Thumb
+game code at `0x08002248`:
 
 ```
 08002248: pop {r0}      ; pops a code pointer off the stack
-0800224a: bx  r0        ; r0 == 0  → reset → BIOS boot → freeze
+0800224a: bx  r0        ; r0 == 0  → jumps to reset → BIOS boot → freeze
 ```
 
-`lr` at the jump is `0x08001873` (not 0), so it is NOT `bx lr`; a **stack slot
-that should hold a return/code address is 0**. The `pop {r0}; bx r0` is a
-function epilogue returning to a pushed address (saved LR or a continuation).
+Watchpoints established the precise nature — **it is NOT a value/stack
+corruption, it is wrong control flow**:
 
-Adding SP + stack words to the tracer:
+1. **The popped 0 is legitimate.** A store watchpoint on the popped slot
+   `0x03007E20` shows it is written `0` by an *unrelated* prologue
+   `push {r5,r6,r7}` at `0x080015DC` — and the **interpreter writes exactly the
+   same 0 there** (635 vs 643 instances, all 0). The slot the JIT pops was last
+   written by a different function than the one owning the `pop`; the JIT pops a
+   **stale** word.
+2. **The interpreter never runs this code.** A PC-hook in the interpreter shows
+   it **never executes `0x08002248`** (count 0), while the JIT branches there.
+   So `0x08002248` is code the game never reaches on the correct path; the JIT
+   got there on a wrong path.
+3. **The wrong target is off by 2.** The `@@WJ` resolver ring shows the chain
+   passing through **`0x08001870` — the middle of the Thumb `bl @0x0800186E`**.
+   `0x08001870 = 0x08001872 − 2`, i.e. a valid BL return (`0x08001873` with the
+   Thumb bit, which matches the live `lr`) **minus 2**. A code pointer drifted by
+   2 and now points mid-instruction.
 
-```
-@@WJ 00000000 lr08001873 sp03007E24 [00000000,00000000]
-```
+So: a register/saved code-pointer **branch target drifted** (off by 2, into a
+mid-BL/dead-code region), the JIT executed dead code, and a stale `pop {pc}`/`bx`
+of a 0 finished the job. This is an **accumulated** divergence — by the time the
+wild jump fires, the bad value has propagated through several frames of
+IRQ-heavy cutscene.
 
-**SP (`0x03007E24`) is sane** (in the IWRAM stack), and the popped word
-`[sp-4] == 0`. So it is the **stored value** that is 0, NOT the stack pointer —
-this is *not* a PUSH/POP SP-writeback miscalculation (which the register diff
-would catch as an r13 divergence anyway). A code pointer (the saved LR, or a
-function-pointer/continuation the caller passed in r0) was written to the stack
-as 0 — i.e. a `push`/`str` stored 0, or the source register was already 0 when
-pushed (a load/computation that should yield a code address produced 0).
+### Why the existing diff can't catch it
 
-### Update (2026-06-27, later): it is a CONTROL-FLOW divergence, not a value bug
+The block-diff harness reseeds the dynarec from the interpreter's state before
+every block, so the dynarec block always *starts correct* and produces the
+correct end — it structurally **cannot see accumulated drift**. It also compares
+**registers only** (r0..r15 + CPSR, not memory) and stalls on the cutscene's
+per-frame `IntrWait`/VCOUNT waits before it ever reaches the divergence. Pinning
+the **first** wrong branch therefore needs a true-lockstep diff (see Next steps).
 
-A multi-agent code audit pointed at an S-bit `LDM{pc}^` bank-restore bug in
-`cgba_sh4_arm_block` (the helper loaded r13/r14 into the privileged bank instead
-of bracketing the transfer in USER mode like the interpreter). That **is a real
-latent bug** (fixed — see below) but is **not** this freeze: instrumenting the
-helper showed **zero** `LDM{pc}^`-with-r14 events near frame 700 (the BIOS IRQ
-returns use `subs pc,lr,#4`, not `ldm^`), and the fix does not change the freeze.
+## Ruled out
 
-Direct watchpoints then settled it:
-- A store watchpoint on `0x03007E20`: the slot is written `0` by the prologue
-  `push {r5,r6,r7}` at game `0x080015DC` — and the **interpreter writes exactly
-  the same 0 there** (635 vs 643 instances, all 0). **The stack value 0 is
-  legitimate, not corrupted.**
-- A read/PC watchpoint: the **interpreter NEVER executes `0x08002248`** (count 0),
-  while the JIT jumps there. So `0x08002248 pop {r0}; bx r0` is code the game
-  never runs — the JIT branched into it wrongly, popped a *stale* (legitimately 0)
-  stack slot — last written by an unrelated function (`0x080015DC`), not by the
-  function owning the `pop` — and `bx 0`.
+- **Native LDST emitters are not the cause.**
+  `-DCGBA_SH4_THUMB_LDST_NATIVE=OFF -DCGBA_SH4_ARM_LDST_NATIVE=OFF` still freezes
+  — *earlier* (frame 696) and *differently* (no BIOS storm). So native LDST only
+  perturbs which value happens to be live; the bug is in shared machinery.
+- **Value/stack corruption** of the popped slot (the 0 is written identically by
+  both cores) and a **PUSH/POP SP-writeback miscalc** (SP is sane at the jump,
+  `0x03007E24` in the IWRAM stack; a wrong r13 would show in the register diff).
+- **The BIOS LZ77 unpack at `0xB5C`** — the earlier "first divergence here" was a
+  harness artifact (see History below).
 
-So the root is a **wrong-computed branch/return target** that lands the JIT in
-dead code at `0x0800223E`/`0x08002248`. The `@@WJ` ring even shows the chain
-passing through `0x08001870` (the middle of the Thumb `bl @0x0800186E`), i.e. an
-indirect-branch target that is off / mid-instruction. This is an accumulated
-control-flow divergence (a register holding a branch target is wrong), which the
-state-reseeding per-block register diff cannot see and which the cutscene's frame
-waits keep it from reaching. Pinning the FIRST wrong branch needs a **true-
-lockstep diff** (run both cores with independent register files, compare after
-every block, no per-block reseed) — the documented next step.
+## Fixed along the way (a real bug, but NOT this freeze)
 
-### Ruled out
+A multi-agent audit found that `cgba_sh4_arm_block` transferred the
+current/privileged register bank for S-bit block transfers, whereas the gpSP
+interpreter (`cpu.cc` `exec_arm_block_mem`, ~1010/1041) brackets the transfer in
+USER mode whenever `s_bit && (store || rn != r15)`. For an `LDM{pc}^` exception
+return that loaded the popped user `r13`/`r14` into the wrong bank, then the SPSR
+re-bank discarded them and reloaded stale USER `sp`/`lr`.
 
-- **Native LDST emitters are NOT the cause.** Building with
-  `-DCGBA_SH4_THUMB_LDST_NATIVE=OFF -DCGBA_SH4_ARM_LDST_NATIVE=OFF` still
-  freezes — *earlier* (frame 696) and *differently* (no BIOS storm, only ~80
-  vs 152k boot-region jumps). So native LDST is not the bug (it lets the game
-  get *further*); the corruption is in machinery shared by both builds.
-- **Per-block codegen looks correct** in the diffable region: the block-diff
-  (with the loop-artifact + spin fixes) runs clean through the cutscene. The
-  corruption is either accumulated state (a store wrote 0 — the register diff
-  compares r0..r15+CPSR, **not memory**, so it would miss a wrong-value store)
-  or in code the diff can't reach (it stalls on the cutscene's frame waits).
+**Fixed** (`ports/fxcg100/sh4/sh4_interp_helpers.c`): `set_cpu_mode(MODE_USER)`
+around the transfer, restore the entry mode after, matching the interpreter
+exactly. Genuine latent bug; **regression-neutral on this ROM** (instrumentation
+showed **zero** `LDM{pc}^`-with-r13/r14 opcodes fire near the freeze — the BIOS
+IRQ returns use `subs pc,lr,#4`, not `ldm^`), so it does not change the freeze.
 
-## Correction: the earlier "decompression divergences" were harness artifacts
+## Diagnostic tooling (durable)
 
-Previously the block-diff harness reported the first divergence at BIOS `0xB5C`
-(the LZ77 unpack) and we believed the unpacker was mistranslated. **That was a
-false positive in the harness, not a codegen bug.** Mechanism:
+- **`@@WJ` resolver tracer** (`cpu_threaded.c`, gated on `CGBA_GPSP_HEADLESS_TEST`):
+  `block_lookup_address_arm/thumb` log guest jumps into the boot/vector region
+  (`pc < 0x260`) with a ring of recent block PCs + `lr`/`sp`/`[sp]`. This is what
+  caught the wild jump. Instrument the **resolver**, never `translate_block`
+  (guest-side instrumentation of `translate_block` shifts block layout and
+  dissolves layout-sensitive bugs — a Heisenbug).
+- **Block-diff harness** (`ports/fxcg100/sh4/sh4_diff_harness.c`), now with two
+  correctness fixes so it stops emitting false positives:
+  1. **Loop-artifact retry.** A block ending in a backward branch has its `dpc`
+     *inside* the block; `interp_run_to_pc` used to stop at the loop-body entry
+     (reached early, sequentially) instead of the dyn's branch exit, mis-comparing
+     the interp at the loop entry vs the dyn after a full body pass (tell:
+     `du`≫`iu`). Now, on a mismatch with `dpc != pc0`, it retries the interp
+     skipping one `dpc` occurrence (= one body pass); if that matches it was the
+     artifact. `regs_diverge()` compares r0..r15+CPSR only (cycle/halt/sleep are
+     timing residue, intentionally ignored).
+  2. **VCOUNT/idle-spin advance.** A matching self-loop (`dpc == pc0`, e.g. BIOS
+     `0x238 ldrh VCOUNT; cmp #0x9f; bls 0x238`) can't advance VCOUNT in
+     single-block mode and hung the diff; it now steps the interpreter freely
+     until the loop exits.
+- **Faster casio-emu:** the `codex/casio-emu-block-dispatch` branch (worktree
+  `/private/tmp/cgv-casio-emu-block-dispatch`, `cmake . -B build -DUSE_SDL_GUI=ON
+  && make -C build` → `build/calcemu`). Verified byte-identical output to the old
+  `build-hle/calcemu`, much faster — use it for all diff/playtest runs.
 
-- The harness runs the dynarec one block from a shared state `S`, takes its
-  block-end PC `dpc`, then runs the interpreter `S → dpc` (`interp_run_to_pc`)
-  and compares register files.
-- gpSP blocks **contain internal backward branches** (a tight loop ends a block
-  at the loop's backward branch, whose target is *inside* the block). For such a
-  block `dpc` is the backward-branch target, which the interpreter passes through
-  **sequentially, early** (the loop-body entry) long before the dyn's block
-  actually exits there. `interp_run_to_pc` stopped at that first early pass, so
-  it compared the interp at the loop *entry* against the dyn after a *full body
-  pass*. Apples-to-oranges → bogus "divergence."
-- Proof: forcing the LZ77 routine to one-instruction gpSP blocks (no internal
-  loops) made it **match**, and the "divergence" just hopped to the next
-  loop-bearing block (`0xB60` → `0xC14` …). The smoking gun was `du20 iu2`: the
-  dyn ran 20 insns (full body, exiting at `bne 0xC1C`) while the interp ran 2
-  (`0xC14,0xC18` → stopped at the `0xC1C` body entry).
+### Reproduce / locate the freeze
 
-### Harness fixes (ports/fxcg100/sh4/sh4_diff_harness.c)
-
-1. **Loop-artifact retry.** On a register mismatch with `dpc != pc0`, re-run the
-   interpreter to `dpc` skipping one occurrence (`skip_initial=1`) = one body
-   pass, matching how single-block mode exits the loop. If that matches, it was
-   the artifact → not a bug, and the one-body-pass state is the next baseline.
-   Real (non-loop) divergences fail the retry and are still reported.
-   (`regs_diverge()` compares r0..r15 + CPSR; cycle/halt/sleep are timing
-   residue and intentionally ignored — per the cycle-accuracy research.)
-2. **VBlank/idle-spin advance.** A self-loop that matches (`dpc == pc0`) is a
-   VCOUNT/idle wait (e.g. BIOS `0x238`: `ldrh VCOUNT; cmp #0x9f; bls 0x238`) the
-   dyn also spins on; single-block mode can't advance VCOUNT, so the diff hung
-   there forever. Now it steps the interpreter freely (`execute_arm`/`update_gba`)
-   until the loop exits, then resumes the lockstep.
-
-With both fixes the diff runs cleanly through the frame-620 region (no false
-positives) and advances through the per-frame BIOS waits.
-
-## How to reproduce / diagnose
-
-- **Faster casio-emu:** build the `codex/casio-emu-block-dispatch` branch
-  (worktree `/private/tmp/cgv-casio-emu-block-dispatch`, `cmake . -B build
-  -DUSE_SDL_GUI=ON && make -C build` → `build/calcemu`). Verified byte-identical
-  output to the old `build-hle/calcemu`, runs the same workloads faster — use it
-  for all diff/playtest runs.
-- **Find the freeze frame:** two builds (`HEADLESS_DYNAREC=0` vs `1`),
-  `STAT_EVERY=1 FRAMES=900` + new-game input (`START_FRAME=30 START_HOLD=8`,
-  `A_FRAME=120 A_PERIOD=120 A_PRESS=6 A_HOLD=900`); compare FBSTAT per frame →
+- Build interp (`-DCGBA_GPSP_HEADLESS_DYNAREC=0`) and JIT (`=1`) with
+  `STAT_EVERY=1 FRAMES=900` + the input config above; compare FBSTAT per frame →
   first hard divergence = frame ~700.
-- **Block-diff at the freeze:** `-DCGBA_GPSP_HEADLESS_DIFF_FRAME=699
-  -DCGBA_GPSP_HEADLESS_DIFF_BLOCKS=300000`. First `B<n> p<pc> …` / `PC i d` line
-  is the mistranslated block / wild jump.
-- **External observer (avoids the layout-Heisenbug):** instrument *casio-emu*
-  `src/interpreter.c`, or gpSP's `block_lookup_address` resolver (NOT
-  `translate_block`) to log guest jumps into the BIOS boot (`0x0`/`0x200`).
-
-## Fixed along the way (not the freeze)
-
-`cgba_sh4_arm_block` now brackets S-bit block transfers in USER mode to match the
-interpreter (`set_cpu_mode(MODE_USER)` around the transfer when `s_bit && (store
-|| rn != r15)`), so an `LDM{pc}^` exception return preserves the popped user
-sp/lr. Real latent bug; regression-neutral here (the path doesn't fire in this
-ROM near the freeze).
+- Run the JIT alone; `@@WJ` lines near frame 700 show the jump to `0x0` with the
+  recent-PC ring (the chain ends `… 0x08001846 0x08001870 0x0800223E → 0x0`).
 
 ## Next steps
 
-The freeze is a **control-flow divergence** (the JIT branches into dead code the
-interpreter never runs). The register-only, state-reseeding per-block diff cannot
-see it, and the cutscene's frame/IntrWait waits keep it from reaching the
-divergence. So:
-
 1. **Build a true-lockstep diff.** Run the dynarec and interpreter with
-   *independent* register files + memory, stepping both block-by-block WITHOUT
-   reseeding from a shared state, and compare the full state after each block.
-   The first register/PC divergence is the wrong branch's cause. (The existing
-   block-diff reseeds every block, which is exactly why it misses an accumulated
-   control-flow drift.) It must advance through IRQ/IntrWait waits naturally
-   (drive both cores with their own `update_gba`).
-2. With the first wrong branch pinned, identify the SH4 codegen for the
-   branch/return that computes the bad target (suspect: an indirect branch /
-   `pop {pc}` / `bx` whose target register drifts, possibly Thumb-BL LR handling
-   given the chain lands at `0x08001870` mid-BL, or an IRQ taken at a block
-   boundary that mis-saves the return PC). Fix it and re-verify new-game →
-   gameplay, interp vs JIT, frame-by-frame past frame 700/1000.
+   **independent register files + memory**, stepping both block-by-block with
+   **no per-block reseed**, comparing full state after each block. The first
+   register/PC divergence is the wrong branch's cause. It must advance through
+   IRQ/`IntrWait` waits naturally (each core drives its own `update_gba`). A
+   full-memory-snapshot version likely won't fit the fx-CG100 add-in, so this
+   probably has to run host-side / inside casio-emu rather than in the add-in.
+2. With the first wrong branch pinned, fix the SH4 codegen that computes the bad
+   target. Given the off-by-2-into-mid-BL signature, the suspects are: Thumb-BL
+   `lr`/return handling (esp. a BL split across a block boundary — the prefix
+   `0xF0-0xF7` case generates no code, so a stale `lr` could reach `thumb_blh`),
+   an indirect branch / `pop {pc}` / `bx` whose target register drifts, or an IRQ
+   taken at a block boundary that mis-saves the return PC. Then re-verify
+   new-game → gameplay, interp vs JIT, frame-by-frame past frame 700/1000.
 
-See [[sh4-newgame-decompress-bug]], [[casio-emu-timing-not-cycle-accurate]],
-[[dynarec-cycle-accuracy-practice]], [[dispatch-null-overflow-crash]].
+## History / superseded
+
+The original hypothesis was a mistranslated **BIOS LZ77 unpack at `0xB5C`**,
+reported by the block-diff as the "first divergence". **That was a harness
+artifact, not a codegen bug:** gpSP blocks contain internal backward branches, so
+for a loop block `dpc` is the backward-branch target, which the interpreter
+passes through *sequentially, early* (the loop-body entry) long before the dyn's
+block exits there. `interp_run_to_pc` stopped at that first early pass and
+compared the interp at the loop entry vs the dyn after a full body pass —
+apples-to-oranges. Forcing the routine to one-instruction blocks made it match,
+and the "divergence" just hopped to the next loop-bearing block (`0xB60` →
+`0xC14` …); the smoking gun was `du20 iu2`. This is why the harness now has the
+loop-artifact retry above.
+
+See [[sh4-newgame-decompress-bug]], [[sh4-block-diff-loop-artifact]],
+[[casio-emu-timing-not-cycle-accurate]], [[dynarec-cycle-accuracy-practice]],
+[[dispatch-null-overflow-crash]].
