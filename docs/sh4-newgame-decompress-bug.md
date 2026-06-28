@@ -82,14 +82,23 @@ Further watchpoints narrowed *how* `0x08001870` is reached:
 - The corrupt pointer is **not on the C-path.** Value + load watchpoints on
   `write_memory32`/`read_memory32` for `0x08001870`..`0x08001873` show the JIT
   stores/loads the *correct* `0x08001873` identically to the interpreter and
-  **never** touches the corrupt `0x08001871` through the C helpers. So the bad
-  pointer is created/consumed on the **native single LDST path** (which bypasses
-  `write_memory32`/`read_memory32`) or computed in a register.
-- **Native LDST off is a *different* bug.** With both LDST natives disabled the
-  freeze moves to **frame 696** with `@@WJ`=0 (NO jump into the boot region at
-  all) and zero `0x0800187x` C-path traffic. So there appear to be **two distinct
-  bugs**; the frame-700 one is tied to the native LDST path, and native-off
-  exposes a separate, earlier one.
+  **never** touches the corrupt `0x08001871` through the C helpers.
+- It is **not a native single LDST load either.** `sh4g_thumb_ldst_native` only
+  ever handles **LDRB (byte loads)** — it can't load a 32-bit pointer; and
+  disabling the **ARM** DP/block/MUL natives (`CGBA_DIAG_NO_ARM_NATIVE`) leaves
+  the frame-700 freeze **unchanged** (frames 700-752 all the same `9C795F0E`).
+- It is **not an IRQ-resume-mid-BL.** Instrumenting `check_and_raise_interrupts`
+  for an IRQ taken with PC in `0x08001868`..`0x08001876` fired **zero** times.
+- It is **not `bx`/`pop`/gate** (the registers at the resolver hold no
+  `0x08001870/71`; `pop`/`ldm{pc}` go through the C path which only sees the
+  correct value; `@@GATE`=0).
+
+So the wrong branch target is **computed** (or produced on a path none of the
+above watchpoints can see), and the targeted-watchpoint approach is **exhausted**.
+The remaining tool is the true-lockstep diff.
+
+**Native LDST off is a *different*, earlier bug** (frame 696, `@@WJ`=0, none of
+the `0x0800187x` traffic) — confirming **two distinct bugs**.
 
 ## Ruled out
 
@@ -166,29 +175,25 @@ frame-700 freeze (confirmed by instrumentation / re-test), but both are correct.
 
 ## Next steps
 
-The corrupt branch target is created on the **native single LDST path** (it is
-invisible to the C-path watchpoints), reached by an indirect branch. So:
+The targeted-watchpoint approach is exhausted (the wrong branch target is
+computed / invisible to every C-path and value watch tried). The decisive tool is
+now a real differential:
 
-1. **Instrument the native LDST path.** `sh4g_thumb_ldst_native` /
-   `sh4g_arm_ldst_native` (`ports/fxcg100/sh4/sh4_*_ldst_emit.h`,
-   `sh4_thumb_dp_emit.h`) emit inline SH4 that bypasses `write_memory32`/
-   `read_memory32`. Make the native path call (or mirror into) a C value-watch for
-   the corrupt `0x08001870`/`0x08001871` (or, generically, any store/load of a
-   Thumb code-pointer that points mid-instruction), capturing the guest PC. That
-   directly finds the native ldr/str that produces the bad pointer — compare its
-   address/value against the interpreter at the same instruction. Suspect a native
-   single ldr/str reading/writing a **wrong address** (off by 2/halfword) for a
-   function-pointer/jump-table access.
-2. **Or build a true-lockstep diff** (the general tool): dynarec and interpreter
-   with **independent register files + memory**, no per-block reseed, comparing
-   full state after each block and advancing through IRQ/`IntrWait` waits with
-   each core's own `update_gba`. The first PC/register divergence is the cause. A
-   full-memory-snapshot version likely won't fit the add-in, so run it host-side /
-   inside casio-emu.
+1. **Build a true-lockstep diff** (host-side / inside casio-emu, since two full
+   memory snapshots won't fit the add-in): run the dynarec and interpreter with
+   **independent register files + memory**, no per-block reseed, comparing full
+   register/PC state after each block and advancing through IRQ/`IntrWait` waits
+   with each core's own `update_gba`. The first PC/register divergence is the
+   cause. Distinguish benign IRQ-timing skew (both at valid PCs, re-converges)
+   from the real bug (the JIT branches to a PC the interpreter never reaches and
+   does not re-converge — `@@IRQ`=0 near the BL suggests the critical divergence
+   is *not* IRQ-timing, so the lockstep should find a clean codegen divergence).
+2. Once the first wrong branch is pinned, examine the SH4 codegen for the op that
+   computes the bad target (a Thumb data-proc / shift / hi-reg move producing a
+   code pointer off by 2). Fix it.
 3. Separately, the **native-LDST-off frame-696 freeze** (`@@WJ`=0, a different
    failure) is a *second* bug — pin it the same way.
-4. With each wrong branch pinned, fix the SH4 codegen and re-verify new-game →
-   gameplay, interp vs JIT, frame-by-frame past frame 700/1000.
+4. Re-verify new-game → gameplay, interp vs JIT, frame-by-frame past 700/1000.
 
 ## History / superseded
 
