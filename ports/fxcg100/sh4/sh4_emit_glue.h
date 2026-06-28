@@ -228,6 +228,41 @@ static inline void sh4g_set_nz(u8 **tp, unsigned result)
   sh4g_close(tp, &cg);
 }
 
+/* Set N/Z/C from result and a 0/1 carry register, preserving V and mode bits.
+ * result must be R1; carry must not be R0/R2/R3. */
+static inline void sh4g_set_nzc(u8 **tp, unsigned result, unsigned carry)
+{
+  sh4_codegen cg = sh4g_open(tp);
+  const unsigned r_cpsr = SH4_REG_T1; /* R2 */
+  const unsigned r_tmp  = SH4_REG_T2; /* R3 */
+
+  sh4_emit_load_greg(&cg, SH4_GREG_CPSR, r_cpsr);
+  sh4_emit_shll2(&cg, r_cpsr);                 /* clear bits 31..29 (N/Z/C) */
+  sh4_emit_shll(&cg, r_cpsr);
+  sh4_emit_shlr2(&cg, r_cpsr);
+  sh4_emit_shlr(&cg, r_cpsr);
+
+  sh4_emit_mov_reg(&cg, result, r_tmp);         /* N */
+  sh4_emit_mov_imm(&cg, 1, SH4_REG_RET);
+  sh4_emit_rotr(&cg, SH4_REG_RET);
+  sh4_emit_and(&cg, SH4_REG_RET, r_tmp);
+  sh4_emit_or(&cg, r_tmp, r_cpsr);
+
+  sh4_emit_tst(&cg, result, result);            /* Z */
+  sh4_emit_movt(&cg, r_tmp);
+  sh4_emit_mov_imm(&cg, 30, SH4_REG_RET);
+  sh4_emit_shld(&cg, SH4_REG_RET, r_tmp);
+  sh4_emit_or(&cg, r_tmp, r_cpsr);
+
+  sh4_emit_mov_reg(&cg, carry, r_tmp);          /* C */
+  sh4_emit_mov_imm(&cg, 29, SH4_REG_RET);
+  sh4_emit_shld(&cg, SH4_REG_RET, r_tmp);
+  sh4_emit_or(&cg, r_tmp, r_cpsr);
+
+  sh4_emit_store_greg(&cg, r_cpsr, SH4_GREG_CPSR);
+  sh4g_close(tp, &cg);
+}
+
 /* ---- data-processing core ------------------------------------------------ */
 
 enum {
@@ -316,26 +351,45 @@ static inline void sh4g_shift_imm(u8 **tp, int kind, unsigned rd, unsigned rs,
                                   unsigned imm5, int set_flags)
 {
   sh4_codegen cg = sh4g_open(tp);
+  const unsigned carry = SH4_REG_ARG0;
+  int preserves_c = (kind == SH4SH_LSL && imm5 == 0);
   sh4_emit_load_greg(&cg, rs, SH4_REG_T0);
   if (imm5 != 0) {
-    int amt = (kind == SH4SH_LSL) ? (int)imm5 : -(int)imm5;
-    sh4_emit_mov_imm(&cg, amt, SH4_REG_RET);
+    sh4_emit_mov_reg(&cg, SH4_REG_T0, carry);
+    sh4_emit_mov_imm(&cg,
+      (kind == SH4SH_LSL) ? -(int)(32 - imm5) : -(int)(imm5 - 1),
+      SH4_REG_RET);
+    sh4_emit_shld(&cg, SH4_REG_RET, carry);
+    sh4_emit_mov_reg(&cg, carry, SH4_REG_RET);
+    sh4_emit_and_imm(&cg, 1);
+    sh4_emit_mov_reg(&cg, SH4_REG_RET, carry);
+
+    sh4_emit_mov_imm(&cg, (kind == SH4SH_LSL) ? (int)imm5 : -(int)imm5,
+      SH4_REG_RET);
     if (kind == SH4SH_ASR)
       sh4_emit_shad(&cg, SH4_REG_RET, SH4_REG_T0);
     else                                              /* LSL / LSR */
       sh4_emit_shld(&cg, SH4_REG_RET, SH4_REG_T0);
   } else if (kind == SH4SH_LSR) {
     /* Thumb LSR #0 means LSR #32 -> result is 0. */
+    sh4_emit_mov_reg(&cg, SH4_REG_T0, carry);
+    sh4_emit_shll(&cg, carry);
+    sh4_emit_movt(&cg, carry);
     sh4_emit_mov_imm(&cg, 0, SH4_REG_T0);
   } else if (kind == SH4SH_ASR) {
     /* Thumb ASR #0 means ASR #32 -> sign extension (0 or -1). */
+    sh4_emit_mov_reg(&cg, SH4_REG_T0, carry);
+    sh4_emit_shll(&cg, carry);
+    sh4_emit_movt(&cg, carry);
     sh4_emit_mov_imm(&cg, -31, SH4_REG_RET);
     sh4_emit_shad(&cg, SH4_REG_RET, SH4_REG_T0);
   }                                                   /* LSL #0 is a no-op */
   sh4_emit_store_greg(&cg, SH4_REG_T0, rd);
   sh4g_close(tp, &cg);
-  if (set_flags)
-    sh4g_set_nz(tp, SH4_REG_T0);
+  if (set_flags) {
+    if (preserves_c) sh4g_set_nz(tp, SH4_REG_T0);
+    else             sh4g_set_nzc(tp, SH4_REG_T0, carry);
+  }
 }
 
 /* Register-amount shifts (LSL/LSR/ASR/ROR Rd,Rs) are routed to a C helper
