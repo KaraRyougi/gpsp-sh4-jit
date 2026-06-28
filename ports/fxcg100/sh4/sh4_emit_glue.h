@@ -440,7 +440,7 @@ static inline void sh4g_cycle_sub(u8 **tp, int n, uint32_t pc,
     return;
   sh4g_cycle_debit(tp, n);
   { sh4_codegen cg = sh4g_open(tp);
-    sh4_emit_cmppz(&cg, SH4_REG_CYCLES);      /* T = (cycles >= 0) */
+    sh4_emit_cmppl(&cg, SH4_REG_CYCLES);      /* T = (cycles > 0) */
     sh4g_close(tp, &cg); }
   bt = *tp;
   sh4g_u16(tp, 0x8900);                        /* BT skip update */
@@ -458,7 +458,7 @@ static inline void sh4g_cycle_gate(u8 **tp, uint32_t pc, const void *block_exit_
 {
   u8 *bt;
   { sh4_codegen cg = sh4g_open(tp);
-    sh4_emit_cmppz(&cg, SH4_REG_CYCLES);       /* T = (cycles >= 0) */
+    sh4_emit_cmppl(&cg, SH4_REG_CYCLES);       /* T = (cycles > 0) */
     sh4g_close(tp, &cg); }
   bt = *tp;
   sh4g_u16(tp, 0x8900);                        /* BT skip (budget remains) */
@@ -538,7 +538,7 @@ static inline u8 *sh4g_branch_exit(u8 **tp, uint32_t new_pc, const void *block_e
   sh4g_store_pc_imm(tp, new_pc);                /* R4 = reg[REG_PC] = new_pc */
 
   { sh4_codegen cg = sh4g_open(tp);
-    sh4_emit_cmppz(&cg, SH4_REG_CYCLES);        /* T = (cycles >= 0) */
+    sh4_emit_cmppl(&cg, SH4_REG_CYCLES);        /* T = (cycles > 0) */
     sh4g_close(tp, &cg); }
   bt = *tp;
   sh4g_u16(tp, 0x8900);                          /* BT over (skip exit if budget left) */

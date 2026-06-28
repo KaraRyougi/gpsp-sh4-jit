@@ -252,6 +252,19 @@ defsymbl(sh4_indirect_branch_dual)
   jmp     @r0
   nop
 
+/* ---- BIOS fallback: interpret the open-BIOS routine, then resume JIT. ---- */
+defsymbl(sh4_bios_fallback_entry)
+  mov     r13, r4                 /* arg0 = remaining cycles */
+  CALL    cgba_sh4_bios_fallback
+  cmp/pz  r0
+  bt      1f                      /* helper stopped at BIOS return PC */
+  bra     return_to_main          /* helper completed the frame */
+  nop
+1:
+  mov     r0, r13                 /* helper stopped at BIOS return PC */
+  bra     lookup_pc
+  nop
+
 /* ---- RAM self-modifying-code flush; R6 = current PC ---- */
 defsymbl(smc_write)
   mov     #REG_PC, r0

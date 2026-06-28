@@ -41,6 +41,7 @@ u32  sh4_update_gba(u32 pc);
 void sh4_indirect_branch_arm(u32 address);
 void sh4_indirect_branch_thumb(u32 address);
 void sh4_indirect_branch_dual(u32 address);
+void sh4_bios_fallback_entry(void);
 void smc_write(void);
 void execute_swi(u32 pc);
 void sh4_cheat_hook(void);

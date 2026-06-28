@@ -17,6 +17,11 @@
 
 u32 execute_arm_translate_internal(u32 cycles, void *reg_base);  /* sh4_stub.S */
 
+extern u32 cgba_diff_stop_pc;
+extern int cgba_diff_stop_active;
+extern int cgba_diff_stop_skip_initial;
+extern s32 cgba_diff_stop_cycles_remaining;
+
 #if defined(CGBA_GPSP_HEADLESS_TEST) && CGBA_GPSP_HEADLESS_TRACE_PC != 0
 static void sh4_headless_putc(char c)
 {
@@ -919,6 +924,36 @@ void sh4_swi_handler(void)
   set_cpu_mode(MODE_SUPERVISOR);
   reg[REG_BUS_VALUE] = 0xe3a02004u;                         /* post-SWI bios[0xE4] open-bus */
   reg[REG_PC] = 0x00000008u;                                /* SWI vector */
+}
+
+u32 cgba_sh4_bios_fallback(u32 cycles)
+{
+  u32 return_pc = 0xffffffffu;
+
+  if (reg[CPU_MODE] == MODE_SUPERVISOR) {
+    return_pc = REG_MODE(MODE_SUPERVISOR)[6];
+    if (return_pc >= 0x00004000u) {
+      cgba_diff_stop_pc = return_pc;
+      cgba_diff_stop_active = 1;
+      cgba_diff_stop_skip_initial = 0;
+      cgba_diff_stop_cycles_remaining = (s32)cycles;
+      execute_arm(cycles);
+      cgba_diff_stop_active = 0;
+      cgba_diff_stop_skip_initial = 0;
+
+      if (reg[REG_PC] == return_pc) {
+        s32 remaining = cgba_diff_stop_cycles_remaining;
+        if (remaining <= 0) {
+          u32 ret = update_gba(remaining);
+          return completed_frame(ret) ? ret : cycles_to_run(ret);
+        }
+        return (u32)remaining;
+      }
+    }
+  }
+
+  execute_arm(cycles);
+  return 0x80000000u;
 }
 
 /* Host-emitter init hook (main.c calls this under HAVE_DYNAREC). The MIPS/x86

@@ -19,7 +19,7 @@ MEMORY
 		a scratch/upload window, so keep gpSP's temporary high arena there
 		until the core is moved to explicit heap/NOR-backed allocation.
 	*/
-	highram (rw):   o = 0x8c200000, l = 5M
+	highram (rw):   o = 0x8c200000, l = 0x580000
 	ilram   (rwx):  o = 0xe5200000, l = 4k
 	xyram   (rwx):  o = 0xe500e000, l = 16k
 }
