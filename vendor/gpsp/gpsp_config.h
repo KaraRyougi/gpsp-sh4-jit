@@ -34,8 +34,13 @@
    instruction can take. STM/LDM are tipically the biggest ones */
 #define TRANSLATION_CACHE_LIMIT_THRESHOLD (1024 * 2)
 
-/* Hash table size for ROM trans cache lookups */
+/* Hash table size for ROM trans cache lookups. The upstream default 16
+   (64K * 4 = 256 KiB) dwarfs the fx-CG100/SH7305 cache and is walked on every
+   indirect-branch resolve, so calculator builds can override it down to a
+   cache-friendlier size. */
+#ifndef ROM_BRANCH_HASH_BITS
 #define ROM_BRANCH_HASH_BITS                           16
+#endif
 #define ROM_BRANCH_HASH_SIZE   (1 << ROM_BRANCH_HASH_BITS)
 
 /* RFU Multiplayer config, do not mess around too much with it */
