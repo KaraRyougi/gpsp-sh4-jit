@@ -43,5 +43,22 @@ cmake -S "$GG" -B "$GG/$BUILD" \
 cmake --build "$GG/$BUILD" -j"$JOBS"
 
 G3A="$(find "$GG/$BUILD" "$GG" -maxdepth 1 -name 'CGBA-GPSP.g3a' 2>/dev/null | head -1)"
+[ -n "$G3A" ] || { echo "error: CGBA-GPSP.g3a was not produced" >&2; exit 1; }
+
+# Make it visible on macOS. fxSDK's mkg3a marks the .g3a with the 'hidden' file
+# flag, and this checkout may live under a dot-directory (e.g. .claude/worktrees)
+# that Finder hides too -- either way you can't drag it to the calculator. Clear
+# the flag and drop a clean, visible copy where you can reach it (override the
+# destination with CGBA_G3A_OUT=/path).
+command -v chflags >/dev/null 2>&1 && chflags nohidden "$G3A" 2>/dev/null || true
+OUT_DIR="${CGBA_G3A_OUT:-$HOME/Desktop}"
+[ -d "$OUT_DIR" ] || OUT_DIR="$HOME"
+OUT="$OUT_DIR/CGBA-GPSP.g3a"
+cp -f "$G3A" "$OUT"
+command -v xattr   >/dev/null 2>&1 && xattr -c "$OUT" 2>/dev/null || true
+command -v chflags >/dev/null 2>&1 && chflags nohidden "$OUT" 2>/dev/null || true
+
 echo
-echo "Built playable JIT add-in: ${G3A:-$GG/CGBA-GPSP.g3a}"
+echo "Built playable JIT add-in:"
+echo "  build output : $G3A"
+echo "  VISIBLE copy : $OUT   <- drag THIS to the calculator"
