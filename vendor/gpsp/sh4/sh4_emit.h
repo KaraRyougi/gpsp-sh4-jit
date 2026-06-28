@@ -415,6 +415,12 @@ extern void *tmemst[4][16];
          block_exits[block_exit_position].branch_target);                     \
        block_exit_position++; } while(0)
 
+#define thumb_bl_prefix()                                                     \
+  do { thumb_decode_branch();                                                 \
+       sh4g_const(&translation_ptr,                                           \
+         (u32)(pc + 4 + ((s32)((offset & 0x07FF) << 21) >> 9)), SH4_REG_T0);  \
+       sh4g_store_greg(&translation_ptr, SH4_REG_T0, REG_LR); } while(0)
+
 #define thumb_blh()                                                           \
   do { thumb_decode_branch();                                                 \
        sh4g_load_greg(&translation_ptr, REG_LR, SH4_REG_ARG0);                \
