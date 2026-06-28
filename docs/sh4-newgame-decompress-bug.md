@@ -1,10 +1,42 @@
 # SH4 dynarec: new-game freeze (Metroid Fusion)
 
-Status: **OPEN.** The dynarec renders the new-game intro cutscene, then **freezes
-~frame 700 on a control-flow divergence** — it branches into code the game never
-executes, pops a (legitimately) zero stack word as a code pointer, and `bx 0` →
-guest reset → BIOS boot → frozen. Distinct from the cache-overflow crash fixed in
-`d3fb4f8`.
+Status: **FIXED** (`53dd75e`). The new-game cutscene now renders **pixel-identical
+to the interpreter** (frames 696–756 verified byte-for-byte) and runs on into the
+next scene (≥ frame 1300, 0 wild jumps). Distinct from the cache-overflow crash
+fixed in `d3fb4f8`.
+
+## Root cause + fix (the answer)
+
+**A Thumb BL that is interrupted by a cycle-budget exit between its two halves.**
+gpSP folds a Thumb BL prefix (`0xF000-0xF7FF`) + suffix into one `thumb_bl()` at
+the suffix, and the prefix emitted **no code** — only `thumb_bl()` sets LR. But
+the dynarec can take a cycle exit (or store-alert re-dispatch) *between* the two
+halves and re-dispatch at the **suffix** (`reg[REG_PC]` = suffix). That suffix is
+then translated as a standalone `thumb_blh()` block which computes its target from
+`reg[LR]` — **stale**, since the prefix never set it. → wrong branch into dead
+code → eventual `pop {pc}` of a stale 0 → reset → BIOS boot → freeze.
+
+**Fix** (`vendor/gpsp/cpu_threaded.c` + `sh4/sh4_emit.h`): emit the prefix's
+temporary LR `= (PC+4) + signext(offset11)<<12` **unconditionally** at the BL
+prefix (`thumb_bl_prefix`). Combined BLs harmlessly overwrite it in `thumb_bl()`;
+a mid-BL cycle exit now resumes with the correct LR. (Matches the
+`codex/metroid-frame700-fix` change. My earlier `thumb_blh_setup` attempt gated
+this on "block ends exactly at the prefix" — which only covers a `MAX_BLOCK_SIZE`
+split that never happens — so it missed the common mid-BL cycle exit and did not
+fix the freeze. The lesson: emit the prefix LR **always**.)
+
+**This was ONE bug, not two.** The earlier "native-LDST-off is a separate
+frame-696 bug" was the *same* bug — native LDST only changes the cycle timing, so
+the budget exit lands inside a *different* BL (frame 696 vs 700). With the fix,
+both native-on and native-off are pixel-identical to the interpreter.
+
+It also explains every prior observation: `0x08001870` is reached via re-dispatch
+(`reg[REG_PC]`, so no register holds it, nothing is stored/loaded), and it is
+neither a translation-gate (`@@GATE`=0) nor an IRQ resume (`@@IRQ`=0).
+
+---
+
+The investigation history below is kept for the techniques and the dead ends.
 
 > The filename says "decompress" — that was the **original, wrong** hypothesis
 > (kept so the memory `[[sh4-newgame-decompress-bug]]` links and git history stay
