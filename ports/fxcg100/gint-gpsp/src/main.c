@@ -31,6 +31,7 @@ extern uint32_t cgba_dynarec_ibh_dual_thumb_hit_count;
 extern uint32_t cgba_dynarec_ibh_dual_slow_count;
 extern uint32_t cgba_dynarec_ibh_dual_hot_arm_count;
 extern uint32_t cgba_dynarec_ibh_dual_hot_thumb_count;
+extern void cgba_sh4_prof_reset(void);
 extern uint32_t cgba_sh4_helper_thumb_ldst_count;
 extern uint32_t cgba_sh4_helper_thumb_block_count;
 extern uint32_t cgba_sh4_helper_thumb_shift_count;
@@ -222,6 +223,7 @@ static int start_gpsp(uint16_t *framebuffer, unsigned rom_id)
 	cgba_dynarec_ibh_dual_slow_count = 0;
 	cgba_dynarec_ibh_dual_hot_arm_count = 0;
 	cgba_dynarec_ibh_dual_hot_thumb_count = 0;
+	cgba_sh4_prof_reset();
 	cgba_sh4_helper_thumb_ldst_count = 0;
 	cgba_sh4_helper_thumb_block_count = 0;
 	cgba_sh4_helper_thumb_shift_count = 0;
@@ -884,6 +886,7 @@ static int cgba_headless_test(uint16_t *framebuffer)
 	cgba_dynarec_ibh_dual_slow_count = 0;
 	cgba_dynarec_ibh_dual_hot_arm_count = 0;
 	cgba_dynarec_ibh_dual_hot_thumb_count = 0;
+	cgba_sh4_prof_reset();
 	cgba_sh4_helper_thumb_ldst_count = 0;
 	cgba_sh4_helper_thumb_block_count = 0;
 	cgba_sh4_helper_thumb_shift_count = 0;
