@@ -1,7 +1,8 @@
 /*
  * sh4_native_ldst_audit.c — host checks for native SH4 load/store fast paths.
- * Stores must stay on the C helper path so SMC detection and store-raised alerts
- * cannot be bypassed when native load paths are enabled.
+ * Side-effecting stores must stay on the C helper path. Plain Thumb RAM stores
+ * may emit native guarded code as long as the generated path still falls back
+ * for non-RAM and SMC-tagged writes.
  */
 
 #include <stdint.h>
@@ -103,7 +104,7 @@ static void expect_thumb_fallback(const char *name, u32 opcode)
   memset(code, 0xCC, sizeof(code));
 
   if (sh4g_thumb_ldst_native(&p, opcode, 0x08000000, 1)) {
-    fprintf(stderr, "%s: native path accepted store opcode\n", name);
+    fprintf(stderr, "%s: native path accepted fallback opcode\n", name);
     fail = 1;
   }
   if (p != code) {
@@ -113,17 +114,17 @@ static void expect_thumb_fallback(const char *name, u32 opcode)
   }
 }
 
-static void expect_thumb_native_load(const char *name, u32 opcode)
+static void expect_thumb_native_transfer(const char *name, u32 opcode)
 {
   u8 *p = code;
   memset(code, 0xCC, sizeof(code));
 
   if (!sh4g_thumb_ldst_native(&p, opcode, 0x08000000, 1)) {
-    fprintf(stderr, "%s: native path rejected load opcode\n", name);
+    fprintf(stderr, "%s: native path rejected transfer opcode\n", name);
     fail = 1;
   }
   if (p == code) {
-    fprintf(stderr, "%s: native load emitted no code\n", name);
+    fprintf(stderr, "%s: native transfer emitted no code\n", name);
     fail = 1;
   }
 }
@@ -197,9 +198,12 @@ int main(void)
   expect_arm_single_fallback("STRH r1,[r0]", 0xE1C010B0u);
   expect_arm_single_native_load("LDR r1,[r0]", 0xE5901000u);
 
-  expect_thumb_fallback("STRB r1,[r0,#0]", 0x7001u);
-  expect_thumb_native_load("LDR r0,[pc,#0]", 0x4800u);
-  expect_thumb_native_load("LDRB r1,[r0,#0]", 0x7801u);
+  expect_thumb_native_transfer("LDR r0,[pc,#0]", 0x4800u);
+  expect_thumb_native_transfer("LDRB r1,[r0,#0]", 0x7801u);
+  expect_thumb_native_transfer("STR r1,[r0,#0]", 0x6001u);
+  expect_thumb_native_transfer("STRB r1,[r0,#0]", 0x7001u);
+  expect_thumb_native_transfer("STRH r1,[r0,#0]", 0x8001u);
+  expect_thumb_fallback("non-ldst Thumb opcode", 0xDF00u);
 
   expect_arm_block_fallback("STMIA r0,{r1,r2}", 0xE8800006u);
   expect_arm_block_native_load("LDMIA r0,{r1,r2}", 0xE8900006u);

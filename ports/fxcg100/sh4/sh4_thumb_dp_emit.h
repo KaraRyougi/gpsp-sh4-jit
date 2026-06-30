@@ -321,9 +321,10 @@ static inline u8 *sh4g_thumb_ldst_guard(u8 **tp, int slow_if_t)
   return sh4g_emit_bra_placeholder(tp);
 }
 
-/* Native Thumb mapped loads. Stores and side-effecting/open regions fall back
- * to cgba_sh4_thumb_ldst so DMA/IRQ alerts, I/O semantics, SMC invalidation,
- * ROM paging and backup stay helper-owned. */
+/* Native Thumb mapped loads and plain RAM stores. Side-effecting/open regions
+ * fall back to cgba_sh4_thumb_ldst so DMA/IRQ alerts, I/O semantics, ROM paging
+ * and backup stay helper-owned. RAM stores check the SMC tag mirror first and
+ * fall back if they would overwrite translated guest code. */
 static inline int sh4g_thumb_ldst_native(u8 **tp, u32 opcode, u32 pc,
   int cycle_count)
 {
@@ -389,7 +390,6 @@ static inline int sh4g_thumb_ldst_native(u8 **tp, u32 opcode, u32 pc,
   } else {
     return 0;
   }
-  if (!is_load) return 0;                         /* stores own side effects in C */
 
   if (pc_relative) {
     sh4g_const(tp, ((pc & ~2u) + 4u + offset), SH4_REG_T0);
@@ -429,26 +429,38 @@ static inline int sh4g_thumb_ldst_native(u8 **tp, u32 opcode, u32 pc,
     sh4_emit_tst(&cg, SH4_REG_T2, SH4_REG_T2);     /* T = (page == NULL) */
     sh4g_close(tp, &cg); }
   guards[ng++] = sh4g_thumb_ldst_guard(tp, 1);     /* unmapped -> slow */
-  /* Fast loads are safe for mapped RAM/video/gamepak memory. Exclude BIOS/open
-   * (0/1), I/O (4), and backup/EEPROM (13..15), matching the ARM load path. */
-  { sh4_codegen cg = sh4g_open(tp);
-    sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
-    sh4_emit_shlr16(&cg, SH4_REG_RET);
-    sh4_emit_shlr8(&cg, SH4_REG_RET);              /* R0 = addr >> 24 */
-    sh4_emit_mov_imm(&cg, 2, SH4_REG_T1);
-    sh4_emit_cmphs(&cg, SH4_REG_T1, SH4_REG_RET);  /* T = region >= 2 */
-    sh4g_close(tp, &cg); }
-  guards[ng++] = sh4g_thumb_ldst_guard(tp, 0);     /* BIOS/open -> slow */
-  { sh4_codegen cg = sh4g_open(tp);
-    sh4_emit_mov_imm(&cg, 4, SH4_REG_T1);
-    sh4_emit_cmpeq(&cg, SH4_REG_T1, SH4_REG_RET);  /* T = I/O */
-    sh4g_close(tp, &cg); }
-  guards[ng++] = sh4g_thumb_ldst_guard(tp, 1);     /* I/O -> slow */
-  { sh4_codegen cg = sh4g_open(tp);
-    sh4_emit_mov_imm(&cg, 13, SH4_REG_T1);
-    sh4_emit_cmphs(&cg, SH4_REG_T1, SH4_REG_RET);  /* T = backup/EEPROM */
-    sh4g_close(tp, &cg); }
-  guards[ng++] = sh4g_thumb_ldst_guard(tp, 1);     /* backup -> slow */
+  if (is_load) {
+    /* Fast loads are safe for mapped RAM/video/gamepak memory. Exclude
+     * BIOS/open (0/1), I/O (4), and backup/EEPROM (13..15), matching the ARM
+     * load path. */
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
+      sh4_emit_shlr16(&cg, SH4_REG_RET);
+      sh4_emit_shlr8(&cg, SH4_REG_RET);              /* R0 = addr >> 24 */
+      sh4_emit_mov_imm(&cg, 2, SH4_REG_T1);
+      sh4_emit_cmphs(&cg, SH4_REG_T1, SH4_REG_RET);  /* T = region >= 2 */
+      sh4g_close(tp, &cg); }
+    guards[ng++] = sh4g_thumb_ldst_guard(tp, 0);     /* BIOS/open -> slow */
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_imm(&cg, 4, SH4_REG_T1);
+      sh4_emit_cmpeq(&cg, SH4_REG_T1, SH4_REG_RET);  /* T = I/O */
+      sh4g_close(tp, &cg); }
+    guards[ng++] = sh4g_thumb_ldst_guard(tp, 1);     /* I/O -> slow */
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_imm(&cg, 13, SH4_REG_T1);
+      sh4_emit_cmphs(&cg, SH4_REG_T1, SH4_REG_RET);  /* T = backup/EEPROM */
+      sh4g_close(tp, &cg); }
+    guards[ng++] = sh4g_thumb_ldst_guard(tp, 1);     /* backup -> slow */
+  } else {
+    /* Fast stores are safe only for plain RAM: 0x02/0x03. */
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
+      sh4_emit_mov_imm(&cg, -25, SH4_REG_T1);
+      sh4_emit_shld(&cg, SH4_REG_T1, SH4_REG_RET);   /* R0 = addr >> 25 */
+      sh4_emit_cmpeq_imm(&cg, 1);                    /* regions 2 or 3 */
+      sh4g_close(tp, &cg); }
+    guards[ng++] = sh4g_thumb_ldst_guard(tp, 0);
+  }
   if (align_mask) {
     sh4_codegen cg = sh4g_open(tp);
     sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
