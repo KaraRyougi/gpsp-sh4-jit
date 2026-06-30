@@ -19,7 +19,9 @@ typedef int64_t  s64;
 
 #define CGBA_SH4_ARM_LDST_NATIVE   1
 #define CGBA_SH4_THUMB_LDST_NATIVE 1
+#define CGBA_SH4_THUMB_BLOCK_NATIVE 1
 #include "ports/fxcg100/sh4/sh4_thumb_dp_emit.h"
+#include "ports/fxcg100/sh4/sh4_thumb_block_emit.h"
 #include "ports/fxcg100/sh4/sh4_arm_ldst_emit.h"
 #include "ports/fxcg100/sh4/sh4_arm_block_emit.h"
 
@@ -36,6 +38,13 @@ int cgba_sh4_arm_ldst(u32 opcode, u32 pc)
 }
 
 int cgba_sh4_thumb_ldst(u32 opcode, u32 pc)
+{
+  (void)opcode;
+  (void)pc;
+  return 0;
+}
+
+int cgba_sh4_thumb_block(u32 opcode, u32 pc)
 {
   (void)opcode;
   (void)pc;
@@ -150,6 +159,37 @@ static void expect_arm_block_native_load(const char *name, u32 opcode)
   }
 }
 
+static void expect_thumb_block_fallback(const char *name, u32 opcode)
+{
+  u8 *p = code;
+  memset(code, 0xCC, sizeof(code));
+
+  if (sh4g_thumb_block_native(&p, opcode, 0x08000000, 1)) {
+    fprintf(stderr, "%s: native path accepted store opcode\n", name);
+    fail = 1;
+  }
+  if (p != code) {
+    fprintf(stderr, "%s: fallback opcode emitted %ld bytes\n",
+            name, (long)(p - code));
+    fail = 1;
+  }
+}
+
+static void expect_thumb_block_native_load(const char *name, u32 opcode)
+{
+  u8 *p = code;
+  memset(code, 0xCC, sizeof(code));
+
+  if (!sh4g_thumb_block_native(&p, opcode, 0x08000000, 1)) {
+    fprintf(stderr, "%s: native path rejected load opcode\n", name);
+    fail = 1;
+  }
+  if (p == code) {
+    fprintf(stderr, "%s: native load emitted no code\n", name);
+    fail = 1;
+  }
+}
+
 int main(void)
 {
   expect_arm_single_fallback("STR r1,[r0]",  0xE5801000u);
@@ -162,6 +202,12 @@ int main(void)
 
   expect_arm_block_fallback("STMIA r0,{r1,r2}", 0xE8800006u);
   expect_arm_block_native_load("LDMIA r0,{r1,r2}", 0xE8900006u);
+
+  expect_thumb_block_fallback("PUSH {r0,r1}", 0xB403u);
+  expect_thumb_block_fallback("STMIA r0!,{r1,r2}", 0xC006u);
+  expect_thumb_block_native_load("POP {r0,r1}", 0xBC03u);
+  expect_thumb_block_native_load("POP {r0,pc}", 0xBD01u);
+  expect_thumb_block_native_load("LDMIA r0!,{r1,r2}", 0xC806u);
 
   if (fail) {
     fprintf(stderr, "SH4 native ldst audit failed\n");
