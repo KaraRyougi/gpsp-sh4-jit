@@ -37,13 +37,14 @@ extern u8 ws_cyc_seq[16][2];   /* gba_memory.c: GBA wait-state cycle tables, */
 extern u8 ws_cyc_nseq[16][2];  /* [region][word?1:0], live under WAITCNT.    */
 
 /* ---- back-patch I-cache sync --------------------------------------------- *
- * Re-sync a patched line on the SH-4A's split I/D caches. Used only by
- * sh4g_patch_cond: it rewrites the disp8 of a BT/BF, which is fetched and
- * executed as an INSTRUCTION, so a stale I-cache copy would branch wrong. (Today
- * every conditional patch is intra-block, inside the forward range the post-block
- * translate_icache_sync already covers, so this is belt-and-suspenders; it stays
- * because the moment a conditional patch ever targets an already-synced block it
- * becomes load-bearing, and an instruction patch is the one case where it must.)
+ * All current SH4 patch sites are written while a block is still being emitted,
+ * before block_lookup_address_* calls translate_icache_sync() on the full newly
+ * emitted range. Re-syncing each tiny BT/BF/BRA patch separately is therefore
+ * redundant and very expensive on real SH-4A hardware (OCBWB+SYNCO+ICBI+SYNCO
+ * per line).
+ *
+ * Keep an opt-in safety switch for future code that might patch an already
+ * synchronized instruction. Leave it off for hardware performance builds.
  *
  * It is deliberately NOT used by sh4g_patch_jump. That patches the .long target
  * of `MOV.L @(d,PC),R0; JMP @R0` — a LITERAL read as DATA via the operand cache,
@@ -51,7 +52,7 @@ extern u8 ws_cyc_nseq[16][2];  /* [region][word?1:0], live under WAITCNT.    */
  * store and MOV.L load are D-cache-coherent on one core, so the read sees the
  * new value with no flush; an OCBWB+ICBI there is pure waste on the hottest
  * (every-chain) path. The host build of the encoder has no caches: no-op. */
-#if defined(CGBA_FXCG100)
+#if defined(CGBA_FXCG100) && defined(CGBA_SH4_PATCH_RESYNC)
 #include "ports/fxcg100/sh4/sh4_cache.h"
 #define SH4G_RESYNC(p, n) cgba_sh4_cache_sync((void *)(p), (void *)((u8 *)(p) + (n)))
 #else
