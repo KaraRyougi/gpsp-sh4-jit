@@ -82,6 +82,11 @@ u32 cgba_dynarec_rom_flush_count;
 u32 cgba_dynarec_ram_flush_count;
 u32 cgba_dynarec_arm_translate_count;
 u32 cgba_dynarec_thumb_translate_count;
+u32 cgba_dynarec_lookup_arm_count;
+u32 cgba_dynarec_lookup_thumb_count;
+u32 cgba_dynarec_lookup_dual_count;
+u32 cgba_dynarec_icache_sync_count;
+u32 cgba_dynarec_icache_sync_bytes;
 #endif
 
 typedef struct
@@ -287,15 +292,24 @@ typedef struct
 #endif
 
 void translate_icache_sync() {
+    u32 synced = 0;
     // Cache emitted code can only grow
     if (last_rom_translation_ptr < rom_translation_ptr) {
+        synced += (u32)(rom_translation_ptr - last_rom_translation_ptr);
         platform_cache_sync(last_rom_translation_ptr, rom_translation_ptr);
         last_rom_translation_ptr = rom_translation_ptr;
     }
     if (last_ram_translation_ptr < ram_translation_ptr) {
+        synced += (u32)(ram_translation_ptr - last_ram_translation_ptr);
         platform_cache_sync(last_ram_translation_ptr, ram_translation_ptr);
         last_ram_translation_ptr = ram_translation_ptr;
     }
+#if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
+    if (synced) {
+        cgba_dynarec_icache_sync_count++;
+        cgba_dynarec_icache_sync_bytes += synced;
+    }
+#endif
 }
 
 /* End of Cache invalidation */
@@ -2709,6 +2723,9 @@ static void cgba_wj_note(u32 pc)
 
 u8 function_cc *block_lookup_address_dual(u32 pc)
 {
+#if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
+  cgba_dynarec_lookup_dual_count++;
+#endif
   u32 thumb = pc & 0x01;
   if(thumb) {
     pc &= ~1;
@@ -2724,6 +2741,9 @@ u8 function_cc *block_lookup_address_dual(u32 pc)
 u8 function_cc *block_lookup_address_arm(u32 pc)
 {
   unsigned i;
+#if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
+  cgba_dynarec_lookup_arm_count++;
+#endif
 #ifdef SH4_ARCH
   /* Commit the resolved PC. lookup_pc already has reg[REG_PC] == pc (no-op), but
    * the BX / computed-PC trampolines jump straight here without storing it, so
@@ -2751,6 +2771,9 @@ u8 function_cc *block_lookup_address_arm(u32 pc)
 u8 function_cc *block_lookup_address_thumb(u32 pc)
 {
   unsigned i;
+#if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
+  cgba_dynarec_lookup_thumb_count++;
+#endif
 #ifdef SH4_ARCH
   reg[REG_PC] = pc;   /* see block_lookup_address_arm: commit PC for indirect/BX */
   if(pc < 0x00004000u)

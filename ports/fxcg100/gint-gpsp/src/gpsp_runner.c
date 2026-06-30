@@ -24,6 +24,11 @@ extern uint32_t cgba_dynarec_rom_flush_count;
 extern uint32_t cgba_dynarec_ram_flush_count;
 extern uint32_t cgba_dynarec_arm_translate_count;
 extern uint32_t cgba_dynarec_thumb_translate_count;
+extern uint32_t cgba_dynarec_lookup_arm_count;
+extern uint32_t cgba_dynarec_lookup_thumb_count;
+extern uint32_t cgba_dynarec_lookup_dual_count;
+extern uint32_t cgba_dynarec_icache_sync_count;
+extern uint32_t cgba_dynarec_icache_sync_bytes;
 extern uint32_t cgba_sh4_helper_thumb_ldst_count;
 extern uint32_t cgba_sh4_helper_thumb_block_count;
 extern uint32_t cgba_sh4_helper_thumb_shift_count;
@@ -44,6 +49,13 @@ extern uint32_t cgba_sh4_helper_arm_ldst_rom_count;
 extern uint32_t cgba_sh4_helper_arm_ldst_other_count;
 extern uint32_t cgba_sh4_helper_arm_block_load_count;
 extern uint32_t cgba_sh4_helper_arm_block_store_count;
+extern uint32_t cgba_sh4_helper_thumb_ldst_load_count;
+extern uint32_t cgba_sh4_helper_thumb_ldst_store_count;
+extern uint32_t cgba_sh4_helper_thumb_ldst_ram_count;
+extern uint32_t cgba_sh4_helper_thumb_ldst_io_count;
+extern uint32_t cgba_sh4_helper_thumb_ldst_video_count;
+extern uint32_t cgba_sh4_helper_thumb_ldst_rom_count;
+extern uint32_t cgba_sh4_helper_thumb_ldst_other_count;
 #endif
 
 typedef struct cgba_rom_source {
@@ -583,6 +595,12 @@ void cgba_gpsp_debug_menu(fxcg100_debug_info *debug, unsigned frame,
 			(unsigned long)(cgba_dynarec_thumb_translate_count / f),
 			(unsigned long)(arm_helpers / f),
 			(unsigned long)(thumb_helpers / f));
+		debug_line(debug, "JIT LK A%lu T%lu D%lu IC%lu/%luk",
+			(unsigned long)cgba_dynarec_lookup_arm_count,
+			(unsigned long)cgba_dynarec_lookup_thumb_count,
+			(unsigned long)cgba_dynarec_lookup_dual_count,
+			(unsigned long)cgba_dynarec_icache_sync_count,
+			(unsigned long)(cgba_dynarec_icache_sync_bytes / 1024u));
 		debug_line(debug, "H ARM ld%lu st%lu blk%lu dp%lu",
 			(unsigned long)cgba_sh4_helper_arm_ldst_load_count,
 			(unsigned long)cgba_sh4_helper_arm_ldst_store_count,
@@ -597,6 +615,15 @@ void cgba_gpsp_debug_menu(fxcg100_debug_info *debug, unsigned frame,
 			(unsigned long)cgba_sh4_helper_thumb_block_count,
 			(unsigned long)cgba_sh4_helper_thumb_shift_count,
 			(unsigned long)cgba_sh4_helper_thumb_dp_count);
+		debug_line(debug, "H TLD l%lu s%lu ram%lu io%lu",
+			(unsigned long)cgba_sh4_helper_thumb_ldst_load_count,
+			(unsigned long)cgba_sh4_helper_thumb_ldst_store_count,
+			(unsigned long)cgba_sh4_helper_thumb_ldst_ram_count,
+			(unsigned long)cgba_sh4_helper_thumb_ldst_io_count);
+		debug_line(debug, "H TLD vid%lu rom%lu oth%lu",
+			(unsigned long)cgba_sh4_helper_thumb_ldst_video_count,
+			(unsigned long)cgba_sh4_helper_thumb_ldst_rom_count,
+			(unsigned long)cgba_sh4_helper_thumb_ldst_other_count);
 		debug_line(debug, "H LD ram%lu io%lu vid%lu rom%lu oth%lu",
 			(unsigned long)cgba_sh4_helper_arm_ldst_ram_count,
 			(unsigned long)cgba_sh4_helper_arm_ldst_io_count,

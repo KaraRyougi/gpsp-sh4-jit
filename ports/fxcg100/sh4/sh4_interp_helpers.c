@@ -108,6 +108,13 @@ u32 cgba_sh4_helper_arm_ldst_rom_count;
 u32 cgba_sh4_helper_arm_ldst_other_count;
 u32 cgba_sh4_helper_arm_block_load_count;
 u32 cgba_sh4_helper_arm_block_store_count;
+u32 cgba_sh4_helper_thumb_ldst_load_count;
+u32 cgba_sh4_helper_thumb_ldst_store_count;
+u32 cgba_sh4_helper_thumb_ldst_ram_count;
+u32 cgba_sh4_helper_thumb_ldst_io_count;
+u32 cgba_sh4_helper_thumb_ldst_video_count;
+u32 cgba_sh4_helper_thumb_ldst_rom_count;
+u32 cgba_sh4_helper_thumb_ldst_other_count;
 #define CGBA_SH4_HELPER_HIT(name) (cgba_sh4_helper_##name##_count++)
 static void cgba_sh4_helper_arm_ldst_detail(u32 is_load, u32 address)
 {
@@ -125,10 +132,22 @@ static void cgba_sh4_helper_arm_block_detail(u32 is_load)
   if (is_load) cgba_sh4_helper_arm_block_load_count++;
   else         cgba_sh4_helper_arm_block_store_count++;
 }
+static void cgba_sh4_helper_thumb_ldst_detail(u32 is_load, u32 address)
+{
+  u32 region = address >> 24;
+  if (is_load) cgba_sh4_helper_thumb_ldst_load_count++;
+  else         cgba_sh4_helper_thumb_ldst_store_count++;
+  if (region == 0x02 || region == 0x03) cgba_sh4_helper_thumb_ldst_ram_count++;
+  else if (region == 0x04)              cgba_sh4_helper_thumb_ldst_io_count++;
+  else if (region >= 0x05 && region <= 0x07) cgba_sh4_helper_thumb_ldst_video_count++;
+  else if (region >= 0x08 && region <= 0x0E) cgba_sh4_helper_thumb_ldst_rom_count++;
+  else                                  cgba_sh4_helper_thumb_ldst_other_count++;
+}
 #else
 #define CGBA_SH4_HELPER_HIT(name) ((void)0)
 #define cgba_sh4_helper_arm_ldst_detail(is_load, address) ((void)0)
 #define cgba_sh4_helper_arm_block_detail(is_load) ((void)0)
+#define cgba_sh4_helper_thumb_ldst_detail(is_load, address) ((void)0)
 #endif
 
 /* ---- guest memory accessors (backend-provided wrappers over gba_memory.c) --
@@ -294,6 +313,7 @@ static void cgba_sh4_thumb_ldst_do(u32 opcode, u32 pc)
 
   if (hi >= 0x48 && hi <= 0x4F) {                  /* LDR Rd,[PC,#imm8*4] */
     u32 addr = ((pc & ~2u) + 4) + ((opcode & 0xFF) * 4);
+    cgba_sh4_helper_thumb_ldst_detail(1, addr);
     reg[rd] = execute_load_u32(addr);
     return;
   }
@@ -302,17 +322,41 @@ static void cgba_sh4_thumb_ldst_do(u32 opcode, u32 pc)
     u32 addr = reg[rb] + reg[ro];
     if (opcode & 0x0200) {                          /* format 8: H/S */
       switch ((opcode >> 10) & 3) {
-      case 0: execute_store_u16(addr, reg[rd]); break;     /* STRH */
-      case 1: reg[rd] = execute_load_s8(addr);  break;     /* LDRSB */
-      case 2: reg[rd] = execute_load_u16(addr); break;     /* LDRH */
-      case 3: reg[rd] = execute_load_s16(addr); break;     /* LDRSH */
+      case 0:
+        cgba_sh4_helper_thumb_ldst_detail(0, addr);
+        execute_store_u16(addr, reg[rd]);
+        break;                                             /* STRH */
+      case 1:
+        cgba_sh4_helper_thumb_ldst_detail(1, addr);
+        reg[rd] = execute_load_s8(addr);
+        break;                                             /* LDRSB */
+      case 2:
+        cgba_sh4_helper_thumb_ldst_detail(1, addr);
+        reg[rd] = execute_load_u16(addr);
+        break;                                             /* LDRH */
+      case 3:
+        cgba_sh4_helper_thumb_ldst_detail(1, addr);
+        reg[rd] = execute_load_s16(addr);
+        break;                                             /* LDRSH */
       }
     } else {                                        /* format 7: L/B */
       switch ((opcode >> 10) & 3) {
-      case 0: execute_store_u32(addr, reg[rd]); break;     /* STR */
-      case 1: execute_store_u8(addr, reg[rd]);  break;     /* STRB */
-      case 2: reg[rd] = execute_load_u32(addr); break;     /* LDR */
-      case 3: reg[rd] = execute_load_u8(addr);  break;     /* LDRB */
+      case 0:
+        cgba_sh4_helper_thumb_ldst_detail(0, addr);
+        execute_store_u32(addr, reg[rd]);
+        break;                                             /* STR */
+      case 1:
+        cgba_sh4_helper_thumb_ldst_detail(0, addr);
+        execute_store_u8(addr, reg[rd]);
+        break;                                             /* STRB */
+      case 2:
+        cgba_sh4_helper_thumb_ldst_detail(1, addr);
+        reg[rd] = execute_load_u32(addr);
+        break;                                             /* LDR */
+      case 3:
+        cgba_sh4_helper_thumb_ldst_detail(1, addr);
+        reg[rd] = execute_load_u8(addr);
+        break;                                             /* LDRB */
       }
     }
     return;
@@ -322,6 +366,7 @@ static void cgba_sh4_thumb_ldst_do(u32 opcode, u32 pc)
     u32 is_byte = (opcode >> 12) & 1;
     u32 is_load = (opcode >> 11) & 1;
     u32 addr = reg[rb] + (is_byte ? imm5 : imm5 * 4);
+    cgba_sh4_helper_thumb_ldst_detail(is_load, addr);
     if (is_byte) {
       if (is_load) reg[rd] = execute_load_u8(addr);
       else         execute_store_u8(addr, reg[rd]);
@@ -333,6 +378,7 @@ static void cgba_sh4_thumb_ldst_do(u32 opcode, u32 pc)
   }
   if (hi >= 0x80 && hi <= 0x8F) {                  /* LDRH/STRH imm5*2 */
     u32 addr = reg[rb] + ((opcode >> 6) & 0x1F) * 2;
+    cgba_sh4_helper_thumb_ldst_detail((opcode & 0x0800) != 0, addr);
     if (opcode & 0x0800) reg[rd] = execute_load_u16(addr);
     else                 execute_store_u16(addr, reg[rd]);
     return;
@@ -340,6 +386,7 @@ static void cgba_sh4_thumb_ldst_do(u32 opcode, u32 pc)
   if (hi >= 0x90 && hi <= 0x9F) {                  /* LDR/STR [SP,#imm8*4] */
     u32 rdsp = (opcode >> 8) & 7;
     u32 addr = reg[REG_SP] + (opcode & 0xFF) * 4;
+    cgba_sh4_helper_thumb_ldst_detail((opcode & 0x0800) != 0, addr);
     if (opcode & 0x0800) reg[rdsp] = execute_load_u32(addr);
     else                 execute_store_u32(addr, reg[rdsp]);
     return;
