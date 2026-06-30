@@ -72,8 +72,14 @@ static void trace_jit_state(const char *phase, u32 cycles)
 
 unsigned cgba_gpsp_refresh_roms(void)
 {
+#ifdef CGBA_GPSP_DISABLE_STORAGE
+	memset(&cgba_storage_roms, 0, sizeof(cgba_storage_roms));
+	cgba_storage_roms_scanned = 1;
+	return 0;
+#else
 	cgba_storage_roms_scanned = 1;
 	return cgba_nor_rom_scan_gba(&cgba_storage_roms);
+#endif
 }
 
 static void ensure_storage_roms_scanned(void)
@@ -84,11 +90,10 @@ static void ensure_storage_roms_scanned(void)
 
 const char *cgba_gpsp_rom_name(unsigned rom_id)
 {
-	ensure_storage_roms_scanned();
-
 	if(rom_id < CGBA_GPSP_ROM_BUILTIN_COUNT)
 		return cgba_rom_sources[rom_id].name;
 
+	ensure_storage_roms_scanned();
 	rom_id -= CGBA_GPSP_ROM_BUILTIN_COUNT;
 	if(rom_id < cgba_storage_roms.count)
 		return cgba_storage_roms.entries[rom_id].label;
@@ -122,11 +127,11 @@ int cgba_gpsp_init(uint16_t *framebuffer, unsigned rom_id)
 		return -1;
 
 	cgba_last_error[0] = 0;
-	ensure_storage_roms_scanned();
 
 	if(rom_id < CGBA_GPSP_ROM_BUILTIN_COUNT)
 		rom = &cgba_rom_sources[rom_id];
 	else {
+		ensure_storage_roms_scanned();
 		unsigned storage_id = rom_id - CGBA_GPSP_ROM_BUILTIN_COUNT;
 		if(storage_id < cgba_storage_roms.count)
 			nor_entry = &cgba_storage_roms.entries[storage_id];

@@ -25,15 +25,19 @@
 #     DIFF_FRAME(120) DIFF_BLOCKS(256)        # in-emu lockstep block diff
 #     DIFF_DUMP_OPS(OFF)                      # dump block ops/cycle trace
 #     WINDOW_DIFF_FRAME(-1)                   # preserving one-frame diff
+#     DUMP_EVERY(0)                           # dump RGB565 framebuffer hex
 #     THUMB_LDST_NATIVE(ON)                   # toggle native Thumb byte LDR fast path
 #     EXACT_CYCLES(ON)                        # harness-only Thumb instruction
 #                                                boundary checks for cycle diffing
 #     TRACE_PC(0) TRACE_MASK(4095) TRACE_JIT(0)
 #                                                targeted helper/JIT debug trace
 #     TRACE_TIMER_IO(0)                          timer register write trace
+#     SCREEN_ONLY(OFF)                           verdict compares only the
+#                                                rendered GBA framebuffer hash
 #     SECS_INTERP(240) SECS_JIT(240) SECS_DIFF(SECS_INTERP)
 #                                                wall-clock caps per run
 #     CASIO_EMU(~/Dev/casio-emu)              # uses build-hle/calcemu
+#     CALCEMU($CASIO_EMU/build-hle/calcemu)   # direct emulator binary override
 #     FXSDK_PREFIX(~/.local)                  # fxsdk cmake module/toolchain
 set -euo pipefail
 
@@ -42,7 +46,7 @@ GG="$PORT_DIR/gint-gpsp"
 ROM="${1:-${ROM:-$HOME/Downloads/Metroid.gba}}"
 
 CASIO_EMU="${CASIO_EMU:-$HOME/Dev/casio-emu}"
-CALCEMU="$CASIO_EMU/build-hle/calcemu"
+CALCEMU="${CALCEMU:-$CASIO_EMU/build-hle/calcemu}"
 FXSDK_PREFIX="${FXSDK_PREFIX:-$HOME/.local}"
 
 FRAMES="${FRAMES:-600}";            STATE_EVERY="${STATE_EVERY:-5}"
@@ -54,12 +58,14 @@ SHIFT_PRESS="${SHIFT_PRESS:-${A_PRESS:-2}}"
 DIFF_FRAME="${DIFF_FRAME:-120}";    DIFF_BLOCKS="${DIFF_BLOCKS:-256}"
 DIFF_DUMP_OPS="${DIFF_DUMP_OPS:-OFF}"
 WINDOW_DIFF_FRAME="${WINDOW_DIFF_FRAME:--1}"
+DUMP_EVERY="${DUMP_EVERY:-0}"
 THUMB_LDST_NATIVE="${THUMB_LDST_NATIVE:-ON}"
 EXACT_CYCLES="${EXACT_CYCLES:-ON}"
 TRACE_PC="${TRACE_PC:-0}"
 TRACE_MASK="${TRACE_MASK:-4095}"
 TRACE_JIT="${TRACE_JIT:-0}"
 TRACE_TIMER_IO="${TRACE_TIMER_IO:-0}"
+SCREEN_ONLY="${SCREEN_ONLY:-OFF}"
 SECS_INTERP="${SECS_INTERP:-240}";  SECS_JIT="${SECS_JIT:-240}"
 SECS_DIFF="${SECS_DIFF:-$SECS_INTERP}"
 
@@ -83,6 +89,7 @@ cfg() { # build_dir dynarec(0|1) [extra diff args...]
     -DCGBA_GPSP_HEADLESS_FRAMES="$FRAMES" \
     -DCGBA_GPSP_HEADLESS_STATE_EVERY="$STATE_EVERY" \
     -DCGBA_GPSP_HEADLESS_LOG_EVERY=0 \
+    -DCGBA_GPSP_HEADLESS_DUMP_EVERY="$DUMP_EVERY" \
     -DCGBA_GPSP_HEADLESS_START_FRAME="$START_FRAME" \
     -DCGBA_GPSP_HEADLESS_START_HOLD="$START_HOLD" \
     -DCGBA_GPSP_HEADLESS_A_FRAME="$SHIFT_FRAME" \
@@ -123,6 +130,8 @@ echo "ROM: $ROM   frames: $FRAMES   sample: every $STATE_EVERY"
 echo "input: START frame $START_FRAME hold $START_HOLD; SHIFT frame $SHIFT_FRAME hold $SHIFT_HOLD period $SHIFT_PERIOD press $SHIFT_PRESS"
 echo "jit knobs: thumb_ldst=$THUMB_LDST_NATIVE exact_cycles=$EXACT_CYCLES"
 echo "trace: pc=$TRACE_PC mask=$TRACE_MASK jit=$TRACE_JIT timer_io=$TRACE_TIMER_IO"
+echo "dump: every $DUMP_EVERY frame(s)"
+echo "verdict: screen_only=$SCREEN_ONLY"
 
 run_block_diff=0
 if [[ "$DIFF_BLOCKS" != "0" && "$DIFF_FRAME" -ge 0 ]]; then
@@ -178,12 +187,27 @@ else
   echo "disabled"
 fi
 echo "--- end-to-end region-hash A/B (first divergent frame) ---"
-join -j1 \
-  <(sed -E 's/CGBA_HASH frame=([0-9]+) (.*)/\1 \2/' "$OUT/h-interp.txt" | sort -n) \
-  <(sed -E 's/CGBA_HASH frame=([0-9]+) (.*)/\1 \2/' "$OUT/h-jit.txt"    | sort -n) \
-  | awk '{ half=int((NF-1)/2); i=""; j="";
-           for(k=2;k<=1+half;k++) i=i" "$k; for(k=2+half;k<=NF;k++) j=j" "$k;
-           if(i!=j){ printf "DIVERGE at frame %s\n  interp:%s\n  jit:   %s\n",$1,i,j; bad=1; exit }
-         }
-         END{ if(!bad) printf "MATCH across %d common sampled frames (no divergence)\n", NR }'
+case "$SCREEN_ONLY" in
+  1|ON|on|true|TRUE|yes|YES)
+    join -j1 \
+      <(sed -E 's/CGBA_HASH frame=([0-9]+) (.*)/\1 \2/' "$OUT/h-interp.txt" | sort -n) \
+      <(sed -E 's/CGBA_HASH frame=([0-9]+) (.*)/\1 \2/' "$OUT/h-jit.txt"    | sort -n) \
+      | awk '{ half=int((NF-1)/2); i=""; j=""; ifb=""; jfb="";
+               for(k=2;k<=1+half;k++){ i=i" "$k; if($k ~ /^fb=/) ifb=$k; }
+               for(k=2+half;k<=NF;k++){ j=j" "$k; if($k ~ /^fb=/) jfb=$k; }
+               if(ifb!=jfb){ printf "SCREEN DIVERGE at frame %s\n  interp: %s\n  jit:    %s\n  full interp:%s\n  full jit:   %s\n",$1,ifb,jfb,i,j; bad=1; exit }
+             }
+             END{ if(!bad) printf "SCREEN MATCH across %d common sampled frames (framebuffer only; non-screen state ignored)\n", NR }'
+    ;;
+  *)
+    join -j1 \
+      <(sed -E 's/CGBA_HASH frame=([0-9]+) (.*)/\1 \2/' "$OUT/h-interp.txt" | sort -n) \
+      <(sed -E 's/CGBA_HASH frame=([0-9]+) (.*)/\1 \2/' "$OUT/h-jit.txt"    | sort -n) \
+      | awk '{ half=int((NF-1)/2); i=""; j="";
+               for(k=2;k<=1+half;k++) i=i" "$k; for(k=2+half;k<=NF;k++) j=j" "$k;
+               if(i!=j){ printf "DIVERGE at frame %s\n  interp:%s\n  jit:   %s\n",$1,i,j; bad=1; exit }
+             }
+             END{ if(!bad) printf "MATCH across %d common sampled frames (no divergence)\n", NR }'
+    ;;
+esac
 echo "logs + g3a + framebuffers under: $OUT"

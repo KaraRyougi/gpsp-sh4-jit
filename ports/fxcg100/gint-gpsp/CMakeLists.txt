@@ -141,6 +141,25 @@ if(CGBA_GPSP_DIAG)
   target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_GPSP_DIAG=1)
 endif()
 
+# Hardware-only diagnostic: bypass the menu/storage scan and boot the built-in
+# LCD test directly. This keeps ROM/NOR syscalls out of the launch path while
+# still exercising the display loop and the same add-in runtime.
+option(CGBA_GPSP_DIRECT_LCD_TEST
+  "Hardware debug: boot the built-in LCD test without scanning storage" OFF)
+if(CGBA_GPSP_DIRECT_LCD_TEST)
+  target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_GPSP_DIRECT_LCD_TEST=1)
+endif()
+
+# Hardware-only diagnostic: avoid all BFile/config/storage calls. If this boots
+# through the normal menu while the regular build faults, the crash is isolated
+# to the storage syscall path rather than LCD, key scan, menu drawing, or gpSP's
+# built-in test runner.
+option(CGBA_GPSP_DISABLE_STORAGE
+  "Hardware debug: disable config load/save and ROM storage scans" OFF)
+if(CGBA_GPSP_DISABLE_STORAGE)
+  target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_GPSP_DISABLE_STORAGE=1)
+endif()
+
 # Emulator-only: auto-boot the first storage ROM and stream cgba_gpsp_diag() to
 # the host debug-putchar port (run-headless.sh). Keep OFF for hardware builds.
 option(CGBA_GPSP_HEADLESS_TEST "Headless auto-boot + stdout diag (emulator)" OFF)

@@ -654,7 +654,7 @@ static fxcg100_menu_result menu_activate_item(fxcg100_menu_state *state,
 void fxcg100_menu_init(fxcg100_menu_state *state)
 {
   memset(state, 0, sizeof(*state));
-  state->rom_source = 1;
+  state->rom_source = 0;
   state->screen_scale = 0;
   state->frameskip_type = 1;
   state->frameskip_value = 1;

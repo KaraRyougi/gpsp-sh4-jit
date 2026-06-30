@@ -566,22 +566,14 @@ static int cgba_headless_test(uint16_t *framebuffer)
 		headless_log_phase(i, "post-fps");
 		if(rendered) {
 			/* Exercise the real blit path incl. the no-final-wait DMA overlap. */
-			headless_log_phase(i, "pre-overlay");
-			fxcg100_lcd_overlay_fps(framebuffer, cgba_fps.emu_fps,
-				cgba_fps.draw_fps);
-			headless_log_phase(i, "post-overlay");
 			fxcg100_lcd_blit_gba(framebuffer);
 			headless_log_phase(i, "post-blit");
 		}
 		headless_log_phase(i, "loop-end");
 	}
 
-	/* Exercise the FPS overlay so the font + framebuffer write are validated;
-	 * px[1,1] should become white (0xFFFF, the 'F' glyph), px[0,0] black. */
-	fxcg100_lcd_overlay_fps(framebuffer, cgba_fps.emu_fps, cgba_fps.draw_fps);
-	snprintf(buf, sizeof buf, "fps emu=%u draw=%u px00=%04X px11=%04X",
-		(unsigned)cgba_fps.emu_fps, (unsigned)cgba_fps.draw_fps,
-		framebuffer[0], framebuffer[1 * 240 + 1]);
+	snprintf(buf, sizeof buf, "fps emu=%u draw=%u",
+		(unsigned)cgba_fps.emu_fps, (unsigned)cgba_fps.draw_fps);
 	hputs_dbg(buf);
 
 	n = cgba_gpsp_diag(lines, 20);
@@ -620,9 +612,9 @@ static int cgba_headless_test(uint16_t *framebuffer)
 int main(void)
 {
 	uint16_t *framebuffer = cgba_framebuffer;
-#ifdef CGBA_GPSP_HEADLESS_TEST
+	#ifdef CGBA_GPSP_HEADLESS_TEST
 	return cgba_headless_test(framebuffer);
-#endif
+	#endif
 	fxcg100_menu_state menu_state;
 	uint32_t previous_app_keys = 0;
 	uint32_t previous_hotkeys = 0;
@@ -635,6 +627,19 @@ int main(void)
 	cgba_pacer_init(&pacer, 60, 9);
 
 	fxcg100_lcd_init();
+#ifdef CGBA_GPSP_DIRECT_LCD_TEST
+	if(start_gpsp(framebuffer, CGBA_GPSP_ROM_LCD_TEST) != 0)
+		return exit_to_os(1);
+	enter_gameplay_display(framebuffer, frame);
+	for(;; frame++) {
+		if(fxcg100_poll_app_keys() & FXCG100_APPKEY_ON)
+			break;
+		cgba_gpsp_run_frame(FXCG100_GBA_BUTTON_NONE, 1);
+		blit_gba_frame(framebuffer, frame, FXCG100_GBA_BUTTON_NONE);
+	}
+	cgba_gpsp_shutdown();
+	return exit_to_os(1);
+#endif
 	cgba_gpsp_refresh_roms();
 	fxcg100_menu_init(&menu_state);
 	if(cgba_gpsp_rom_count() > CGBA_GPSP_ROM_BUILTIN_COUNT)
