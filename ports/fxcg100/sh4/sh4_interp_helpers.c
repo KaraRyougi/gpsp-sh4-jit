@@ -87,7 +87,7 @@ static void sh4_headless_trace_op(char tag, u32 pc, u32 opcode)
  * (the differential harness uses this to step the dynarec one block at a time). */
 int cgba_dynarec_single_block = 0;
 
-#ifdef CGBA_GPSP_HEADLESS_TEST
+#if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
 u32 cgba_sh4_helper_thumb_ldst_count;
 u32 cgba_sh4_helper_thumb_block_count;
 u32 cgba_sh4_helper_thumb_shift_count;

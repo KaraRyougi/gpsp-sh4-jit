@@ -12,7 +12,7 @@
 extern int dynarec_enable;   /* gpSP: 0 = interpreter, 1 = SH4 recompiler */
 extern uint32_t execute_cycles;
 extern uint32_t reg[64];
-#ifdef CGBA_GPSP_HEADLESS_TEST
+#if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
 extern uint32_t cgba_dynarec_rom_flush_count;
 extern uint32_t cgba_dynarec_ram_flush_count;
 extern uint32_t cgba_dynarec_arm_translate_count;
@@ -168,6 +168,33 @@ static int start_gpsp(uint16_t *framebuffer, unsigned rom_id)
 		return -1;
 	}
 
+#if defined(CGBA_DYNAREC) && \
+	(defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS))
+	cgba_dynarec_rom_flush_count = 0;
+	cgba_dynarec_ram_flush_count = 0;
+	cgba_dynarec_arm_translate_count = 0;
+	cgba_dynarec_thumb_translate_count = 0;
+	cgba_sh4_helper_thumb_ldst_count = 0;
+	cgba_sh4_helper_thumb_block_count = 0;
+	cgba_sh4_helper_thumb_shift_count = 0;
+	cgba_sh4_helper_thumb_dp_count = 0;
+	cgba_sh4_helper_arm_ldst_count = 0;
+	cgba_sh4_helper_arm_block_count = 0;
+	cgba_sh4_helper_arm_dp_count = 0;
+	cgba_sh4_helper_arm_mul_count = 0;
+	cgba_sh4_helper_arm_psr_count = 0;
+	cgba_sh4_helper_arm_swap_count = 0;
+	cgba_sh4_helper_hle_div_count = 0;
+	cgba_sh4_helper_arm_ldst_load_count = 0;
+	cgba_sh4_helper_arm_ldst_store_count = 0;
+	cgba_sh4_helper_arm_ldst_ram_count = 0;
+	cgba_sh4_helper_arm_ldst_io_count = 0;
+	cgba_sh4_helper_arm_ldst_video_count = 0;
+	cgba_sh4_helper_arm_ldst_rom_count = 0;
+	cgba_sh4_helper_arm_ldst_other_count = 0;
+	cgba_sh4_helper_arm_block_load_count = 0;
+	cgba_sh4_helper_arm_block_store_count = 0;
+#endif
 	return 0;
 }
 

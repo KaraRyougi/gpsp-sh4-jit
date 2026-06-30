@@ -77,7 +77,7 @@ typedef struct
 
 u32 rom_branch_hash[ROM_BRANCH_HASH_SIZE] CGBA_HIGH_BSS;
 
-#if defined(CGBA_GPSP_HEADLESS_TEST)
+#if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
 u32 cgba_dynarec_rom_flush_count;
 u32 cgba_dynarec_ram_flush_count;
 u32 cgba_dynarec_arm_translate_count;
@@ -3151,7 +3151,7 @@ bool translate_block_arm(u32 pc, bool ram_region)
   block_exit_type external_block_exits[MAX_EXITS];
   generate_block_extra_vars_arm();
 
-#if defined(CGBA_GPSP_HEADLESS_TEST)
+#if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
   cgba_dynarec_arm_translate_count++;
 #endif
 
@@ -3364,7 +3364,7 @@ bool translate_block_thumb(u32 pc, bool ram_region)
   block_exit_type external_block_exits[MAX_EXITS];
   generate_block_extra_vars_thumb();
 
-#if defined(CGBA_GPSP_HEADLESS_TEST)
+#if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
   cgba_dynarec_thumb_translate_count++;
 #endif
 
@@ -3552,7 +3552,7 @@ void flush_translation_cache_ram(void)
 {
   /* Flushes RAM caches avoiding doing too much work (ie. wiping unused memory) */
   flush_ram_count++;
-#if defined(CGBA_GPSP_HEADLESS_TEST)
+#if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
   cgba_dynarec_ram_flush_count++;
 #endif
   /*printf("ram flush %d (pc %x), %x to %x, %x to %x\n",
@@ -3592,7 +3592,7 @@ void flush_translation_cache_ram(void)
 void flush_translation_cache_rom(void)
 {
   /* We flush the generated code except for everything below the watermark. */
-#if defined(CGBA_GPSP_HEADLESS_TEST)
+#if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
   cgba_dynarec_rom_flush_count++;
 #endif
 

@@ -18,6 +18,33 @@ extern RFILE *gamepak_file_large;   /* gpSP ROM page-fault source (gba_memory.c)
 extern timer_type timer[4];
 extern s32 video_count;
 extern u32 instruction_count;
+#if defined(CGBA_DYNAREC) && \
+	(defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS))
+extern uint32_t cgba_dynarec_rom_flush_count;
+extern uint32_t cgba_dynarec_ram_flush_count;
+extern uint32_t cgba_dynarec_arm_translate_count;
+extern uint32_t cgba_dynarec_thumb_translate_count;
+extern uint32_t cgba_sh4_helper_thumb_ldst_count;
+extern uint32_t cgba_sh4_helper_thumb_block_count;
+extern uint32_t cgba_sh4_helper_thumb_shift_count;
+extern uint32_t cgba_sh4_helper_thumb_dp_count;
+extern uint32_t cgba_sh4_helper_arm_ldst_count;
+extern uint32_t cgba_sh4_helper_arm_block_count;
+extern uint32_t cgba_sh4_helper_arm_dp_count;
+extern uint32_t cgba_sh4_helper_arm_mul_count;
+extern uint32_t cgba_sh4_helper_arm_psr_count;
+extern uint32_t cgba_sh4_helper_arm_swap_count;
+extern uint32_t cgba_sh4_helper_hle_div_count;
+extern uint32_t cgba_sh4_helper_arm_ldst_load_count;
+extern uint32_t cgba_sh4_helper_arm_ldst_store_count;
+extern uint32_t cgba_sh4_helper_arm_ldst_ram_count;
+extern uint32_t cgba_sh4_helper_arm_ldst_io_count;
+extern uint32_t cgba_sh4_helper_arm_ldst_video_count;
+extern uint32_t cgba_sh4_helper_arm_ldst_rom_count;
+extern uint32_t cgba_sh4_helper_arm_ldst_other_count;
+extern uint32_t cgba_sh4_helper_arm_block_load_count;
+extern uint32_t cgba_sh4_helper_arm_block_store_count;
+#endif
 
 typedef struct cgba_rom_source {
 	const char *name;
@@ -535,6 +562,53 @@ void cgba_gpsp_debug_menu(fxcg100_debug_info *debug, unsigned frame,
 		(unsigned long)((uintptr_t)ram_translation_ptr -
 			(uintptr_t)ram_translation_cache) / 1024u,
 		(unsigned long)RAM_TRANSLATION_CACHE_SIZE / 1024u);
+#if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
+	{
+		unsigned f = frame ? frame : 1;
+		uint32_t arm_helpers = cgba_sh4_helper_arm_ldst_count +
+			cgba_sh4_helper_arm_block_count + cgba_sh4_helper_arm_dp_count +
+			cgba_sh4_helper_arm_mul_count + cgba_sh4_helper_arm_psr_count +
+			cgba_sh4_helper_arm_swap_count;
+		uint32_t thumb_helpers = cgba_sh4_helper_thumb_ldst_count +
+			cgba_sh4_helper_thumb_block_count +
+			cgba_sh4_helper_thumb_shift_count +
+			cgba_sh4_helper_thumb_dp_count;
+		debug_line(debug, "JIT FL R%lu M%lu TX A%lu T%lu",
+			(unsigned long)cgba_dynarec_rom_flush_count,
+			(unsigned long)cgba_dynarec_ram_flush_count,
+			(unsigned long)cgba_dynarec_arm_translate_count,
+			(unsigned long)cgba_dynarec_thumb_translate_count);
+		debug_line(debug, "JIT TX/f A%lu T%lu H/f A%lu T%lu",
+			(unsigned long)(cgba_dynarec_arm_translate_count / f),
+			(unsigned long)(cgba_dynarec_thumb_translate_count / f),
+			(unsigned long)(arm_helpers / f),
+			(unsigned long)(thumb_helpers / f));
+		debug_line(debug, "H ARM ld%lu st%lu blk%lu dp%lu",
+			(unsigned long)cgba_sh4_helper_arm_ldst_load_count,
+			(unsigned long)cgba_sh4_helper_arm_ldst_store_count,
+			(unsigned long)cgba_sh4_helper_arm_block_count,
+			(unsigned long)cgba_sh4_helper_arm_dp_count);
+		debug_line(debug, "H ARM mul%lu psr%lu swp%lu",
+			(unsigned long)cgba_sh4_helper_arm_mul_count,
+			(unsigned long)cgba_sh4_helper_arm_psr_count,
+			(unsigned long)cgba_sh4_helper_arm_swap_count);
+		debug_line(debug, "H TH ld%lu blk%lu sh%lu dp%lu",
+			(unsigned long)cgba_sh4_helper_thumb_ldst_count,
+			(unsigned long)cgba_sh4_helper_thumb_block_count,
+			(unsigned long)cgba_sh4_helper_thumb_shift_count,
+			(unsigned long)cgba_sh4_helper_thumb_dp_count);
+		debug_line(debug, "H LD ram%lu io%lu vid%lu rom%lu oth%lu",
+			(unsigned long)cgba_sh4_helper_arm_ldst_ram_count,
+			(unsigned long)cgba_sh4_helper_arm_ldst_io_count,
+			(unsigned long)cgba_sh4_helper_arm_ldst_video_count,
+			(unsigned long)cgba_sh4_helper_arm_ldst_rom_count,
+			(unsigned long)cgba_sh4_helper_arm_ldst_other_count);
+		debug_line(debug, "H ABLK load%lu store%lu div%lu",
+			(unsigned long)cgba_sh4_helper_arm_block_load_count,
+			(unsigned long)cgba_sh4_helper_arm_block_store_count,
+			(unsigned long)cgba_sh4_helper_hle_div_count);
+	}
+#endif
 #else
 	debug_line(debug, "CORE=INTERPRETER");
 #endif
