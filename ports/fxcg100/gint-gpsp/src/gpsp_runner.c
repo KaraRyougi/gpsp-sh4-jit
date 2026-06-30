@@ -63,6 +63,19 @@ extern uint32_t cgba_sh4_helper_thumb_ldst_io_count;
 extern uint32_t cgba_sh4_helper_thumb_ldst_video_count;
 extern uint32_t cgba_sh4_helper_thumb_ldst_rom_count;
 extern uint32_t cgba_sh4_helper_thumb_ldst_other_count;
+extern uint32_t cgba_sh4_helper_thumb_ldst_unmapped_count;
+extern uint32_t cgba_sh4_helper_thumb_ldst_guest_unaligned_count;
+extern uint32_t cgba_sh4_helper_thumb_ldst_host_unaligned_count;
+extern uint32_t cgba_sh4_helper_thumb_ldst_unsafe_region_count;
+extern uint32_t cgba_sh4_helper_thumb_ldst_smc_count;
+extern uint32_t cgba_sh4_helper_thumb_ldst_native_ready_count;
+extern uint32_t cgba_sh4_helper_thumb_ldst_word_count;
+extern uint32_t cgba_sh4_helper_thumb_ldst_byte_count;
+extern uint32_t cgba_sh4_helper_thumb_ldst_half_count;
+extern uint32_t cgba_sh4_helper_thumb_ldst_pc_count;
+extern uint32_t cgba_sh4_helper_thumb_ldst_sp_count;
+extern uint32_t cgba_sh4_helper_thumb_ldst_reg_count;
+extern uint32_t cgba_sh4_helper_thumb_ldst_imm_count;
 #endif
 
 typedef struct cgba_rom_source {
@@ -686,6 +699,23 @@ void cgba_gpsp_debug_menu(fxcg100_debug_info *debug, unsigned frame,
 			(unsigned long)cgba_sh4_helper_thumb_ldst_video_count,
 			(unsigned long)cgba_sh4_helper_thumb_ldst_rom_count,
 			(unsigned long)cgba_sh4_helper_thumb_ldst_other_count);
+		debug_line(debug, "H TWHY U%lu GA%lu HA%lu",
+			(unsigned long)cgba_sh4_helper_thumb_ldst_unmapped_count,
+			(unsigned long)cgba_sh4_helper_thumb_ldst_guest_unaligned_count,
+			(unsigned long)cgba_sh4_helper_thumb_ldst_host_unaligned_count);
+		debug_line(debug, "H TWHY R%lu S%lu OK%lu",
+			(unsigned long)cgba_sh4_helper_thumb_ldst_unsafe_region_count,
+			(unsigned long)cgba_sh4_helper_thumb_ldst_smc_count,
+			(unsigned long)cgba_sh4_helper_thumb_ldst_native_ready_count);
+		debug_line(debug, "H TK W%lu B%lu H%lu",
+			(unsigned long)cgba_sh4_helper_thumb_ldst_word_count,
+			(unsigned long)cgba_sh4_helper_thumb_ldst_byte_count,
+			(unsigned long)cgba_sh4_helper_thumb_ldst_half_count);
+		debug_line(debug, "H TS PC%lu SP%lu R%lu I%lu",
+			(unsigned long)cgba_sh4_helper_thumb_ldst_pc_count,
+			(unsigned long)cgba_sh4_helper_thumb_ldst_sp_count,
+			(unsigned long)cgba_sh4_helper_thumb_ldst_reg_count,
+			(unsigned long)cgba_sh4_helper_thumb_ldst_imm_count);
 		debug_line(debug, "H LD ram%lu io%lu vid%lu rom%lu oth%lu",
 			(unsigned long)cgba_sh4_helper_arm_ldst_ram_count,
 			(unsigned long)cgba_sh4_helper_arm_ldst_io_count,

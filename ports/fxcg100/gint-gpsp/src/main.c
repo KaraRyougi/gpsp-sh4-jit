@@ -56,6 +56,19 @@ extern uint32_t cgba_sh4_helper_thumb_ldst_io_count;
 extern uint32_t cgba_sh4_helper_thumb_ldst_video_count;
 extern uint32_t cgba_sh4_helper_thumb_ldst_rom_count;
 extern uint32_t cgba_sh4_helper_thumb_ldst_other_count;
+extern uint32_t cgba_sh4_helper_thumb_ldst_unmapped_count;
+extern uint32_t cgba_sh4_helper_thumb_ldst_guest_unaligned_count;
+extern uint32_t cgba_sh4_helper_thumb_ldst_host_unaligned_count;
+extern uint32_t cgba_sh4_helper_thumb_ldst_unsafe_region_count;
+extern uint32_t cgba_sh4_helper_thumb_ldst_smc_count;
+extern uint32_t cgba_sh4_helper_thumb_ldst_native_ready_count;
+extern uint32_t cgba_sh4_helper_thumb_ldst_word_count;
+extern uint32_t cgba_sh4_helper_thumb_ldst_byte_count;
+extern uint32_t cgba_sh4_helper_thumb_ldst_half_count;
+extern uint32_t cgba_sh4_helper_thumb_ldst_pc_count;
+extern uint32_t cgba_sh4_helper_thumb_ldst_sp_count;
+extern uint32_t cgba_sh4_helper_thumb_ldst_reg_count;
+extern uint32_t cgba_sh4_helper_thumb_ldst_imm_count;
 #endif
 #endif
 
@@ -232,6 +245,19 @@ static int start_gpsp(uint16_t *framebuffer, unsigned rom_id)
 	cgba_sh4_helper_thumb_ldst_video_count = 0;
 	cgba_sh4_helper_thumb_ldst_rom_count = 0;
 	cgba_sh4_helper_thumb_ldst_other_count = 0;
+	cgba_sh4_helper_thumb_ldst_unmapped_count = 0;
+	cgba_sh4_helper_thumb_ldst_guest_unaligned_count = 0;
+	cgba_sh4_helper_thumb_ldst_host_unaligned_count = 0;
+	cgba_sh4_helper_thumb_ldst_unsafe_region_count = 0;
+	cgba_sh4_helper_thumb_ldst_smc_count = 0;
+	cgba_sh4_helper_thumb_ldst_native_ready_count = 0;
+	cgba_sh4_helper_thumb_ldst_word_count = 0;
+	cgba_sh4_helper_thumb_ldst_byte_count = 0;
+	cgba_sh4_helper_thumb_ldst_half_count = 0;
+	cgba_sh4_helper_thumb_ldst_pc_count = 0;
+	cgba_sh4_helper_thumb_ldst_sp_count = 0;
+	cgba_sh4_helper_thumb_ldst_reg_count = 0;
+	cgba_sh4_helper_thumb_ldst_imm_count = 0;
 #endif
 	return 0;
 }
@@ -879,6 +905,19 @@ static int cgba_headless_test(uint16_t *framebuffer)
 	cgba_sh4_helper_thumb_ldst_video_count = 0;
 	cgba_sh4_helper_thumb_ldst_rom_count = 0;
 	cgba_sh4_helper_thumb_ldst_other_count = 0;
+	cgba_sh4_helper_thumb_ldst_unmapped_count = 0;
+	cgba_sh4_helper_thumb_ldst_guest_unaligned_count = 0;
+	cgba_sh4_helper_thumb_ldst_host_unaligned_count = 0;
+	cgba_sh4_helper_thumb_ldst_unsafe_region_count = 0;
+	cgba_sh4_helper_thumb_ldst_smc_count = 0;
+	cgba_sh4_helper_thumb_ldst_native_ready_count = 0;
+	cgba_sh4_helper_thumb_ldst_word_count = 0;
+	cgba_sh4_helper_thumb_ldst_byte_count = 0;
+	cgba_sh4_helper_thumb_ldst_half_count = 0;
+	cgba_sh4_helper_thumb_ldst_pc_count = 0;
+	cgba_sh4_helper_thumb_ldst_sp_count = 0;
+	cgba_sh4_helper_thumb_ldst_reg_count = 0;
+	cgba_sh4_helper_thumb_ldst_imm_count = 0;
 	#endif
 	snprintf(buf, sizeof buf, "input START f=%u h=%u A/SHIFT f=%u h=%u p=%u w=%u",
 		(unsigned)CGBA_GPSP_HEADLESS_START_FRAME,
