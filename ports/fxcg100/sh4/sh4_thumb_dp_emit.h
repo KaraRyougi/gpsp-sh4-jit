@@ -321,10 +321,9 @@ static inline u8 *sh4g_thumb_ldst_guard(u8 **tp, int slow_if_t)
   return sh4g_emit_bra_placeholder(tp);
 }
 
-/* Native Thumb RAM transfers. Only EWRAM/IWRAM are fast-pathed; side-effecting
- * regions fall back to cgba_sh4_thumb_ldst so DMA/IRQ alerts, I/O semantics,
- * ROM paging and backup stay helper-owned. Stores additionally check the SMC tag
- * mirror before touching RAM, falling back if translated code would be hit. */
+/* Native Thumb RAM loads. Only EWRAM/IWRAM are fast-pathed; stores and
+ * side-effecting regions fall back to cgba_sh4_thumb_ldst so DMA/IRQ alerts,
+ * I/O semantics, SMC invalidation, ROM paging and backup stay helper-owned. */
 static inline int sh4g_thumb_ldst_native(u8 **tp, u32 opcode, u32 pc,
   int cycle_count)
 {
@@ -383,6 +382,7 @@ static inline int sh4g_thumb_ldst_native(u8 **tp, u32 opcode, u32 pc,
   } else {
     return 0;
   }
+  if (!is_load) return 0;                         /* stores own side effects in C */
 
   { sh4_codegen cg = sh4g_open(tp);
     sh4_emit_load_greg(&cg, rb, SH4_REG_T0);       /* R1 = base */

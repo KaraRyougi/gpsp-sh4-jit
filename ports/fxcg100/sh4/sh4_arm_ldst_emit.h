@@ -12,9 +12,8 @@
  * cgba_sh4_arm_ldst, which keeps the exact side-effect / writeback / alert
  * semantics.
  *
- * RAM stores are fast-pathed only when the parallel SMC tag mirror is clear;
- * otherwise they fall through to the C helper so cache invalidation and
- * redispatch behavior stays centralized.
+ * Stores stay on the C helper path. That keeps SMC invalidation, DMA/IRQ
+ * alerts, and other write-side effects in the canonical store machinery.
  *
  * Big-endian host: guest RAM is little-endian, so a word read is byte-reversed
  * (swap.b;swap.w;swap.b). SH-4A faults on an unaligned mov.l, so the fast path is
@@ -33,7 +32,7 @@ enum { LDK_W = 0, LDK_B, LDK_UH, LDK_SH, LDK_SB };
 /* Emit native SH4 for the ARM transfer `opcode`, or return 0 to fall back to C.
  * Handles single RAM/mapped-load transfers (word/byte/halfword/signed) with
  * pre- or post-indexed addressing through gpSP's memory_map_read host-page table.
- * Side-effecting stores use the C helper. */
+ * Stores use the C helper. */
 static inline int sh4g_arm_ldst_native(u8 **tp, u32 opcode, u32 pc,
   int cycle_count)
 {
@@ -55,6 +54,7 @@ static inline int sh4g_arm_ldst_native(u8 **tp, u32 opcode, u32 pc,
   u8 *bra_done;
 
   if (rd == 15 || rn == 15) return 0;   /* PC operand (incl. STR pc) -> C */
+  if (!is_load) return 0;               /* stores own side effects in C */
   if (is_load && effective_wb && rd == rn)
     return 0;                           /* helper writes Rn before Rd */
 

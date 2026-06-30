@@ -3,13 +3,13 @@
 
 /*
  * Native SH-4A emission for ARM block transfers (LDM/STM). The register list is
- * a translate-time constant, so the transfer UNROLLS into a straight-line run of
- * fast-path word reads/writes instead of the C helper's popcount loop +
- * per-word execute_load/execute_store region switch.
+ * a translate-time constant, so load transfers UNROLL into a straight-line run
+ * of fast-path word reads instead of the C helper's popcount loop +
+ * per-word execute_load region switch.
  *
  * LDM (load) reads through any mapped host page (EWRAM/IWRAM/IO/VRAM/paged-ROM,
- * memory_map_read non-NULL, region != 0). STM (store) fast-paths only RAM
- * pages (EWRAM/IWRAM) after checking the SMC tag mirror for the whole range.
+ * memory_map_read non-NULL, region != 0). STM (store) stays on the C helper
+ * path so write-side effects and SMC invalidation stay centralized.
  *
  * Address model (matches the oracle exactly): lowest-numbered register <-> lowest
  * address; the run is `count` contiguous ascending words from A = (base & ~3) +
@@ -66,6 +66,7 @@ static inline int sh4g_arm_block_native(u8 **tp, u32 opcode, u32 pc,
   for (i = 0; i < 16; i++)
     if (rlist & (1u << i)) count++;
   if (count == 0)            return 0;         /* empty list -> C (rare) */
+  if (!is_load)              return 0;         /* stores own side effects in C */
   if (!is_load && writeback && (rlist & (1u << rn)))
     return 0;                                  /* store-base value is subtle */
 
