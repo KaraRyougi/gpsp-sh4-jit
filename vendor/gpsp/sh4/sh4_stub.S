@@ -328,17 +328,110 @@ ibt_disp:
   jmp     @r0
   nop
 
-  .align 2
-ibh_bios_limit:
-  .long   0x00004000
-ibh_mul:
-  .long   0x9E3779B1              /* 2654435761 (Knuth multiplicative hash) */
-ibh_hash:
-  .long   _rom_branch_hash
-ibh_tcache:
-  .long   _rom_translation_cache
-
 defsymbl(sh4_indirect_branch_dual)
+  mov.l   sb_flag, r1
+  mov.l   @r1, r1
+  tst     r1, r1
+  bf      ibd_slow                /* single-block diff -> unchanged C path */
+
+  mov     r4, r0
+  tst     #1, r0                  /* T = ARM target (bit0 clear) */
+  bt      ibd_arm_hash
+
+  /* Thumb target: pc = target & ~1, key = pc | 1. */
+  mov     r4, r2
+  mov     #-2, r0
+  and     r0, r2                  /* r2 = pc */
+  mov     r2, r0
+  or      #1, r0
+  mov     r0, r2                  /* r2 = hash key */
+  mov.l   ibh_bios_limit, r1
+  cmp/hs  r1, r2                  /* T = key >= 0x4000 */
+  bt      ibd_thumb_hash
+  bra     ibd_slow
+  nop
+
+ibd_arm_hash:
+  /* ARM target: pc = (target + 2) & ~3, key = pc. */
+  mov     r4, r2
+  add     #2, r2
+  shlr2   r2
+  shll2   r2                      /* r2 = key = pc */
+  mov.l   ibh_bios_limit, r1
+  cmp/hs  r1, r2                  /* T = pc >= 0x4000 */
+  bf      ibd_slow
+
+  mov.l   ibh_mul, r3
+  dmulu.l r2, r3
+  sts     macl, r0
+  mov     #-(32-ROM_BRANCH_HASH_BITS), r1
+  shld    r1, r0
+  shll2   r0
+  mov.l   ibh_hash, r1
+  mov.l   @(r0,r1), r5
+  mov.l   ibh_tcache, r6
+ibd_arm_walk:
+  tst     r5, r5
+  bt      ibd_slow
+  mov     r5, r7
+  add     r6, r7
+  mov.l   @r7, r0
+  cmp/eq  r2, r0
+  bt      ibd_arm_hit
+  mov.l   @(4,r7), r5
+  bra     ibd_arm_walk
+  nop
+ibd_arm_hit:
+  mov     #REG_PC, r0
+  mov.l   r2, @(r0,r14)           /* commit reg[REG_PC] = pc */
+  mov     #REG_CPSR, r0
+  mov.l   @(r0,r14), r1
+  mov     #-33, r0
+  and     r0, r1                  /* clear CPSR.T */
+  mov     #REG_CPSR, r0
+  mov.l   r1, @(r0,r14)
+  add     #8, r7
+  jmp     @r7
+  nop
+
+ibd_thumb_hash:
+  mov.l   ibh_mul, r3
+  dmulu.l r2, r3
+  sts     macl, r0
+  mov     #-(32-ROM_BRANCH_HASH_BITS), r1
+  shld    r1, r0
+  shll2   r0
+  mov.l   ibh_hash, r1
+  mov.l   @(r0,r1), r5
+  mov.l   ibh_tcache, r6
+ibd_thumb_walk:
+  tst     r5, r5
+  bt      ibd_slow
+  mov     r5, r7
+  add     r6, r7
+  mov.l   @r7, r0
+  cmp/eq  r2, r0
+  bt      ibd_thumb_hit
+  mov.l   @(4,r7), r5
+  bra     ibd_thumb_walk
+  nop
+ibd_thumb_hit:
+  mov     r2, r1
+  mov     #-2, r0
+  and     r0, r1                  /* pc = key & ~1 */
+  mov     #REG_PC, r0
+  mov.l   r1, @(r0,r14)
+  mov     #REG_CPSR, r0
+  mov.l   @(r0,r14), r1
+  mov     #0x20, r0
+  or      r0, r1                  /* set CPSR.T */
+  mov     #REG_CPSR, r0
+  mov.l   r1, @(r0,r14)
+  add     #8, r7
+  jmp     @r7
+  nop
+
+ibd_slow:
   CALL    block_lookup_address_dual
   mov.l   sb_flag, r1
   mov.l   @r1, r1
@@ -350,6 +443,16 @@ defsymbl(sh4_indirect_branch_dual)
   REDISPATCH_IF_NULL
   jmp     @r0
   nop
+
+  .align 2
+ibh_bios_limit:
+  .long   0x00004000
+ibh_mul:
+  .long   0x9E3779B1              /* 2654435761 (Knuth multiplicative hash) */
+ibh_hash:
+  .long   _rom_branch_hash
+ibh_tcache:
+  .long   _rom_translation_cache
 
 /* ---- BIOS fallback: interpret the open-BIOS routine, then resume JIT. ---- */
 defsymbl(sh4_bios_fallback_entry)
