@@ -42,6 +42,7 @@ u32  sh4_update_gba(u32 pc);
 void sh4_indirect_branch_arm(u32 address);
 void sh4_indirect_branch_thumb(u32 address);
 void sh4_indirect_branch_dual(u32 address);
+void sh4_indirect_branch_dual_thumb_current(u32 address);
 void sh4_bios_fallback_entry(void);
 void smc_write(void);
 void execute_swi(u32 pc);
@@ -493,7 +494,10 @@ static inline void sh4g_prof_block_entry(u8 **tp, u32 pc, int thumb)
        generate_load_reg_pc(SH4_REG_ARG0, rs, 4);                            \
        cycle_count -= ws_cyc_seq[(pc >> 24) & 0x0F][0];                      \
        sh4g_charge_thumb_bx_target_fetch(&translation_ptr, SH4_REG_ARG0);     \
-       generate_indirect_branch_cycle_update(dual); } while(0)
+       generate_cycle_update();                                               \
+       sh4g_thumb_bx_dispatch(&translation_ptr,                               \
+         (const void *)sh4_indirect_branch_dual_thumb_current,                \
+         (const void *)sh4_indirect_branch_dual); } while(0)
 
 #define thumb_conditional_branch(condition)                                   \
   do { generate_condition_##condition();                                      \

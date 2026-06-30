@@ -198,6 +198,25 @@ static inline void sh4g_far_jmp(u8 **tp, const void *fn)
   }
 }
 
+/* Thumb BX almost always returns to another Thumb block in GBA games. Split that
+ * hot subcase before the generic dual resolver so the runtime hit path can avoid
+ * the ARM/Thumb mode split and redundant CPSR.T store. R4/ARG0 remains the target.
+ * TST #1,R0 sets T when the target is ARM (bit clear), so BT skips to generic. */
+static inline void sh4g_thumb_bx_dispatch(u8 **tp, const void *thumb_current_fn,
+                                          const void *dual_fn)
+{
+  u8 *bt;
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_reg(&cg, SH4_REG_ARG0, SH4_REG_RET);
+    sh4g_close(tp, &cg); }
+  sh4g_u16(tp, (uint16_t)(0xC800 | 0x01));                 /* TST #1,R0 */
+  bt = *tp;
+  sh4g_u16(tp, 0x8900);                                    /* BT generic */
+  sh4g_far_jmp(tp, thumb_current_fn);                      /* Thumb target */
+  { long d = ((long)(*tp) - ((long)bt + 4)) / 2; bt[1] = (uint8_t)(d & 0xFF); }
+  sh4g_far_jmp(tp, dual_fn);                               /* ARM target */
+}
+
 /* ---- N/Z materialization (literal-free) into REG_CPSR -------------------- */
 
 /* result must be in R1 (SH4_REG_T0); clobbers R0/R2/R3. */
