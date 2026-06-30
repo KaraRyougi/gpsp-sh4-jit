@@ -3559,6 +3559,7 @@ bool translate_block_thumb(u32 pc, bool ram_region)
     {
       generate_cycle_update();
       block_data[block_data_position].block_offset = translation_ptr;
+      sh4_thumb_const_clear_all();
       generate_prof_block_entry(1);
       generate_cycle_gate(0);
     }
