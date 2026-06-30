@@ -76,6 +76,8 @@ typedef struct
 } hashhdr_type;
 
 u32 rom_branch_hash[ROM_BRANCH_HASH_SIZE] CGBA_HIGH_BSS;
+u32 cgba_dynarec_dual_hot_key[64] CGBA_HIGH_BSS;
+u32 cgba_dynarec_dual_hot_ptr[64] CGBA_HIGH_BSS;
 
 #if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
 u32 cgba_dynarec_rom_flush_count;
@@ -94,6 +96,8 @@ u32 cgba_dynarec_ibh_thumb_slow_count;
 u32 cgba_dynarec_ibh_dual_arm_hit_count;
 u32 cgba_dynarec_ibh_dual_thumb_hit_count;
 u32 cgba_dynarec_ibh_dual_slow_count;
+u32 cgba_dynarec_ibh_dual_hot_arm_count;
+u32 cgba_dynarec_ibh_dual_hot_thumb_count;
 #endif
 
 typedef struct
@@ -3630,6 +3634,8 @@ void flush_translation_cache_rom(void)
   rom_translation_ptr      = &rom_translation_cache[rom_cache_watermark];
 
   memset(rom_branch_hash, 0, sizeof(rom_branch_hash));
+  memset(cgba_dynarec_dual_hot_key, 0, sizeof(cgba_dynarec_dual_hot_key));
+  memset(cgba_dynarec_dual_hot_ptr, 0, sizeof(cgba_dynarec_dual_hot_ptr));
 }
 
 void init_dynarec_caches(void)
@@ -3637,6 +3643,8 @@ void init_dynarec_caches(void)
   /* Initialize caches so that we can start initalizing the emitter. */
   rom_translation_ptr = last_rom_translation_ptr = &rom_translation_cache[0];
   memset(rom_branch_hash, 0, sizeof(rom_branch_hash));
+  memset(cgba_dynarec_dual_hot_key, 0, sizeof(cgba_dynarec_dual_hot_key));
+  memset(cgba_dynarec_dual_hot_ptr, 0, sizeof(cgba_dynarec_dual_hot_ptr));
 
   ram_translation_ptr = last_ram_translation_ptr = &ram_translation_cache[0];
   memset(iwram, 0, 0x8000);

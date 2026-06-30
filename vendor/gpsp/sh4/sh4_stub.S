@@ -383,6 +383,23 @@ ibd_arm_hash:
   cmp/hs  r1, r2                  /* T = pc >= 0x4000 */
   bf      ibd_slow
 
+  mov     r2, r0
+  shlr2   r0
+  and     #0x3f, r0
+  shll2   r0
+  mov.l   ibh_dhot_key, r1
+  mov.l   @(r0,r1), r3
+  cmp/eq  r2, r3
+  bf      ibd_arm_hash_miss
+  mov.l   ibh_dhot_ptr, r1
+  mov.l   @(r0,r1), r7
+  tst     r7, r7
+  bt      ibd_arm_hash_miss
+  INC_COUNTER cgba_dynarec_ibh_dual_hot_arm_count
+  bra     ibd_arm_commit
+  nop
+
+ibd_arm_hash_miss:
   mov.l   ibh_mul, r3
   dmulu.l r2, r3
   sts     macl, r0
@@ -405,6 +422,16 @@ ibd_arm_walk:
   nop
 ibd_arm_hit:
   INC_COUNTER cgba_dynarec_ibh_dual_arm_hit_count
+  add     #8, r7
+  mov     r2, r0
+  shlr2   r0
+  and     #0x3f, r0
+  shll2   r0
+  mov.l   ibh_dhot_key, r1
+  mov.l   r2, @(r0,r1)
+  mov.l   ibh_dhot_ptr, r1
+  mov.l   r7, @(r0,r1)
+ibd_arm_commit:
   mov     #REG_PC, r0
   mov.l   r2, @(r0,r14)           /* commit reg[REG_PC] = pc */
   mov     #REG_CPSR, r0
@@ -413,11 +440,27 @@ ibd_arm_hit:
   and     r0, r1                  /* clear CPSR.T */
   mov     #REG_CPSR, r0
   mov.l   r1, @(r0,r14)
-  add     #8, r7
   jmp     @r7
   nop
 
 ibd_thumb_hash:
+  mov     r2, r0
+  shlr    r0
+  and     #0x3f, r0
+  shll2   r0
+  mov.l   ibh_dhot_key, r1
+  mov.l   @(r0,r1), r3
+  cmp/eq  r2, r3
+  bf      ibd_thumb_hash_miss
+  mov.l   ibh_dhot_ptr, r1
+  mov.l   @(r0,r1), r7
+  tst     r7, r7
+  bt      ibd_thumb_hash_miss
+  INC_COUNTER cgba_dynarec_ibh_dual_hot_thumb_count
+  bra     ibd_thumb_commit
+  nop
+
+ibd_thumb_hash_miss:
   mov.l   ibh_mul, r3
   dmulu.l r2, r3
   sts     macl, r0
@@ -440,6 +483,16 @@ ibd_thumb_walk:
   nop
 ibd_thumb_hit:
   INC_COUNTER cgba_dynarec_ibh_dual_thumb_hit_count
+  add     #8, r7
+  mov     r2, r0
+  shlr    r0
+  and     #0x3f, r0
+  shll2   r0
+  mov.l   ibh_dhot_key, r1
+  mov.l   r2, @(r0,r1)
+  mov.l   ibh_dhot_ptr, r1
+  mov.l   r7, @(r0,r1)
+ibd_thumb_commit:
   mov     r2, r1
   mov     #-2, r0
   and     r0, r1                  /* pc = key & ~1 */
@@ -451,7 +504,6 @@ ibd_thumb_hit:
   or      r0, r1                  /* set CPSR.T */
   mov     #REG_CPSR, r0
   mov.l   r1, @(r0,r14)
-  add     #8, r7
   jmp     @r7
   nop
 
@@ -478,6 +530,10 @@ ibh_hash:
   .long   _rom_branch_hash
 ibh_tcache:
   .long   _rom_translation_cache
+ibh_dhot_key:
+  .long   _cgba_dynarec_dual_hot_key
+ibh_dhot_ptr:
+  .long   _cgba_dynarec_dual_hot_ptr
 
 /* ---- BIOS fallback: interpret the open-BIOS routine, then resume JIT. ---- */
 defsymbl(sh4_bios_fallback_entry)
