@@ -60,4 +60,9 @@ unsigned cgba_sh4_diff_blocks_here(unsigned max_blocks, char out[][48],
 unsigned cgba_sh4_diff_window(uint32_t cycles, char out[][48],
   unsigned max_lines);
 
+void *cgba_sh4_checkpoint_buffer(void);
+unsigned cgba_sh4_checkpoint_size(void);
+void cgba_sh4_checkpoint_capture(void);
+int cgba_sh4_checkpoint_restore(void);
+
 #endif /* CGBA_SH4_DIFF_HARNESS_H */

@@ -2667,6 +2667,13 @@ block_lookup_translate_builder(arm);
 block_lookup_translate_builder(thumb);
 
 #ifdef CGBA_GPSP_HEADLESS_TEST
+#ifndef CGBA_GPSP_HEADLESS_WJ_START
+#define CGBA_GPSP_HEADLESS_WJ_START 0u
+#endif
+#ifndef CGBA_GPSP_HEADLESS_WJ_END
+#define CGBA_GPSP_HEADLESS_WJ_END 0xffffffffu
+#endif
+
 /* DIAG: trace guest jumps into the BIOS boot/vector region (a wild jump =
  * corrupted control flow). Logs the target + a ring of recent resolver targets
  * (block sequence) + LR to the casio-emu putchar port. */
@@ -2680,6 +2687,12 @@ static void cgba_wj_note(u32 pc)
   unsigned i;
   cgba_wj_ring[cgba_wj_pos] = pc; cgba_wj_pos = (cgba_wj_pos + 1) % 24;
   if (pc >= 0x260u) return;                 /* not the boot/vector region */
+  if (frame_counter > (u32)CGBA_GPSP_HEADLESS_WJ_END)
+    return;
+#if CGBA_GPSP_HEADLESS_WJ_START != 0
+  if (frame_counter < (u32)CGBA_GPSP_HEADLESS_WJ_START)
+    return;
+#endif
   cgba_wj_putc('@'); cgba_wj_putc('@'); cgba_wj_putc('W'); cgba_wj_putc('J');
   cgba_wj_putc(' '); cgba_wj_hex(pc);
   cgba_wj_putc(' '); cgba_wj_putc('l'); cgba_wj_putc('r'); cgba_wj_hex(reg[14]);
@@ -2718,6 +2731,8 @@ u8 function_cc *block_lookup_address_arm(u32 pc)
    * cgba_dynarec_single_block (the diff harness reads reg[REG_PC] as the block
    * end) and would mis-bank an IRQ taken right after the branch. */
   reg[REG_PC] = pc;
+  if(pc < 0x00004000u)
+    return (u8 *)sh4_bios_fallback_entry;
 #endif
   cgba_wj_note(pc);
   for (i = 0; i < 4; i++) {
@@ -2738,6 +2753,8 @@ u8 function_cc *block_lookup_address_thumb(u32 pc)
   unsigned i;
 #ifdef SH4_ARCH
   reg[REG_PC] = pc;   /* see block_lookup_address_arm: commit PC for indirect/BX */
+  if(pc < 0x00004000u)
+    return (u8 *)sh4_bios_fallback_entry;
 #endif
   cgba_wj_note(pc);
   for (i = 0; i < 4; i++) {

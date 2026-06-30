@@ -2,8 +2,12 @@
 
 Status: **FIXED** (`53dd75e`). The new-game cutscene now renders **pixel-identical
 to the interpreter** (frames 696–756 verified byte-for-byte) and runs on into the
-next scene (≥ frame 1300, 0 wild jumps). Distinct from the cache-overflow crash
-fixed in `d3fb4f8`.
+next scene (≥ frame 3000 in the paired Metroid harness). Distinct from the
+cache-overflow crash fixed in `d3fb4f8`.
+
+A separate later dynarec-only blackout remains open between frames 3875 and
+3900; see
+[sh4-jit-status.md](sh4-jit-status.md#current-metroid-fusion-harness-findings-2026-06-28).
 
 ## Root cause + fix (the answer)
 
@@ -207,25 +211,15 @@ frame-700 freeze (confirmed by instrumentation / re-test), but both are correct.
 
 ## Next steps
 
-The targeted-watchpoint approach is exhausted (the wrong branch target is
-computed / invisible to every C-path and value watch tried). The decisive tool is
-now a real differential:
+Done for this bug: Thumb-BL prefix handling was the bad target source. The SH4
+emitter now materializes the prefix LR so exits between the BL halves resume at
+the suffix with the right temporary link state. Keep this file as the historical
+record for the frame-700 failure.
 
-1. **Build a true-lockstep diff** (host-side / inside casio-emu, since two full
-   memory snapshots won't fit the add-in): run the dynarec and interpreter with
-   **independent register files + memory**, no per-block reseed, comparing full
-   register/PC state after each block and advancing through IRQ/`IntrWait` waits
-   with each core's own `update_gba`. The first PC/register divergence is the
-   cause. Distinguish benign IRQ-timing skew (both at valid PCs, re-converges)
-   from the real bug (the JIT branches to a PC the interpreter never reaches and
-   does not re-converge — `@@IRQ`=0 near the BL suggests the critical divergence
-   is *not* IRQ-timing, so the lockstep should find a clean codegen divergence).
-2. Once the first wrong branch is pinned, examine the SH4 codegen for the op that
-   computes the bad target (a Thumb data-proc / shift / hi-reg move producing a
-   code pointer off by 2). Fix it.
-3. Separately, the **native-LDST-off frame-696 freeze** (`@@WJ`=0, a different
-   failure) is a *second* bug — pin it the same way.
-4. Re-verify new-game → gameplay, interp vs JIT, frame-by-frame past 700/1000.
+For the next Metroid issue, continue from the current finding in
+[sh4-jit-status.md](sh4-jit-status.md#current-metroid-fusion-harness-findings-2026-06-28):
+the dynarec still blacks out between frames 3875 and 3900 while the interpreter
+continues rendering.
 
 ## History / superseded
 

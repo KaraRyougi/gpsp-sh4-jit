@@ -139,7 +139,7 @@ static int run_safe_boot_app(void)
       fxcg100_menu_result menu_result;
 
       fxcg100_debug_puts("[cgba] safe menu open\n");
-      menu_result = fxcg100_menu_run(&menu_state, ticks, raw_app_keys);
+      menu_result = fxcg100_menu_run(&menu_state, ticks, raw_app_keys, NULL);
       previous_app_keys = fxcg100_poll_app_keys();
       draw_safe_boot_screen(previous_app_keys, ticks);
 
@@ -249,7 +249,7 @@ int emain(void)
       fxcg100_menu_result menu_result;
 
       fxcg100_debug_puts("[cgba] menu open\n");
-      menu_result = fxcg100_menu_run(&menu_state, frame, last_hash);
+      menu_result = fxcg100_menu_run(&menu_state, frame, last_hash, NULL);
       previous_app_keys = fxcg100_poll_app_keys();
       previous_hotkeys = fxcg100_poll_hotkeys_mapped(menu_state.hotkey_map);
       fxcg100_lcd_clear(0);

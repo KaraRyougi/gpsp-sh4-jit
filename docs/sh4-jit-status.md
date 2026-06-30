@@ -51,6 +51,101 @@ These are deliberately the simplest correct choices; the speed work
 (resident regs, lazy/dead flags, inline memory, block chaining, idle-loop emit)
 layers on top — see the optimization plan.
 
+## Current Metroid Fusion harness findings (2026-06-28)
+
+The frame-700 Metroid Fusion new-game freeze is fixed by
+`b665a78 Fix SH4 Thumb BL prefix resume state`, with the fx-CG100 key mapping
+commit `6561561 fxcg100: map CG100 keys through gint` used for pulsed
+`SHIFT`/GBA `A` input. The fix materializes the Thumb `BL` prefix temporary LR
+in the SH4 emitter, so a cycle exit between the prefix and suffix resumes with
+the correct link value.
+
+Verified with the headless Metroid harness using the fast casio-emu branch:
+
+```sh
+START_FRAME=30 START_HOLD=8 \
+A_FRAME=120 A_HOLD=<frames> A_PERIOD=120 A_PRESS=6 \
+CASIO_EMU=/private/tmp/cgv-casio-emu-block-dispatch \
+ports/fxcg100/run-playtest.sh /Users/ryougi/Downloads/Metroid.gba
+```
+
+Evidence:
+
+- Baseline before the fix: JIT diverged at frame 700
+  (`black=32412/38400 hash=9C795F0E`) while the interpreter frame 700 was still
+  rendering (`hash=07989D3C`).
+- After the fix, the 760-frame paired run reached frame 759 for both cores with
+  `done=1 crash=0`; sampled frames 640/660/680/700/720/740 matched exactly, and
+  frame 700 was fixed (`black=0/38400 hash=07989D3C`).
+- A 3000-frame paired pulsed-`A` run reached frame 2999 for both cores with
+  `done=1 crash=0`. The JIT matched the interpreter exactly through frame 1500;
+  sampled framebuffer hashes start diverging at frame 1600, but both continue
+  through the intro sequence.
+
+New open correctness issue: the longer JIT-only soak showed black frames at
+4000/5000. A focused interp-vs-JIT run from 3000 to 4099 narrowed this to a
+dynarec-only transition between frames 3875 and 3900:
+
+| frame | JIT FBSTAT | interp FBSTAT |
+|---:|---|---|
+| 3800 | `black=739/38400 hash=0FD72129 pc=2AC4` | `black=739/38400 hash=40511CD9 pc=2AC4` |
+| 3875 | `black=953/38400 hash=7AFB01DC pc=5407` | `black=1077/38400 hash=A2974FCE pc=5407` |
+| 3900 | `black=38400/38400 hash=6AD58DC5 pc=0000` | `black=0/38400 hash=455EE41A pc=5CB9` |
+| 4000 | `black=38400/38400 hash=6AD58DC5 pc=0000` | `black=714/38400 hash=023B1E64 pc=DFFF` |
+| 4099 | `black=38139/38400 hash=2DEBC153 pc=0000` | `black=2748/38400 hash=143367F9 pc=DFFF` |
+
+Artifacts from that run:
+
+- `/tmp/cgba-metroid-window-3000-4000/jit.log`
+- `/tmp/cgba-metroid-window-3000-4000/interp.log`
+- `/tmp/cgba-metroid-window-3000-4000/png/contact_interp_jit_3000_4100.png`
+
+Conclusion: the frame-700 BL-prefix crash and BIOS reboot are fixed, but Metroid
+still has an accumulated dynarec-only divergence later in the intro. It is not
+an expected cutscene fade: the interpreter renders the white/blue transition at
+frame 3900 and keeps rendering afterward while the JIT is fully black.
+
+Next correctness target: narrow frames 3875-3900 with denser sampling and branch
+state, then run true lockstep/no-reseed diff around the first bad branch or
+state write. The old per-block diff still cannot catch accumulated drift because
+it reseeds the dynarec from interpreter state at every block boundary.
+
+## Current performance caveat
+
+The present SH4 dynarec should still be treated as a correctness MVP, not a
+performance win. On real fx-CG100 hardware, the user reports that JIT does not
+noticeably improve performance during the Metroid intro cutscene. That is
+plausible for the current backend, but first verify that the hardware artifact
+was actually built with the dynarec. `CGBA_DYNAREC` is still CMake-default
+`OFF`, so a plain `fxsdk build-cg` produces an interpreter-only `.g3a`.
+
+Build a hardware JIT artifact explicitly:
+
+```sh
+cd ports/fxcg100/gint-gpsp
+fxsdk build-cg -c -DCGBA_DYNAREC=ON
+fxsdk build-cg
+```
+
+If the tested `.g3a` was built this way and still shows no gain, that is
+plausible for the current backend:
+
+- all guest ARM registers still spill through `reg[]` instead of resident host
+  registers;
+- many ARM/Thumb operations still route through C helpers;
+- memory fast paths, block chaining, lazy/dead flags, and idle-loop emit are not
+  implemented yet;
+- cutscenes can be render/LCD/IRQ/timing-bound, so CPU recompilation alone may
+  not move the user-visible FPS;
+- the focused JIT run by frame 4099 reported heavy translation activity
+  (`rom_flush=1780`, `ram_flush=7`, `arm_tx=13640`, `thumb_tx=604734`), so cache
+  churn or repeated translation may be eating any native-execution gain.
+
+Do not use casio-emu FPS as final proof here; it is useful for instruction-share
+and regression direction only. The next performance pass needs a physical
+calculator A/B with the same ROM, scene, frameskip setting, and overlay metric,
+plus a split of core time vs render/LCD time and translation/cache-flush counts.
+
 ## Dynarec bring-up — DONE (compiles, links, runs the control-flow skeleton)
 
 The three bring-up tasks are complete at the build/link level (runtime

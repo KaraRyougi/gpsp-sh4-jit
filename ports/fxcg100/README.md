@@ -75,6 +75,16 @@ Output:
 
 - `ports/fxcg100/gint-gpsp/CGBA-GPSP.g3a`
 
+The plain command above builds the current interpreter/default artifact. The SH4
+dynarec is still an opt-in correctness build; enable it explicitly when testing
+JIT behavior on hardware:
+
+```sh
+cd ports/fxcg100/gint-gpsp
+fxsdk build-cg -c -DCGBA_DYNAREC=ON
+fxsdk build-cg
+```
+
 Runtime shape:
 
 - Uses stock gint startup and hardware detection, matching the physical-safe
@@ -113,8 +123,9 @@ Runtime shape:
   markers.
 - Full gpSP path: embedded `test_rom/mode3_smoke.h` and
   `test_rom/input_probe.h`, plus a NOR root-file source for
-  `test_rom/CGBAINP.GBA`; interpreter only, audio disabled,
-  serial/netplay/rumble inert, JIT probe opt-in only
+  `test_rom/CGBAINP.GBA`; interpreter by default, optional SH4 dynarec when
+  configured with `-DCGBA_DYNAREC=ON`, audio disabled, serial/netplay/rumble
+  inert, JIT probe opt-in only
 - gpSP gameplay video uses a CGBC-style direct R61524 frame window instead of
   full-screen `dupdate()`; menus and status screens still use gint VRAM.
 

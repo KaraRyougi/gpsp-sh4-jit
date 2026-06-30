@@ -2,18 +2,19 @@
 #define CGBA_SH4_ARM_LDST_EMIT_H
 
 /*
- * Native SH-4A emission for ARM single loads (the #2 hottest class), with an
+ * Native SH-4A emission for ARM single transfers (the #2 hottest class), with an
  * inline memory fast path: for the always-mapped data regions EWRAM (0x02) and
  * IWRAM (0x03) the access goes straight through gpSP's memory_map_read host-page
- * table instead of a C call into read_memory. Every other region (I/O, ROM,
- * VRAM/palette/OAM, BIOS, backup, unaligned) is resolved at RUNTIME by a region
- * guard that branches to the C helper cgba_sh4_arm_ldst, which keeps the exact
- * side-effect / writeback / alert semantics.
+ * table instead of a C call into read/write_memory. Mapped ROM loads are also
+ * fast-pathed; NULL ROM pages still branch to the helper so the pager can fill
+ * them. Every side-effecting/open region (BIOS/open bus, I/O, backup, unaligned)
+ * is resolved at runtime by a guard that branches to the C helper
+ * cgba_sh4_arm_ldst, which keeps the exact side-effect / writeback / alert
+ * semantics.
  *
- * Milestone 1: immediate-offset WORD LOADS, rd!=15, rn!=15, pre-indexed with no
- * writeback. The big, lowest-risk subset. Stores, bytes/halfwords, register
- * offsets, writeback and the PC forms stay on the C path (return 0 / runtime
- * fall-through).
+ * RAM stores are fast-pathed only when the parallel SMC tag mirror is clear;
+ * otherwise they fall through to the C helper so cache invalidation and
+ * redispatch behavior stays centralized.
  *
  * Big-endian host: guest RAM is little-endian, so a word read is byte-reversed
  * (swap.b;swap.w;swap.b). SH-4A faults on an unaligned mov.l, so the fast path is
@@ -29,11 +30,10 @@ void sh4_block_exit(u32 pc);
 /* Access kinds (the load width/sign we natively fast-path). */
 enum { LDK_W = 0, LDK_B, LDK_UH, LDK_SH, LDK_SB };
 
-/* Emit native SH4 for the ARM load `opcode`, or return 0 to fall back to C.
- * Handles pre-indexed, no-writeback LOADS (word/byte/halfword/signed),
- * immediate or register (no-shift) offset, through gpSP's memory_map_read
- * host-page table for EWRAM/IWRAM only; stores and side-effecting regions use
- * the C helper. */
+/* Emit native SH4 for the ARM transfer `opcode`, or return 0 to fall back to C.
+ * Handles single RAM/mapped-load transfers (word/byte/halfword/signed) with
+ * pre- or post-indexed addressing through gpSP's memory_map_read host-page table.
+ * Side-effecting stores use the C helper. */
 static inline int sh4g_arm_ldst_native(u8 **tp, u32 opcode, u32 pc,
   int cycle_count)
 {
@@ -50,12 +50,13 @@ static inline int sh4g_arm_ldst_native(u8 **tp, u32 opcode, u32 pc,
   u32 offset = 0, reg_offset = 0, rm = 0;
   u32 shift_offset = 0, shoff_type = 0, shoff_amount = 0;
   int kind, align_mask;
-  u8 *guards[4]; int ng = 0;
+  int effective_wb = writeback || !pre;
+  u8 *guards[7]; int ng = 0;
   u8 *bra_done;
 
-  if (!pre || writeback)    return 0;   /* pre-indexed, no writeback */
   if (rd == 15 || rn == 15) return 0;   /* PC operand (incl. STR pc) -> C */
-  if (!is_load)             return 0;   /* stores need helper-side SMC/alerts */
+  if (is_load && effective_wb && rd == rn)
+    return 0;                           /* helper writes Rn before Rd */
 
   if ((opcode & 0x0E000090) == 0x00000090) {           /* halfword / signed form */
     u32 signed_ld = (opcode >> 6) & 1, half_w = (opcode >> 5) & 1;
@@ -63,9 +64,12 @@ static inline int sh4g_arm_ldst_native(u8 **tp, u32 opcode, u32 pc,
       offset = ((opcode >> 4) & 0xF0) | (opcode & 0xF);
     else                                               /* register offset (no shift) */
       { reg_offset = 1; rm = opcode & 0xF; }
-    if (signed_ld && half_w) { kind = LDK_SH; align_mask = 1; }   /* LDRSH */
-    else if (signed_ld)      { kind = LDK_SB; align_mask = 0; }   /* LDRSB */
-    else                     { kind = LDK_UH; align_mask = 1; }   /* LDRH */
+    if (!is_load && (signed_ld || !half_w))
+      return 0;                                                   /* reserved */
+    if (!is_load)          { kind = LDK_UH; align_mask = 1; }      /* STRH */
+    else if (signed_ld && half_w) { kind = LDK_SH; align_mask = 1; }   /* LDRSH */
+    else if (signed_ld)    { kind = LDK_SB; align_mask = 0; }      /* LDRSB */
+    else                   { kind = LDK_UH; align_mask = 1; }      /* LDRH */
   } else {                                             /* normal word / byte form */
     if (opcode & 0x02000000) {                         /* register offset */
       u32 st = (opcode >> 5) & 3, sa = (opcode >> 7) & 0x1F;
@@ -82,7 +86,8 @@ static inline int sh4g_arm_ldst_native(u8 **tp, u32 opcode, u32 pc,
   }
   if ((reg_offset || shift_offset) && rm == 15) return 0;  /* PC offset register -> C */
 
-  /* addr = reg[rn] +/- offset, in R1; then page = memory_map_read[addr>>15] in R3 */
+  /* addr = transfer address in R1; for post-indexed forms keep the old base in
+   * R1 and precompute writeback into R6 before the fast path clobbers R2. */
   { sh4_codegen cg = sh4g_open(tp);
     sh4_emit_load_greg(&cg, rn, SH4_REG_T0);
     sh4g_close(tp, &cg); }
@@ -95,12 +100,25 @@ static inline int sh4g_arm_ldst_native(u8 **tp, u32 opcode, u32 pc,
   } else {                                             /* offset = +/- immediate */
     sh4g_const(tp, up ? offset : (u32)(-(int32_t)offset), SH4_REG_T1);
   }
-  { sh4_codegen cg = sh4g_open(tp);
+  if (pre) {
+    sh4_codegen cg = sh4g_open(tp);
     if ((reg_offset || shift_offset) && !up)           /* addr = rn - offset (down) */
       sh4_emit_sub(&cg, SH4_REG_T1, SH4_REG_T0);
     else                                               /* addr = rn + offset */
       sh4_emit_add_reg(&cg, SH4_REG_T1, SH4_REG_T0);   /* R1 = addr */
-    sh4g_close(tp, &cg); }
+    sh4g_close(tp, &cg);
+  }
+  if (effective_wb) {
+    sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_ARG2);   /* R6 = new Rn */
+    if (!pre) {
+      if ((reg_offset || shift_offset) && !up)
+        sh4_emit_sub(&cg, SH4_REG_T1, SH4_REG_ARG2);
+      else
+        sh4_emit_add_reg(&cg, SH4_REG_T1, SH4_REG_ARG2);
+    }
+    sh4g_close(tp, &cg);
+  }
 
   /* memory_map_read[] only covers the GBA 0x00000000..0x0fffffff space. */
   sh4g_const(tp, 0x10000000u, SH4_REG_T1);
@@ -124,14 +142,37 @@ static inline int sh4g_arm_ldst_native(u8 **tp, u32 opcode, u32 pc,
     sh4g_close(tp, &cg); }
   guards[ng++] = sh4g_emit_bt_placeholder(tp);          /* unmapped -> slow */
 
-  /* Fast memory must not bypass gpSP side effects. 0x02/0x03 are plain RAM. */
-  { sh4_codegen cg = sh4g_open(tp);
-    sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
-    sh4_emit_mov_imm(&cg, -25, SH4_REG_T1);
-    sh4_emit_shld(&cg, SH4_REG_T1, SH4_REG_RET);        /* R0 = addr >> 25 */
-    sh4_emit_cmpeq_imm(&cg, 1);                         /* T = region 2 or 3 */
-    sh4g_close(tp, &cg); }
-  guards[ng++] = sh4g_emit_bf_placeholder(tp);          /* not EWRAM/IWRAM -> slow */
+  if (is_load) {
+    /* Fast loads are safe for plain RAM plus mapped read-only/game/display
+     * memory. Exclude BIOS/open (0/1), I/O (4), and backup/EEPROM (13..15). */
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
+      sh4_emit_shlr16(&cg, SH4_REG_RET);
+      sh4_emit_shlr8(&cg, SH4_REG_RET);                  /* R0 = addr >> 24 */
+      sh4_emit_mov_imm(&cg, 2, SH4_REG_T1);
+      sh4_emit_cmphs(&cg, SH4_REG_T1, SH4_REG_RET);      /* T = region >= 2 */
+      sh4g_close(tp, &cg); }
+    guards[ng++] = sh4g_emit_bf_placeholder(tp);         /* BIOS/open -> slow */
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_imm(&cg, 4, SH4_REG_T1);
+      sh4_emit_cmpeq(&cg, SH4_REG_T1, SH4_REG_RET);      /* T = I/O */
+      sh4g_close(tp, &cg); }
+    guards[ng++] = sh4g_emit_bt_placeholder(tp);         /* I/O -> slow */
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_imm(&cg, 13, SH4_REG_T1);
+      sh4_emit_cmphs(&cg, SH4_REG_T1, SH4_REG_RET);      /* T = backup/EEPROM */
+      sh4g_close(tp, &cg); }
+    guards[ng++] = sh4g_emit_bt_placeholder(tp);         /* backup -> slow */
+  } else {
+    /* Fast stores must not bypass side effects. 0x02/0x03 are plain RAM. */
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
+      sh4_emit_mov_imm(&cg, -25, SH4_REG_T1);
+      sh4_emit_shld(&cg, SH4_REG_T1, SH4_REG_RET);       /* R0 = addr >> 25 */
+      sh4_emit_cmpeq_imm(&cg, 1);                        /* T = region 2 or 3 */
+      sh4g_close(tp, &cg); }
+    guards[ng++] = sh4g_emit_bf_placeholder(tp);         /* not EWRAM/IWRAM -> slow */
+  }
   if (align_mask) {                                    /* SH4 faults on unaligned w/h */
     sh4_codegen cg = sh4g_open(tp);
     sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
@@ -140,12 +181,51 @@ static inline int sh4g_arm_ldst_native(u8 **tp, u32 opcode, u32 pc,
     guards[ng++] = sh4g_emit_bf_placeholder(tp);          /* misaligned -> slow */
   }
 
-  /* --- fast path: load reg[rd] from page[addr & 0x7FFF] --- */
+  /* R0 = addr & 0x7FFF (in-page offset). */
   { sh4_codegen cg = sh4g_open(tp);
-    sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);       /* R0 = addr & 0x7FFF */
+    sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
     sh4_emit_shll16(&cg, SH4_REG_RET); sh4_emit_shll(&cg, SH4_REG_RET);
     sh4_emit_shlr16(&cg, SH4_REG_RET); sh4_emit_shlr(&cg, SH4_REG_RET);
-    switch (kind) {                                  /* guest is little-endian */
+    sh4g_close(tp, &cg); }
+
+  if (!is_load) {
+    u8 *bf_iwram, *bra_tag_ready;
+    /* Build the SMC tag-page pointer in R5 from the data page pointer in R3:
+     *   EWRAM tag mirror = ewram + 0x40000, so page + 0x40000.
+     *   IWRAM data page  = iwram + 0x8000, so tag page = page - 0x8000. */
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_reg(&cg, SH4_REG_T2, SH4_REG_ARG1);
+      sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_T1);
+      sh4_emit_shlr16(&cg, SH4_REG_T1);
+      sh4_emit_shlr8(&cg, SH4_REG_T1);                  /* R2 = addr >> 24 */
+      sh4_emit_mov_imm(&cg, 2, SH4_REG_ARG0);
+      sh4_emit_cmpeq(&cg, SH4_REG_ARG0, SH4_REG_T1);    /* T = EWRAM */
+      sh4g_close(tp, &cg); }
+    bf_iwram = sh4g_emit_bf_placeholder(tp);
+    sh4g_const(tp, 0x40000u, SH4_REG_ARG0);
+    sh4g_add_reg(tp, SH4_REG_ARG0, SH4_REG_ARG1);
+    bra_tag_ready = sh4g_emit_bra_placeholder(tp);
+    sh4g_patch_cond(bf_iwram, *tp);
+    sh4g_const(tp, (u32)-0x8000, SH4_REG_ARG0);
+    sh4g_add_reg(tp, SH4_REG_ARG0, SH4_REG_ARG1);
+    sh4g_patch_bra(bra_tag_ready, *tp);
+
+    /* Any nonzero tag byte means this write hits translated RAM code. */
+    { sh4_codegen cg = sh4g_open(tp);
+      switch (kind) {
+      case LDK_W:  sh4_emit_mov_l_load_r0(&cg, SH4_REG_ARG1, SH4_REG_ARG0); break;
+      case LDK_UH: sh4_emit_mov_w_load_r0(&cg, SH4_REG_ARG1, SH4_REG_ARG0); break;
+      default:     sh4_emit_mov_b_load_r0(&cg, SH4_REG_ARG1, SH4_REG_ARG0); break;
+      }
+      sh4_emit_tst(&cg, SH4_REG_ARG0, SH4_REG_ARG0);    /* T = tag == 0 */
+      sh4g_close(tp, &cg); }
+    guards[ng++] = sh4g_emit_bf_placeholder(tp);        /* SMC -> slow */
+  }
+
+  /* --- fast path: transfer reg[rd] and page[addr & 0x7FFF] --- */
+  { sh4_codegen cg = sh4g_open(tp);
+    if (is_load) {
+      switch (kind) {                                  /* guest is little-endian */
     case LDK_W:                                       /* word: read + byte-reverse */
       sh4_emit_mov_l_load_r0(&cg, SH4_REG_T2, SH4_REG_T1);
       sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_ARG0);
@@ -169,9 +249,29 @@ static inline int sh4g_arm_ldst_native(u8 **tp, u32 opcode, u32 pc,
     default:                                          /* LDRSB: mov.b sign-extends */
       sh4_emit_mov_b_load_r0(&cg, SH4_REG_T2, SH4_REG_T1);
       break;
+      }
+      sh4_emit_store_greg(&cg, SH4_REG_T1, rd);
+    } else {
+      sh4_emit_load_greg(&cg, rd, SH4_REG_T1);
+      switch (kind) {                                  /* guest is little-endian */
+      case LDK_W:
+        sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_ARG0);
+        sh4_emit_swap_w(&cg, SH4_REG_ARG0, SH4_REG_ARG0);
+        sh4_emit_swap_b(&cg, SH4_REG_ARG0, SH4_REG_T1);
+        sh4_emit_mov_l_store_r0(&cg, SH4_REG_T1, SH4_REG_T2);
+        break;
+      case LDK_UH:
+        sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
+        sh4_emit_mov_w_store_r0(&cg, SH4_REG_T1, SH4_REG_T2);
+        break;
+      default:
+        sh4_emit_mov_b_store_r0(&cg, SH4_REG_T1, SH4_REG_T2);
+        break;
+      }
     }
-    sh4_emit_store_greg(&cg, SH4_REG_T1, rd);
     sh4g_close(tp, &cg); }
+  if (effective_wb)
+    sh4g_store_greg(tp, SH4_REG_ARG2, rn);
   /* Charge the single access (nonseq; word column for LDR/STR, else byte/half);
    * addr is still in T0. The slow path charges the same via extra_cycles. */
   sh4g_charge_mem_run(tp, SH4_REG_T0, /*seq=*/0, /*is_word=*/(kind == LDK_W), 1);

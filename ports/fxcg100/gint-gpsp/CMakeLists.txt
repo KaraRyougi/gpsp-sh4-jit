@@ -46,22 +46,22 @@ set(GPSP_C_SOURCES
 # SH4 dynarec bring-up (opt-in). Adds the threaded recompiler, its SH4 host
 # emitter, the entry/exit trampoline, the executable code-cache placement and
 # the C instruction helpers. Default OFF so the interpreter build stays the
-# shipping target until the dynarec is differentially validated.
+# conservative shipping target; turn CGBA_DYNAREC on for hardware JIT artifacts.
 option(CGBA_DYNAREC "Build the SH4 dynamic recompiler (bring-up)" OFF)
 option(CGBA_SH4_ARM_LDST_NATIVE
-  "Enable experimental SH4 native ARM single load/store fast path" OFF)
+  "Enable SH4 native ARM single load fast path" ON)
 option(CGBA_SH4_THUMB_LDST_NATIVE
-  "Enable experimental SH4 native Thumb byte load/store fast path" ON)
+  "Enable SH4 native Thumb RAM load fast path" ON)
 option(CGBA_SH4_EXACT_CYCLE_BOUNDARIES
   "Headless/debug: check the SH4 dynarec cycle budget at each translated instruction boundary" OFF)
 option(CGBA_SH4_DIFF_DUMP_OPS
   "Headless/debug: dump block-diff op/cycle diagnostics" OFF)
-set(CGBA_GPSP_ROM_TRANSLATION_CACHE_SIZE "524288" CACHE STRING
+set(CGBA_GPSP_ROM_TRANSLATION_CACHE_SIZE "786432" CACHE STRING
   "SH4 dynarec ROM translation cache size in bytes")
 set(CGBA_GPSP_RAM_TRANSLATION_CACHE_SIZE "262144" CACHE STRING
   "SH4 dynarec RAM translation cache size in bytes")
-set(CGBA_GPSP_ROM_BRANCH_HASH_BITS "13" CACHE STRING
-  "SH4 dynarec ROM branch-hash = 2^N u32 entries (16=256KB thrashes the ~32KB cache and is walked on every indirect-branch resolve; 12-13=16-32KB fits). Sweep on HW for the knee.")
+set(CGBA_GPSP_ROM_BRANCH_HASH_BITS "12" CACHE STRING
+  "SH4 dynarec ROM branch-hash = 2^N u32 entries; 12 is 16 KiB, which is friendlier to the SH7305 cache than the upstream 16 / 256 KiB table")
 if(CGBA_DYNAREC)
   list(APPEND GPSP_C_SOURCES
     ${GPSP}/cpu_threaded.c
@@ -168,6 +168,8 @@ endif()
 option(CGBA_GPSP_HEADLESS_TEST "Headless auto-boot + stdout diag (emulator)" OFF)
 set(CGBA_GPSP_HEADLESS_FRAMES "48" CACHE STRING
   "Number of frames to run in CGBA_GPSP_HEADLESS_TEST")
+set(CGBA_GPSP_HEADLESS_FRAME_BASE "0" CACHE STRING
+  "Absolute frame number for the first CGBA_GPSP_HEADLESS_TEST frame")
 set(CGBA_GPSP_HEADLESS_LOG_EVERY "1" CACHE STRING
   "Frame log interval in CGBA_GPSP_HEADLESS_TEST; 0 logs only summary")
 set(CGBA_GPSP_HEADLESS_START_FRAME "0" CACHE STRING
@@ -188,6 +190,10 @@ set(CGBA_GPSP_HEADLESS_STAT_EVERY "0" CACHE STRING
   "Headless debug: log framebuffer stats every N frames; 0 disables")
 set(CGBA_GPSP_HEADLESS_STATE_EVERY "0" CACHE STRING
   "Headless debug: log CPU/scheduler/memory state every N frames; 0 disables")
+set(CGBA_GPSP_HEADLESS_STATE_START "0" CACHE STRING
+  "Headless debug: first frame for state logging")
+set(CGBA_GPSP_HEADLESS_STATE_END "4294967295" CACHE STRING
+  "Headless debug: last frame for state logging")
 set(CGBA_GPSP_HEADLESS_PHASE_START "4294967295" CACHE STRING
   "Headless debug: first frame for per-phase loop breadcrumbs")
 set(CGBA_GPSP_HEADLESS_PHASE_END "4294967295" CACHE STRING
@@ -200,6 +206,10 @@ set(CGBA_GPSP_HEADLESS_DIFF_BLOCKS "0" CACHE STRING
   "Headless debug: maximum live dynarec block-diff blocks; 0 disables")
 set(CGBA_GPSP_HEADLESS_WINDOW_DIFF_FRAME "-1" CACHE STRING
   "Headless debug: frame at which to run a preserving interp-vs-JIT window diff; -1 disables")
+set(CGBA_GPSP_HEADLESS_SAVE_STATE_FRAME "-1" CACHE STRING
+  "Headless debug: absolute frame after which to save a reusable checkpoint; -1 disables")
+set(CGBA_GPSP_HEADLESS_LOAD_STATE "0" CACHE STRING
+  "Headless debug: load the reusable checkpoint before running frames; 0 disables")
 set(CGBA_GPSP_HEADLESS_TRACE_PC "0" CACHE STRING
   "Headless debug: trace Thumb load/store helper state at this guest PC; 0 disables")
 set(CGBA_GPSP_HEADLESS_TRACE_MASK "4095" CACHE STRING
@@ -210,10 +220,15 @@ set(CGBA_GPSP_HEADLESS_TRACE_TIMER_IO "0" CACHE STRING
   "Headless debug: log writes to GBA timer IO registers; 0 disables")
 set(CGBA_GPSP_HEADLESS_BENCH_FRAMES "0" CACHE STRING
   "Headless debug: run interpreter-vs-JIT throughput bench for this many frames; 0 disables")
+set(CGBA_GPSP_HEADLESS_WJ_START "0" CACHE STRING
+  "Headless debug: first frame to log wild-jump resolver trace")
+set(CGBA_GPSP_HEADLESS_WJ_END "4294967295" CACHE STRING
+  "Headless debug: last frame to log wild-jump resolver trace")
 if(CGBA_GPSP_HEADLESS_TEST)
   target_compile_definitions(cgba-gint-gpsp PRIVATE
     CGBA_GPSP_HEADLESS_TEST=1
     CGBA_GPSP_HEADLESS_FRAMES=${CGBA_GPSP_HEADLESS_FRAMES}
+    CGBA_GPSP_HEADLESS_FRAME_BASE=${CGBA_GPSP_HEADLESS_FRAME_BASE}
     CGBA_GPSP_HEADLESS_LOG_EVERY=${CGBA_GPSP_HEADLESS_LOG_EVERY}
     CGBA_GPSP_HEADLESS_START_FRAME=${CGBA_GPSP_HEADLESS_START_FRAME}
     CGBA_GPSP_HEADLESS_START_HOLD=${CGBA_GPSP_HEADLESS_START_HOLD}
@@ -224,17 +239,23 @@ if(CGBA_GPSP_HEADLESS_TEST)
     CGBA_GPSP_HEADLESS_DUMP_EVERY=${CGBA_GPSP_HEADLESS_DUMP_EVERY}
     CGBA_GPSP_HEADLESS_STAT_EVERY=${CGBA_GPSP_HEADLESS_STAT_EVERY}
     CGBA_GPSP_HEADLESS_STATE_EVERY=${CGBA_GPSP_HEADLESS_STATE_EVERY}
+    CGBA_GPSP_HEADLESS_STATE_START=${CGBA_GPSP_HEADLESS_STATE_START}
+    CGBA_GPSP_HEADLESS_STATE_END=${CGBA_GPSP_HEADLESS_STATE_END}
     CGBA_GPSP_HEADLESS_PHASE_START=${CGBA_GPSP_HEADLESS_PHASE_START}
     CGBA_GPSP_HEADLESS_PHASE_END=${CGBA_GPSP_HEADLESS_PHASE_END}
     CGBA_GPSP_HEADLESS_DYNAREC=${CGBA_GPSP_HEADLESS_DYNAREC}
     CGBA_GPSP_HEADLESS_DIFF_FRAME=${CGBA_GPSP_HEADLESS_DIFF_FRAME}
     CGBA_GPSP_HEADLESS_DIFF_BLOCKS=${CGBA_GPSP_HEADLESS_DIFF_BLOCKS}
     CGBA_GPSP_HEADLESS_WINDOW_DIFF_FRAME=${CGBA_GPSP_HEADLESS_WINDOW_DIFF_FRAME}
+    CGBA_GPSP_HEADLESS_SAVE_STATE_FRAME=${CGBA_GPSP_HEADLESS_SAVE_STATE_FRAME}
+    CGBA_GPSP_HEADLESS_LOAD_STATE=${CGBA_GPSP_HEADLESS_LOAD_STATE}
     CGBA_GPSP_HEADLESS_TRACE_PC=${CGBA_GPSP_HEADLESS_TRACE_PC}
     CGBA_GPSP_HEADLESS_TRACE_MASK=${CGBA_GPSP_HEADLESS_TRACE_MASK}
     CGBA_GPSP_HEADLESS_TRACE_JIT=${CGBA_GPSP_HEADLESS_TRACE_JIT}
     CGBA_GPSP_HEADLESS_TRACE_TIMER_IO=${CGBA_GPSP_HEADLESS_TRACE_TIMER_IO}
-    CGBA_GPSP_HEADLESS_BENCH_FRAMES=${CGBA_GPSP_HEADLESS_BENCH_FRAMES})
+    CGBA_GPSP_HEADLESS_BENCH_FRAMES=${CGBA_GPSP_HEADLESS_BENCH_FRAMES}
+    CGBA_GPSP_HEADLESS_WJ_START=${CGBA_GPSP_HEADLESS_WJ_START}
+    CGBA_GPSP_HEADLESS_WJ_END=${CGBA_GPSP_HEADLESS_WJ_END})
 endif()
 
 target_compile_options(cgba-gint-gpsp PRIVATE
