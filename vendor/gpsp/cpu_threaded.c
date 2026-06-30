@@ -87,6 +87,13 @@ u32 cgba_dynarec_lookup_thumb_count;
 u32 cgba_dynarec_lookup_dual_count;
 u32 cgba_dynarec_icache_sync_count;
 u32 cgba_dynarec_icache_sync_bytes;
+u32 cgba_dynarec_ibh_arm_hit_count;
+u32 cgba_dynarec_ibh_arm_slow_count;
+u32 cgba_dynarec_ibh_thumb_hit_count;
+u32 cgba_dynarec_ibh_thumb_slow_count;
+u32 cgba_dynarec_ibh_dual_arm_hit_count;
+u32 cgba_dynarec_ibh_dual_thumb_hit_count;
+u32 cgba_dynarec_ibh_dual_slow_count;
 #endif
 
 typedef struct
