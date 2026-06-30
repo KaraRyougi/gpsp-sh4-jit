@@ -36,6 +36,8 @@ extern uint32_t cgba_dynarec_ibh_thumb_slow_count;
 extern uint32_t cgba_dynarec_ibh_dual_arm_hit_count;
 extern uint32_t cgba_dynarec_ibh_dual_thumb_hit_count;
 extern uint32_t cgba_dynarec_ibh_dual_slow_count;
+extern uint32_t cgba_dynarec_ibh_dual_hot_arm_count;
+extern uint32_t cgba_dynarec_ibh_dual_hot_thumb_count;
 extern uint32_t cgba_sh4_helper_thumb_ldst_count;
 extern uint32_t cgba_sh4_helper_thumb_block_count;
 extern uint32_t cgba_sh4_helper_thumb_shift_count;
@@ -676,6 +678,9 @@ void cgba_gpsp_debug_menu(fxcg100_debug_info *debug, unsigned frame,
 			(unsigned long)cgba_dynarec_ibh_arm_slow_count,
 			(unsigned long)cgba_dynarec_ibh_thumb_slow_count,
 			(unsigned long)cgba_dynarec_ibh_dual_slow_count);
+		debug_line(debug, "JIT IH hot DA%lu DT%lu",
+			(unsigned long)cgba_dynarec_ibh_dual_hot_arm_count,
+			(unsigned long)cgba_dynarec_ibh_dual_hot_thumb_count);
 		debug_line(debug, "H ARM ld%lu st%lu blk%lu dp%lu",
 			(unsigned long)cgba_sh4_helper_arm_ldst_load_count,
 			(unsigned long)cgba_sh4_helper_arm_ldst_store_count,
