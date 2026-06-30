@@ -27,6 +27,7 @@ typedef int64_t  s64;
 #include "ports/fxcg100/sh4/sh4_arm_block_emit.h"
 
 u8 *memory_map_read[0x2000];
+u16 io_registers[512];
 int cgba_sh4_extra_cycles;
 u8 ws_cyc_seq[16][2];
 u8 ws_cyc_nseq[16][2];
@@ -129,6 +130,42 @@ static void expect_thumb_native_transfer(const char *name, u32 opcode)
   }
 }
 
+static void expect_thumb_const_io_load(const char *name, u32 opcode, u32 address)
+{
+  u8 *p = code;
+  u32 const_val[16] = {0};
+  memset(code, 0xCC, sizeof(code));
+  const_val[0] = address;
+
+  if (!sh4g_thumb_ldst_const_native(&p, opcode, 1u << 0, const_val)) {
+    fprintf(stderr, "%s: const IO path rejected load opcode\n", name);
+    fail = 1;
+  }
+  if (p == code) {
+    fprintf(stderr, "%s: const IO load emitted no code\n", name);
+    fail = 1;
+  }
+}
+
+static void expect_thumb_const_io_fallback(const char *name, u32 opcode,
+                                           u32 address)
+{
+  u8 *p = code;
+  u32 const_val[16] = {0};
+  memset(code, 0xCC, sizeof(code));
+  const_val[0] = address;
+
+  if (sh4g_thumb_ldst_const_native(&p, opcode, 1u << 0, const_val)) {
+    fprintf(stderr, "%s: const IO path accepted fallback opcode\n", name);
+    fail = 1;
+  }
+  if (p != code) {
+    fprintf(stderr, "%s: const IO fallback emitted %ld bytes\n",
+            name, (long)(p - code));
+    fail = 1;
+  }
+}
+
 static void expect_arm_block_fallback(const char *name, u32 opcode)
 {
   u8 *p = code;
@@ -204,6 +241,14 @@ int main(void)
   expect_thumb_native_transfer("STRB r1,[r0,#0]", 0x7001u);
   expect_thumb_native_transfer("STRH r1,[r0,#0]", 0x8001u);
   expect_thumb_fallback("non-ldst Thumb opcode", 0xDF00u);
+  expect_thumb_const_io_load("const LDRH r1,[r0,#0] KEYINPUT", 0x8801u,
+                             0x04000130u);
+  expect_thumb_const_io_load("const LDRB r1,[r0,#0] IO", 0x7801u,
+                             0x04000130u);
+  expect_thumb_const_io_fallback("const STR r1,[r0,#0]", 0x6001u,
+                                 0x04000130u);
+  expect_thumb_const_io_fallback("const LDRH r1,[r0,#0] non-IO", 0x8801u,
+                                 0x03000130u);
 
   expect_arm_block_fallback("STMIA r0,{r1,r2}", 0xE8800006u);
   expect_arm_block_native_load("LDMIA r0,{r1,r2}", 0xE8900006u);

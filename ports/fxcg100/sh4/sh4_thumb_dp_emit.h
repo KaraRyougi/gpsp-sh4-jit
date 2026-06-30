@@ -27,6 +27,7 @@
 #include "ports/fxcg100/sh4/sh4_emit_glue.h"
 
 extern u8 *memory_map_read[];
+extern u16 io_registers[512];
 int cgba_sh4_thumb_ldst(u32 opcode, u32 pc);
 void sh4_block_exit(u32 pc);
 
@@ -309,6 +310,131 @@ enum {
   SH4_THUMB_LDK_SH,
   SH4_THUMB_LDK_SB
 };
+
+static inline void sh4g_charge_mem_cell(u8 **tp, const u8 *cell)
+{
+  sh4g_const(tp, (uint32_t)(uintptr_t)cell, SH4_REG_T2);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_b_load(&cg, SH4_REG_T2, SH4_REG_T1);
+    sh4_emit_extu_b(&cg, SH4_REG_T1, SH4_REG_T1);
+    sh4_emit_sub(&cg, SH4_REG_T1, SH4_REG_CYCLES);
+    sh4g_close(tp, &cg); }
+}
+
+/* Fast path for the hot Thumb shape:
+ *   LDR rB, [pc, #literal]   ; rB = fixed IO address
+ *   LDRH/LDRB/LDR rD, [rB, #offset]
+ *
+ * The generic native load is still correct, but it must rebuild the effective
+ * address class, probe memory_map_read[], check alignment and read the wait-state
+ * table at runtime. If translation knows the effective address is fixed IO, the
+ * host pointer is stable and the read can be emitted directly. Loads only: IO
+ * writes remain helper-owned. */
+static inline int sh4g_thumb_ldst_const_native(u8 **tp, u32 opcode,
+  u32 const_mask, const u32 const_val[16])
+{
+#ifndef CGBA_SH4_THUMB_LDST_NATIVE
+  (void)tp;
+  (void)opcode;
+  (void)const_mask;
+  (void)const_val;
+  return 0;
+#else
+  u32 hi = (opcode >> 8) & 0xFF;
+  u32 rd = opcode & 7, rb = (opcode >> 3) & 7;
+  u32 ro = 0, offset = 0, address;
+  int reg_offset = 0, kind = SH4_THUMB_LDK_W, align_mask = 3, is_load = 1;
+
+  if (hi >= 0x50 && hi <= 0x5F) {
+    u32 op = (opcode >> 10) & 3;
+    ro = (opcode >> 6) & 7;
+    reg_offset = 1;
+    if (opcode & 0x0200) {
+      switch (op) {
+      case 0: kind = SH4_THUMB_LDK_UH; align_mask = 1; is_load = 0; break;
+      case 1: kind = SH4_THUMB_LDK_SB; align_mask = 0; break;
+      case 2: kind = SH4_THUMB_LDK_UH; align_mask = 1; break;
+      case 3: kind = SH4_THUMB_LDK_SH; align_mask = 1; break;
+      }
+    } else {
+      switch (op) {
+      case 0: kind = SH4_THUMB_LDK_W; align_mask = 3; is_load = 0; break;
+      case 1: kind = SH4_THUMB_LDK_B; align_mask = 0; is_load = 0; break;
+      case 2: kind = SH4_THUMB_LDK_W; align_mask = 3; break;
+      case 3: kind = SH4_THUMB_LDK_B; align_mask = 0; break;
+      }
+    }
+  } else if (hi >= 0x60 && hi <= 0x7F) {
+    u32 imm5 = (opcode >> 6) & 0x1F;
+    u32 is_byte = (opcode >> 12) & 1;
+    is_load = (opcode >> 11) & 1;
+    offset = imm5 << (is_byte ? 0 : 2);
+    kind = is_byte ? SH4_THUMB_LDK_B : SH4_THUMB_LDK_W;
+    align_mask = is_byte ? 0 : 3;
+  } else if (hi >= 0x80 && hi <= 0x8F) {
+    is_load = (opcode >> 11) & 1;
+    offset = ((opcode >> 6) & 0x1F) << 1;
+    kind = SH4_THUMB_LDK_UH;
+    align_mask = 1;
+  } else if (hi >= 0x90 && hi <= 0x9F) {
+    is_load = (opcode >> 11) & 1;
+    rd = (opcode >> 8) & 7;
+    rb = 13;
+    offset = (opcode & 0xFF) << 2;
+    kind = SH4_THUMB_LDK_W;
+    align_mask = 3;
+  } else {
+    return 0;
+  }
+
+  if (!is_load)
+    return 0;
+  if (!(const_mask & (1u << rb)))
+    return 0;
+  if (reg_offset && !(const_mask & (1u << ro)))
+    return 0;
+
+  address = const_val[rb] + offset + (reg_offset ? const_val[ro] : 0);
+  if (((address >> 24) & 0x0F) != 0x04)
+    return 0;
+  if (align_mask && (address & (u32)align_mask))
+    return 0;
+
+  sh4g_const(tp, (u32)(uintptr_t)(((u8 *)io_registers) + (address & 0x3FFu)),
+             SH4_REG_T2);
+  { sh4_codegen cg = sh4g_open(tp);
+    switch (kind) {
+    case SH4_THUMB_LDK_W:
+      sh4_emit_mov_l_load(&cg, SH4_REG_T2, SH4_REG_T1);
+      sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_ARG0);
+      sh4_emit_swap_w(&cg, SH4_REG_ARG0, SH4_REG_ARG0);
+      sh4_emit_swap_b(&cg, SH4_REG_ARG0, SH4_REG_T1);
+      break;
+    case SH4_THUMB_LDK_B:
+      sh4_emit_mov_b_load(&cg, SH4_REG_T2, SH4_REG_T1);
+      sh4_emit_extu_b(&cg, SH4_REG_T1, SH4_REG_T1);
+      break;
+    case SH4_THUMB_LDK_UH:
+      sh4_emit_mov_w_load(&cg, SH4_REG_T2, SH4_REG_T1);
+      sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
+      sh4_emit_extu_w(&cg, SH4_REG_T1, SH4_REG_T1);
+      break;
+    case SH4_THUMB_LDK_SH:
+      sh4_emit_mov_w_load(&cg, SH4_REG_T2, SH4_REG_T1);
+      sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
+      sh4_emit_exts_w(&cg, SH4_REG_T1, SH4_REG_T1);
+      break;
+    default:
+      sh4_emit_mov_b_load(&cg, SH4_REG_T2, SH4_REG_T1);
+      break;
+    }
+    sh4_emit_store_greg(&cg, SH4_REG_T1, rd);
+    sh4g_close(tp, &cg); }
+
+  sh4g_charge_mem_cell(tp, &ws_cyc_nseq[0x04][kind == SH4_THUMB_LDK_W]);
+  return 1;
+#endif
+}
 
 /* Emit "branch to the Thumb memory slow path if (T == slow_if_t)" without the
  * BT/BF disp8 range limit. The short conditional skips over a far BRA. */
