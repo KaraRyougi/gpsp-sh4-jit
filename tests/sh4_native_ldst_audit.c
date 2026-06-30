@@ -27,6 +27,7 @@ typedef int64_t  s64;
 #include "ports/fxcg100/sh4/sh4_arm_block_emit.h"
 
 u8 *memory_map_read[0x2000];
+u8 iwram[1024 * 32 * 2];
 u16 io_registers[512];
 int cgba_sh4_extra_cycles;
 u8 ws_cyc_seq[16][2];

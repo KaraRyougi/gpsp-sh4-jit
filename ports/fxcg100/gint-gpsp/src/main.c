@@ -74,6 +74,7 @@ extern uint32_t cgba_sh4_helper_thumb_ldst_reg_count;
 extern uint32_t cgba_sh4_helper_thumb_ldst_imm_count;
 extern uint32_t cgba_sh4_native_thumb_const_io_count;
 extern uint32_t cgba_sh4_native_thumb_runtime_io_count;
+extern uint32_t cgba_sh4_native_thumb_push_iwram_count;
 #endif
 #endif
 
@@ -268,6 +269,7 @@ static int start_gpsp(uint16_t *framebuffer, unsigned rom_id)
 	cgba_sh4_helper_thumb_ldst_imm_count = 0;
 	cgba_sh4_native_thumb_const_io_count = 0;
 	cgba_sh4_native_thumb_runtime_io_count = 0;
+	cgba_sh4_native_thumb_push_iwram_count = 0;
 #endif
 	return 0;
 }
@@ -933,6 +935,7 @@ static int cgba_headless_test(uint16_t *framebuffer)
 	cgba_sh4_helper_thumb_ldst_imm_count = 0;
 	cgba_sh4_native_thumb_const_io_count = 0;
 	cgba_sh4_native_thumb_runtime_io_count = 0;
+	cgba_sh4_native_thumb_push_iwram_count = 0;
 	#endif
 	snprintf(buf, sizeof buf, "input START f=%u h=%u A/SHIFT f=%u h=%u p=%u w=%u",
 		(unsigned)CGBA_GPSP_HEADLESS_START_FRAME,
