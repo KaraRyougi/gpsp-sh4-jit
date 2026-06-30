@@ -66,6 +66,24 @@
 9:
 .endm
 
+#if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
+.macro INC_COUNTER sym
+  mov.l   8f, r0
+  mov.l   @r0, r1
+  add     #1, r1
+  mov.l   r1, @r0
+  bra     9f
+  nop
+  .align 2
+8:
+  .long   _\sym
+9:
+.endm
+#else
+.macro INC_COUNTER sym
+.endm
+#endif
+
 /* After a block_lookup_address_* call (host block in R0): a NULL result means the
  * translation cache overflowed mid-translate and was flushed (translate_block
  * returns false -> the resolver returns NULL, cpu_threaded.c:3167-3172 / 2604 /
@@ -255,12 +273,14 @@ iba_walk:
   bra     iba_walk
   nop
 iba_hit:
+  INC_COUNTER cgba_dynarec_ibh_arm_hit_count
   mov     #REG_PC, r0
   mov.l   r4, @(r0,r14)           /* commit reg[REG_PC] = pc */
   add     #8, r7                  /* sizeof(hashhdr_type) + prologue size */
   jmp     @r7
   nop
 iba_slow:
+  INC_COUNTER cgba_dynarec_ibh_arm_slow_count
   CALL    block_lookup_address_arm
   mov.l   sb_flag, r1
   mov.l   @r1, r1
@@ -310,12 +330,14 @@ ibt_walk:
   bra     ibt_walk
   nop
 ibt_hit:
+  INC_COUNTER cgba_dynarec_ibh_thumb_hit_count
   mov     #REG_PC, r0
   mov.l   r4, @(r0,r14)
   add     #8, r7
   jmp     @r7
   nop
 ibt_slow:
+  INC_COUNTER cgba_dynarec_ibh_thumb_slow_count
   CALL    block_lookup_address_thumb
   mov.l   sb_flag, r1
   mov.l   @r1, r1
@@ -382,6 +404,7 @@ ibd_arm_walk:
   bra     ibd_arm_walk
   nop
 ibd_arm_hit:
+  INC_COUNTER cgba_dynarec_ibh_dual_arm_hit_count
   mov     #REG_PC, r0
   mov.l   r2, @(r0,r14)           /* commit reg[REG_PC] = pc */
   mov     #REG_CPSR, r0
@@ -416,6 +439,7 @@ ibd_thumb_walk:
   bra     ibd_thumb_walk
   nop
 ibd_thumb_hit:
+  INC_COUNTER cgba_dynarec_ibh_dual_thumb_hit_count
   mov     r2, r1
   mov     #-2, r0
   and     r0, r1                  /* pc = key & ~1 */
@@ -432,6 +456,7 @@ ibd_thumb_hit:
   nop
 
 ibd_slow:
+  INC_COUNTER cgba_dynarec_ibh_dual_slow_count
   CALL    block_lookup_address_dual
   mov.l   sb_flag, r1
   mov.l   @r1, r1

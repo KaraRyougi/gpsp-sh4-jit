@@ -29,6 +29,13 @@ extern uint32_t cgba_dynarec_lookup_thumb_count;
 extern uint32_t cgba_dynarec_lookup_dual_count;
 extern uint32_t cgba_dynarec_icache_sync_count;
 extern uint32_t cgba_dynarec_icache_sync_bytes;
+extern uint32_t cgba_dynarec_ibh_arm_hit_count;
+extern uint32_t cgba_dynarec_ibh_arm_slow_count;
+extern uint32_t cgba_dynarec_ibh_thumb_hit_count;
+extern uint32_t cgba_dynarec_ibh_thumb_slow_count;
+extern uint32_t cgba_dynarec_ibh_dual_arm_hit_count;
+extern uint32_t cgba_dynarec_ibh_dual_thumb_hit_count;
+extern uint32_t cgba_dynarec_ibh_dual_slow_count;
 extern uint32_t cgba_sh4_helper_thumb_ldst_count;
 extern uint32_t cgba_sh4_helper_thumb_block_count;
 extern uint32_t cgba_sh4_helper_thumb_shift_count;
@@ -107,6 +114,19 @@ static unsigned framebuffer_black_pixels(const uint16_t *framebuffer)
 	for(unsigned i = 0; i < CGBA_GBA_WIDTH * CGBA_GBA_HEIGHT; i++)
 		black += framebuffer[i] == 0;
 	return black;
+}
+
+static char sh4_area_tag(uintptr_t value)
+{
+	if(value < 0x80000000u)
+		return '0';
+	if(value < 0xa0000000u)
+		return '1';
+	if(value < 0xc0000000u)
+		return '2';
+	if(value < 0xe0000000u)
+		return '3';
+	return '4';
 }
 
 #if defined(CGBA_DYNAREC) && CGBA_GPSP_HEADLESS_TRACE_JIT
@@ -518,6 +538,10 @@ void cgba_gpsp_debug_menu(fxcg100_debug_info *debug, unsigned frame,
 	const uint16_t *framebuffer, uint32_t host_sp)
 {
 	const uint16_t *fb = framebuffer ? framebuffer : cgba_active_framebuffer;
+	const cgba_nor_rom *r = &cgba_current_nor_rom;
+	uint32_t rom_probe_page = 0;
+	const uint8_t *rom_probe_ptr = NULL;
+	const uint8_t *rom_map_ptr = NULL;
 	uint16_t center = fb ?
 		fb[(CGBA_GBA_HEIGHT / 2) * CGBA_GBA_PITCH +
 			(CGBA_GBA_WIDTH / 2)] : 0;
@@ -565,6 +589,18 @@ void cgba_gpsp_debug_menu(fxcg100_debug_info *debug, unsigned frame,
 	debug_line(debug, "TMR2=%ld TMR3=%ld",
 		(long)timer[2].count, (long)timer[3].count);
 #ifdef CGBA_DYNAREC
+	if(r->fd >= 0 && r->page_count > 0) {
+		uint32_t p;
+
+		for(p = 1; p < r->page_count; p++) {
+			if(r->pages[p]) {
+				rom_probe_page = p;
+				break;
+			}
+		}
+		rom_probe_ptr = r->pages[rom_probe_page];
+		rom_map_ptr = memory_map_read[(0x08000000u >> 15) + rom_probe_page];
+	}
 	debug_line(debug, "CORE=%s ECYC=%lu",
 		dynarec_enable ? "JIT" : "INT", (unsigned long)execute_cycles);
 	debug_line(debug, "JIT ROM=%luk/%luk RAM=%luk/%luk",
@@ -574,6 +610,23 @@ void cgba_gpsp_debug_menu(fxcg100_debug_info *debug, unsigned frame,
 		(unsigned long)((uintptr_t)ram_translation_ptr -
 			(uintptr_t)ram_translation_cache) / 1024u,
 		(unsigned long)RAM_TRANSLATION_CACHE_SIZE / 1024u);
+	debug_line(debug, "ADDR TC=%08lX/%c RC=%08lX/%c",
+		(unsigned long)(uintptr_t)rom_translation_cache,
+		sh4_area_tag((uintptr_t)rom_translation_cache),
+		(unsigned long)(uintptr_t)ram_translation_cache,
+		sh4_area_tag((uintptr_t)ram_translation_cache));
+	debug_line(debug, "ADDR REG=%08lX/%c STK=%08lX/%c",
+		(unsigned long)(uintptr_t)reg, sh4_area_tag((uintptr_t)reg),
+		(unsigned long)(uintptr_t)host_sp, sh4_area_tag((uintptr_t)host_sp));
+	debug_line(debug, "ADDR ROM%lu=%08lX/%c MAP=%08lX/%c",
+		(unsigned long)rom_probe_page,
+		(unsigned long)(uintptr_t)rom_probe_ptr,
+		sh4_area_tag((uintptr_t)rom_probe_ptr),
+		(unsigned long)(uintptr_t)rom_map_ptr,
+		sh4_area_tag((uintptr_t)rom_map_ptr));
+	debug_line(debug, "NOR DP=%lu/%lu F=%08lX/%c",
+		(unsigned long)r->direct_page_count, (unsigned long)r->page_count,
+		(unsigned long)r->first_address, sh4_area_tag(r->first_address));
 #if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
 	{
 		unsigned f = frame ? frame : 1;
@@ -601,6 +654,15 @@ void cgba_gpsp_debug_menu(fxcg100_debug_info *debug, unsigned frame,
 			(unsigned long)cgba_dynarec_lookup_dual_count,
 			(unsigned long)cgba_dynarec_icache_sync_count,
 			(unsigned long)(cgba_dynarec_icache_sync_bytes / 1024u));
+		debug_line(debug, "JIT IH hit A%lu T%lu DA%lu DT%lu",
+			(unsigned long)cgba_dynarec_ibh_arm_hit_count,
+			(unsigned long)cgba_dynarec_ibh_thumb_hit_count,
+			(unsigned long)cgba_dynarec_ibh_dual_arm_hit_count,
+			(unsigned long)cgba_dynarec_ibh_dual_thumb_hit_count);
+		debug_line(debug, "JIT IH slow A%lu T%lu D%lu",
+			(unsigned long)cgba_dynarec_ibh_arm_slow_count,
+			(unsigned long)cgba_dynarec_ibh_thumb_slow_count,
+			(unsigned long)cgba_dynarec_ibh_dual_slow_count);
 		debug_line(debug, "H ARM ld%lu st%lu blk%lu dp%lu",
 			(unsigned long)cgba_sh4_helper_arm_ldst_load_count,
 			(unsigned long)cgba_sh4_helper_arm_ldst_store_count,
