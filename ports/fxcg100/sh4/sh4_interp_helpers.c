@@ -675,20 +675,20 @@ int cgba_sh4_arm_block(u32 opcode, u32 pc)
   u32 base = reg[rn];
   u32 count = 0, addr, new_base, i, lowest = 16;
   int wrote_pc = 0;
+  /* S-bit LDM/STM transfers the USER-mode banked registers (r8-r14). Match the
+     gpSP interpreter (cpu.cc exec_arm_block_mem ~1010/1041): bracket the transfer
+     in USER mode whenever the S bit is set AND it is a store OR rn != r15 -- so
+     an LDM{pc}^ exception return (S=1, pc in list, rn != 15) lands the popped user
+     r13/r14 in the USER bank and the SPSR re-bank below (execute_spsr_restore ->
+     set_cpu_mode(USER)) reloads THEM instead of stale USER sp/lr. (The old code
+     transferred the current/privileged bank, diverging from the interpreter for
+     this exception-return case; not the trigger of the frame-700 freeze, which is
+     a control-flow divergence, but a genuine latent bug.) The native fast path
+     bails on the S bit, so this C helper handles every S-bit block transfer. */
+  int user_bank = s_bit && (!is_load || rn != 15);
+  u32 old_cpsr = reg[REG_CPSR];
 
   cgba_sh4_reset_mem_cycles(1);
-
-  /* S-bit LDM/STM WITHOUT r15 in the list architecturally transfers the
-     USER-mode banked registers (r8..r14), not the current mode's. We deliberately
-     transfer the current bank instead: that is correct in User/System mode (where
-     GBA code runs essentially always) and, crucially, it matches the gpSP
-     interpreter oracle, whose LDM/STM path likewise ignores the S bit for bank
-     selection (cpu.cc special-cases only the S-bit-WITH-r15 exception return, via
-     execute_spsr_restore above). Keeping both cores identical here preserves the
-     differential harness; a true fix would have to land in BOTH the interpreter
-     and this helper. It only diverges for an LDM/STM^-without-PC executed from a
-     privileged banked mode (FIQ/IRQ/SVC/...), which the BIOS and normal games do
-     not do. The native fast path bails here on the S bit for the same reason. */
 
   for (i = 0; i < 16; i++)
     if (rlist & (1u << i)) { count++; if (lowest == 16) lowest = i; }
@@ -696,6 +696,8 @@ int cgba_sh4_arm_block(u32 opcode, u32 pc)
   new_base = up ? base + count * 4 : base - count * 4;
   addr = (up ? base : new_base) & ~3u;   /* word-align; traverse ascending */
   if (up == 0) pre = !pre;
+
+  if (user_bank) set_cpu_mode(MODE_USER);   /* transfer the USER bank (r13/r14) */
 
   for (i = 0; i < 16; i++) {
     if (!(rlist & (1u << i))) continue;
@@ -717,6 +719,8 @@ int cgba_sh4_arm_block(u32 opcode, u32 pc)
   /* LDM with the base in the list keeps the loaded value (no writeback). */
   if (writeback && !(is_load && (rlist & (1u << rn))))
     reg[rn] = new_base;
+
+  if (user_bank) set_cpu_mode(cpu_modes[old_cpsr & 0xF]);   /* back to entry mode */
 
   /* LDM{pc}^ (exception return): restore CPSR from SPSR, re-bank, take any now-
    * pending IRQ — the canonical execute_spsr_restore path. */

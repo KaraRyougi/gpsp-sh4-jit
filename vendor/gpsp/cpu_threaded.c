@@ -237,6 +237,11 @@ typedef struct
   #include "x86/x86_emit.h"
 #endif
 
+/* Backends that fold the whole Thumb BL into the suffix need no prefix code. */
+#ifndef thumb_bl_prefix
+#define thumb_bl_prefix() do {} while(0)
+#endif
+
 /* Cache invalidation */
 
 #if defined(PSP)
@@ -2343,9 +2348,11 @@ void translate_icache_sync() {
                                                                               \
     case 0xF0 ... 0xF7:                                                       \
     {                                                                         \
-      /* (low word) BL label */                                               \
-      /* This should possibly generate code if not in conjunction with a BLH  \
-         next, but I don't think anyone will do that. */                      \
+      /* BL prefix (high word). Emitters materialize the temporary LR here so  \
+         a cycle-budget exit between the BL halves can resume at the suffix     \
+         (thumb_blh) with the correct LR instead of a stale one. Combined BLs   \
+         overwrite this LR in thumb_bl(). */                                   \
+      thumb_bl_prefix();                                                       \
       break;                                                                  \
     }                                                                         \
                                                                               \
@@ -2659,6 +2666,34 @@ u8 function_cc *block_lookup_translate_##type(u32 pc)                         \
 block_lookup_translate_builder(arm);
 block_lookup_translate_builder(thumb);
 
+#ifdef CGBA_GPSP_HEADLESS_TEST
+/* DIAG: trace guest jumps into the BIOS boot/vector region (a wild jump =
+ * corrupted control flow). Logs the target + a ring of recent resolver targets
+ * (block sequence) + LR to the casio-emu putchar port. */
+static u32 cgba_wj_ring[24];
+static unsigned cgba_wj_pos;
+static void cgba_wj_putc(char c) { *(volatile unsigned char *)0xb7000000u = (unsigned char)c; }
+static void cgba_wj_hex(u32 v) { static const char h[] = "0123456789ABCDEF"; int i;
+  for (i = 7; i >= 0; i--) cgba_wj_putc(h[(v >> (i * 4)) & 0xF]); }
+static void cgba_wj_note(u32 pc)
+{
+  unsigned i;
+  cgba_wj_ring[cgba_wj_pos] = pc; cgba_wj_pos = (cgba_wj_pos + 1) % 24;
+  if (pc >= 0x260u) return;                 /* not the boot/vector region */
+  cgba_wj_putc('@'); cgba_wj_putc('@'); cgba_wj_putc('W'); cgba_wj_putc('J');
+  cgba_wj_putc(' '); cgba_wj_hex(pc);
+  cgba_wj_putc(' '); cgba_wj_putc('l'); cgba_wj_putc('r'); cgba_wj_hex(reg[14]);
+  cgba_wj_putc(' '); cgba_wj_putc('s'); cgba_wj_putc('p'); cgba_wj_hex(reg[13]);
+  cgba_wj_putc(' '); cgba_wj_putc('['); cgba_wj_hex(read_memory32(reg[13] - 4));
+  cgba_wj_putc(','); cgba_wj_hex(read_memory32(reg[13])); cgba_wj_putc(']');
+  cgba_wj_putc(':');
+  for (i = 0; i < 24; i++) { cgba_wj_hex(cgba_wj_ring[(cgba_wj_pos + i) % 24]); cgba_wj_putc(' '); }
+  cgba_wj_putc('\n');
+}
+#else
+#define cgba_wj_note(pc) ((void)0)
+#endif
+
 u8 function_cc *block_lookup_address_dual(u32 pc)
 {
   u32 thumb = pc & 0x01;
@@ -2684,6 +2719,7 @@ u8 function_cc *block_lookup_address_arm(u32 pc)
    * end) and would mis-bank an IRQ taken right after the branch. */
   reg[REG_PC] = pc;
 #endif
+  cgba_wj_note(pc);
   for (i = 0; i < 4; i++) {
     u8 *ret = block_lookup_translate_arm(pc);
     if (ret) {
@@ -2703,6 +2739,7 @@ u8 function_cc *block_lookup_address_thumb(u32 pc)
 #ifdef SH4_ARCH
   reg[REG_PC] = pc;   /* see block_lookup_address_arm: commit PC for indirect/BX */
 #endif
+  cgba_wj_note(pc);
   for (i = 0; i < 4; i++) {
     u8 *ret = block_lookup_translate_thumb(pc);
     if (ret) {
@@ -2936,6 +2973,23 @@ u8 function_cc *block_lookup_address_thumb(u32 pc)
 block_data_type block_data[MAX_BLOCK_SIZE];
 block_exit_type block_exits[MAX_EXITS];
 
+/* DIAG: with -DCGBA_DIAG_SINGLE_INSN, force one-instruction blocks ONLY for the
+ * divergent BIOS function-entry block (start PC == CGBA_DIAG_BLK_PC, default
+ * 0xB5C) while the block-diff harness is active (cgba_dynarec_single_block), so
+ * the diff resolves to the single mistranslated opcode -- without splitting the
+ * Thumb game code (BL artifact) or per-instruction-ing the whole BIOS LZ77 loop
+ * (which runs thousands of times). 0 (normal blocks) in non-diag builds. */
+#if defined(CGBA_DIAG_SINGLE_INSN)
+extern int cgba_dynarec_single_block;
+#ifndef CGBA_DIAG_BLK_PC
+#define CGBA_DIAG_BLK_PC 0xB5Cu
+#endif
+#define CGBA_DIAG_ONE_INSN_BLOCK(start) \
+  (cgba_dynarec_single_block && (start) >= 0xB5Cu && (start) < 0xC10u)
+#else
+#define CGBA_DIAG_ONE_INSN_BLOCK(start) ((void)(start), 0)
+#endif
+
 #define smc_write_arm_yes() {                                                 \
   intptr_t offset = (pc < 0x03000000) ? 0x40000 : -0x8000;                    \
   if(address32(pc_address_block, (block_end_pc & 0x7FFF) + offset) == 0)      \
@@ -2961,6 +3015,7 @@ block_exit_type block_exits[MAX_EXITS];
 #define scan_block(type, smc_write_op)                                        \
 {                                                                             \
   __label__ block_end;                                                        \
+  u32 cgba_blk_start = block_end_pc;  /* DIAG: block start PC */              \
   /* Find the end of the block */                                             \
   do                                                                          \
   {                                                                           \
@@ -3027,6 +3082,7 @@ block_exit_type block_exits[MAX_EXITS];
     block_data[block_data_position].update_cycles = 0;                        \
     block_data_position++;                                                    \
     if((block_data_position == MAX_BLOCK_SIZE) ||                             \
+     CGBA_DIAG_ONE_INSN_BLOCK(cgba_blk_start) ||                             \
      (block_end_pc == 0x3007FF0) || (block_end_pc == 0x203FFFF0))             \
     {                                                                         \
       break;                                                                  \
