@@ -38,6 +38,13 @@ extern uint32_t cgba_dynarec_ibh_dual_thumb_hit_count;
 extern uint32_t cgba_dynarec_ibh_dual_slow_count;
 extern uint32_t cgba_dynarec_ibh_dual_hot_arm_count;
 extern uint32_t cgba_dynarec_ibh_dual_hot_thumb_count;
+struct cgba_sh4_prof_row {
+	uint32_t key;
+	uint32_t count;
+};
+extern uint32_t cgba_sh4_prof_entry_count;
+extern uint32_t cgba_sh4_prof_overflow_count;
+extern unsigned cgba_sh4_prof_top(struct cgba_sh4_prof_row *out, unsigned max);
 extern uint32_t cgba_sh4_helper_thumb_ldst_count;
 extern uint32_t cgba_sh4_helper_thumb_block_count;
 extern uint32_t cgba_sh4_helper_thumb_shift_count;
@@ -681,6 +688,28 @@ void cgba_gpsp_debug_menu(fxcg100_debug_info *debug, unsigned frame,
 		debug_line(debug, "JIT IH hot DA%lu DT%lu",
 			(unsigned long)cgba_dynarec_ibh_dual_hot_arm_count,
 			(unsigned long)cgba_dynarec_ibh_dual_hot_thumb_count);
+		debug_line(debug, "PROF entries=%lu ovf=%lu",
+			(unsigned long)cgba_sh4_prof_entry_count,
+			(unsigned long)cgba_sh4_prof_overflow_count);
+		{
+			struct cgba_sh4_prof_row rows[5];
+			unsigned pn = cgba_sh4_prof_top(rows, 5);
+			for(unsigned pi = 0; pi < pn; pi++) {
+				uint32_t key = rows[pi].key;
+				char mode = (key & 1u) ? 'T' : 'A';
+				uint32_t pc = key & 0x0fffffffu;
+				if(mode == 'T')
+					pc &= ~1u;
+				if(key == 0xffffffffu) {
+					debug_line(debug, "PROF OVF %lu",
+						(unsigned long)rows[pi].count);
+				} else {
+					debug_line(debug, "PROF %c%08lX %lu",
+						mode, (unsigned long)pc,
+						(unsigned long)rows[pi].count);
+				}
+			}
+		}
 		debug_line(debug, "H ARM ld%lu st%lu blk%lu dp%lu",
 			(unsigned long)cgba_sh4_helper_arm_ldst_load_count,
 			(unsigned long)cgba_sh4_helper_arm_ldst_store_count,

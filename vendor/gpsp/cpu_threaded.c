@@ -80,6 +80,12 @@ u32 cgba_dynarec_dual_hot_key[64] CGBA_HIGH_BSS;
 u32 cgba_dynarec_dual_hot_ptr[64] CGBA_HIGH_BSS;
 
 #if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
+#define CGBA_SH4_PROF_SLOTS 128
+struct cgba_sh4_prof_row {
+  u32 key;
+  u32 count;
+};
+
 u32 cgba_dynarec_rom_flush_count;
 u32 cgba_dynarec_ram_flush_count;
 u32 cgba_dynarec_arm_translate_count;
@@ -98,6 +104,90 @@ u32 cgba_dynarec_ibh_dual_thumb_hit_count;
 u32 cgba_dynarec_ibh_dual_slow_count;
 u32 cgba_dynarec_ibh_dual_hot_arm_count;
 u32 cgba_dynarec_ibh_dual_hot_thumb_count;
+u32 cgba_sh4_prof_key[CGBA_SH4_PROF_SLOTS] CGBA_HIGH_BSS;
+u32 cgba_sh4_prof_count[CGBA_SH4_PROF_SLOTS] CGBA_HIGH_BSS;
+u32 cgba_sh4_prof_overflow_count;
+u32 cgba_sh4_prof_entry_count;
+
+u32 *cgba_sh4_prof_counter_for_key(u32 key)
+{
+  key = (key & 0x0fffffffu) | 0x80000000u;
+  u32 slot = (key * 2654435761u) >> (32 - 7);
+
+  for(u32 i = 0; i < CGBA_SH4_PROF_SLOTS; i++) {
+    u32 at = (slot + i) & (CGBA_SH4_PROF_SLOTS - 1);
+    if(cgba_sh4_prof_key[at] == key)
+      return &cgba_sh4_prof_count[at];
+    if(cgba_sh4_prof_key[at] == 0) {
+      cgba_sh4_prof_key[at] = key;
+      cgba_sh4_prof_count[at] = 0;
+      cgba_sh4_prof_entry_count++;
+      return &cgba_sh4_prof_count[at];
+    }
+  }
+
+  return &cgba_sh4_prof_overflow_count;
+}
+
+void cgba_sh4_prof_reset(void)
+{
+  memset(cgba_sh4_prof_key, 0, sizeof(cgba_sh4_prof_key));
+  memset(cgba_sh4_prof_count, 0, sizeof(cgba_sh4_prof_count));
+  cgba_sh4_prof_overflow_count = 0;
+  cgba_sh4_prof_entry_count = 0;
+}
+
+unsigned cgba_sh4_prof_top(struct cgba_sh4_prof_row *out, unsigned max)
+{
+  unsigned n = 0;
+
+  for(unsigned want = 0; want < max; want++) {
+    u32 best_count = 0;
+    u32 best_key = 0;
+    unsigned best_slot = 0;
+
+    for(unsigned i = 0; i < CGBA_SH4_PROF_SLOTS; i++) {
+      u32 count = cgba_sh4_prof_count[i];
+      if(count <= best_count)
+        continue;
+      int already = 0;
+      for(unsigned j = 0; j < n; j++) {
+        if(out[j].key == cgba_sh4_prof_key[i]) {
+          already = 1;
+          break;
+        }
+      }
+      if(already)
+        continue;
+      best_count = count;
+      best_key = cgba_sh4_prof_key[i];
+      best_slot = i;
+    }
+
+    if(cgba_sh4_prof_overflow_count > best_count) {
+      int already = 0;
+      for(unsigned j = 0; j < n; j++) {
+        if(out[j].key == 0xffffffffu) {
+          already = 1;
+          break;
+        }
+      }
+      if(!already) {
+        best_count = cgba_sh4_prof_overflow_count;
+        best_key = 0xffffffffu;
+      }
+    }
+
+    (void)best_slot;
+    if(best_count == 0)
+      break;
+    out[n].key = best_key;
+    out[n].count = best_count;
+    n++;
+  }
+
+  return n;
+}
 #endif
 
 typedef struct
@@ -3262,11 +3352,14 @@ bool translate_block_arm(u32 pc, bool ram_region)
       }
       generate_cycle_update();
       block_data[block_data_position].block_offset = translation_ptr;
+      generate_prof_block_entry(0);
       generate_cycle_gate(1);
     }
     else
     {
       block_data[block_data_position].block_offset = translation_ptr;
+      if(block_data_position == 0)
+        generate_prof_block_entry(0);
     }
 #else
     block_data[block_data_position].block_offset = translation_ptr;
@@ -3465,11 +3558,14 @@ bool translate_block_thumb(u32 pc, bool ram_region)
     {
       generate_cycle_update();
       block_data[block_data_position].block_offset = translation_ptr;
+      generate_prof_block_entry(1);
       generate_cycle_gate(0);
     }
     else
     {
       block_data[block_data_position].block_offset = translation_ptr;
+      if(block_data_position == 0)
+        generate_prof_block_entry(1);
     }
 #else
     block_data[block_data_position].block_offset = translation_ptr;

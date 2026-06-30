@@ -51,6 +51,10 @@ void sh4_cheat_hook(void);
  * block chaining so every branch funnels through sh4_block_exit. */
 extern int cgba_dynarec_single_block;
 
+#if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
+u32 *cgba_sh4_prof_counter_for_key(u32 key);
+#endif
+
 u32  execute_read_cpsr(void);
 u32  execute_read_spsr(void);
 u32  execute_spsr_restore(u32 address);
@@ -103,6 +107,25 @@ extern void *tmemst[4][16];
 #define generate_block_prologue()         do {} while(0)
 #define generate_block_extra_vars_arm()
 #define generate_block_extra_vars_thumb()
+
+#if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
+static inline void sh4g_prof_block_entry(u8 **tp, u32 pc, int thumb)
+{
+  u32 *counter = cgba_sh4_prof_counter_for_key((pc & ~1u) | (thumb ? 1u : 0u));
+  if(!counter)
+    return;
+  sh4g_const(tp, (u32)(uintptr_t)counter, SH4_REG_T0);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_l_load(&cg, SH4_REG_T0, SH4_REG_T1);
+    sh4_emit_add_imm(&cg, 1, SH4_REG_T1);
+    sh4_emit_mov_l_store(&cg, SH4_REG_T1, SH4_REG_T0);
+    sh4g_close(tp, &cg); }
+}
+#define generate_prof_block_entry(is_thumb) \
+  sh4g_prof_block_entry(&translation_ptr, (u32)pc, (is_thumb))
+#else
+#define generate_prof_block_entry(is_thumb) do {} while(0)
+#endif
 
 #define generate_cycle_update()                                               \
   do { if(cycle_count != 0) {                                                 \
