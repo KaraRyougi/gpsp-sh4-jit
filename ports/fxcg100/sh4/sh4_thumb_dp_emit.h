@@ -30,6 +30,9 @@ extern u8 *memory_map_read[];
 extern u16 io_registers[512];
 int cgba_sh4_thumb_ldst(u32 opcode, u32 pc);
 void sh4_block_exit(u32 pc);
+#if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
+extern u32 cgba_sh4_native_thumb_const_io_count;
+#endif
 
 /* Write N/Z/C/V into reg[REG_CPSR] from a result register plus C and V already
  * reduced to 0/1 in rc/rv. N = result bit31, Z = (result==0). rc and rv must NOT
@@ -399,6 +402,16 @@ static inline int sh4g_thumb_ldst_const_native(u8 **tp, u32 opcode,
     return 0;
   if (align_mask && (address & (u32)align_mask))
     return 0;
+
+#if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
+  sh4g_const(tp, (u32)(uintptr_t)&cgba_sh4_native_thumb_const_io_count,
+             SH4_REG_T0);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_l_load(&cg, SH4_REG_T0, SH4_REG_T1);
+    sh4_emit_add_imm(&cg, 1, SH4_REG_T1);
+    sh4_emit_mov_l_store(&cg, SH4_REG_T1, SH4_REG_T0);
+    sh4g_close(tp, &cg); }
+#endif
 
   sh4g_const(tp, (u32)(uintptr_t)(((u8 *)io_registers) + (address & 0x3FFu)),
              SH4_REG_T2);
