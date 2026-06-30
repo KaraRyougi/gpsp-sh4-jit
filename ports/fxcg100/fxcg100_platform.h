@@ -71,7 +71,7 @@ typedef enum fxcg100_menu_result {
 } fxcg100_menu_result;
 
 #define FXCG100_MENU_PAGE_SLOTS 5
-#define FXCG100_DEBUG_MENU_LINES 56
+#define FXCG100_DEBUG_MENU_LINES 64
 #define FXCG100_DEBUG_MENU_LINE_MAX 64
 
 typedef struct fxcg100_debug_info {
