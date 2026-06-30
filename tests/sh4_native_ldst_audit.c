@@ -1,8 +1,8 @@
 /*
  * sh4_native_ldst_audit.c — host checks for native SH4 load/store fast paths.
  * Side-effecting stores must stay on the C helper path. Plain Thumb RAM stores
- * may emit native guarded code as long as the generated path still falls back
- * for non-RAM and SMC-tagged writes.
+ * and block stores may emit native guarded code as long as the generated path
+ * still falls back for non-RAM and SMC-tagged writes.
  */
 
 #include <stdint.h>
@@ -166,7 +166,7 @@ static void expect_thumb_block_fallback(const char *name, u32 opcode)
   memset(code, 0xCC, sizeof(code));
 
   if (sh4g_thumb_block_native(&p, opcode, 0x08000000, 1)) {
-    fprintf(stderr, "%s: native path accepted store opcode\n", name);
+    fprintf(stderr, "%s: native path accepted fallback opcode\n", name);
     fail = 1;
   }
   if (p != code) {
@@ -176,17 +176,17 @@ static void expect_thumb_block_fallback(const char *name, u32 opcode)
   }
 }
 
-static void expect_thumb_block_native_load(const char *name, u32 opcode)
+static void expect_thumb_block_native_transfer(const char *name, u32 opcode)
 {
   u8 *p = code;
   memset(code, 0xCC, sizeof(code));
 
   if (!sh4g_thumb_block_native(&p, opcode, 0x08000000, 1)) {
-    fprintf(stderr, "%s: native path rejected load opcode\n", name);
+    fprintf(stderr, "%s: native path rejected transfer opcode\n", name);
     fail = 1;
   }
   if (p == code) {
-    fprintf(stderr, "%s: native load emitted no code\n", name);
+    fprintf(stderr, "%s: native transfer emitted no code\n", name);
     fail = 1;
   }
 }
@@ -208,11 +208,13 @@ int main(void)
   expect_arm_block_fallback("STMIA r0,{r1,r2}", 0xE8800006u);
   expect_arm_block_native_load("LDMIA r0,{r1,r2}", 0xE8900006u);
 
-  expect_thumb_block_fallback("PUSH {r0,r1}", 0xB403u);
-  expect_thumb_block_fallback("STMIA r0!,{r1,r2}", 0xC006u);
-  expect_thumb_block_native_load("POP {r0,r1}", 0xBC03u);
-  expect_thumb_block_native_load("POP {r0,pc}", 0xBD01u);
-  expect_thumb_block_native_load("LDMIA r0!,{r1,r2}", 0xC806u);
+  expect_thumb_block_native_transfer("PUSH {r0,r1}", 0xB403u);
+  expect_thumb_block_native_transfer("PUSH {lr}", 0xB500u);
+  expect_thumb_block_native_transfer("STMIA r0!,{r1,r2}", 0xC006u);
+  expect_thumb_block_native_transfer("POP {r0,r1}", 0xBC03u);
+  expect_thumb_block_native_transfer("POP {r0,pc}", 0xBD01u);
+  expect_thumb_block_native_transfer("LDMIA r0!,{r1,r2}", 0xC806u);
+  expect_thumb_block_fallback("non-block Thumb opcode", 0xDF00u);
 
   if (fail) {
     fprintf(stderr, "SH4 native ldst audit failed\n");
