@@ -427,6 +427,21 @@ extern void *tmemst[4][16];
        sh4g_store_greg(&translation_ptr, SH4_REG_T0, REG_LR);                 \
        generate_indirect_branch_cycle_update(thumb); } while(0)
 
+/* BL prefix (high word, 0xF000-0xF7FF): materialize the temporary LR =
+ * (PC+4) + sign_extend(offset11) << 12 -- the intermediate value the suffix's
+ * thumb_blh() adds the low offset to. Normally prefix+suffix fold into one
+ * thumb_bl() in the same block and the prefix could emit nothing, BUT the dynarec
+ * can take a cycle-budget exit BETWEEN the two halves and re-dispatch at the
+ * suffix; that suffix is then a separate thumb_blh() block which would read a
+ * STALE LR and branch wild. So always set LR here (combined BLs overwrite it in
+ * thumb_bl()). Emit unconditionally — gating on "block ends at the prefix" misses
+ * the far more common mid-BL cycle exit. */
+#define thumb_bl_prefix()                                                     \
+  do { thumb_decode_branch();                                                 \
+       sh4g_const(&translation_ptr,                                           \
+         (u32)(pc + 4 + ((s32)((offset & 0x07FF) << 21) >> 9)), SH4_REG_T0);  \
+       sh4g_store_greg(&translation_ptr, SH4_REG_T0, REG_LR); } while(0)
+
 #define thumb_bx()                                                            \
   do { thumb_decode_hireg_op();                                               \
        generate_load_reg_pc(SH4_REG_ARG0, rs, 4);                            \

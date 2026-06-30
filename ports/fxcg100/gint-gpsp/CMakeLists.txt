@@ -60,6 +60,8 @@ set(CGBA_GPSP_ROM_TRANSLATION_CACHE_SIZE "524288" CACHE STRING
   "SH4 dynarec ROM translation cache size in bytes")
 set(CGBA_GPSP_RAM_TRANSLATION_CACHE_SIZE "262144" CACHE STRING
   "SH4 dynarec RAM translation cache size in bytes")
+set(CGBA_GPSP_ROM_BRANCH_HASH_BITS "13" CACHE STRING
+  "SH4 dynarec ROM branch-hash = 2^N u32 entries (16=256KB thrashes the ~32KB cache and is walked on every indirect-branch resolve; 12-13=16-32KB fits). Sweep on HW for the knee.")
 if(CGBA_DYNAREC)
   list(APPEND GPSP_C_SOURCES
     ${GPSP}/cpu_threaded.c
@@ -114,6 +116,7 @@ if(CGBA_DYNAREC)
     SMALL_TRANSLATION_CACHE=1
     ROM_TRANSLATION_CACHE_SIZE=${CGBA_GPSP_ROM_TRANSLATION_CACHE_SIZE}
     RAM_TRANSLATION_CACHE_SIZE=${CGBA_GPSP_RAM_TRANSLATION_CACHE_SIZE}
+    ROM_BRANCH_HASH_BITS=${CGBA_GPSP_ROM_BRANCH_HASH_BITS}
   )
   # HAVE_DYNAREC only where it matters: main.c wires init_dynarec_caches/
   # init_emitter and savestate.c flushes on load. cpu.cc must NOT see it, so it
