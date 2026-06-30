@@ -80,7 +80,8 @@ u32 cgba_dynarec_dual_hot_key[64] CGBA_HIGH_BSS;
 u32 cgba_dynarec_dual_hot_ptr[64] CGBA_HIGH_BSS;
 
 #if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
-#define CGBA_SH4_PROF_SLOTS 128
+#define CGBA_SH4_PROF_BITS 11
+#define CGBA_SH4_PROF_SLOTS (1u << CGBA_SH4_PROF_BITS)
 struct cgba_sh4_prof_row {
   u32 key;
   u32 count;
@@ -112,7 +113,7 @@ u32 cgba_sh4_prof_entry_count;
 u32 *cgba_sh4_prof_counter_for_key(u32 key)
 {
   key = (key & 0x0fffffffu) | 0x80000000u;
-  u32 slot = (key * 2654435761u) >> (32 - 7);
+  u32 slot = (key * 2654435761u) >> (32 - CGBA_SH4_PROF_BITS);
 
   for(u32 i = 0; i < CGBA_SH4_PROF_SLOTS; i++) {
     u32 at = (slot + i) & (CGBA_SH4_PROF_SLOTS - 1);
