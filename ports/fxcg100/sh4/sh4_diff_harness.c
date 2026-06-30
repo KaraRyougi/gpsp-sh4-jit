@@ -68,6 +68,11 @@ static u16 oracle_io[512] CGBA_HIGH_BSS_LOCAL;
 static void capture_full(void)  { gba_save_state(snap_buf); }
 static void restore_full(void)  { gba_load_state(snap_buf); }
 
+void *cgba_sh4_checkpoint_buffer(void) { return snap_buf; }
+unsigned cgba_sh4_checkpoint_size(void) { return GBA_STATE_MEM_SIZE; }
+void cgba_sh4_checkpoint_capture(void) { capture_full(); }
+int cgba_sh4_checkpoint_restore(void) { return gba_load_state(snap_buf) ? 1 : 0; }
+
 static void trace_update_begin(char tag)
 {
 #if defined(CGBA_GPSP_HEADLESS_TEST)

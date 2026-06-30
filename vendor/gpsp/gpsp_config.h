@@ -35,9 +35,9 @@
 #define TRANSLATION_CACHE_LIMIT_THRESHOLD (1024 * 2)
 
 /* Hash table size for ROM trans cache lookups. The upstream default 16
-   (64K * 4 = 256KB) dwarfs the SH7305's ~32KB I/D-cache and is index+chain-walked
-   on every indirect-branch resolve, so the fx-CG100 build overrides it down
-   (~13 = 32KB) to keep the table cache-resident. Override-able from the build. */
+   (64K * 4 = 256 KiB) dwarfs the fx-CG100/SH7305 cache and is walked on every
+   indirect-branch resolve, so calculator builds can override it down to a
+   cache-friendlier size (12 = 16 KiB, 13 = 32 KiB). */
 #ifndef ROM_BRANCH_HASH_BITS
 #define ROM_BRANCH_HASH_BITS                           16
 #endif
