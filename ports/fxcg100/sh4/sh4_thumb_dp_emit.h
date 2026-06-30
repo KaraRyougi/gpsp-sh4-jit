@@ -430,9 +430,9 @@ static inline int sh4g_thumb_ldst_native(u8 **tp, u32 opcode, u32 pc,
     sh4g_close(tp, &cg); }
   guards[ng++] = sh4g_thumb_ldst_guard(tp, 1);     /* unmapped -> slow */
   if (is_load) {
-    /* Fast loads are safe for mapped RAM/video/gamepak memory. Exclude
-     * BIOS/open (0/1), I/O (4), and backup/EEPROM (13..15), matching the ARM
-     * load path. */
+    /* Fast loads are safe for mapped RAM/I/O/video/gamepak memory. gpSP models
+     * I/O reads as raw io_registers[] loads; writes stay helper-owned below.
+     * Exclude BIOS/open (0/1) and backup/EEPROM (13..15). */
     { sh4_codegen cg = sh4g_open(tp);
       sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
       sh4_emit_shlr16(&cg, SH4_REG_RET);
@@ -441,11 +441,6 @@ static inline int sh4g_thumb_ldst_native(u8 **tp, u32 opcode, u32 pc,
       sh4_emit_cmphs(&cg, SH4_REG_T1, SH4_REG_RET);  /* T = region >= 2 */
       sh4g_close(tp, &cg); }
     guards[ng++] = sh4g_thumb_ldst_guard(tp, 0);     /* BIOS/open -> slow */
-    { sh4_codegen cg = sh4g_open(tp);
-      sh4_emit_mov_imm(&cg, 4, SH4_REG_T1);
-      sh4_emit_cmpeq(&cg, SH4_REG_T1, SH4_REG_RET);  /* T = I/O */
-      sh4g_close(tp, &cg); }
-    guards[ng++] = sh4g_thumb_ldst_guard(tp, 1);     /* I/O -> slow */
     { sh4_codegen cg = sh4g_open(tp);
       sh4_emit_mov_imm(&cg, 13, SH4_REG_T1);
       sh4_emit_cmphs(&cg, SH4_REG_T1, SH4_REG_RET);  /* T = backup/EEPROM */
