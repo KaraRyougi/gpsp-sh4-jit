@@ -32,6 +32,7 @@ int cgba_sh4_thumb_ldst(u32 opcode, u32 pc);
 void sh4_block_exit(u32 pc);
 #if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
 extern u32 cgba_sh4_native_thumb_const_io_count;
+extern u32 cgba_sh4_native_thumb_runtime_io_count;
 #endif
 
 /* Write N/Z/C/V into reg[REG_CPSR] from a result register plus C and V already
@@ -177,6 +178,9 @@ static inline int sh4g_thumb_dp_native(u8 **tp, u32 opcode, u32 pc, u32 flag_sta
   u32 hi = (opcode >> 8) & 0xFF;
   (void)pc;
   (void)flag_status;
+
+  if (opcode == 0x46C0u)                                /* MOV r8,r8: Thumb NOP */
+    return 1;
 
   /* fmt3 MOV Rd,#imm8  (001 00 ddd iiiiiiii) — N/Z only, C/V preserved. */
   if (hi >= 0x20 && hi <= 0x27) {
@@ -449,6 +453,88 @@ static inline int sh4g_thumb_ldst_const_native(u8 **tp, u32 opcode,
 #endif
 }
 
+static inline int sh4g_thumb_ldst_runtime_io_candidate(u32 opcode)
+{
+  return opcode == 0x6820u || opcode == 0x7820u || opcode == 0x8801u;
+}
+
+static inline u8 *sh4g_thumb_ldst_runtime_io_fast(u8 **tp, u32 opcode,
+  int kind, unsigned rd, int align_mask)
+{
+  u8 *miss[2];
+  int nmiss = 0;
+  u8 *done;
+
+  if (!sh4g_thumb_ldst_runtime_io_candidate(opcode))
+    return NULL;
+
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
+    sh4_emit_shlr16(&cg, SH4_REG_RET);
+    sh4_emit_shlr8(&cg, SH4_REG_RET);
+    sh4_emit_cmpeq_imm(&cg, 4);                 /* T = GBA IO region */
+    sh4g_close(tp, &cg); }
+  miss[nmiss++] = sh4g_emit_bf_placeholder(tp);
+
+  if (align_mask) {
+    sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
+    sh4_emit_tst_imm(&cg, align_mask);          /* T = aligned */
+    sh4g_close(tp, &cg);
+    miss[nmiss++] = sh4g_emit_bf_placeholder(tp);
+  }
+
+#if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
+  sh4g_const(tp, (u32)(uintptr_t)&cgba_sh4_native_thumb_runtime_io_count,
+             SH4_REG_T2);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_l_load(&cg, SH4_REG_T2, SH4_REG_T1);
+    sh4_emit_add_imm(&cg, 1, SH4_REG_T1);
+    sh4_emit_mov_l_store(&cg, SH4_REG_T1, SH4_REG_T2);
+    sh4g_close(tp, &cg); }
+#endif
+
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
+    sh4_emit_mov_imm(&cg, 22, SH4_REG_T1);
+    sh4_emit_shld(&cg, SH4_REG_T1, SH4_REG_RET);
+    sh4_emit_mov_imm(&cg, -22, SH4_REG_T1);
+    sh4_emit_shld(&cg, SH4_REG_T1, SH4_REG_RET); /* R0 = address & 0x3ff */
+    sh4g_close(tp, &cg); }
+  sh4g_const(tp, (u32)(uintptr_t)io_registers, SH4_REG_T2);
+  { sh4_codegen cg = sh4g_open(tp);
+    switch (kind) {
+    case SH4_THUMB_LDK_W:
+      sh4_emit_mov_l_load_r0(&cg, SH4_REG_T2, SH4_REG_T1);
+      sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_ARG0);
+      sh4_emit_swap_w(&cg, SH4_REG_ARG0, SH4_REG_ARG0);
+      sh4_emit_swap_b(&cg, SH4_REG_ARG0, SH4_REG_T1);
+      break;
+    case SH4_THUMB_LDK_B:
+      sh4_emit_mov_b_load_r0(&cg, SH4_REG_T2, SH4_REG_T1);
+      sh4_emit_extu_b(&cg, SH4_REG_T1, SH4_REG_T1);
+      break;
+    case SH4_THUMB_LDK_UH:
+      sh4_emit_mov_w_load_r0(&cg, SH4_REG_T2, SH4_REG_T1);
+      sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
+      sh4_emit_extu_w(&cg, SH4_REG_T1, SH4_REG_T1);
+      break;
+    default:
+      sh4_emit_mov_w_load_r0(&cg, SH4_REG_T2, SH4_REG_T1);
+      sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
+      sh4_emit_exts_w(&cg, SH4_REG_T1, SH4_REG_T1);
+      break;
+    }
+    sh4_emit_store_greg(&cg, SH4_REG_T1, rd);
+    sh4g_close(tp, &cg); }
+
+  sh4g_charge_mem_cell(tp, &ws_cyc_nseq[0x04][kind == SH4_THUMB_LDK_W]);
+  done = sh4g_emit_bra_placeholder(tp);
+  for (int i = 0; i < nmiss; i++)
+    sh4g_patch_cond(miss[i], *tp);
+  return done;
+}
+
 /* Emit "branch to the Thumb memory slow path if (T == slow_if_t)" without the
  * BT/BF disp8 range limit. The short conditional skips over a far BRA. */
 static inline u8 *sh4g_thumb_ldst_guard(u8 **tp, int slow_if_t)
@@ -480,7 +566,7 @@ static inline int sh4g_thumb_ldst_native(u8 **tp, u32 opcode, u32 pc,
   int pc_relative = 0;
   int kind = SH4_THUMB_LDK_W, align_mask = 3, is_load = 1;
   u8 *guards[8]; int ng = 0;
-  u8 *bra_done;
+  u8 *bra_done, *runtime_io_done = NULL;
 
   if (hi >= 0x48 && hi <= 0x4F) {                    /* LDR Rd,[PC,#imm8*4] */
     rd = (opcode >> 8) & 7;
@@ -546,6 +632,10 @@ static inline int sh4g_thumb_ldst_native(u8 **tp, u32 opcode, u32 pc,
       sh4g_add_reg(tp, SH4_REG_T1, SH4_REG_T0);      /* R1 = base + offset */
     }
   }
+
+  if (is_load && !pc_relative && !reg_offset)
+    runtime_io_done = sh4g_thumb_ldst_runtime_io_fast(tp, opcode, kind, rd,
+                                                      align_mask);
 
   /* memory_map_read[] only covers the GBA 0x00000000..0x0fffffff space. */
   sh4g_const(tp, 0x10000000u, SH4_REG_T1);
@@ -718,6 +808,8 @@ static inline int sh4g_thumb_ldst_native(u8 **tp, u32 opcode, u32 pc,
   sh4g_redispatch_if_r0_debit(tp, cycle_count, (const void *)sh4_block_exit);
 
   sh4g_patch_bra(bra_done, *tp);
+  if (runtime_io_done)
+    sh4g_patch_bra(runtime_io_done, *tp);
   return 1;
 #endif
 }
