@@ -73,6 +73,26 @@ OUT="${OUT:-$(mktemp -d)}"
 [[ -x "$CALCEMU" ]] || { echo "missing emulator: $CALCEMU" >&2; exit 1; }
 [[ -r "$ROM" ]]     || { echo "missing ROM: $ROM" >&2; exit 1; }
 
+# fxsdk's generate_g3a() writes CGBA-GPSP.g3a in the source directory, even
+# when CMake builds from separate build dirs. Preserve any calculator-launch
+# artifact that was there before the diagnostic harness so the last headless
+# add-in does not get mistaken for the installable build.
+ROOT_G3A="$GG/CGBA-GPSP.g3a"
+ROOT_G3A_SAVE="$OUT/source-root-before-jitdiff.g3a"
+ROOT_G3A_WAS_PRESENT=0
+if [[ -e "$ROOT_G3A" ]]; then
+  cp "$ROOT_G3A" "$ROOT_G3A_SAVE"
+  ROOT_G3A_WAS_PRESENT=1
+fi
+restore_root_g3a() {
+  if [[ "$ROOT_G3A_WAS_PRESENT" == "1" ]]; then
+    cp "$ROOT_G3A_SAVE" "$ROOT_G3A"
+  else
+    rm -f "$ROOT_G3A"
+  fi
+}
+trap restore_root_g3a EXIT
+
 # casio-emu's HLE backs \fls0\ with a host dir and find_first is stubbed, so the
 # port falls back to fixed names; GAME.GBA is the first that the boot path opens.
 FLS0="$OUT/fls0"; mkdir -p "$FLS0"; cp "$ROM" "$FLS0/GAME.GBA"
@@ -83,6 +103,7 @@ cfg() { # build_dir dynarec(0|1) [extra diff args...]
     -DCMAKE_TOOLCHAIN_FILE="$FXSDK_PREFIX/lib/cmake/fxsdk/FXCG50.cmake" \
     -DFXSDK_CMAKE_MODULE_PATH="$FXSDK_PREFIX/lib/cmake/fxsdk" \
     -DCGBA_DYNAREC=ON -DCGBA_GPSP_HEADLESS_TEST=ON \
+    -DCGBA_FXCG100_STORAGE=ON \
     -DCGBA_SH4_THUMB_LDST_NATIVE="$THUMB_LDST_NATIVE" \
     -DCGBA_SH4_EXACT_CYCLE_BOUNDARIES="$EXACT_CYCLES" \
     -DCGBA_SH4_DIFF_DUMP_OPS="$DIFF_DUMP_OPS" \

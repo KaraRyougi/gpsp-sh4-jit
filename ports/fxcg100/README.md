@@ -92,6 +92,9 @@ Runtime shape:
 - Uses gint display calls for all calculator LCD output
 - Opens the settings menu as the first screen; physical `ON` reopens it after
   returning to the game
+- Builds with storage access enabled by default. BFile calls are wrapped in
+  `gint_world_switch()` so ROM scanning/config I/O do not run inside gint's
+  hardware world.
 - Reserves only `ON` during gameplay; all other fx-CG100 keys are bindable as
   GBA inputs or gpSP hotkeys through the settings menu
 - Keeps gpSP's large GBA memories, framebuffer, and embedded smoke ROM buffer in
@@ -203,7 +206,10 @@ presses calculator `SHIFT`'s default GBA binding (`A`) for two frames every
 200 GBA frames, after a short `START` press to leave the title flow. Tune with
 `SHIFT_FRAME`, `SHIFT_HOLD`, `SHIFT_PERIOD`, and `SHIFT_PRESS`; the older
 `A_*` environment variable names still work. `THUMB_LDST_NATIVE=OFF` disables
-the native Thumb byte-load fast path for isolation runs.
+the native Thumb byte-load fast path for isolation runs. Harness `.g3a` files
+under the output directory are headless diagnostics for casio-emu; do not install
+them on hardware. The script preserves/restores the source-tree
+`gint-gpsp/CGBA-GPSP.g3a` so it remains the calculator-launch build.
 
 The full MPM flow is scaffolded in `run-mpm-smoke.sh`. It provisions a temporary
 flash image under `/tmp`, installs `MPM.BIN`, attempts to install `CGBA.G3A`,
@@ -229,18 +235,21 @@ Expected result:
 - Pixel count sanity check on the dump should find exactly `38400` GBA-frame
   pixels in the centered direct-LCD window.
 
-Physical NOR input-probe ROM:
+Experimental NOR input-probe ROM:
 
 ```text
 ports/fxcg100/test_rom/CGBAINP.GBA
 ```
 
-Copy `CGBAINP.GBA` to the calculator storage root. In `CGBA-GPSP.g3a`, choose
-`ROM SOURCE: NOR CGBAINP.GBA`, then `LOAD NEW GAME`. The loader opens
-`\\fls0\CGBAINP.GBA`, resolves its fx-CG100 NOR blocks through the direct OS
-block-address function, and maps gpSP's 32 KiB GBA ROM pages directly to cached
-NOR aliases when each page is physically contiguous. The bundled test ROM is
-already padded to exactly one 32 KiB GBA page.
+Copy `CGBAINP.GBA` to the storage root, choose
+`ROM SOURCE: NOR CGBAINP.GBA`, then `LOAD NEW GAME`. The default calculator
+build enables `CGBA_FXCG100_STORAGE` and runs the BFile calls through
+`gint_world_switch()`; this avoids calling the OS storage entry points while
+gint owns the hardware state. The loader opens `\\fls0\CGBAINP.GBA`, resolves
+its fx-CG100 NOR blocks through the direct OS block-address function, and maps
+gpSP's 32 KiB GBA ROM pages directly to cached NOR aliases when each page is
+physically contiguous. The bundled test ROM is padded to exactly one 32 KiB GBA
+page.
 
 Safety note: the previous gpSP isolate placed `.cgba.highbss` at `0x8c800000`
 and installed HLE-only UTLB mappings before entering gint. On the real fx-CG100
