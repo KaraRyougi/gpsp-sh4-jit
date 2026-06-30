@@ -9,6 +9,7 @@
 #include "fxcg100_platform.h"
 #include "nor_rom.h"
 #include "vendor/gpsp/common.h"
+#include "vendor/gpsp/gba_memory.h"
 
 #ifndef CGBA_GPSP_HEADLESS_TRACE_JIT
 #define CGBA_GPSP_HEADLESS_TRACE_JIT 0
@@ -126,6 +127,21 @@ static void debug_line(fxcg100_debug_info *debug, const char *fmt, ...)
 	va_end(ap);
 	debug->count++;
 }
+
+#if defined(CGBA_DYNAREC) && \
+	(defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS))
+static void debug_prof_opcodes(fxcg100_debug_info *debug, uint32_t pc)
+{
+	if(pc >= 0x10000000u)
+		return;
+
+	debug_line(debug, "OP %04lX %04lX %04lX %04lX",
+		(unsigned long)(read_memory16(pc) & 0xffffu),
+		(unsigned long)(read_memory16(pc + 2) & 0xffffu),
+		(unsigned long)(read_memory16(pc + 4) & 0xffffu),
+		(unsigned long)(read_memory16(pc + 6) & 0xffffu));
+}
+#endif
 
 static unsigned framebuffer_black_pixels(const uint16_t *framebuffer)
 {
@@ -703,13 +719,14 @@ void cgba_gpsp_debug_menu(fxcg100_debug_info *debug, unsigned frame,
 				if(key == 0xffffffffu) {
 					debug_line(debug, "PROF OVF %lu",
 						(unsigned long)rows[pi].count);
-				} else {
-					debug_line(debug, "PROF %c%08lX %lu",
-						mode, (unsigned long)pc,
-						(unsigned long)rows[pi].count);
+					} else {
+						debug_line(debug, "PROF %c%08lX %lu",
+							mode, (unsigned long)pc,
+							(unsigned long)rows[pi].count);
+						debug_prof_opcodes(debug, pc);
+					}
 				}
 			}
-		}
 		debug_line(debug, "H ARM ld%lu st%lu blk%lu dp%lu",
 			(unsigned long)cgba_sh4_helper_arm_ldst_load_count,
 			(unsigned long)cgba_sh4_helper_arm_ldst_store_count,
