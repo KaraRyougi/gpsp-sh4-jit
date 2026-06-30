@@ -152,7 +152,9 @@ defsymbl(sh4_update_gba)
   bf      return_to_main          /* bit31 set (negative) -> frame complete */
 
   mov     r0, r13
-  mov.l   c_mask15, r1
+  mov     #-1, r1
+  shlr16  r1
+  shlr    r1
   and     r1, r13                 /* new cycle count = ret & 0x7FFF */
 
   shll    r0                      /* test bit30 (PC changed) */
@@ -193,7 +195,9 @@ cpu_sleep_loop:
   cmp/pz  r0
   bf      return_to_main          /* frame complete */
   mov     r0, r13
-  mov.l   c_mask15, r1
+  mov     #-1, r1
+  shlr16  r1
+  shlr    r1
   and     r1, r13
   /* CPU active again: re-dispatch */
   bra     lookup_pc
@@ -222,7 +226,9 @@ defsymbl(sh4_block_exit)
   cmp/pz  r0
   bf      return_to_main          /* bit31 set -> frame complete */
   mov     r0, r13
-  mov.l   c_mask15, r1
+  mov     #-1, r1
+  shlr16  r1
+  shlr    r1
   and     r1, r13                 /* cycles = ret & 0x7FFF */
   bra     lookup_pc               /* always re-dispatch on reg[REG_PC] */
   nop
@@ -354,7 +360,10 @@ defsymbl(sh4_indirect_branch_dual)
   mov.l   sb_flag, r1
   mov.l   @r1, r1
   tst     r1, r1
-  bf      ibd_slow                /* single-block diff -> unchanged C path */
+  bt      1f
+  bra     ibd_slow                /* single-block diff -> unchanged C path */
+  nop
+1:
 
   mov     r4, r0
   tst     #1, r0                  /* T = ARM target (bit0 clear) */
@@ -369,8 +378,11 @@ defsymbl(sh4_indirect_branch_dual)
   mov     r0, r2                  /* r2 = hash key */
   mov.l   ibh_bios_limit, r1
   cmp/hs  r1, r2                  /* T = key >= 0x4000 */
-  bt      ibd_thumb_hash
+  bt      1f
   bra     ibd_slow
+  nop
+1:
+  bra     ibd_thumb_hash
   nop
 
 ibd_arm_hash:
@@ -381,7 +393,10 @@ ibd_arm_hash:
   shll2   r2                      /* r2 = key = pc */
   mov.l   ibh_bios_limit, r1
   cmp/hs  r1, r2                  /* T = pc >= 0x4000 */
-  bf      ibd_slow
+  bt      1f
+  bra     ibd_slow
+  nop
+1:
 
   mov     r2, r0
   shlr2   r0
@@ -411,7 +426,10 @@ ibd_arm_hash_miss:
   mov.l   ibh_tcache, r6
 ibd_arm_walk:
   tst     r5, r5
-  bt      ibd_slow
+  bf      1f
+  bra     ibd_slow
+  nop
+1:
   mov     r5, r7
   add     r6, r7
   mov.l   @r7, r0
@@ -439,6 +457,58 @@ ibd_arm_commit:
   mov     #-33, r0
   and     r0, r1                  /* clear CPSR.T */
   mov     #REG_CPSR, r0
+  mov.l   r1, @(r0,r14)
+  jmp     @r7
+  nop
+
+/* Hot subcase for Thumb BX when the generated code has already checked that the
+ * target bit is set. Current CPSR is already Thumb, so a hot cache hit only needs
+ * to resolve the translated Thumb block and commit PC; it skips the generic dual
+ * ARM/Thumb split and the redundant CPSR.T store. Misses and single-block diff
+ * mode rejoin the exact generic dual resolver below. */
+defsymbl(sh4_indirect_branch_dual_thumb_current)
+  mov.l   sb_flag, r1
+  mov.l   @r1, r1
+  tst     r1, r1
+  bt      1f
+  bra     ibd_slow
+  nop
+1:
+  mov     r4, r2
+  mov     #-2, r0
+  and     r0, r2                  /* r2 = pc = target & ~1 */
+  mov     r2, r0
+  or      #1, r0
+  mov     r0, r2                  /* r2 = hash key = pc | 1 */
+  mov.l   ibh_bios_limit, r1
+  cmp/hs  r1, r2                  /* T = key >= 0x4000 */
+  bt      2f
+  bra     ibd_slow
+  nop
+2:
+  mov     r2, r0
+  shlr    r0
+  and     #0x3f, r0
+  shll2   r0
+  mov.l   ibh_dhot_key, r1
+  mov.l   @(r0,r1), r3
+  cmp/eq  r2, r3
+  bt      3f
+  bra     ibd_thumb_hash_miss
+  nop
+3:
+  mov.l   ibh_dhot_ptr, r1
+  mov.l   @(r0,r1), r7
+  tst     r7, r7
+  bf      4f
+  bra     ibd_thumb_hash_miss
+  nop
+4:
+  INC_COUNTER cgba_dynarec_ibh_dual_hot_thumb_count
+  mov     r2, r1
+  mov     #-2, r0
+  and     r0, r1                  /* pc = key & ~1 */
+  mov     #REG_PC, r0
   mov.l   r1, @(r0,r14)
   jmp     @r7
   nop
@@ -583,8 +653,6 @@ defsymbl(sh4_cheat_hook)
   nop
 
 .align 2
-c_mask15:
-  .long   0x00007FFF
 sb_flag:
   .long   _cgba_dynarec_single_block
 
