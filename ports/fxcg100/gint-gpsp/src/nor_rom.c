@@ -561,11 +561,16 @@ static int build_block_table(cgba_nor_rom *rom)
 				break;
 			}
 		}
-		if(contiguous) {
+		/* gpSP and the SH4 JIT perform 16/32-bit reads directly through
+		 * memory_map_read[]. If the OS gives us a payload pointer that is
+		 * contiguous but not word-aligned, wide loads from the direct NOR page
+		 * can fault or read incorrectly on SH4. Leave those pages unmapped so
+		 * load_gamepak_page gathers them into the aligned RAM page cache. */
+		if(contiguous && (((uintptr_t)base & 3u) == 0)) {
 			rom->pages[p] = base;
 			rom->direct_page_count++;
 		} else {
-			rom->pages[p] = NULL;   /* fragmented: gpSP pages it on demand */
+			rom->pages[p] = NULL;   /* fragmented/unaligned: page on demand */
 		}
 	}
 
