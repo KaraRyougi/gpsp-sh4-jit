@@ -10,10 +10,9 @@
 #define CGBA_FLASH_BLOCKS_PER_PAGE \
 	(CGBA_NOR_ROM_PAGE_SIZE / CGBA_FLASH_BLOCK_SIZE)
 
-#define CGBA_NOR_BASE_P1 ((uintptr_t)0x80b00000u)
-#define CGBA_NOR_BASE_P2 ((uintptr_t)0xa0b00000u)
-#define CGBA_NOR_END_P1  ((uintptr_t)0x81500000u)
-#define CGBA_NOR_END_P2  ((uintptr_t)0xa1500000u)
+#define CGBA_SH4_P1_BASE ((uintptr_t)0x80000000u)
+#define CGBA_SH4_P2_BASE ((uintptr_t)0xa0000000u)
+#define CGBA_SH4_P2_END  ((uintptr_t)0xc0000000u)
 
 #define CGBA_BFILE_OPEN              ((uintptr_t)0x803338d0u)
 #define CGBA_BFILE_SIZE              ((uintptr_t)0x80333b04u)
@@ -317,15 +316,13 @@ static const uint8_t *cached_nor_pointer(unsigned char *address)
 	if(!value)
 		return NULL;
 
-	/*
-	 * Inside the known cached-NOR window, use the cached P1 alias. Outside it
-	 * the OS still hands back a directly-readable flash address (large files
-	 * are placed high in flash, e.g. 0xAA1CCE00, well past the window) -- accept
-	 * it as-is instead of rejecting it. This matches cgbc's cachedNorPointer();
-	 * the old window rejection is what made large ROMs fail to load (err -5).
-	 */
-	if(value >= CGBA_NOR_BASE_P2 && value < CGBA_NOR_END_P2)
-		value = value - CGBA_NOR_BASE_P2 + CGBA_NOR_BASE_P1;
+	/* BFile_GetBlockAddress returns direct-readable NOR addresses in the SH4
+	 * P2 segment. P2 is uncached; the same physical address is visible through
+	 * the P1 alias, which is cached and much friendlier to native JIT loads.
+	 * Earlier code only converted a narrow 0xA0B..0xA15 window, but real files
+	 * on the fx-CG100 can sit higher, eg 0xA1B97000. */
+	if(value >= CGBA_SH4_P2_BASE && value < CGBA_SH4_P2_END)
+		value = value - CGBA_SH4_P2_BASE + CGBA_SH4_P1_BASE;
 
 	return (const uint8_t *)value;
 }
