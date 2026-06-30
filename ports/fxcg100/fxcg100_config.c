@@ -4,6 +4,22 @@
 #include <stdint.h>
 #include <string.h>
 
+#ifdef CGBA_GPSP_DISABLE_STORAGE
+
+int fxcg100_config_load(fxcg100_menu_state *state)
+{
+  (void)state;
+  return 0;
+}
+
+int fxcg100_config_save(const fxcg100_menu_state *state)
+{
+  (void)state;
+  return 0;
+}
+
+#else
+
 #define CGBA_CONFIG_MAGIC 0x43474241u
 #define CGBA_CONFIG_VERSION 2u
 
@@ -266,3 +282,5 @@ int fxcg100_config_save(const fxcg100_menu_state *state)
     return 0;
   return write_config(&config);
 }
+
+#endif
