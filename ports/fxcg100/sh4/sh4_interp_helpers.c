@@ -138,6 +138,7 @@ u32 cgba_sh4_helper_thumb_ldst_sp_count;
 u32 cgba_sh4_helper_thumb_ldst_reg_count;
 u32 cgba_sh4_helper_thumb_ldst_imm_count;
 u32 cgba_sh4_native_thumb_const_io_count;
+u32 cgba_sh4_native_thumb_runtime_io_count;
 #define CGBA_SH4_HELPER_HIT(name) (cgba_sh4_helper_##name##_count++)
 static void cgba_sh4_helper_arm_ldst_detail(u32 is_load, u32 address)
 {
