@@ -25,6 +25,7 @@
 
 #include "ports/fxcg100/sh4/sh4_emit_glue.h"
 #include "ports/fxcg100/sh4/sh4_thumb_dp_emit.h"
+#include "ports/fxcg100/sh4/sh4_thumb_block_emit.h"
 #include "ports/fxcg100/sh4/sh4_arm_ldst_emit.h"
 #include "ports/fxcg100/sh4/sh4_arm_mul_emit.h"
 #include "ports/fxcg100/sh4/sh4_arm_block_emit.h"
@@ -533,7 +534,9 @@ extern void *tmemst[4][16];
                                   (int)cycle_count))                          \
          SH4_CALL_OP2_PC_MEM(cgba_sh4_thumb_ldst); } while(0)
 #define thumb_block_memory(access_type, pre_op, post_op, base_reg)            \
-  SH4_CALL_OP2_PC_MEM(cgba_sh4_thumb_block)
+  do { if(!sh4g_thumb_block_native(&translation_ptr, (u32)opcode, (u32)pc,    \
+                                   (int)cycle_count))                         \
+         SH4_CALL_OP2_PC_MEM(cgba_sh4_thumb_block); } while(0)
 #define arm_access_memory(access_type, direction, adjust_op, mem_type,        \
                           offset_type)                                        \
   do { if(!sh4g_arm_ldst_native(&translation_ptr, (u32)opcode, (u32)pc,       \
