@@ -198,6 +198,7 @@ int main(void)
   expect_arm_single_native_load("LDR r1,[r0]", 0xE5901000u);
 
   expect_thumb_fallback("STRB r1,[r0,#0]", 0x7001u);
+  expect_thumb_native_load("LDR r0,[pc,#0]", 0x4800u);
   expect_thumb_native_load("LDRB r1,[r0,#0]", 0x7801u);
 
   expect_arm_block_fallback("STMIA r0,{r1,r2}", 0xE8800006u);

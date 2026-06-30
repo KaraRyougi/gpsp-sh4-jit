@@ -143,6 +143,15 @@ static inline int sh4g_arm_block_native(u8 **tp, u32 opcode, u32 pc,
     sh4_emit_shll16(&cg, SH4_REG_RET); sh4_emit_shll(&cg, SH4_REG_RET);
     sh4_emit_shlr16(&cg, SH4_REG_RET); sh4_emit_shlr(&cg, SH4_REG_RET);
     sh4g_close(tp, &cg); }
+  if (is_load) {
+    sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_reg(&cg, SH4_REG_RET, SH4_REG_T1);
+    sh4_emit_add_reg(&cg, SH4_REG_T2, SH4_REG_T1);
+    sh4_emit_mov_imm(&cg, 3, SH4_REG_ARG0);
+    sh4_emit_tst(&cg, SH4_REG_ARG0, SH4_REG_T1);       /* T = host ptr aligned */
+    sh4g_close(tp, &cg);
+    guards[ng++] = sh4g_block_guard(tp, 0);            /* unaligned NOR/RAM ptr */
+  }
 
   if (!is_load) {
     u8 *bf_iwram, *bra_tag_ready;

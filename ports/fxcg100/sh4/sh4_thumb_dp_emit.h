@@ -321,9 +321,9 @@ static inline u8 *sh4g_thumb_ldst_guard(u8 **tp, int slow_if_t)
   return sh4g_emit_bra_placeholder(tp);
 }
 
-/* Native Thumb RAM loads. Only EWRAM/IWRAM are fast-pathed; stores and
- * side-effecting regions fall back to cgba_sh4_thumb_ldst so DMA/IRQ alerts,
- * I/O semantics, SMC invalidation, ROM paging and backup stay helper-owned. */
+/* Native Thumb mapped loads. Stores and side-effecting/open regions fall back
+ * to cgba_sh4_thumb_ldst so DMA/IRQ alerts, I/O semantics, SMC invalidation,
+ * ROM paging and backup stay helper-owned. */
 static inline int sh4g_thumb_ldst_native(u8 **tp, u32 opcode, u32 pc,
   int cycle_count)
 {
@@ -337,11 +337,18 @@ static inline int sh4g_thumb_ldst_native(u8 **tp, u32 opcode, u32 pc,
   u32 hi = (opcode >> 8) & 0xFF;
   u32 rd = opcode & 7, rb = (opcode >> 3) & 7;
   u32 offset = 0, ro = 0, reg_offset = 0;
+  int pc_relative = 0;
   int kind = SH4_THUMB_LDK_W, align_mask = 3, is_load = 1;
-  u8 *guards[5]; int ng = 0;
+  u8 *guards[8]; int ng = 0;
   u8 *bra_done;
 
-  if (hi >= 0x50 && hi <= 0x5F) {                    /* register-offset forms */
+  if (hi >= 0x48 && hi <= 0x4F) {                    /* LDR Rd,[PC,#imm8*4] */
+    rd = (opcode >> 8) & 7;
+    offset = (opcode & 0xFF) << 2;
+    pc_relative = 1;
+    kind = SH4_THUMB_LDK_W;
+    align_mask = 3;
+  } else if (hi >= 0x50 && hi <= 0x5F) {             /* register-offset forms */
     u32 op = (opcode >> 10) & 3;
     ro = (opcode >> 6) & 7;
     reg_offset = 1;
@@ -384,27 +391,29 @@ static inline int sh4g_thumb_ldst_native(u8 **tp, u32 opcode, u32 pc,
   }
   if (!is_load) return 0;                         /* stores own side effects in C */
 
-  { sh4_codegen cg = sh4g_open(tp);
-    sh4_emit_load_greg(&cg, rb, SH4_REG_T0);       /* R1 = base */
-    sh4g_close(tp, &cg); }
-  if (reg_offset) {
-    sh4_codegen cg = sh4g_open(tp);
-    sh4_emit_load_greg(&cg, ro, SH4_REG_T1);
-    sh4_emit_add_reg(&cg, SH4_REG_T1, SH4_REG_T0); /* R1 = base + reg[ro] */
-    sh4g_close(tp, &cg);
-  } else if (offset) {
-    sh4g_const(tp, offset, SH4_REG_T1);
-    sh4g_add_reg(tp, SH4_REG_T1, SH4_REG_T0);      /* R1 = base + offset */
+  if (pc_relative) {
+    sh4g_const(tp, ((pc & ~2u) + 4u + offset), SH4_REG_T0);
+  } else {
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_load_greg(&cg, rb, SH4_REG_T0);       /* R1 = base */
+      sh4g_close(tp, &cg); }
+    if (reg_offset) {
+      sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_load_greg(&cg, ro, SH4_REG_T1);
+      sh4_emit_add_reg(&cg, SH4_REG_T1, SH4_REG_T0); /* R1 = base + reg[ro] */
+      sh4g_close(tp, &cg);
+    } else if (offset) {
+      sh4g_const(tp, offset, SH4_REG_T1);
+      sh4g_add_reg(tp, SH4_REG_T1, SH4_REG_T0);      /* R1 = base + offset */
+    }
   }
 
-  /* EWRAM/IWRAM only: addr>>25 is 1 for 0x02xxxxxx and 0x03xxxxxx. */
+  /* memory_map_read[] only covers the GBA 0x00000000..0x0fffffff space. */
+  sh4g_const(tp, 0x10000000u, SH4_REG_T1);
   { sh4_codegen cg = sh4g_open(tp);
-    sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
-    sh4_emit_mov_imm(&cg, -25, SH4_REG_T1);
-    sh4_emit_shld(&cg, SH4_REG_T1, SH4_REG_RET);
-    sh4_emit_cmpeq_imm(&cg, 1);
+    sh4_emit_cmphs(&cg, SH4_REG_T1, SH4_REG_T0);   /* T = addr >= 0x10000000 */
     sh4g_close(tp, &cg); }
-  guards[ng++] = sh4g_thumb_ldst_guard(tp, 0);     /* not EWRAM/IWRAM -> slow */
+  guards[ng++] = sh4g_thumb_ldst_guard(tp, 1);     /* out of map -> slow */
 
   { sh4_codegen cg = sh4g_open(tp);
     sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
@@ -420,6 +429,26 @@ static inline int sh4g_thumb_ldst_native(u8 **tp, u32 opcode, u32 pc,
     sh4_emit_tst(&cg, SH4_REG_T2, SH4_REG_T2);     /* T = (page == NULL) */
     sh4g_close(tp, &cg); }
   guards[ng++] = sh4g_thumb_ldst_guard(tp, 1);     /* unmapped -> slow */
+  /* Fast loads are safe for mapped RAM/video/gamepak memory. Exclude BIOS/open
+   * (0/1), I/O (4), and backup/EEPROM (13..15), matching the ARM load path. */
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
+    sh4_emit_shlr16(&cg, SH4_REG_RET);
+    sh4_emit_shlr8(&cg, SH4_REG_RET);              /* R0 = addr >> 24 */
+    sh4_emit_mov_imm(&cg, 2, SH4_REG_T1);
+    sh4_emit_cmphs(&cg, SH4_REG_T1, SH4_REG_RET);  /* T = region >= 2 */
+    sh4g_close(tp, &cg); }
+  guards[ng++] = sh4g_thumb_ldst_guard(tp, 0);     /* BIOS/open -> slow */
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_imm(&cg, 4, SH4_REG_T1);
+    sh4_emit_cmpeq(&cg, SH4_REG_T1, SH4_REG_RET);  /* T = I/O */
+    sh4g_close(tp, &cg); }
+  guards[ng++] = sh4g_thumb_ldst_guard(tp, 1);     /* I/O -> slow */
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_imm(&cg, 13, SH4_REG_T1);
+    sh4_emit_cmphs(&cg, SH4_REG_T1, SH4_REG_RET);  /* T = backup/EEPROM */
+    sh4g_close(tp, &cg); }
+  guards[ng++] = sh4g_thumb_ldst_guard(tp, 1);     /* backup -> slow */
   if (align_mask) {
     sh4_codegen cg = sh4g_open(tp);
     sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
@@ -435,6 +464,15 @@ static inline int sh4g_thumb_ldst_native(u8 **tp, u32 opcode, u32 pc,
     sh4_emit_shlr16(&cg, SH4_REG_RET);
     sh4_emit_shlr(&cg, SH4_REG_RET);
     sh4g_close(tp, &cg); }
+  if (align_mask) {
+    sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_reg(&cg, SH4_REG_RET, SH4_REG_T1);
+    sh4_emit_add_reg(&cg, SH4_REG_T2, SH4_REG_T1);
+    sh4_emit_mov_imm(&cg, align_mask, SH4_REG_ARG0);
+    sh4_emit_tst(&cg, SH4_REG_ARG0, SH4_REG_T1);   /* T = host ptr aligned */
+    sh4g_close(tp, &cg);
+    guards[ng++] = sh4g_thumb_ldst_guard(tp, 0);   /* unaligned NOR/RAM ptr */
+  }
 
   if (!is_load) {
     u8 *bf_iwram, *bra_tag_ready;
