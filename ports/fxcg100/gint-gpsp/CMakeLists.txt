@@ -152,6 +152,12 @@ if(CGBA_DYNAREC)
   if(CGBA_SH4_THUMB_BLOCK_NATIVE)
     target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_SH4_THUMB_BLOCK_NATIVE=1)
   endif()
+  # Re-sync the I-cache line for every INSTRUCTION patch (BT/BF/BRA rewrites).
+  # All such patches are in not-yet-synced memory by construction, so this is
+  # belt-and-suspenders — but it is translate-time-only (a few thousand patches
+  # per session, ~zero cost) and closes the last software coherency surface for
+  # overclocked hardware, where write-back/fetch races widen.
+  target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_SH4_PATCH_RESYNC=1)
   if(CGBA_SH4_EXACT_CYCLE_BOUNDARIES)
     target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_SH4_EXACT_CYCLE_BOUNDARIES=1)
   endif()
