@@ -42,6 +42,11 @@ void sh4_block_exit(u32 pc);
  * 2 store alert) and the pure PC re-dispatch that skips update_gba. */
 void sh4_helper_exit(u32 pc);
 void sh4_pc_redispatch(u32 pc);
+/* Compact helper-call trampolines (literal tuple read via PR; sh4_stub.S). */
+void sh4_op2_tramp(void);
+void sh4_op2_mem_tramp(void);
+void sh4_op2_pc_tramp(void);
+void sh4_op2_pc_mem_tramp(void);
 u32  sh4_update_gba(u32 pc);
 void sh4_indirect_branch_arm(u32 address);
 void sh4_indirect_branch_thumb(u32 address);
@@ -638,32 +643,29 @@ static inline void sh4g_prof_block_entry(u8 **tp, u32 pc, int thumb)
 /* C-helper handlers (bring-up): pass opcode in R4, pc in R5, JSR.     */
 /* ================================================================== */
 
+/* All four forms emit the compact fixed-shape trampoline site (~28-32 bytes,
+ * see sh4g_op2_tramp_call): the shared stub reads (fn, opcode, pc[, cycles])
+ * through PR, runs the helper, debits guest-memory cycles (MEM forms, both
+ * paths — as the old inline glue did), and on a nonzero helper return (1 =
+ * pure PC change, 2 = store alert) debits the accumulated cycle_count and
+ * leaves via sh4_helper_exit. */
 #define SH4_CALL_OP2(fn)                                                      \
-  do { sh4g_const(&translation_ptr, (u32)opcode, SH4_REG_ARG0);               \
-       sh4g_const(&translation_ptr, (u32)pc, SH4_REG_ARG1);                   \
-       sh4g_far_call(&translation_ptr, (const void *)(fn)); } while(0)
+  sh4g_op2_tramp_call(&translation_ptr, (const void *)sh4_op2_tramp,          \
+                      (const void *)(fn), (u32)opcode, (u32)pc, 0, 0)
 
 #define SH4_CALL_OP2_MEM(fn)                                                  \
-  do { SH4_CALL_OP2(fn);                                                      \
-       sh4g_cycle_debit_from_global(&translation_ptr,                         \
-                                    &cgba_sh4_extra_cycles); } while(0)
+  sh4g_op2_tramp_call(&translation_ptr, (const void *)sh4_op2_mem_tramp,      \
+                      (const void *)(fn), (u32)opcode, (u32)pc, 0, 0)
 
-/* Same, but the handler returns nonzero in R0 when it changed the PC (1) or a
- * store raised an alert (2) -> leave the block via sh4_helper_exit, which skips
- * the update_gba pass for pure PC changes. */
 #define SH4_CALL_OP2_PC(fn)                                                   \
-  do { SH4_CALL_OP2(fn);                                                      \
-       sh4g_redispatch_if_r0_debit(&translation_ptr, (int)cycle_count,        \
-                                   (const void *)sh4_helper_exit);            \
-  } while(0)
+  sh4g_op2_tramp_call(&translation_ptr, (const void *)sh4_op2_pc_tramp,       \
+                      (const void *)(fn), (u32)opcode, (u32)pc, 1,            \
+                      (int)cycle_count)
 
 #define SH4_CALL_OP2_PC_MEM(fn)                                               \
-  do { SH4_CALL_OP2(fn);                                                      \
-       sh4g_cycle_debit_from_global(&translation_ptr,                         \
-                                    &cgba_sh4_extra_cycles);                  \
-       sh4g_redispatch_if_r0_debit(&translation_ptr, (int)cycle_count,        \
-                                   (const void *)sh4_helper_exit);            \
-  } while(0)
+  sh4g_op2_tramp_call(&translation_ptr, (const void *)sh4_op2_pc_mem_tramp,   \
+                      (const void *)(fn), (u32)opcode, (u32)pc, 1,            \
+                      (int)cycle_count)
 
 /* Memory (single + block transfers). */
 #define thumb_access_memory(access_type, op_type, reg_rd, reg_rb, reg_ro,     \

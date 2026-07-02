@@ -32,6 +32,7 @@ extern u8 *memory_map_read[];                 /* gba_memory.c host-page table */
 int  cgba_sh4_arm_block(u32 opcode, u32 pc);  /* C oracle / slow path */
 void sh4_block_exit(u32 pc);                  /* redispatch entry (sh4_emit.h) */
 void sh4_helper_exit(u32 pc);
+void sh4_op2_pc_mem_tramp(void);   /* compact slow-path call (sh4_stub.S) */
 
 /* Emit "branch to the slow path if (T == slow_if_t)" with no disp8 range limit:
  * a short skip over a far BRA placeholder. Returns the BRA site to patch later. */
@@ -222,11 +223,9 @@ static inline int sh4g_arm_block_native(u8 **tp, u32 opcode, u32 pc,
 
   /* slow path: the C helper (SH4_CALL_OP2_PC equivalent) */
   for (i = 0; i < (u32)ng; i++) sh4g_patch_bra(guards[i], *tp);
-  sh4g_const(tp, (u32)opcode, SH4_REG_ARG0);
-  sh4g_const(tp, (u32)pc, SH4_REG_ARG1);
-  sh4g_far_call(tp, (const void *)cgba_sh4_arm_block);
-  sh4g_cycle_debit_from_global(tp, &cgba_sh4_extra_cycles);
-  sh4g_redispatch_if_r0_debit(tp, cycle_count, (const void *)sh4_helper_exit);
+  sh4g_op2_tramp_call(tp, (const void *)sh4_op2_pc_mem_tramp,
+                      (const void *)cgba_sh4_arm_block, (u32)opcode, (u32)pc,
+                      1, cycle_count);
 
   sh4g_patch_bra(bra_done, *tp);
   return 1;

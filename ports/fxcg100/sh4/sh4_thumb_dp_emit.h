@@ -31,6 +31,7 @@ extern u16 io_registers[512];
 int cgba_sh4_thumb_ldst(u32 opcode, u32 pc);
 void sh4_block_exit(u32 pc);
 void sh4_helper_exit(u32 pc);
+void sh4_op2_pc_mem_tramp(void);   /* compact slow-path call (sh4_stub.S) */
 #if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
 extern u32 cgba_sh4_native_thumb_const_io_count;
 extern u32 cgba_sh4_native_thumb_runtime_io_count;
@@ -802,11 +803,9 @@ static inline int sh4g_thumb_ldst_native(u8 **tp, u32 opcode, u32 pc,
   bra_done = sh4g_emit_bra_placeholder(tp);
 
   { int gi; for (gi = 0; gi < ng; gi++) sh4g_patch_bra(guards[gi], *tp); }
-  sh4g_const(tp, (u32)opcode, SH4_REG_ARG0);
-  sh4g_const(tp, (u32)pc, SH4_REG_ARG1);
-  sh4g_far_call(tp, (const void *)cgba_sh4_thumb_ldst);
-  sh4g_cycle_debit_from_global(tp, &cgba_sh4_extra_cycles);
-  sh4g_redispatch_if_r0_debit(tp, cycle_count, (const void *)sh4_helper_exit);
+  sh4g_op2_tramp_call(tp, (const void *)sh4_op2_pc_mem_tramp,
+                      (const void *)cgba_sh4_thumb_ldst, (u32)opcode, (u32)pc,
+                      1, cycle_count);
 
   sh4g_patch_bra(bra_done, *tp);
   if (runtime_io_done)
