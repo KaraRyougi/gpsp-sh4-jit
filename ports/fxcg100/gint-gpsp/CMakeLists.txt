@@ -62,13 +62,15 @@ option(CGBA_SH4_PROFILE_COUNTERS
   "Hardware/debug: count SH4 JIT translations, cache flushes, and helper calls for the ON-menu debug page" OFF)
 option(CGBA_FXCG100_STORAGE
   "Enable gint_world_switch-backed fx-CG100 BFile storage for ROM/config files" ON)
-# Sized from a 1300-frame Metroid soak: the hot translated set is ~800 KB and a
-# 768 KB cache wholesale-flushed 44 times (once per ~30 frames — a hash wipe +
-# ~300-block retranslation storm each). 1152 KB fits the set with headroom.
-# DO NOT grow past what the linker arena allows: the resident MPM loader lives
-# at 0x8c700000 and a 1.5 MB cache (arena end 0x8c715300) overwrote it,
-# HARD-RESETTING the calculator — the .ld ASSERT now enforces the real bound.
-set(CGBA_GPSP_ROM_TRANSLATION_CACHE_SIZE "1179648" CACHE STRING
+# 768 KB keeps the .cgba.highbss arena end at 0x8c655300 — the ONLY layout
+# proven safe on real hardware. Growing the cache looked attractive (a
+# 1300-frame soak showed the ~800 KB hot set wholesale-flushing 44 times at
+# 768 KB), but BOTH growth attempts hard-reset the calculator: 1.5 MB (arena
+# end 0x8c715300) overwrote the resident MPM loader at 0x8c700000, and even
+# 1152 KB (end 0x8c6b5300) still reset — live OS state evidently sits well
+# below 0x8c700000. Do not raise this without probing the real bound on
+# hardware with a dedicated test; the flush cost is real but survivable.
+set(CGBA_GPSP_ROM_TRANSLATION_CACHE_SIZE "786432" CACHE STRING
   "SH4 dynarec ROM translation cache size in bytes")
 set(CGBA_GPSP_RAM_TRANSLATION_CACHE_SIZE "262144" CACHE STRING
   "SH4 dynarec RAM translation cache size in bytes")
