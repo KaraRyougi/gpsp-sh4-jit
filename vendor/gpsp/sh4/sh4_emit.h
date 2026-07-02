@@ -56,6 +56,10 @@ void sh4_cheat_hook(void);
  * block chaining so every branch funnels through sh4_block_exit. */
 extern int cgba_dynarec_single_block;
 
+/* Per-game idle-loop PC from the gba_over database (0xFFFFFFFF when absent);
+ * also declared in cpu.h — repeated here so this header stays standalone. */
+extern u32 idle_loop_target_pc;
+
 #if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
 u32 *cgba_sh4_prof_counter_for_key(u32 key);
 #endif
@@ -239,6 +243,25 @@ static inline void sh4g_prof_block_entry(u8 **tp, u32 pc, int thumb)
   (writeback_location) =                                                      \
     sh4g_branch_exit(&translation_ptr, (u32)(new_pc), (const void *)sh4_block_exit)
 
+/* ---- idle-loop elimination (dynarec mirror of the interpreter's) ---------
+ * The interpreter zeroes the remaining cycle budget when it (a) arrives at the
+ * per-game gba_over idle_loop_target_pc or (b) takes a branch-to-self (the
+ * port's runtime detector, cpu.cc) — update_gba then fast-forwards to the next
+ * scheduled event instead of spinning the loop for real. Without this the JIT
+ * executes every idle iteration and loses to the interpreter on any
+ * idle-heavy scene (e.g. title screens waiting on VBlank). Detected at
+ * translate time on direct branches: self-branch, a branch AT the DB address
+ * (arm_emit.h semantics), or a backward branch INTO the DB address (loop-head
+ * style entries). `pc` is the branch instruction's own address here. */
+#define SH4_IDLE_BRANCH(new_pc)                                               \
+  ((u32)(new_pc) == (u32)pc || (u32)pc == idle_loop_target_pc ||              \
+   ((u32)(new_pc) == idle_loop_target_pc && (u32)(new_pc) < (u32)pc))
+
+#define generate_branch_idle_eliminate(writeback_location, new_pc)            \
+  (writeback_location) = sh4g_branch_exit_idle(&translation_ptr,              \
+      (u32)(new_pc), (const void *)sh4_update_gba,                            \
+      (const void *)sh4_block_exit)
+
 #define generate_branch_current_update(writeback_location, new_pc)            \
   do { sh4g_cycle_debit(&translation_ptr, (int)cycle_count);                  \
        cycle_count = 0;                                                       \
@@ -262,7 +285,18 @@ static inline void sh4g_prof_block_entry(u8 **tp, u32 pc, int thumb)
 
 #define generate_arm_branch()                                                 \
   do {                                                                        \
-    if(condition == 0x0E)                                                     \
+    u32 _b_target = block_exits[block_exit_position].branch_target;           \
+    if(SH4_IDLE_BRANCH(_b_target)) {                                          \
+      /* the interpreter detects ARM B-to-self for any EXECUTED condition     \
+       * (cpu.cc case 0xA0..0xAF runs post condition check), so both legs     \
+       * idle-eliminate; cycle handling mirrors the non-idle legs below. */   \
+      sh4g_cycle_debit(&translation_ptr, (int)cycle_count +                   \
+        (int)ws_cyc_nseq[(_b_target >> 24) & 0x0F][1]);                       \
+      if(condition == 0x0E) cycle_count = 0;                                  \
+      generate_branch_idle_eliminate(                                         \
+        block_exits[block_exit_position].branch_source, _b_target);           \
+    }                                                                         \
+    else if(condition == 0x0E)                                                \
       generate_branch_cycle_update(1,                                         \
         block_exits[block_exit_position].branch_source,                       \
         block_exits[block_exit_position].branch_target);                      \
@@ -506,10 +540,21 @@ static inline void sh4g_prof_block_entry(u8 **tp, u32 pc, int thumb)
          block_exits[block_exit_position].branch_target);                     \
        block_exit_position++; } while(0)
 
+/* Unconditional Thumb B: the one Thumb form the interpreter's self-loop
+ * detector covers (cpu.cc case 0xE0..0xE7); conditional Thumb branches stay on
+ * the normal path to match it. */
 #define thumb_b()                                                             \
-  do { generate_branch_cycle_update(0,                                        \
-         block_exits[block_exit_position].branch_source,                      \
-         block_exits[block_exit_position].branch_target);                     \
+  do { u32 _b_target = block_exits[block_exit_position].branch_target;        \
+       if(SH4_IDLE_BRANCH(_b_target)) {                                       \
+         sh4g_cycle_debit(&translation_ptr, (int)cycle_count +                \
+           (int)ws_cyc_nseq[(_b_target >> 24) & 0x0F][0]);                    \
+         cycle_count = 0;                                                     \
+         generate_branch_idle_eliminate(                                      \
+           block_exits[block_exit_position].branch_source, _b_target);        \
+       } else                                                                 \
+         generate_branch_cycle_update(0,                                      \
+           block_exits[block_exit_position].branch_source,                    \
+           block_exits[block_exit_position].branch_target);                   \
        block_exit_position++; } while(0)
 
 #define thumb_bl()                                                            \
