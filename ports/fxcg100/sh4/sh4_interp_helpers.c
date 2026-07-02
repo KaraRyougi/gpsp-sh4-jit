@@ -25,6 +25,7 @@ extern u32 cgba_diff_stop_pc;
 extern int cgba_diff_stop_active;
 extern int cgba_diff_stop_skip_initial;
 extern s32 cgba_diff_stop_cycles_remaining;
+extern int cgba_diff_stop_on_bios_exit;
 
 #if defined(CGBA_GPSP_HEADLESS_TEST) && CGBA_GPSP_HEADLESS_TRACE_PC != 0
 static void sh4_headless_putc(char c)
@@ -1128,32 +1129,33 @@ void sh4_swi_handler(void)
 
 u32 cgba_sh4_bios_fallback(u32 cycles)
 {
-  u32 return_pc = 0xffffffffu;
-
-  if (reg[CPU_MODE] == MODE_SUPERVISOR) {
-    return_pc = REG_MODE(MODE_SUPERVISOR)[6];
-    if (return_pc >= 0x00004000u) {
-      cgba_diff_stop_pc = return_pc;
-      cgba_diff_stop_active = 1;
-      cgba_diff_stop_skip_initial = 0;
-      cgba_diff_stop_cycles_remaining = (s32)cycles;
-      execute_arm(cycles);
-      cgba_diff_stop_active = 0;
-      cgba_diff_stop_skip_initial = 0;
-
-      if (reg[REG_PC] == return_pc) {
-        s32 remaining = cgba_diff_stop_cycles_remaining;
-        if (remaining <= 0) {
-          u32 ret = update_gba(remaining);
-          return completed_frame(ret) ? ret : cycles_to_run(ret);
-        }
-        return (u32)remaining;
-      }
-    }
-  }
-
+  /* Interpret ONLY while the PC is inside the BIOS (region-exit stop mode,
+   * cpu.cc CGBA_DIFF_STOP_CHECK): the instant execution reaches game code
+   * (PC >= 0x4000) control returns and the stub re-dispatches into the JIT.
+   * This holds for every entry — SWI (BIOS body, incl. the IntrWait halt
+   * loop, which the interpreter fast-forwards), and IRQ vectors (0x18 -> the
+   * ~10-instruction BIOS wrapper -> the GAME's handler, which now runs
+   * translated; the handler's return to the BIOS epilogue comes back here
+   * for the final ldm/subs). The previous version only stopped at a known
+   * SWI return LR, so every VBlank/HBlank IRQ interpreted the whole rest of
+   * the frame — the profile showed 68%% of a JIT run inside execute_arm. */
+  cgba_diff_stop_on_bios_exit = 1;
+  cgba_diff_stop_active = 1;
+  cgba_diff_stop_skip_initial = 0;
+  cgba_diff_stop_cycles_remaining = (s32)cycles;
   execute_arm(cycles);
-  return 0x80000000u;
+  cgba_diff_stop_active = 0;
+  cgba_diff_stop_on_bios_exit = 0;
+
+  if (reg[REG_PC] >= 0x00004000u) {      /* left the BIOS: back to the JIT */
+    s32 remaining = cgba_diff_stop_cycles_remaining;
+    if (remaining <= 0) {
+      u32 ret = update_gba(remaining);
+      return completed_frame(ret) ? ret : cycles_to_run(ret);
+    }
+    return (u32)remaining;
+  }
+  return 0x80000000u;                    /* frame completed inside the BIOS */
 }
 
 /* Host-emitter init hook (main.c calls this under HAVE_DYNAREC). The MIPS/x86
