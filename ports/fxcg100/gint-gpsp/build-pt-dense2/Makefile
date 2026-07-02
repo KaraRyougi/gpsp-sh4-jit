@@ -649,6 +649,30 @@ Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/vid
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/video.cc.s
 .PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/video.cc.s
 
+src/crash_panic.obj: src/crash_panic.c.obj
+.PHONY : src/crash_panic.obj
+
+# target to build an object file
+src/crash_panic.c.obj:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/src/crash_panic.c.obj
+.PHONY : src/crash_panic.c.obj
+
+src/crash_panic.i: src/crash_panic.c.i
+.PHONY : src/crash_panic.i
+
+# target to preprocess a source file
+src/crash_panic.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/src/crash_panic.c.i
+.PHONY : src/crash_panic.c.i
+
+src/crash_panic.s: src/crash_panic.c.s
+.PHONY : src/crash_panic.s
+
+# target to generate assembly for a file
+src/crash_panic.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/src/crash_panic.c.s
+.PHONY : src/crash_panic.c.s
+
 src/frame_pacing.obj: src/frame_pacing.c.obj
 .PHONY : src/frame_pacing.obj
 
@@ -891,6 +915,9 @@ help:
 	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/video.obj"
 	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/video.i"
 	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/video.s"
+	@echo "... src/crash_panic.obj"
+	@echo "... src/crash_panic.i"
+	@echo "... src/crash_panic.s"
 	@echo "... src/frame_pacing.obj"
 	@echo "... src/frame_pacing.i"
 	@echo "... src/frame_pacing.s"

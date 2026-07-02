@@ -39,4 +39,5 @@ CMakeFiles/cgba-gint-gpsp.dir/src/gpsp_runner.c.obj: \
  /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/../../../vendor/gpsp/cheats.h \
  /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/../../../vendor/gpsp/serial.h \
  /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/../../../vendor/gpsp/gba_memory.h \
+ /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/../../../ports/fxcg100/sh4/sh4_cache.h \
  /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/../../../ports/fxcg100/sh4/sh4_diff_harness.h

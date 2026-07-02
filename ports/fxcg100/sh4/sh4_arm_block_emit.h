@@ -118,14 +118,25 @@ static inline int sh4g_arm_block_native(u8 **tp, u32 opcode, u32 pc,
       sh4g_close(tp, &cg); }
     guards[ng++] = sh4g_block_guard(tp, 1);
   } else {
-    /* STM fast path is RAM-only: region 2 or 3 => (A >> 25) == 1. */
+    /* STM stores: EWRAM/IWRAM (SMC tag-scanned below) or VRAM (plain word
+     * stores; the read map implements GBA's VRAM mirroring incl. the 0x18000
+     * fold, and gpSP's region-6 word write path has no side effects). The
+     * graphics-heavy scenes that dropped to 10 fps on hardware were exactly
+     * STM blit loops into VRAM falling to the C helper. */
+    u8 *vram_ok;
     { sh4_codegen cg = sh4g_open(tp);
       sh4_emit_mov_reg(&cg, SH4_REG_ARG1, SH4_REG_RET);
-      sh4_emit_mov_imm(&cg, -25, SH4_REG_T1);
-      sh4_emit_shld(&cg, SH4_REG_T1, SH4_REG_RET);
-      sh4_emit_cmpeq_imm(&cg, 1);
+      sh4_emit_shlr16(&cg, SH4_REG_RET);
+      sh4_emit_shlr8(&cg, SH4_REG_RET);            /* R0 = region = A >> 24 */
+      sh4_emit_cmpeq_imm(&cg, 6);                  /* T = VRAM */
+      sh4g_close(tp, &cg); }
+    vram_ok = sh4g_emit_bt_placeholder(tp);
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_shlr(&cg, SH4_REG_RET);             /* R0 = A >> 25 */
+      sh4_emit_cmpeq_imm(&cg, 1);                  /* T = EWRAM/IWRAM */
       sh4g_close(tp, &cg); }
     guards[ng++] = sh4g_block_guard(tp, 0);
+    sh4g_patch_cond(vram_ok, *tp);
   }
 
   /* page = memory_map_read[A >> 15] in R3 */
@@ -159,7 +170,17 @@ static inline int sh4g_arm_block_native(u8 **tp, u32 opcode, u32 pc,
   }
 
   if (!is_load) {
-    u8 *bf_iwram, *bra_tag_ready;
+    u8 *bf_iwram, *bra_tag_ready, *vram_skip;
+    /* VRAM has no SMC tag mirror (region 6 is not translatable code): skip
+     * the tag scan entirely; RAM destinations fall through into it. */
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_reg(&cg, SH4_REG_ARG1, SH4_REG_T1);
+      sh4_emit_shlr16(&cg, SH4_REG_T1);
+      sh4_emit_shlr8(&cg, SH4_REG_T1);                  /* R2 = A >> 24 */
+      sh4_emit_mov_imm(&cg, 6, SH4_REG_ARG0);
+      sh4_emit_cmpeq(&cg, SH4_REG_ARG0, SH4_REG_T1);    /* T = VRAM */
+      sh4g_close(tp, &cg); }
+    vram_skip = sh4g_emit_bt_placeholder(tp);
     /* Build SMC tag-page pointer in R6 from data page R3. */
     { sh4_codegen cg = sh4g_open(tp);
       sh4_emit_mov_reg(&cg, SH4_REG_T2, SH4_REG_ARG2);
@@ -190,6 +211,7 @@ static inline int sh4g_arm_block_native(u8 **tp, u32 opcode, u32 pc,
       }
       sh4_emit_add_imm(&cg, -(int)(count * 4), SH4_REG_RET);
       sh4g_close(tp, &cg); }
+    sh4g_patch_cond(vram_skip, *tp);              /* VRAM: no tags to scan */
   }
 
   /* fast path: transfer each listed register (ascending = lowest addr first) */
