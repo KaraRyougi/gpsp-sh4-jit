@@ -1487,14 +1487,27 @@ u32 cgba_diff_stop_pc;
 int cgba_diff_stop_active;
 int cgba_diff_stop_skip_initial;
 s32 cgba_diff_stop_cycles_remaining;
+/* Region-exit mode (the dynarec's BIOS fallback, sh4_interp_helpers.c):
+ * instead of one watch PC, stop the instant the interpreter is about to
+ * execute OUTSIDE the BIOS (PC >= 0x4000) — i.e. hand game code back to the
+ * JIT. This makes the fallback work for IRQ entries (vector 0x18 -> the BIOS
+ * wrapper -> the GAME's handler), not just SWI calls with a known LR: without
+ * it every VBlank/HBlank IRQ interpreted the whole rest of the frame. */
+int cgba_diff_stop_on_bios_exit;
 }
 #define CGBA_DIFF_STOP_CHECK()                                                \
-  do { if(cgba_diff_stop_active && reg[REG_PC] == cgba_diff_stop_pc) {        \
-         if(cgba_diff_stop_skip_initial) {                                     \
-           cgba_diff_stop_skip_initial = 0;                                    \
-           break;                                                             \
+  do { if(cgba_diff_stop_active) {                                            \
+         if(cgba_diff_stop_on_bios_exit) {                                    \
+           if(reg[REG_PC] >= 0x00004000u) {                                   \
+             cgba_diff_stop_cycles_remaining = cycles_remaining; return;      \
+           }                                                                  \
+         } else if(reg[REG_PC] == cgba_diff_stop_pc) {                        \
+           if(cgba_diff_stop_skip_initial) {                                   \
+             cgba_diff_stop_skip_initial = 0;                                  \
+             break;                                                           \
+           }                                                                  \
+           cgba_diff_stop_cycles_remaining = cycles_remaining; return;        \
          }                                                                    \
-         cgba_diff_stop_cycles_remaining = cycles_remaining; return;          \
        } }                                                                    \
   while(0)
 #else
