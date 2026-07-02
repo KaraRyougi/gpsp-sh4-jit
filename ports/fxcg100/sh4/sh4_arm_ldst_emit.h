@@ -56,7 +56,12 @@ static inline int sh4g_arm_ldst_native(u8 **tp, u32 opcode, u32 pc,
   u8 *bra_done;
 
   if (rd == 15 || rn == 15) return 0;   /* PC operand (incl. STR pc) -> C */
-  if (!is_load) return 0;               /* stores own side effects in C */
+  /* Stores are native for plain EWRAM/IWRAM: the emitted path is RAM-only
+   * (region guard), SMC-checked (width-sized tag-mirror probe, falling back
+   * BEFORE any write), and byteswapped — the same discipline as the proven
+   * Thumb store path. Dense-gameplay profiling showed ARM stores as the top
+   * helper class (H ARM st=466K + blk stores/session), so helper-owned
+   * stores were the JIT's largest remaining instruction-count cost. */
   if (is_load && effective_wb && rd == rn)
     return 0;                           /* helper writes Rn before Rd */
 

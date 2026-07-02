@@ -68,7 +68,10 @@ static inline int sh4g_arm_block_native(u8 **tp, u32 opcode, u32 pc,
   for (i = 0; i < 16; i++)
     if (rlist & (1u << i)) count++;
   if (count == 0)            return 0;         /* empty list -> C (rare) */
-  if (!is_load)              return 0;         /* stores own side effects in C */
+  /* STM is native for plain RAM: region-guarded to EWRAM/IWRAM, every
+   * destination tag word scanned BEFORE any store (SMC falls back with no
+   * partial writes), byteswapped word stores. Dense-gameplay profiling showed
+   * STM-store helpers as the single hottest JIT cost (3.94M calls/session). */
   if (!is_load && writeback && (rlist & (1u << rn)))
     return 0;                                  /* store-base value is subtle */
 

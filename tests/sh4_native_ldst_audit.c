@@ -245,9 +245,13 @@ static void expect_thumb_block_native_transfer(const char *name, u32 opcode)
 
 int main(void)
 {
-  expect_arm_single_fallback("STR r1,[r0]",  0xE5801000u);
-  expect_arm_single_fallback("STRB r1,[r0]", 0xE5C01000u);
-  expect_arm_single_fallback("STRH r1,[r0]", 0xE1C010B0u);
+  /* ARM stores are native since the dense-gameplay profile showed them as the
+   * top helper class: the emitted path is RAM-only + SMC-tag-guarded, exactly
+   * like the Thumb store path. Side-effecting forms still fall back. */
+  expect_arm_single_native_load("STR r1,[r0]",  0xE5801000u);
+  expect_arm_single_native_load("STRB r1,[r0]", 0xE5C01000u);
+  expect_arm_single_native_load("STRH r1,[r0]", 0xE1C010B0u);
+  expect_arm_single_fallback("STR pc,[r0]", 0xE580F000u);   /* rd=PC -> C */
   expect_arm_single_native_load("LDR r1,[r0]", 0xE5901000u);
 
   expect_thumb_native_transfer("LDR r0,[pc,#0]", 0x4800u);
@@ -265,7 +269,9 @@ int main(void)
   expect_thumb_const_io_fallback("const LDRH r1,[r0,#0] non-IO", 0x8801u,
                                  0x03000130u);
 
-  expect_arm_block_fallback("STMIA r0,{r1,r2}", 0xE8800006u);
+  expect_arm_block_native_load("STMIA r0,{r1,r2}", 0xE8800006u);
+  expect_arm_block_fallback("STMIA r0!,{r0,r1}", 0xE8A00003u); /* wb base in list */
+  expect_arm_block_fallback("STMIA r0,{r1,pc}", 0xE8808002u);  /* PC in list */
   expect_arm_block_native_load("LDMIA r0,{r1,r2}", 0xE8900006u);
 
   expect_thumb_block_native_transfer("PUSH {r0,r1}", 0xB403u);
