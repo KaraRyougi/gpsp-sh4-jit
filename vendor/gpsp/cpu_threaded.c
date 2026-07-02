@@ -3730,6 +3730,14 @@ void flush_translation_cache_ram(void)
   ewram_code_min = ~0U;
   ewram_code_max =  0U;
   ram_block_tag = INITIAL_TOP_TAG;
+
+  /* The dual-hot dispatch table (sh4_stub.S) caches RESOLVED HOST POINTERS,
+   * including RAM-cache blocks (Thumb returns into IWRAM/EWRAM code). Leaving
+   * them across a RAM flush hands the stub a stale pointer into rewritten
+   * cache memory — a wild jump long after the flush. ROM flush and init
+   * already clear it; this path was the gap. */
+  memset(cgba_dynarec_dual_hot_key, 0, sizeof(cgba_dynarec_dual_hot_key));
+  memset(cgba_dynarec_dual_hot_ptr, 0, sizeof(cgba_dynarec_dual_hot_ptr));
 }
 
 void flush_translation_cache_rom(void)
