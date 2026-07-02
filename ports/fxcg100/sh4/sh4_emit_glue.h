@@ -693,6 +693,34 @@ static inline u8 *sh4g_branch_exit(u8 **tp, uint32_t new_pc,
   return site;
 }
 
+/* Idle-loop branch exit — the dynarec mirror of the interpreter's idle
+ * handling (gba_over.h idle_loop_target_pc + the port's b-to-self detector,
+ * cpu.cc) and of arm_emit.h's generate_branch_idle_eliminate: the branch burns
+ * the REST of the cycle budget (R13 = 0, only when it is still positive, like
+ * the interpreter's `cycles_remaining > 0` guard) and CALLS sh4_update_gba,
+ * which commits R4 to reg[REG_PC] and fast-forwards hardware to the next event.
+ * When the frame completes or an IRQ redirects the PC the call never returns;
+ * otherwise it comes back with a fresh budget and falls through to the normal
+ * patchable chain jump, so exactly one loop iteration runs per event slice
+ * instead of thousands of spins. Returns the patch site. */
+static inline u8 *sh4g_branch_exit_idle(u8 **tp, uint32_t new_pc,
+                                        const void *update_gba_fn,
+                                        const void *block_exit_fn)
+{
+  u8 *site;
+  sh4g_const(tp, new_pc, SH4_REG_ARG0);              /* R4 = target PC */
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_cmppl(&cg, SH4_REG_CYCLES);             /* T = (budget > 0) */
+    sh4g_close(tp, &cg); }
+  sh4g_u16(tp, 0x8B00);                              /* BF +0: keep <=0 budget */
+  sh4g_u16(tp, (uint16_t)(0xE000 | (SH4_REG_CYCLES << 8))); /* MOV #0,R13 */
+  sh4g_far_call(tp, update_gba_fn);                  /* fast-forward events */
+  sh4g_const(tp, new_pc, SH4_REG_ARG0);              /* R4 clobbered by C call */
+  site = sh4g_emit_patch_jump(tp);                   /* chain to target block */
+  sh4g_patch_jump(site, block_exit_fn);              /* default: full exit */
+  return site;
+}
+
 /* After a C handler that returns nonzero in R0 when it changed the guest PC
  * (1 = pure PC change, 2 = store alert; see sh4_interp_helpers.c), leave the
  * block: TST R0,R0 ; BT skip ; R4 = reg[REG_PC] ; R1 = code ; jmp helper_exit.
