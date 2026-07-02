@@ -62,17 +62,20 @@ option(CGBA_SH4_PROFILE_COUNTERS
   "Hardware/debug: count SH4 JIT translations, cache flushes, and helper calls for the ON-menu debug page" OFF)
 option(CGBA_FXCG100_STORAGE
   "Enable gint_world_switch-backed fx-CG100 BFile storage for ROM/config files" ON)
-# 768 KB keeps the .cgba.highbss arena end at 0x8c655300 — the ONLY layout
-# proven safe on real hardware. Growing the cache looked attractive (a
-# 1300-frame soak showed the ~800 KB hot set wholesale-flushing 44 times at
-# 768 KB), but BOTH growth attempts hard-reset the calculator: 1.5 MB (arena
-# end 0x8c715300) overwrote the resident MPM loader at 0x8c700000, and even
-# 1152 KB (end 0x8c6b5300) still reset — live OS state evidently sits well
-# below 0x8c700000. Do not raise this without probing the real bound on
-# hardware with a dedicated test; the flush cost is real but survivable.
-set(CGBA_GPSP_ROM_TRANSLATION_CACHE_SIZE "786432" CACHE STRING
+# The ROM+RAM cache TOTAL must keep the .cgba.highbss arena end at 0x8c655300
+# — the ONLY layout proven safe on real hardware. Growing the arena hard-reset
+# the calculator twice: 1.5 MB ROM cache (arena end 0x8c715300) overwrote the
+# resident MPM loader at 0x8c700000, and even 1152 KB (end 0x8c6b5300) still
+# reset — live OS state sits well below 0x8c700000. Do not grow the TOTAL
+# without probing the real bound with a dedicated hardware test.
+#
+# Within that fixed 1 MiB total, the split favors ROM code: hardware showed the
+# post-BIOS-fix hot translated set at ~739 KB+ (right at the old 768 KB cap →
+# constant wholesale flush-retranslate thrash) while the RAM-code cache used
+# only ~83 KB of its 256 KB. 896/128 relieves the ROM side at no layout risk.
+set(CGBA_GPSP_ROM_TRANSLATION_CACHE_SIZE "917504" CACHE STRING
   "SH4 dynarec ROM translation cache size in bytes")
-set(CGBA_GPSP_RAM_TRANSLATION_CACHE_SIZE "262144" CACHE STRING
+set(CGBA_GPSP_RAM_TRANSLATION_CACHE_SIZE "131072" CACHE STRING
   "SH4 dynarec RAM translation cache size in bytes")
 set(CGBA_GPSP_ROM_BRANCH_HASH_BITS "12" CACHE STRING
   "SH4 dynarec ROM branch-hash = 2^N u32 entries; 12 is 16 KiB, which is friendlier to the SH7305 cache than the upstream 16 / 256 KiB table")
