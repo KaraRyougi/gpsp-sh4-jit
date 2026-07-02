@@ -29,9 +29,11 @@
 extern u8 *memory_map_read[];
 extern u16 io_registers[512];
 int cgba_sh4_thumb_ldst(u32 opcode, u32 pc);
+int cgba_sh4_arm_psr(u32 opcode, u32 pc);
 void sh4_block_exit(u32 pc);
 void sh4_helper_exit(u32 pc);
 void sh4_op2_pc_mem_tramp(void);   /* compact slow-path call (sh4_stub.S) */
+void sh4_op2_pc_tramp(void);
 #if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
 extern u32 cgba_sh4_native_thumb_const_io_count;
 extern u32 cgba_sh4_native_thumb_runtime_io_count;
@@ -276,17 +278,35 @@ static inline int sh4g_thumb_dp_native(u8 **tp, u32 opcode, u32 pc, u32 flag_sta
     return 1;
   }
 
-  /* fmt5 hi-reg ADD/CMP/MOV. PC operands/writes stay on the C path because the
-   * helper handles Thumb's PC+4 read and redispatch semantics. */
+  /* fmt5 hi-reg ADD/CMP/MOV. rs==15 reads the translate-time constant PC+4.
+   * rd==15 MOV — the `mov pc, lr` return idiom, hot in BX-less BIOS-era code
+   * such as the MP2K sound engine — exits through the same contract the C
+   * helper uses (R4 = new PC, R1 = 1: pure PC change -> sh4_pc_redispatch).
+   * ADD pc and MOV pc,pc stay on the C path. */
   if (hi >= 0x44 && hi <= 0x46) {
     unsigned op = (opcode >> 8) & 3;                     /* 0 ADD, 1 CMP, 2 MOV */
     unsigned rd = (opcode & 7) | ((opcode >> 4) & 8);
     unsigned rs = (opcode >> 3) & 0xF;
-    if (rd == 15 || rs == 15)
-      return 0;
+    if (rd == 15) {
+      if (op != 2 || rs == 15)
+        return 0;
+      sh4g_load_greg(tp, rs, SH4_REG_RET);
+      { sh4_codegen cg = sh4g_open(tp);
+        sh4_emit_mov_imm(&cg, -2, SH4_REG_T1);
+        sh4_emit_and(&cg, SH4_REG_T1, SH4_REG_RET);      /* new PC = rs & ~1 */
+        sh4_emit_store_greg(&cg, SH4_REG_RET, SH4_GREG_PC);
+        sh4_emit_mov_reg(&cg, SH4_REG_RET, SH4_REG_ARG0);/* R4 = new PC */
+        sh4_emit_mov_imm(&cg, 1, SH4_REG_T0);            /* R1 = pure PC change */
+        sh4g_close(tp, &cg); }
+      sh4g_far_jmp(tp, (const void *)sh4_helper_exit);
+      return 1;
+    }
     if (op == 1) {                                       /* CMP */
       { sh4_codegen cg = sh4g_open(tp);
         sh4_emit_load_greg(&cg, rd, SH4_REG_T0);
+        sh4g_close(tp, &cg); }
+      if (rs == 15) sh4g_const(tp, pc + 4, SH4_REG_T1);  /* Thumb R15 = PC+4 */
+      else { sh4_codegen cg = sh4g_open(tp);
         sh4_emit_load_greg(&cg, rs, SH4_REG_T1);
         sh4g_close(tp, &cg); }
       sh4g_dp_addsub(tp, 1, rd, 0, 1);
@@ -295,13 +315,19 @@ static inline int sh4g_thumb_dp_native(u8 **tp, u32 opcode, u32 pc, u32 flag_sta
     if (op == 0) {                                       /* ADD */
       { sh4_codegen cg = sh4g_open(tp);
         sh4_emit_load_greg(&cg, rd, SH4_REG_T0);
+        sh4g_close(tp, &cg); }
+      if (rs == 15) sh4g_const(tp, pc + 4, SH4_REG_T1);
+      else { sh4_codegen cg = sh4g_open(tp);
         sh4_emit_load_greg(&cg, rs, SH4_REG_T1);
         sh4g_close(tp, &cg); }
       sh4g_dp_addsub(tp, 0, rd, 1, 0);
       return 1;
     }
     if (op == 2) {                                       /* MOV */
-      { sh4_codegen cg = sh4g_open(tp);
+      if (rs == 15) {
+        sh4g_const(tp, pc + 4, SH4_REG_T0);
+        sh4g_store_greg(tp, SH4_REG_T0, rd);
+      } else { sh4_codegen cg = sh4g_open(tp);
         sh4_emit_load_greg(&cg, rs, SH4_REG_T0);
         sh4_emit_store_greg(&cg, SH4_REG_T0, rd);
         sh4g_close(tp, &cg); }
@@ -310,6 +336,153 @@ static inline int sh4g_thumb_dp_native(u8 **tp, u32 opcode, u32 pc, u32 flag_sta
   }
 
   return 0;
+}
+
+/* Native MRS/MSR (CPSR forms). MRS is a plain register copy: reg[REG_CPSR]
+ * carries the full canonical flag set in this port (set_nzcv / the helpers
+ * write CPSR bits directly), so no flag collapse pass is needed. MSR merges
+ * under gpSP's privileged field mask with three runtime guards to the C
+ * helper: USER mode (different mask + restricted control byte), a mode or
+ * Thumb bit change (needs set_cpu_mode re-banking), and an IRQ-enabled
+ * result with an interrupt actually pending (needs the vector + redispatch).
+ * The hot MP2K bracket — MSR cpsr_c toggling only the I bit with no IRQ due —
+ * stays fully native. SPSR forms and MSR with a PC operand stay on C. */
+static inline int sh4g_arm_psr_native(u8 **tp, u32 opcode, u32 pc)
+{
+  u32 is_msr   = (opcode >> 21) & 1;
+  u32 use_spsr = (opcode >> 22) & 1;
+  if (use_spsr)
+    return 0;
+
+  if (!is_msr) {                                         /* MRS rd, cpsr */
+    u32 rd = (opcode >> 12) & 0xF;
+    if (rd == 15)
+      return 0;
+    sh4g_load_greg(tp, SH4_GREG_CPSR, SH4_REG_T0);
+    sh4g_store_greg(tp, SH4_REG_T0, rd);
+    return 1;
+  }
+
+  {                                                      /* MSR cpsr_<f>, op2 */
+    u32 pfield = ((opcode >> 16) & 1) | ((opcode >> 18) & 2);
+    u32 is_imm = (opcode >> 25) & 1;
+    u32 val = 0, rm = 0;
+    if (is_imm) {
+      u32 imm = opcode & 0xFF, rot = ((opcode >> 8) & 0xF) * 2;
+      val = rot ? ((imm >> rot) | (imm << (32 - rot))) : imm;
+    } else {
+      rm = opcode & 0xF;
+      if (rm == 15)
+        return 0;
+    }
+    if (pfield == 0)
+      return 0;
+
+    if (pfield == 2) {                 /* flags only: mask is 0xF0000000 in
+                                        * BOTH privilege levels -> no guards */
+      sh4g_load_greg(tp, SH4_GREG_CPSR, SH4_REG_T0);
+      sh4g_const(tp, 0x0FFFFFFFu, SH4_REG_T1);
+      { sh4_codegen cg = sh4g_open(tp);
+        sh4_emit_and(&cg, SH4_REG_T1, SH4_REG_T0);
+        sh4g_close(tp, &cg); }
+      if (is_imm)
+        sh4g_const(tp, val & 0xF0000000u, SH4_REG_T1);
+      else {
+        sh4g_load_greg(tp, rm, SH4_REG_T1);
+        sh4g_const(tp, 0xF0000000u, SH4_REG_T2);
+        { sh4_codegen cg = sh4g_open(tp);
+          sh4_emit_and(&cg, SH4_REG_T2, SH4_REG_T1);
+          sh4g_close(tp, &cg); }
+      }
+      { sh4_codegen cg = sh4g_open(tp);
+        sh4_emit_or(&cg, SH4_REG_T1, SH4_REG_T0);
+        sh4_emit_store_greg(&cg, SH4_REG_T0, SH4_GREG_CPSR);
+        sh4g_close(tp, &cg); }
+      return 1;
+    }
+
+    {                                  /* control byte written (pfield 1 / 3) */
+      u32 mask = (pfield == 3) ? 0xF00000EFu : 0x000000EFu;
+      u8 *to_slow[2], *to_store[3], *done;
+      int ns = 0, nst = 0, i;
+
+      if (is_imm) sh4g_const(tp, val, SH4_REG_ARG3);     /* R7 = value */
+      else        sh4g_load_greg(tp, rm, SH4_REG_ARG3);
+
+      sh4g_load_greg(tp, SH4_GREG_CPSR, SH4_REG_T0);
+      { sh4_codegen cg = sh4g_open(tp);
+        sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_ARG1); /* R5 = old CPSR */
+        sh4g_close(tp, &cg); }
+      sh4g_const(tp, ~mask, SH4_REG_T1);
+      { sh4_codegen cg = sh4g_open(tp);
+        sh4_emit_and(&cg, SH4_REG_T1, SH4_REG_T0);       /* old & ~mask */
+        sh4g_close(tp, &cg); }
+      sh4g_const(tp, mask, SH4_REG_T1);
+      { sh4_codegen cg = sh4g_open(tp);
+        sh4_emit_mov_reg(&cg, SH4_REG_ARG3, SH4_REG_T2);
+        sh4_emit_and(&cg, SH4_REG_T1, SH4_REG_T2);       /* val & mask */
+        sh4_emit_or(&cg, SH4_REG_T2, SH4_REG_T0);        /* T0 = new CPSR */
+        sh4g_close(tp, &cg); }
+
+      /* USER mode -> C (restricted mask). Privileged CPU_MODE values are
+       * 0x10.. (PRIVMODE = mode >> 4); MODE_USER is 0x00. */
+      sh4g_load_greg(tp, SH4_GREG_CPU_MODE, SH4_REG_RET);
+      { sh4_codegen cg = sh4g_open(tp);
+        sh4_emit_tst_imm(&cg, 0x10);                     /* T=1: USER */
+        sh4g_close(tp, &cg); }
+      to_slow[ns++] = sh4g_emit_bt_placeholder(tp);
+
+      /* mode or Thumb bit changes -> C (set_cpu_mode re-banking) */
+      { sh4_codegen cg = sh4g_open(tp);
+        sh4_emit_mov_reg(&cg, SH4_REG_ARG1, SH4_REG_RET);
+        sh4_emit_xor(&cg, SH4_REG_T0, SH4_REG_RET);
+        sh4_emit_and_imm(&cg, 0x3F);
+        sh4_emit_tst(&cg, SH4_REG_RET, SH4_REG_RET);     /* T=1: unchanged */
+        sh4g_close(tp, &cg); }
+      to_slow[ns++] = sh4g_emit_bf_placeholder(tp);
+
+      /* IRQs disabled in the NEW value -> nothing can fire, store directly.
+       * (Checked on the new I bit, not old^new: an already-pending IRQ with
+       * I clear must be taken now, exactly like check_for_interrupts.) */
+      { sh4_codegen cg = sh4g_open(tp);
+        sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
+        sh4_emit_tst_imm(&cg, 0x80);                     /* T=1: IRQs enabled */
+        sh4g_close(tp, &cg); }
+      to_store[nst++] = sh4g_emit_bf_placeholder(tp);
+
+      /* IRQs enabled: pending? IE & IF nonzero-ness is byte-order neutral. */
+      sh4g_const(tp, (u32)(uintptr_t)((u8 *)io_registers + 0x200), SH4_REG_T2);
+      { sh4_codegen cg = sh4g_open(tp);
+        sh4_emit_mov_w_load(&cg, SH4_REG_T2, SH4_REG_T1);
+        sh4_emit_extu_w(&cg, SH4_REG_T1, SH4_REG_T1);    /* IE */
+        sh4_emit_add_imm(&cg, 2, SH4_REG_T2);
+        sh4_emit_mov_w_load(&cg, SH4_REG_T2, SH4_REG_ARG2);
+        sh4_emit_extu_w(&cg, SH4_REG_ARG2, SH4_REG_ARG2);/* IF */
+        sh4_emit_tst(&cg, SH4_REG_T1, SH4_REG_ARG2);     /* T=1: none pending */
+        sh4g_close(tp, &cg); }
+      to_store[nst++] = sh4g_emit_bt_placeholder(tp);
+      { sh4_codegen cg = sh4g_open(tp);
+        sh4_emit_add_imm(&cg, 6, SH4_REG_T2);
+        sh4_emit_mov_w_load(&cg, SH4_REG_T2, SH4_REG_RET);
+        sh4_emit_swap_b(&cg, SH4_REG_RET, SH4_REG_RET);  /* IME, true order */
+        sh4_emit_tst_imm(&cg, 1);                        /* T=1: IME off */
+        sh4g_close(tp, &cg); }
+      to_store[nst++] = sh4g_emit_bt_placeholder(tp);
+
+      /* fall-through: an IRQ will fire -> full C helper (vector + exit) */
+      for (i = 0; i < ns; i++)
+        sh4g_patch_cond(to_slow[i], *tp);
+      sh4g_op2_tramp_call(tp, (const void *)sh4_op2_pc_tramp,
+                          (const void *)cgba_sh4_arm_psr, opcode, pc, 0, 0);
+      done = sh4g_emit_bra_placeholder(tp);
+
+      for (i = 0; i < nst; i++)
+        sh4g_patch_cond(to_store[i], *tp);
+      sh4g_store_greg(tp, SH4_REG_T0, SH4_GREG_CPSR);
+      sh4g_patch_bra(done, *tp);
+      return 1;
+    }
+  }
 }
 
 enum {

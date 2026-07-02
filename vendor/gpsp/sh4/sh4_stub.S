@@ -176,6 +176,35 @@ defsymbl(sh4_update_gba)
 lookup_pc_pop:
   lds.l   @r15+, pr               /* discard saved in-block return */
 lookup_pc:
+  /* Hot path: probe the inline ROM branch hash (sh4_indirect_branch_*)
+   * instead of calling the C resolver. Every IRQ return, BIOS exit,
+   * helper PC re-dispatch and update_gba redirect funnels through here —
+   * on hardware that was ~200+ C resolver calls per frame for targets that
+   * are almost always already-translated ROM blocks. The hash stubs handle
+   * the BIOS (<0x4000) fallback themselves and use the same C resolver on
+   * a miss. Single-block diff mode keeps the legacy direct C path: the
+   * stubs' sb slow path returns to main after resolving, which is not what
+   * lookup_pc's mid-run callers expect. */
+  mov.l   lookup_sb, r1
+  mov.l   @r1, r1
+  tst     r1, r1
+  bf      lookup_pc_c             /* single-block diff -> legacy C resolver */
+  mov     #REG_CPSR, r0
+  mov.l   @(r0,r14), r1
+  mov     #REG_PC, r0
+  mov.l   @(r0,r14), r4
+  mov     #0x20, r0
+  tst     r0, r1                  /* T = (thumb bit clear) */
+  bt      1f                      /* ARM mode */
+  bra     sh4_indirect_branch_thumb
+  nop
+1:
+  bra     sh4_indirect_branch_arm
+  nop
+  .align 2
+lookup_sb:
+  .long   _cgba_dynarec_single_block
+lookup_pc_c:
   mov     #REG_CPSR, r0
   mov.l   @(r0,r14), r1
   mov     #0x20, r0

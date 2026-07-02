@@ -708,7 +708,9 @@ static inline void sh4g_prof_block_entry(u8 **tp, u32 pc, int thumb)
 #define arm_multiply_long(name, add_op, flags)                                \
   do { if(!sh4g_arm_multiply_long_native(&translation_ptr, (u32)opcode))      \
          SH4_CALL_OP2(cgba_sh4_arm_multiply_long); } while(0)
-#define arm_psr(op_type, transfer_type, psr_reg)   SH4_CALL_OP2_PC(cgba_sh4_arm_psr)
+#define arm_psr(op_type, transfer_type, psr_reg)                              \
+  do { if (!sh4g_arm_psr_native(&translation_ptr, (u32)opcode, (u32)pc))      \
+         SH4_CALL_OP2_PC(cgba_sh4_arm_psr); } while(0)
 #define arm_swap(type)                             SH4_CALL_OP2_PC_MEM(cgba_sh4_arm_swap)
 
 #define arm_hle_div(cpu_mode)                                                 \
