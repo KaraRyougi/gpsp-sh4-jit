@@ -62,7 +62,11 @@ option(CGBA_SH4_PROFILE_COUNTERS
   "Hardware/debug: count SH4 JIT translations, cache flushes, and helper calls for the ON-menu debug page" OFF)
 option(CGBA_FXCG100_STORAGE
   "Enable gint_world_switch-backed fx-CG100 BFile storage for ROM/config files" ON)
-set(CGBA_GPSP_ROM_TRANSLATION_CACHE_SIZE "786432" CACHE STRING
+# Sized from a 1300-frame Metroid soak: the hot translated set is ~800 KB and a
+# 768 KB cache wholesale-flushed 44 times (once per ~30 frames — a hash wipe +
+# ~300-block retranslation storm each). 1.5 MB fits the set with room to grow
+# and still leaves ~400 KB of .cgba.highbss arena headroom (limit 0x8c780000).
+set(CGBA_GPSP_ROM_TRANSLATION_CACHE_SIZE "1572864" CACHE STRING
   "SH4 dynarec ROM translation cache size in bytes")
 set(CGBA_GPSP_RAM_TRANSLATION_CACHE_SIZE "262144" CACHE STRING
   "SH4 dynarec RAM translation cache size in bytes")
