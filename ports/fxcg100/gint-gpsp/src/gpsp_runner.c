@@ -4,6 +4,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include <gint/exc.h>
+
 #include <streams/file_stream.h>
 
 #include "fxcg100_platform.h"
@@ -130,6 +132,86 @@ static void debug_line(fxcg100_debug_info *debug, const char *fmt, ...)
 	va_end(ap);
 	debug->count++;
 }
+
+/* ---- crash reporting -------------------------------------------------------
+ * Custom gint panic handler: on any CPU exception, render the GUEST CPU state
+ * next to the hardware exception info, so a crash photo pinpoints the guest
+ * code path (e.g. a JIT wild jump) without a debugger. Also the target of the
+ * explicit wild-jump trap below (a synthetic panic code). */
+#define CGBA_EXC_WILD_JUMP 0x0CBAu
+
+static uint32_t cgba_wild_jump_pc = 0xFFFFFFFFu;
+
+extern int dynarec_enable;
+
+static void cgba_panic_text(int row, const char *fmt, ...)
+{
+	char line[44];
+	va_list ap;
+
+	va_start(ap, fmt);
+	vsnprintf(line, sizeof line, fmt, ap);
+	va_end(ap);
+	fxcg100_lcd_draw_text(4, 4 + (unsigned)row * 14, line, 0xFFFF, 0x0000);
+}
+
+__attribute__((noreturn))
+static void cgba_crash_panic(uint32_t code)
+{
+	uint32_t tea = *(volatile uint32_t *)0xFF00000Cu;   /* faulting address */
+	uint32_t spc;                                       /* faulting host PC */
+	int row = 0;
+
+	__asm__ volatile("stc spc, %0" : "=r"(spc));
+
+	fxcg100_lcd_clear(0x0000);
+	cgba_panic_text(row++, "CGBA CRASH  EXC=%03lX%s", (unsigned long)code,
+		code == CGBA_EXC_WILD_JUMP ? " (JIT WILD JUMP)" : "");
+	cgba_panic_text(row++, "HOST PC=%08lX TEA=%08lX",
+		(unsigned long)spc, (unsigned long)tea);
+	cgba_panic_text(row++, "CORE=%s  WILD=%08lX",
+		dynarec_enable ? "JIT" : "INT", (unsigned long)cgba_wild_jump_pc);
+	cgba_panic_text(row++, "GBA PC=%08lX CPSR=%08lX",
+		(unsigned long)reg[REG_PC], (unsigned long)reg[REG_CPSR]);
+	cgba_panic_text(row++, "GBA LR=%08lX SP=%08lX",
+		(unsigned long)reg[REG_LR], (unsigned long)reg[REG_SP]);
+	cgba_panic_text(row++, "GBA R0=%08lX R1=%08lX",
+		(unsigned long)reg[0], (unsigned long)reg[1]);
+#ifdef CGBA_DYNAREC
+	cgba_panic_text(row++, "JIT ROM=%luk RAM=%luk",
+		(unsigned long)((uintptr_t)rom_translation_ptr -
+			(uintptr_t)rom_translation_cache) / 1024u,
+		(unsigned long)((uintptr_t)ram_translation_ptr -
+			(uintptr_t)ram_translation_cache) / 1024u);
+#endif
+	cgba_panic_text(row++, "photo this screen; then RESTART");
+	fxcg100_lcd_update();
+
+	for(;;)
+		;
+}
+
+void cgba_crash_reporting_init(void)
+{
+	gint_panic_set(cgba_crash_panic);
+}
+
+#ifdef CGBA_DYNAREC
+/* Called by block_lookup_address_* (cpu_threaded.c) when an EXECUTED guest
+ * branch lands on an untranslatable address: block_lookup_translate returns
+ * the (u8 *)(~0) sentinel, which the dispatch stubs would otherwise JMP to
+ * (a garbage host address -> random TLB miss / address error). Panic with a
+ * recognizable code and the guest target instead. Speculative (never-executed)
+ * exit resolution does not come through this path. */
+__attribute__((noreturn))
+void cgba_sh4_wild_jump(u32 pc)
+{
+	cgba_wild_jump_pc = pc;
+	gint_panic(CGBA_EXC_WILD_JUMP);
+	for(;;)                       /* gint_panic never returns */
+		;
+}
+#endif
 
 #if defined(CGBA_DYNAREC) && \
 	(defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS))

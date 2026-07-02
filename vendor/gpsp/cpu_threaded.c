@@ -2860,6 +2860,13 @@ u8 function_cc *block_lookup_address_arm(u32 pc)
   for (i = 0; i < 4; i++) {
     u8 *ret = block_lookup_translate_arm(pc);
     if (ret) {
+#ifdef SH4_ARCH
+      /* An EXECUTED branch resolved to the untranslatable-address sentinel:
+       * jumping to it would fault at a random host address. Fail loudly with
+       * the guest target instead (a wild guest branch is a codegen bug). */
+      if (ret == (u8 *)(~(uintptr_t)0))
+        cgba_sh4_wild_jump(pc);
+#endif
       translate_icache_sync();
       return ret;
     }
@@ -2885,6 +2892,10 @@ u8 function_cc *block_lookup_address_thumb(u32 pc)
   for (i = 0; i < 4; i++) {
     u8 *ret = block_lookup_translate_thumb(pc);
     if (ret) {
+#ifdef SH4_ARCH
+      if (ret == (u8 *)(~(uintptr_t)0))   /* see block_lookup_address_arm */
+        cgba_sh4_wild_jump(pc);
+#endif
       translate_icache_sync();
       return ret;
     }

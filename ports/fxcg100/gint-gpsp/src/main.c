@@ -846,6 +846,7 @@ static int cgba_headless_test(uint16_t *framebuffer)
 	unsigned n, i, rom, frame_base, frame_end;
 
 	fxcg100_lcd_init();
+	cgba_crash_reporting_init();
 	cgba_gpsp_refresh_roms();
 	hputs_dbg("=== CGBA headless test ===");
 	snprintf(buf, sizeof buf, "rom_count=%u builtin=%u",
@@ -1147,6 +1148,7 @@ int main(void)
 	cgba_pacer_init(&pacer, 60, 9);
 
 	fxcg100_lcd_init();
+	cgba_crash_reporting_init();
 #ifdef CGBA_GPSP_DIRECT_LCD_TEST
 	if(start_gpsp(framebuffer, CGBA_GPSP_ROM_LCD_TEST) != 0)
 		return exit_to_os(1);
