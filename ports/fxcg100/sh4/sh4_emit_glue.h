@@ -262,70 +262,102 @@ static inline void sh4g_op2_tramp_call(u8 **tp, const void *tramp,
   }
 }
 
-/* ---- N/Z materialization (literal-free) into REG_CPSR -------------------- */
+/* ---- N/Z/C/V materialization (masked, literal-free) into REG_CPSR -------- */
 
-/* result must be in R1 (SH4_REG_T0); clobbers R0/R2/R3. */
-static inline void sh4g_set_nz(u8 **tp, unsigned result)
+/* Flag-liveness masks use gpSP's flag_status low-nibble convention:
+ *   N = 0x8, Z = 0x4, C = 0x2, V = 0x1  (x86_emit.h check_generate_*).
+ * A cleared bit means the flag is DEAD at this instruction — no later reader
+ * before the next writer on any path (thumb_dead_flag_eliminate /
+ * arm_flag_status + arm_dead_flag_eliminate) — so codegen may skip producing
+ * it. Producing a dead flag with its correct value is always safe, which lets
+ * the writer round a sparse mask UP to the nearest top-contiguous set
+ * {0x8, 0xC, 0xE, 0xF} whose bits it can clear with the literal-free shift
+ * trick. Callers must compute inputs (carry/overflow regs) for the ROUNDED
+ * mask, so round first, then compute, then write. */
+static inline u32 sh4g_flags_round(u32 mask)
 {
-  sh4_codegen cg = sh4g_open(tp);
-  const unsigned r_cpsr = SH4_REG_T1; /* R2 */
-  const unsigned r_tmp  = SH4_REG_T2; /* R3 */
+  if (!mask)       return 0;
+  if (mask & 0x1)  return 0xF;
+  if (mask & 0x2)  return 0xE;
+  if (mask & 0x4)  return 0xC;
+  return 0x8;
+}
 
+/* Write the flags selected by `eff` (a ROUNDED mask: 0/0x8/0xC/0xE/0xF) into
+ * reg[REG_CPSR], preserving the rest. N/Z come from `result` (must be R1);
+ * C/V come from 0/1 values in rc/rv, read only when their bit is set — pass
+ * anything for unused ones. rc/rv must not be R0/R2/R3. Clobbers R0/R2/R3.
+ * The eff==0xF/0xE/0xC orderings are byte-identical to the historical
+ * sh4g_set_nzcv/set_nzc/set_nz, which the emission audits pin. */
+static inline void sh4g_set_flags(u8 **tp, unsigned result, unsigned rc,
+                                  unsigned rv, u32 eff)
+{
+  sh4_codegen cg;
+  unsigned r_cpsr = SH4_REG_T1;               /* R2 */
+  unsigned r_tmp  = SH4_REG_T2;               /* R3 */
+
+  if (!eff)
+    return;
+  cg = sh4g_open(tp);
   sh4_emit_load_greg(&cg, SH4_GREG_CPSR, r_cpsr);
-  sh4_emit_shll2(&cg, r_cpsr);                 /* clear bits 31..30 */
-  sh4_emit_shlr2(&cg, r_cpsr);
+  switch (eff) {                              /* clear the live bits */
+  case 0x8:
+    sh4_emit_shll(&cg, r_cpsr);  sh4_emit_shlr(&cg, r_cpsr);  break;
+  case 0xC:
+    sh4_emit_shll2(&cg, r_cpsr); sh4_emit_shlr2(&cg, r_cpsr); break;
+  case 0xE:
+    sh4_emit_shll2(&cg, r_cpsr); sh4_emit_shll(&cg, r_cpsr);
+    sh4_emit_shlr2(&cg, r_cpsr); sh4_emit_shlr(&cg, r_cpsr);  break;
+  default:                                    /* 0xF */
+    sh4_emit_shll2(&cg, r_cpsr); sh4_emit_shll2(&cg, r_cpsr);
+    sh4_emit_shlr2(&cg, r_cpsr); sh4_emit_shlr2(&cg, r_cpsr); break;
+  }
 
-  /* N = result & 0x80000000 */
-  sh4_emit_mov_reg(&cg, result, r_tmp);
-  sh4_emit_mov_imm(&cg, 1, SH4_REG_RET);
-  sh4_emit_rotr(&cg, SH4_REG_RET);             /* R0 = 0x80000000 */
-  sh4_emit_and(&cg, SH4_REG_RET, r_tmp);
-  sh4_emit_or(&cg, r_tmp, r_cpsr);
-
-  /* Z = (result == 0) << 30 */
-  sh4_emit_tst(&cg, result, result);
-  sh4_emit_movt(&cg, r_tmp);
-  sh4_emit_mov_imm(&cg, 30, SH4_REG_RET);
-  sh4_emit_shld(&cg, SH4_REG_RET, r_tmp);
-  sh4_emit_or(&cg, r_tmp, r_cpsr);
-
+  if (eff & 0x8) {                            /* N = result & 0x80000000 */
+    sh4_emit_mov_reg(&cg, result, r_tmp);
+    sh4_emit_mov_imm(&cg, 1, SH4_REG_RET);
+    sh4_emit_rotr(&cg, SH4_REG_RET);          /* R0 = 0x80000000 */
+    sh4_emit_and(&cg, SH4_REG_RET, r_tmp);
+    sh4_emit_or(&cg, r_tmp, r_cpsr);
+  }
+  if (eff & 0x4) {                            /* Z = (result == 0) << 30 */
+    sh4_emit_tst(&cg, result, result);
+    sh4_emit_movt(&cg, r_tmp);
+    sh4_emit_mov_imm(&cg, 30, SH4_REG_RET);
+    sh4_emit_shld(&cg, SH4_REG_RET, r_tmp);
+    sh4_emit_or(&cg, r_tmp, r_cpsr);
+  }
+  if (eff & 0x2) {                            /* C = rc << 29 */
+    sh4_emit_mov_reg(&cg, rc, r_tmp);
+    sh4_emit_mov_imm(&cg, 29, SH4_REG_RET);
+    sh4_emit_shld(&cg, SH4_REG_RET, r_tmp);
+    sh4_emit_or(&cg, r_tmp, r_cpsr);
+  }
+  if (eff & 0x1) {                            /* V = rv << 28 */
+    sh4_emit_mov_reg(&cg, rv, r_tmp);
+    sh4_emit_mov_imm(&cg, 28, SH4_REG_RET);
+    sh4_emit_shld(&cg, SH4_REG_RET, r_tmp);
+    sh4_emit_or(&cg, r_tmp, r_cpsr);
+  }
   sh4_emit_store_greg(&cg, r_cpsr, SH4_GREG_CPSR);
   sh4g_close(tp, &cg);
 }
 
-/* Set N/Z/C from result and a 0/1 carry register, preserving V and mode bits.
- * result must be R1; carry must not be R0/R2/R3. */
+/* Historical entry points, kept for the paths that always want the flags. */
+static inline void sh4g_set_nz(u8 **tp, unsigned result)
+{
+  sh4g_set_flags(tp, result, SH4_REG_ARG0, SH4_REG_ARG0, 0xC);
+}
+
+static inline void sh4g_set_nz_m(u8 **tp, unsigned result, u32 mask)
+{
+  sh4g_set_flags(tp, result, SH4_REG_ARG0, SH4_REG_ARG0,
+                 sh4g_flags_round(mask & 0xC));
+}
+
 static inline void sh4g_set_nzc(u8 **tp, unsigned result, unsigned carry)
 {
-  sh4_codegen cg = sh4g_open(tp);
-  const unsigned r_cpsr = SH4_REG_T1; /* R2 */
-  const unsigned r_tmp  = SH4_REG_T2; /* R3 */
-
-  sh4_emit_load_greg(&cg, SH4_GREG_CPSR, r_cpsr);
-  sh4_emit_shll2(&cg, r_cpsr);                 /* clear bits 31..29 (N/Z/C) */
-  sh4_emit_shll(&cg, r_cpsr);
-  sh4_emit_shlr2(&cg, r_cpsr);
-  sh4_emit_shlr(&cg, r_cpsr);
-
-  sh4_emit_mov_reg(&cg, result, r_tmp);         /* N */
-  sh4_emit_mov_imm(&cg, 1, SH4_REG_RET);
-  sh4_emit_rotr(&cg, SH4_REG_RET);
-  sh4_emit_and(&cg, SH4_REG_RET, r_tmp);
-  sh4_emit_or(&cg, r_tmp, r_cpsr);
-
-  sh4_emit_tst(&cg, result, result);            /* Z */
-  sh4_emit_movt(&cg, r_tmp);
-  sh4_emit_mov_imm(&cg, 30, SH4_REG_RET);
-  sh4_emit_shld(&cg, SH4_REG_RET, r_tmp);
-  sh4_emit_or(&cg, r_tmp, r_cpsr);
-
-  sh4_emit_mov_reg(&cg, carry, r_tmp);          /* C */
-  sh4_emit_mov_imm(&cg, 29, SH4_REG_RET);
-  sh4_emit_shld(&cg, SH4_REG_RET, r_tmp);
-  sh4_emit_or(&cg, r_tmp, r_cpsr);
-
-  sh4_emit_store_greg(&cg, r_cpsr, SH4_GREG_CPSR);
-  sh4g_close(tp, &cg);
+  sh4g_set_flags(tp, result, carry, carry, 0xE);
 }
 
 /* ---- data-processing core ------------------------------------------------ */
@@ -372,63 +404,30 @@ static inline int sh4g_dp_is_test(int op)
   return op == SH4DP_CMP || op == SH4DP_CMN || op == SH4DP_TST || op == SH4DP_TEQ;
 }
 
-/* rd/rn are guest reg indices; rm guest reg index. */
-static inline void sh4g_dp_reg(u8 **tp, int op, unsigned rd, unsigned rn,
-                               unsigned rm, int set_flags)
-{
-  sh4_codegen cg = sh4g_open(tp);
-  if (sh4g_dp_second_only(op))
-    sh4_emit_load_greg(&cg, rm, SH4_REG_T1);          /* second only */
-  else {
-    sh4_emit_load_greg(&cg, rn, SH4_REG_T0);
-    sh4_emit_load_greg(&cg, rm, SH4_REG_T1);
-  }
-  sh4g_dp_compute(&cg, op);
-  if (!sh4g_dp_is_test(op))
-    sh4_emit_store_greg(&cg, SH4_REG_T0, rd);
-  sh4g_close(tp, &cg);
-  if (set_flags)
-    sh4g_set_nz(tp, SH4_REG_T0);
-}
-
-/* rn guest reg index; imm immediate operand. */
-static inline void sh4g_dp_imm(u8 **tp, int op, unsigned rd, unsigned rn,
-                               uint32_t imm, int set_flags)
-{
-  sh4_codegen cg = sh4g_open(tp);
-  if (!sh4g_dp_second_only(op))
-    sh4_emit_load_greg(&cg, rn, SH4_REG_T0);
-  sh4g_close(tp, &cg);
-  sh4g_const(tp, imm, SH4_REG_T1);                    /* second = imm */
-  cg = sh4g_open(tp);
-  sh4g_dp_compute(&cg, op);
-  if (!sh4g_dp_is_test(op))
-    sh4_emit_store_greg(&cg, SH4_REG_T0, rd);
-  sh4g_close(tp, &cg);
-  if (set_flags)
-    sh4g_set_nz(tp, SH4_REG_T0);
-}
-
 /* ---- shifts (LSL/LSR/ASR/ROR by imm or reg) ------------------------------ */
 enum { SH4SH_LSL, SH4SH_LSR, SH4SH_ASR, SH4SH_ROR };
 
+/* fmask = live-flag mask (N=8 Z=4 C=2 V=1); the shifter carry is computed only
+ * when C is live, which drops 6 instructions from the common dead-flag case. */
 static inline void sh4g_shift_imm(u8 **tp, int kind, unsigned rd, unsigned rs,
-                                  unsigned imm5, int set_flags)
+                                  unsigned imm5, u32 fmask)
 {
   sh4_codegen cg = sh4g_open(tp);
   const unsigned carry = SH4_REG_ARG0;
   int preserves_c = (kind == SH4SH_LSL && imm5 == 0);
+  int want_c = (fmask & 0x2) && !preserves_c;
   sh4_emit_load_greg(&cg, rs, SH4_REG_T0);
   if (imm5 != 0) {
-    sh4_emit_mov_reg(&cg, SH4_REG_T0, carry);
-    sh4_emit_mov_imm(&cg,
-      (kind == SH4SH_LSL) ? -(int)(32 - imm5) : -(int)(imm5 - 1),
-      SH4_REG_RET);
-    sh4_emit_shld(&cg, SH4_REG_RET, carry);
-    sh4_emit_mov_reg(&cg, carry, SH4_REG_RET);
-    sh4_emit_and_imm(&cg, 1);
-    sh4_emit_mov_reg(&cg, SH4_REG_RET, carry);
-
+    if (want_c) {
+      sh4_emit_mov_reg(&cg, SH4_REG_T0, carry);
+      sh4_emit_mov_imm(&cg,
+        (kind == SH4SH_LSL) ? -(int)(32 - imm5) : -(int)(imm5 - 1),
+        SH4_REG_RET);
+      sh4_emit_shld(&cg, SH4_REG_RET, carry);
+      sh4_emit_mov_reg(&cg, carry, SH4_REG_RET);
+      sh4_emit_and_imm(&cg, 1);
+      sh4_emit_mov_reg(&cg, SH4_REG_RET, carry);
+    }
     sh4_emit_mov_imm(&cg, (kind == SH4SH_LSL) ? (int)imm5 : -(int)imm5,
       SH4_REG_RET);
     if (kind == SH4SH_ASR)
@@ -437,24 +436,26 @@ static inline void sh4g_shift_imm(u8 **tp, int kind, unsigned rd, unsigned rs,
       sh4_emit_shld(&cg, SH4_REG_RET, SH4_REG_T0);
   } else if (kind == SH4SH_LSR) {
     /* Thumb LSR #0 means LSR #32 -> result is 0. */
-    sh4_emit_mov_reg(&cg, SH4_REG_T0, carry);
-    sh4_emit_shll(&cg, carry);
-    sh4_emit_movt(&cg, carry);
+    if (want_c) {
+      sh4_emit_mov_reg(&cg, SH4_REG_T0, carry);
+      sh4_emit_shll(&cg, carry);
+      sh4_emit_movt(&cg, carry);
+    }
     sh4_emit_mov_imm(&cg, 0, SH4_REG_T0);
   } else if (kind == SH4SH_ASR) {
     /* Thumb ASR #0 means ASR #32 -> sign extension (0 or -1). */
-    sh4_emit_mov_reg(&cg, SH4_REG_T0, carry);
-    sh4_emit_shll(&cg, carry);
-    sh4_emit_movt(&cg, carry);
+    if (want_c) {
+      sh4_emit_mov_reg(&cg, SH4_REG_T0, carry);
+      sh4_emit_shll(&cg, carry);
+      sh4_emit_movt(&cg, carry);
+    }
     sh4_emit_mov_imm(&cg, -31, SH4_REG_RET);
     sh4_emit_shad(&cg, SH4_REG_RET, SH4_REG_T0);
   }                                                   /* LSL #0 is a no-op */
   sh4_emit_store_greg(&cg, SH4_REG_T0, rd);
   sh4g_close(tp, &cg);
-  if (set_flags) {
-    if (preserves_c) sh4g_set_nz(tp, SH4_REG_T0);
-    else             sh4g_set_nzc(tp, SH4_REG_T0, carry);
-  }
+  sh4g_set_flags(tp, SH4_REG_T0, carry, carry,
+                 sh4g_flags_round(fmask & (want_c ? 0xE : 0xC)));
 }
 
 /* Register-amount shifts (LSL/LSR/ASR/ROR Rd,Rs) are routed to a C helper

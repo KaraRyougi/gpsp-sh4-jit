@@ -39,59 +39,19 @@ extern u32 cgba_sh4_native_thumb_const_io_count;
 extern u32 cgba_sh4_native_thumb_runtime_io_count;
 #endif
 
-/* Write N/Z/C/V into reg[REG_CPSR] from a result register plus C and V already
- * reduced to 0/1 in rc/rv. N = result bit31, Z = (result==0). rc and rv must NOT
- * be R1/R2/R3 (the working set used here). Mirrors sh4g_set_nz's N/Z path. */
-static inline void sh4g_set_nzcv(u8 **tp, unsigned result, unsigned rc, unsigned rv)
-{
-  sh4_codegen cg = sh4g_open(tp);
-  const unsigned cpsr = SH4_REG_T1; /* R2 */
-  const unsigned tmp  = SH4_REG_T2; /* R3 */
+/* NZCV packing lives in sh4g_set_flags (sh4_emit_glue.h), masked by the
+ * per-instruction flag liveness the scan pass computes. */
 
-  sh4_emit_load_greg(&cg, SH4_GREG_CPSR, cpsr);
-  sh4_emit_shll2(&cg, cpsr);                 /* clear bits 31..28 (N,Z,C,V) */
-  sh4_emit_shll2(&cg, cpsr);
-  sh4_emit_shlr2(&cg, cpsr);
-  sh4_emit_shlr2(&cg, cpsr);
-
-  /* N = result & 0x80000000 (already in position 31) */
-  sh4_emit_mov_reg(&cg, result, tmp);
-  sh4_emit_mov_imm(&cg, 1, SH4_REG_RET);
-  sh4_emit_rotr(&cg, SH4_REG_RET);           /* R0 = 0x80000000 */
-  sh4_emit_and(&cg, SH4_REG_RET, tmp);
-  sh4_emit_or(&cg, tmp, cpsr);
-
-  /* Z = (result == 0) << 30 */
-  sh4_emit_tst(&cg, result, result);
-  sh4_emit_movt(&cg, tmp);
-  sh4_emit_mov_imm(&cg, 30, SH4_REG_RET);
-  sh4_emit_shld(&cg, SH4_REG_RET, tmp);
-  sh4_emit_or(&cg, tmp, cpsr);
-
-  /* C = rc << 29 */
-  sh4_emit_mov_reg(&cg, rc, tmp);
-  sh4_emit_mov_imm(&cg, 29, SH4_REG_RET);
-  sh4_emit_shld(&cg, SH4_REG_RET, tmp);
-  sh4_emit_or(&cg, tmp, cpsr);
-
-  /* V = rv << 28 */
-  sh4_emit_mov_reg(&cg, rv, tmp);
-  sh4_emit_mov_imm(&cg, 28, SH4_REG_RET);
-  sh4_emit_shld(&cg, SH4_REG_RET, tmp);
-  sh4_emit_or(&cg, tmp, cpsr);
-
-  sh4_emit_store_greg(&cg, cpsr, SH4_GREG_CPSR);
-  sh4g_close(tp, &cg);
-}
-
-/* ADD/SUB of (a in R1, b in R2) with full NZCV, result left in R1 and stored to
- * reg[rd] when write_result. Verified recipe:
+/* ADD/SUB of (a in R1, b in R2), result left in R1 and stored to reg[rd] when
+ * write_result. fmask = live-flag mask (N=8 Z=4 C=2 V=1) — rounded up so only
+ * the live flags' inputs are computed. Verified full recipe:
  *   ADD: clrt; addc => result + C in T;  addv on a copy => V in T.
  *   SUB: cmp/hs => ARM C in T (a>=b);  sub => result;  subv on a copy => V.
- * C and V are captured to R4/R5 (movt) and packed by sh4g_set_nzcv. */
+ * C and V are captured to R4/R5 (movt) and packed by sh4g_set_flags. */
 static inline void sh4g_dp_addsub(u8 **tp, int is_sub, unsigned rd,
-                                  int write_result, int set_flags)
+                                  int write_result, u32 fmask)
 {
+  u32 eff = sh4g_flags_round(fmask & 0xF);
   sh4_codegen cg = sh4g_open(tp);
   const unsigned a = SH4_REG_T0;     /* R1 = first / result */
   const unsigned b = SH4_REG_T1;     /* R2 = second */
@@ -99,26 +59,31 @@ static inline void sh4g_dp_addsub(u8 **tp, int is_sub, unsigned rd,
   const unsigned rc = SH4_REG_ARG0;  /* R4 = C (0/1) */
   const unsigned rv = SH4_REG_ARG1;  /* R5 = V (0/1) */
 
-  if (set_flags)
+  if (eff & 0x1)
     sh4_emit_mov_reg(&cg, a, acopy);           /* save original a for V */
   if (is_sub) {
-    if (set_flags) { sh4_emit_cmphs(&cg, b, a); sh4_emit_movt(&cg, rc); }
+    if (eff & 0x2) { sh4_emit_cmphs(&cg, b, a); sh4_emit_movt(&cg, rc); }
     sh4_emit_sub(&cg, b, a);                    /* a = a - b (result) */
-    if (set_flags) { sh4_emit_subv(&cg, b, acopy); sh4_emit_movt(&cg, rv); }
-  } else if (set_flags) {
-    sh4_emit_clrt(&cg);
-    sh4_emit_addc(&cg, b, a);                   /* a = a + b + 0, T = carry = ARM C */
-    sh4_emit_movt(&cg, rc);
-    sh4_emit_addv(&cg, b, acopy);               /* T = signed overflow = V */
-    sh4_emit_movt(&cg, rv);
+    if (eff & 0x1) { sh4_emit_subv(&cg, b, acopy); sh4_emit_movt(&cg, rv); }
+  } else if (eff & 0x3) {
+    if (eff & 0x2) {
+      sh4_emit_clrt(&cg);
+      sh4_emit_addc(&cg, b, a);                 /* a = a + b + 0, T = ARM C */
+      sh4_emit_movt(&cg, rc);
+    } else {
+      sh4_emit_add_reg(&cg, b, a);
+    }
+    if (eff & 0x1) {
+      sh4_emit_addv(&cg, b, acopy);             /* T = signed overflow = V */
+      sh4_emit_movt(&cg, rv);
+    }
   } else {
-    sh4_emit_add_reg(&cg, b, a);                /* a = a + b (no flags) */
+    sh4_emit_add_reg(&cg, b, a);                /* a = a + b (no C/V wanted) */
   }
   if (write_result)
     sh4_emit_store_greg(&cg, a, rd);
   sh4g_close(tp, &cg);
-  if (set_flags)
-    sh4g_set_nzcv(tp, SH4_REG_T0, SH4_REG_ARG0, SH4_REG_ARG1);
+  sh4g_set_flags(tp, SH4_REG_T0, SH4_REG_ARG0, SH4_REG_ARG1, eff);
 }
 
 /* ADC/SBC/RSC: carry-in add/subtract of (a in R1, b in R2), result in R1. The
@@ -127,8 +92,9 @@ static inline void sh4g_dp_addsub(u8 **tp, int is_sub, unsigned rd,
  * subtract (ARM C = !borrow). V uses the bit formula from the saved operands:
  *   add:  V = (~(a^b) & (a^res)) >> 31     sub: V = ((a^b) & (a^res)) >> 31. */
 static inline void sh4g_dp_carry(u8 **tp, int is_sub, unsigned rd,
-                                 int write_result, int set_flags)
+                                 int write_result, u32 fmask)
 {
+  u32 eff = sh4g_flags_round(fmask & 0xF);
   sh4_codegen cg = sh4g_open(tp);
   const unsigned a  = SH4_REG_T0;    /* R1 = first / result */
   const unsigned b  = SH4_REG_T1;    /* R2 = second (preserved by addc/subc) */
@@ -137,13 +103,13 @@ static inline void sh4g_dp_carry(u8 **tp, int is_sub, unsigned rd,
   const unsigned rv = SH4_REG_ARG1;  /* R5 = V (0/1) */
   const unsigned t  = SH4_REG_T2;    /* R3 scratch */
 
-  if (set_flags) sh4_emit_mov_reg(&cg, a, a0);
+  if (eff & 0x1) sh4_emit_mov_reg(&cg, a, a0);
   if (!is_sub) {                                  /* ADC: T = old C, then a+b+C */
     sh4_emit_load_greg(&cg, SH4_GREG_CPSR, SH4_REG_RET);
     sh4_emit_shll2(&cg, SH4_REG_RET);
     sh4_emit_shll(&cg, SH4_REG_RET);              /* T = CPSR bit29 = old C */
     sh4_emit_addc(&cg, b, a);                     /* a = a + b + C, T = C-out */
-    if (set_flags) sh4_emit_movt(&cg, rc);
+    if (eff & 0x2) sh4_emit_movt(&cg, rc);
   } else {                                        /* SBC/RSC: T = !old C, then a-b-!C */
     sh4_emit_load_greg(&cg, SH4_GREG_CPSR, t);
     sh4_emit_mov_imm(&cg, 1, SH4_REG_RET);
@@ -151,14 +117,14 @@ static inline void sh4g_dp_carry(u8 **tp, int is_sub, unsigned rd,
     sh4_emit_shlr2(&cg, SH4_REG_RET);             /* R0 = 0x20000000 (C bit) */
     sh4_emit_tst(&cg, SH4_REG_RET, t);            /* T = (old C == 0) = !C */
     sh4_emit_subc(&cg, b, a);                     /* a = a - b - !C, T = borrow */
-    if (set_flags) {                              /* ARM C = !borrow */
+    if (eff & 0x2) {                              /* ARM C = !borrow */
       sh4_emit_movt(&cg, rc);
       sh4_emit_not(&cg, rc, SH4_REG_RET);
       sh4_emit_and_imm(&cg, 1);
       sh4_emit_mov_reg(&cg, SH4_REG_RET, rc);
     }
   }
-  if (set_flags) {                                /* V from saved a0, b, res */
+  if (eff & 0x1) {                                /* V from saved a0, b, res */
     sh4_emit_mov_reg(&cg, a0, t); sh4_emit_xor(&cg, b, t);     /* t = a0 ^ b */
     if (!is_sub) sh4_emit_not(&cg, t, t);                       /* add: ~(a0^b) */
     sh4_emit_mov_reg(&cg, a0, SH4_REG_RET); sh4_emit_xor(&cg, a, SH4_REG_RET); /* R0 = a0^res */
@@ -168,20 +134,21 @@ static inline void sh4g_dp_carry(u8 **tp, int is_sub, unsigned rd,
   }
   if (write_result) sh4_emit_store_greg(&cg, a, rd);
   sh4g_close(tp, &cg);
-  if (set_flags)
-    sh4g_set_nzcv(tp, SH4_REG_T0, SH4_REG_ARG0, SH4_REG_ARG1);
+  sh4g_set_flags(tp, SH4_REG_T0, SH4_REG_ARG0, SH4_REG_ARG1, eff);
 }
 
 /* Emit native SH4 for the Thumb data-proc `opcode`, or return 0 to fall back to
- * the C helper. flag_status is gpSP's per-instruction dead-flag mask, but the
- * SH4 path deliberately ignores it for now: memory/DMA/IRQ exits can expose CPSR
- * between a "dead" flag write and the next in-block consumer. Exact flags are
- * the correctness baseline; safe exit-aware flag liveness can come later. */
+ * the C helper. flag_status bits 0-3 are gpSP's per-instruction live-flag mask
+ * (thumb_dead_flag_eliminate): a clear bit has no reader before the next writer
+ * on any path — including the conservative all-live at block ends and before
+ * every PC-changer — so skipping its materialization is unobservable except at
+ * mid-block store-alert exits, the same trade the upstream x86/ARM backends
+ * ship. Producing extra flags is always safe; sh4g_flags_round exploits that. */
 static inline int sh4g_thumb_dp_native(u8 **tp, u32 opcode, u32 pc, u32 flag_status)
 {
   u32 hi = (opcode >> 8) & 0xFF;
+  u32 fm = flag_status & 0xF;
   (void)pc;
-  (void)flag_status;
 
   if (opcode == 0x46C0u)                                /* MOV r8,r8: Thumb NOP */
     return 1;
@@ -191,7 +158,7 @@ static inline int sh4g_thumb_dp_native(u8 **tp, u32 opcode, u32 pc, u32 flag_sta
     unsigned rd = (opcode >> 8) & 7;
     sh4g_const(tp, opcode & 0xFF, SH4_REG_T0);
     sh4g_store_greg(tp, SH4_REG_T0, rd);
-    sh4g_set_nz(tp, SH4_REG_T0);
+    sh4g_set_nz_m(tp, SH4_REG_T0, fm);
     return 1;
   }
 
@@ -199,12 +166,14 @@ static inline int sh4g_thumb_dp_native(u8 **tp, u32 opcode, u32 pc, u32 flag_sta
   if (hi >= 0x28 && hi <= 0x3F) {
     unsigned sub = (opcode >> 11) & 3;
     unsigned rd  = (opcode >> 8) & 7;
+    if (sub == 1 && !fm)
+      return 1;                                         /* CMP, flags dead: nop */
     { sh4_codegen cg = sh4g_open(tp);
       sh4_emit_load_greg(&cg, rd, SH4_REG_T0);          /* a = reg[rd] */
       sh4g_close(tp, &cg); }
     sh4g_const(tp, opcode & 0xFF, SH4_REG_T1);          /* b = imm8 */
-    if (sub == 2) sh4g_dp_addsub(tp, 0, rd, 1, 1);      /* ADD */
-    else          sh4g_dp_addsub(tp, 1, rd, sub == 3, 1); /* CMP (no wb) / SUB */
+    if (sub == 2) sh4g_dp_addsub(tp, 0, rd, 1, fm);     /* ADD */
+    else          sh4g_dp_addsub(tp, 1, rd, sub == 3, fm); /* CMP (no wb) / SUB */
     return 1;
   }
 
@@ -223,7 +192,7 @@ static inline int sh4g_thumb_dp_native(u8 **tp, u32 opcode, u32 pc, u32 flag_sta
     else { sh4_codegen cg = sh4g_open(tp);
       sh4_emit_load_greg(&cg, arg, SH4_REG_T1);         /* b = reg[Rm] */
       sh4g_close(tp, &cg); }
-    sh4g_dp_addsub(tp, is_sub, rd, 1, 1);
+    sh4g_dp_addsub(tp, is_sub, rd, 1, fm);
     return 1;
   }
 
@@ -239,10 +208,12 @@ static inline int sh4g_thumb_dp_native(u8 **tp, u32 opcode, u32 pc, u32 flag_sta
         sh4_emit_load_greg(&cg, rd, SH4_REG_T0);
         sh4_emit_load_greg(&cg, rs, SH4_REG_T1);
         sh4g_close(tp, &cg); }
-      sh4g_dp_carry(tp, alu == 0x6, rd, 1, 1);
+      sh4g_dp_carry(tp, alu == 0x6, rd, 1, fm);
       return 1;
     }
     if (alu == 0x9 || alu == 0xA || alu == 0xB) {       /* NEG / CMP / CMN */
+      if (alu != 0x9 && !fm)
+        return 1;                                       /* CMP/CMN, flags dead */
       { sh4_codegen cg = sh4g_open(tp);
         if (alu == 0x9)
           sh4_emit_mov_imm(&cg, 0, SH4_REG_T0);
@@ -250,7 +221,7 @@ static inline int sh4g_thumb_dp_native(u8 **tp, u32 opcode, u32 pc, u32 flag_sta
           sh4_emit_load_greg(&cg, rd, SH4_REG_T0);
         sh4_emit_load_greg(&cg, rs, SH4_REG_T1);
         sh4g_close(tp, &cg); }
-      sh4g_dp_addsub(tp, alu != 0xB, rd, alu == 0x9, 1);
+      sh4g_dp_addsub(tp, alu != 0xB, rd, alu == 0x9, fm);
       return 1;
     }
     switch (alu) {
@@ -263,6 +234,8 @@ static inline int sh4g_thumb_dp_native(u8 **tp, u32 opcode, u32 pc, u32 flag_sta
     case 0xF: op = SH4DP_MVN; break;                    /* MVN: Rd = ~Rs */
     default:  return 0;
     }
+    if (!write && !fm)
+      return 1;                                         /* TST, flags dead */
     { sh4_codegen cg = sh4g_open(tp);
       if (op == SH4DP_MVN)                              /* second-operand only */
         sh4_emit_load_greg(&cg, rs, SH4_REG_T1);
@@ -274,7 +247,7 @@ static inline int sh4g_thumb_dp_native(u8 **tp, u32 opcode, u32 pc, u32 flag_sta
       if (write)
         sh4_emit_store_greg(&cg, SH4_REG_T0, rd);
       sh4g_close(tp, &cg); }
-    sh4g_set_nz(tp, SH4_REG_T0);
+    sh4g_set_nz_m(tp, SH4_REG_T0, fm);
     return 1;
   }
 
@@ -302,6 +275,8 @@ static inline int sh4g_thumb_dp_native(u8 **tp, u32 opcode, u32 pc, u32 flag_sta
       return 1;
     }
     if (op == 1) {                                       /* CMP */
+      if (!fm)
+        return 1;                                        /* flags dead: nop */
       { sh4_codegen cg = sh4g_open(tp);
         sh4_emit_load_greg(&cg, rd, SH4_REG_T0);
         sh4g_close(tp, &cg); }
@@ -309,7 +284,7 @@ static inline int sh4g_thumb_dp_native(u8 **tp, u32 opcode, u32 pc, u32 flag_sta
       else { sh4_codegen cg = sh4g_open(tp);
         sh4_emit_load_greg(&cg, rs, SH4_REG_T1);
         sh4g_close(tp, &cg); }
-      sh4g_dp_addsub(tp, 1, rd, 0, 1);
+      sh4g_dp_addsub(tp, 1, rd, 0, fm);
       return 1;
     }
     if (op == 0) {                                       /* ADD */
@@ -1140,10 +1115,10 @@ static inline void sh4g_arm_shift_imm_full(u8 **tp, u32 type, u32 amount,
  * (operand2 + carry are translate-time constants) and plain REGISTER with no
  * shift (operand2 = Rm, shifter C = old C, preserved). Arithmetic reuses
  * sh4g_dp_addsub (C/V from the ALU); logical sets N/Z, leaves V, and sets C only
- * for the rotated-immediate case. Shifted-register forms, RSB/ADC/SBC/RSC and
- * the PC operands stay on the C path. Flags gated on the S bit (ARM has no
- * dead-flag elimination — flag_status is always 0xF). */
-static inline int sh4g_arm_dp_native(u8 **tp, u32 opcode, u32 pc)
+ * for the rotated-immediate case. Shifted-register forms, register-specified
+ * shifts and PC operands stay on the C path. Flags gated on the S bit AND the
+ * per-instruction live mask from arm_flag_status/arm_dead_flag_eliminate. */
+static inline int sh4g_arm_dp_native(u8 **tp, u32 opcode, u32 pc, u32 flag_status)
 {
   u32 op = (opcode >> 21) & 0xF;
   u32 S  = (opcode >> 20) & 1;
@@ -1152,8 +1127,10 @@ static inline int sh4g_arm_dp_native(u8 **tp, u32 opcode, u32 pc)
   int is_imm = (opcode & 0x02000000) != 0;
   u32 op2 = 0, rm = 0;
   u32 shifted = 0, shift_type = 0, shift_amount = 0;
+  u32 fm;
   int c_const = -1;                              /* -1 = preserve C; 0/1 = set const */
   (void)pc;
+  fm = S ? (flag_status & 0xF) : 0;
 
   if (rd == 15 || rn == 15) return 0;            /* PC operands -> C path */
   if (is_imm) {
@@ -1177,12 +1154,14 @@ static inline int sh4g_arm_dp_native(u8 **tp, u32 opcode, u32 pc)
   case 0x2: case 0x4: case 0xA: case 0xB: {      /* SUB / ADD / CMP / CMN */
     int is_sub = (op == 0x2 || op == 0xA);
     int write  = (op == 0x2 || op == 0x4);
+    if (!write && !fm)
+      return 1;                                  /* CMP/CMN, flags dead: nop */
     { sh4_codegen cg = sh4g_open(tp);
       sh4_emit_load_greg(&cg, rn, SH4_REG_T0);
       sh4g_close(tp, &cg); }
     if (shifted) sh4g_arm_shift_imm_op2(tp, shift_type, shift_amount, rm);
     else         sh4g_arm_load_op2(tp, is_imm, op2, rm);
-    sh4g_dp_addsub(tp, is_sub, rd, write, S);
+    sh4g_dp_addsub(tp, is_sub, rd, write, fm);
     return 1;
   }
   case 0x0: case 0x1: case 0xC: case 0xD:        /* AND/EOR/ORR/MOV */
@@ -1198,13 +1177,15 @@ static inline int sh4g_arm_dp_native(u8 **tp, u32 opcode, u32 pc)
     case 0x8: dpop = SH4DP_AND; write = 0; break; /* TST */
     default:  dpop = SH4DP_EOR; write = 0; break; /* TEQ */
     }
+    if (!write && !fm)
+      return 1;                                  /* TST/TEQ, flags dead: nop */
     { sh4_codegen cg = sh4g_open(tp);
       if (!(dpop == SH4DP_MOV || dpop == SH4DP_MVN))  /* MOV/MVN: second only */
         sh4_emit_load_greg(&cg, rn, SH4_REG_T0);
       sh4g_close(tp, &cg); }
     if (shifted) {                               /* operand2 = shifted reg[rm] */
-      if (S) sh4g_arm_shift_imm_full(tp, shift_type, shift_amount, rm, SH4_REG_ARG2);
-      else   sh4g_arm_shift_imm_op2(tp, shift_type, shift_amount, rm);
+      if (fm & 0x2) sh4g_arm_shift_imm_full(tp, shift_type, shift_amount, rm, SH4_REG_ARG2);
+      else          sh4g_arm_shift_imm_op2(tp, shift_type, shift_amount, rm);
     } else {
       sh4g_arm_load_op2(tp, is_imm, op2, rm);
     }
@@ -1213,10 +1194,12 @@ static inline int sh4g_arm_dp_native(u8 **tp, u32 opcode, u32 pc)
       if (write)
         sh4_emit_store_greg(&cg, SH4_REG_T0, rd);
       sh4g_close(tp, &cg); }
-    if (S) {                                     /* N/Z; V kept; C from shifter */
-      sh4g_set_nz(tp, SH4_REG_T0);
-      if (shifted)           sh4g_set_c_reg(tp, SH4_REG_ARG2);  /* runtime shifter C */
-      else if (c_const >= 0) sh4g_set_c_const(tp, (unsigned)c_const);
+    if (fm) {                                    /* N/Z; V kept; C from shifter */
+      sh4g_set_nz_m(tp, SH4_REG_T0, fm);
+      if (fm & 0x2) {
+        if (shifted)           sh4g_set_c_reg(tp, SH4_REG_ARG2); /* runtime C */
+        else if (c_const >= 0) sh4g_set_c_const(tp, (unsigned)c_const);
+      }
     }
     return 1;
   }
@@ -1234,8 +1217,8 @@ static inline int sh4g_arm_dp_native(u8 **tp, u32 opcode, u32 pc)
       sh4_emit_mov_reg(&cg, SH4_REG_RET, SH4_REG_T1);
       sh4g_close(tp, &cg);
     }
-    if (op == 0x3) sh4g_dp_addsub(tp, 1, rd, 1, S);          /* RSB = op2 - rn */
-    else           sh4g_dp_carry(tp, op != 0x5, rd, 1, S);   /* ADC add / SBC,RSC sub */
+    if (op == 0x3) sh4g_dp_addsub(tp, 1, rd, 1, fm);         /* RSB = op2 - rn */
+    else           sh4g_dp_carry(tp, op != 0x5, rd, 1, fm);  /* ADC add / SBC,RSC sub */
     return 1;
   }
   default: return 0;

@@ -463,7 +463,8 @@ static inline void sh4g_prof_block_entry(u8 **tp, u32 pc, int thumb)
          sh4g_shift_imm(&translation_ptr, (int)_sh_op,                         \
                         (unsigned)((u32)opcode & 7),                           \
                         (unsigned)(((u32)opcode >> 3) & 7),                    \
-                        (unsigned)(((u32)opcode >> 6) & 0x1F), 1);             \
+                        (unsigned)(((u32)opcode >> 6) & 0x1F),                 \
+                        (u32)flag_status & 0xFu);                              \
        else                                                                    \
          SH4_CALL_OP2(cgba_sh4_thumb_shift_imm);                               \
        sh4_thumb_const_kill((u32)opcode & 7u);                                  \
@@ -692,21 +693,28 @@ static inline void sh4g_prof_block_entry(u8 **tp, u32 pc, int thumb)
                                  (int)cycle_count))                           \
          SH4_CALL_OP2_PC_MEM(cgba_sh4_arm_block); } while(0)
 
-/* ARM data-processing: try native (immediate-operand forms), else the C core. */
+/* ARM data-processing: try native (immediate-operand forms), else the C core.
+ * flag_status carries the per-instruction live-flag mask from arm_flag_status +
+ * arm_dead_flag_eliminate (all-0xF when the ARM liveness pass is disabled). */
 #define arm_data_proc(name, type, flags_op)                                   \
-  do { if(!sh4g_arm_dp_native(&translation_ptr, (u32)opcode, (u32)pc))         \
+  do { if(!sh4g_arm_dp_native(&translation_ptr, (u32)opcode, (u32)pc,          \
+                              (u32)flag_status))                               \
          SH4_CALL_OP2_PC(cgba_sh4_arm_dp); } while(0)
 #define arm_data_proc_test(name, type)                                        \
-  do { if(!sh4g_arm_dp_native(&translation_ptr, (u32)opcode, (u32)pc))         \
+  do { if(!sh4g_arm_dp_native(&translation_ptr, (u32)opcode, (u32)pc,          \
+                              (u32)flag_status))                               \
          SH4_CALL_OP2(cgba_sh4_arm_dp); } while(0)
 #define arm_data_proc_unary(name, type, flags_op)                             \
-  do { if(!sh4g_arm_dp_native(&translation_ptr, (u32)opcode, (u32)pc))         \
+  do { if(!sh4g_arm_dp_native(&translation_ptr, (u32)opcode, (u32)pc,          \
+                              (u32)flag_status))                               \
          SH4_CALL_OP2_PC(cgba_sh4_arm_dp); } while(0)
 #define arm_multiply(add_op, flags)                                          \
-  do { if(!sh4g_arm_multiply_native(&translation_ptr, (u32)opcode))           \
+  do { if(!sh4g_arm_multiply_native(&translation_ptr, (u32)opcode,            \
+                                    (u32)flag_status))                         \
          SH4_CALL_OP2(cgba_sh4_arm_multiply); } while(0)
 #define arm_multiply_long(name, add_op, flags)                                \
-  do { if(!sh4g_arm_multiply_long_native(&translation_ptr, (u32)opcode))      \
+  do { if(!sh4g_arm_multiply_long_native(&translation_ptr, (u32)opcode,       \
+                                         (u32)flag_status))                    \
          SH4_CALL_OP2(cgba_sh4_arm_multiply_long); } while(0)
 #define arm_psr(op_type, transfer_type, psr_reg)                              \
   do { if (!sh4g_arm_psr_native(&translation_ptr, (u32)opcode, (u32)pc))      \

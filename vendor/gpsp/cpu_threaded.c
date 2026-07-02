@@ -429,6 +429,7 @@ void translate_icache_sync() {
   }                                                                           \
 
 #define translate_arm_instruction()                                           \
+  arm_load_flag_status()                                                      \
   check_pc_region(pc);                                                        \
   opcode = readaddress32(pc_address_block, (pc & 0x7FFF));                    \
   condition = block_data[block_data_position].condition;                      \
@@ -1887,7 +1888,111 @@ void translate_icache_sync() {
                                                                               \
   pc += 4                                                                     \
 
+#if defined(SH4_ARCH) && !defined(CGBA_SH4_EXACT_CYCLE_BOUNDARIES)
+
+/* ARM per-instruction flag classification for the dead-flag pass — the ARM
+ * analogue of thumb_flag_status(), same block_data[].flag_data encoding:
+ *   bits 0-3  = flags the instruction MAY modify (rewritten by
+ *               arm_dead_flag_eliminate to the set it SHOULD generate),
+ *   bits 4-7  = flags it MUST modify,
+ *   bits 8-11 = flags it REQUIRES (condition source flags, C carry-in, or
+ *               all-live for anything that leaves the block with the CPSR
+ *               architecturally observable: branches, PC writes, SWI, MSR/MRS).
+ * Conditional instructions contribute their condition's source flags to
+ * requires and demote must to may (a failed condition leaves flags untouched).
+ * Stores pass liveness through (flag_data 0) exactly like the upstream Thumb
+ * scan: a mid-block store-alert exit may observe a skipped dead flag, the same
+ * documented trade the x86/ARM backends ship. */
 #define arm_flag_status()                                                     \
+{                                                                             \
+  static const u16 arm_cond_requires[16] = {                                  \
+    0x400, 0x400,   /* EQ/NE: Z */                                            \
+    0x200, 0x200,   /* CS/CC: C */                                            \
+    0x800, 0x800,   /* MI/PL: N */                                            \
+    0x100, 0x100,   /* VS/VC: V */                                            \
+    0x600, 0x600,   /* HI/LS: C,Z */                                          \
+    0x900, 0x900,   /* GE/LT: N,V */                                          \
+    0xD00, 0xD00,   /* GT/LE: N,Z,V */                                        \
+    0x000, 0xF00    /* AL: none; NV/extension space: conservative */          \
+  };                                                                          \
+  /* arm_load_opcode has already stripped the condition nibble from `opcode`
+   * (opcode &= 0xFFFFFFF) and stashed it in `condition` — read it from there,
+   * NOT from opcode>>28 (which would classify everything as EQ-conditional
+   * and silently neuter the whole pass). */                                  \
+  u32 fcond = condition & 0x0F;                                               \
+  u32 fclass = (opcode >> 25) & 7;                                            \
+  u16 fstat = arm_cond_requires[fcond];                                       \
+  if(fclass <= 1)                                                             \
+  {                                                                           \
+    if((opcode & 0x0FFFFFF0) == 0x012FFF10)                                   \
+      fstat |= 0xF00;                           /* BX: leaves the block */    \
+    else if((opcode & 0x0FC000F0) == 0x00000090 ||                            \
+            (opcode & 0x0F8000F0) == 0x00800090)                              \
+    {                                                                         \
+      if(opcode & 0x00100000)                                                 \
+        fstat |= (fcond != 0x0E) ? 0x0C : 0xCC; /* MULS(L): N,Z */            \
+    }                                                                         \
+    else if((opcode & 0x0FB00FF0) == 0x01000090)                              \
+    { /* SWP: memory op, no flag effects (alert exits pass through) */ }      \
+    else if(fclass == 0 && (opcode & 0x90) == 0x90)                           \
+    {                                                                         \
+      if((opcode & 0x00100000) && (((opcode >> 12) & 0xF) == 15))             \
+        fstat |= 0xF00;                         /* LDRH/LDRSB pc */           \
+    }                                                                         \
+    else if((opcode & 0x0D900000) == 0x01000000)                              \
+      fstat |= 0xF0F;                           /* MRS reads all as data;     \
+                                                   MSR may write all + vector */ \
+    else                                                                      \
+    {                                                                         \
+      u32 fop = (opcode >> 21) & 0xF;                                         \
+      if(((opcode >> 12) & 0xF) == 15)                                        \
+        fstat |= 0xF00;                         /* Rd==PC (incl. SUBS pc) */  \
+      if(fop >= 0x5 && fop <= 0x7)                                            \
+        fstat |= 0x200;                         /* ADC/SBC/RSC carry-in */    \
+      if(!(opcode & 0x02000000) && ((opcode >> 5) & 3) == 3)                  \
+        fstat |= 0x200;                         /* ROR/RRX operand2 */        \
+      if(opcode & 0x00100000)                                                 \
+      {                                                                       \
+        u16 fmod;                                                             \
+        if(fop <= 0x1 || fop == 0x8 || fop == 0x9 ||                          \
+           (fop >= 0xC && fop <= 0xF))                                        \
+          fmod = 0xCE;                          /* logical: must NZ, may C */ \
+        else                                                                  \
+          fmod = 0xFF;                          /* arithmetic: NZCV */        \
+        if(fcond != 0x0E)                                                     \
+          fmod &= 0x0F;                         /* conditional: may only */   \
+        fstat |= fmod;                                                        \
+      }                                                                       \
+    }                                                                         \
+  }                                                                           \
+  else if(fclass == 5)                                                        \
+    fstat |= 0xF00;                             /* B/BL end the block */      \
+  else if(fclass == 2 || fclass == 3)                                         \
+  {                                                                           \
+    if((opcode & 0x00100000) && (((opcode >> 12) & 0xF) == 15))               \
+      fstat |= 0xF00;                           /* LDR pc */                  \
+  }                                                                           \
+  else if(fclass == 4)                                                        \
+  {                                                                           \
+    if((opcode & 0x00100000) &&                                               \
+       ((opcode & 0x8000) || (opcode & 0x00400000)))                          \
+      fstat |= 0xF00;                           /* LDM {..pc} / LDM^ */       \
+  }                                                                           \
+  else                                                                        \
+    fstat |= 0xF00;                             /* SWI / coprocessor space */ \
+  block_data[block_data_position].flag_data = fstat;                          \
+}
+
+#define arm_load_flag_status()                                                \
+  flag_status = block_data[block_data_position].flag_data;                    \
+
+#else
+
+#define arm_flag_status()                                                     \
+
+#define arm_load_flag_status()                                                \
+
+#endif
 
 #define translate_thumb_instruction()                                         \
   flag_status = block_data[block_data_position].flag_data;                    \
@@ -2600,12 +2705,28 @@ void translate_icache_sync() {
                                                                               \
     /* TST, NEG, CMP, CMN */                                                  \
     case 0x42:                                                                \
-      thumb_flag_modifies_all();                                              \
+      if(((opcode >> 6) & 0x03) == 0)                                         \
+        /* TST — N/Z only; C and V are architecturally PRESERVED. The         \
+           historical modifies_all was an upstream scan bug: its bogus        \
+           must-C/V killed live C/V producers above a TST once a backend      \
+           actually honored flag_data (ADDS; TST; BCS broke). */              \
+        thumb_flag_modifies_zn();                                             \
+      else                                                                    \
+        thumb_flag_modifies_all();                                            \
       break;                                                                  \
                                                                               \
     /* ORR, MUL, BIC, MVN */                                                  \
     case 0x43:                                                                \
       thumb_flag_modifies_zn();                                               \
+      break;                                                                  \
+                                                                              \
+    /* add hi: flag-transparent, EXCEPT ADD pc, rs — a runtime PC-changer     \
+       (jump-table idiom) that leaves the block, so all flags must be live    \
+       across it (upstream scan missed this; fall through if rd==pc). */      \
+    case 0x44:                                                                \
+      if((opcode & 0x87) != 0x87)                                             \
+        break;                                                                \
+      thumb_flag_requires_all();                                              \
       break;                                                                  \
                                                                               \
     case 0x45:                                                                \
@@ -3005,11 +3126,35 @@ u8 function_cc *block_lookup_address_thumb(u32 pc)
   cycle_count += def_seq_cycles[pc >> 24][1]
 #endif
 
+#if defined(SH4_ARCH) && !defined(CGBA_SH4_EXACT_CYCLE_BOUNDARIES)
+
+/* Bottom-up ARM flag liveness, identical to thumb_dead_flag_eliminate: start
+ * all-live at the block end, mask each instruction's may-modify set by the
+ * flags still needed below it, kill what it must define, add what it uses.
+ * The translate loop then reloads flag_status per instruction
+ * (arm_load_flag_status) instead of the historical constant 0xF. */
+#define arm_dead_flag_eliminate()                                             \
+{                                                                             \
+  u32 needed_mask = 0xFF;                                                     \
+  while(--block_data_position >= 0)                                           \
+  {                                                                           \
+    flag_status = block_data[block_data_position].flag_data;                  \
+    block_data[block_data_position].flag_data =                               \
+     (flag_status & needed_mask);                                             \
+    needed_mask &= ~((flag_status >> 4) & 0x0F);                              \
+    needed_mask |= flag_status >> 8;                                          \
+  }                                                                           \
+}
+
+#else
+
 // For now this just sets a variable that says flags should always be
 // computed.
 
 #define arm_dead_flag_eliminate()                                             \
   flag_status = 0xF                                                           \
+
+#endif
 
 // The following Thumb instructions can exit:
 // b, bl, bx, swi, pop {... pc}, and mov pc, ..., the latter being a hireg
@@ -3106,6 +3251,19 @@ u8 function_cc *block_lookup_address_thumb(u32 pc)
 // the 1's complement of the instruction's "must generate" mask, and ORs
 // the "currently needed" mask by the instruction's "flags needed" mask.
 
+#if defined(SH4_ARCH) && defined(CGBA_SH4_EXACT_CYCLE_BOUNDARIES)
+
+/* Exact-cycle diff builds compare reg[REG_CPSR] at every instruction
+   boundary, where a legitimately dead flag skip reads as a false mismatch:
+   keep every may-flag generated (emitters self-mask to what they write). */
+#define thumb_dead_flag_eliminate()                                           \
+{                                                                             \
+  while(--block_data_position >= 0)                                           \
+    block_data[block_data_position].flag_data |= 0x0F;                        \
+}
+
+#else
+
 #define thumb_dead_flag_eliminate()                                           \
 {                                                                             \
   u32 needed_mask = 0xff;                                                     \
@@ -3119,6 +3277,8 @@ u8 function_cc *block_lookup_address_thumb(u32 pc)
     needed_mask |= flag_status >> 8;                                          \
   }                                                                           \
 }                                                                             \
+
+#endif
 
 #define MAX_BLOCK_SIZE   1024   // 2/4KiB blocks max
 #define MAX_EXITS          32   // This covers 99% blocks
@@ -3337,6 +3497,14 @@ bool translate_block_arm(u32 pc, bool ram_region)
     {
       block_data[(branch_target - block_start_pc) /
        arm_instruction_width].update_cycles = 1;
+#ifdef SH4_ARCH
+      /* The SH4 port emits an update_gba-capable accounting flush + cycle
+         gate AT this position; an IRQ raised there latches CPSR into
+         SPSR_irq, so all flags must be live entering the seam — the linear
+         eliminate pass cannot see this exit on its own. */
+      block_data[(branch_target - block_start_pc) /
+       arm_instruction_width].flag_data |= 0xF00;
+#endif
     }
   }
 
@@ -3552,6 +3720,12 @@ bool translate_block_thumb(u32 pc, bool ram_region)
     {
       block_data[(branch_target - block_start_pc) /
        thumb_instruction_width].update_cycles = 1;
+#ifdef SH4_ARCH
+      /* Same as the ARM loop: the flush+gate at this seam can take an IRQ
+         with CPSR architecturally observable — keep flags live across it. */
+      block_data[(branch_target - block_start_pc) /
+       thumb_instruction_width].flag_data |= 0xF00;
+#endif
     }
   }
 
