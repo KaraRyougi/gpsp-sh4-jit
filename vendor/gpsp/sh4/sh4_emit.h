@@ -471,7 +471,9 @@ static inline void sh4g_prof_block_entry(u8 **tp, u32 pc, int thumb)
   } while(0)
 
 #define SH4_THUMB_SHIFT_reg(decode_type, op_type)                             \
-  do { SH4_CALL_OP2(cgba_sh4_thumb_shift_reg);                                \
+  do { if (!sh4g_thumb_shift_reg_native(&translation_ptr, (u32)opcode,        \
+                                        (u32)pc, (u32)flag_status))           \
+         SH4_CALL_OP2(cgba_sh4_thumb_shift_reg);                              \
        sh4_thumb_const_kill((u32)opcode & 7u); } while(0)
 
 #define thumb_shift(decode_type, op_type, value_type)                         \
