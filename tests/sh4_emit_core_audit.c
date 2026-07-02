@@ -115,23 +115,32 @@ int main(void)
 
     sh4_emit_load_greg(&rg, 5, 1);    /* r5: off 20 -> MOV.L @(5,base),r1  */
     sh4_emit_load_greg(&rg, 15, 2);   /* PC: off 60 -> MOV.L @(15,base),r2 */
-    sh4_emit_store_greg(&rg, 3, 16);  /* CPSR: off 64 -> @(R0,base), R0=64 */
+    sh4_emit_store_greg(&rg, 3, 16);  /* CPSR: register-cached -> MOV r3,r8 */
+    sh4_emit_load_greg(&rg, 16, 2);   /* CPSR read -> MOV r8,r2 */
+    sh4_emit_store_greg(&rg, 3, 17);  /* CPU_MODE: off 68 -> @(R0,base), R0=68 */
 
     uint16_t l5  = (uint16_t)((b[0] << 8) | b[1]);
     uint16_t l15 = (uint16_t)((b[2] << 8) | b[3]);
-    uint16_t mov = (uint16_t)((b[4] << 8) | b[5]);   /* MOV #64,r0 */
-    uint16_t st  = (uint16_t)((b[6] << 8) | b[7]);   /* MOV.L r3,@(R0,base) */
+    uint16_t stc = (uint16_t)((b[4] << 8) | b[5]);   /* MOV r3,r8 */
+    uint16_t ldc = (uint16_t)((b[6] << 8) | b[7]);   /* MOV r8,r2 */
+    uint16_t mov = (uint16_t)((b[8] << 8) | b[9]);   /* MOV #68,r0 */
+    uint16_t st  = (uint16_t)((b[10] << 8) | b[11]); /* MOV.L r3,@(R0,base) */
 
     /* MOV.L @(disp,Rm),Rn = 0x5000 | rn<<8 | rm<<4 | disp4 */
     if (l5 != (0x5000 | (1 << 8) | (SH4_REG_BASE << 4) | 5))
       { fprintf(stderr, "load_greg(5) wrong: %04x\n", l5); fail = 1; }
     if (l15 != (0x5000 | (2 << 8) | (SH4_REG_BASE << 4) | 15))
       { fprintf(stderr, "load_greg(15) wrong: %04x\n", l15); fail = 1; }
-    if (mov != (0xE000 | (0 << 8) | 64))
-      { fprintf(stderr, "store_greg(16) mov #64 wrong: %04x\n", mov); fail = 1; }
+    /* MOV Rm,Rn = 0x6003 | rn<<8 | rm<<4 — CPSR lives in host R8 */
+    if (stc != (0x6003 | (SH4_REG_CPSR << 8) | (3 << 4)))
+      { fprintf(stderr, "store_greg(16) mov->r8 wrong: %04x\n", stc); fail = 1; }
+    if (ldc != (0x6003 | (2 << 8) | (SH4_REG_CPSR << 4)))
+      { fprintf(stderr, "load_greg(16) mov r8-> wrong: %04x\n", ldc); fail = 1; }
+    if (mov != (0xE000 | (0 << 8) | 68))
+      { fprintf(stderr, "store_greg(17) mov #68 wrong: %04x\n", mov); fail = 1; }
     /* MOV.L Rm,@(R0,Rn) = 0x0006 | rn<<8 | rm<<4 */
     if (st != (0x0006 | (SH4_REG_BASE << 8) | (3 << 4)))
-      { fprintf(stderr, "store_greg(16) store wrong: %04x\n", st); fail = 1; }
+      { fprintf(stderr, "store_greg(17) store wrong: %04x\n", st); fail = 1; }
   }
 
   if (fail) { fprintf(stderr, "EMIT CORE AUDIT FAILED\n"); return 1; }

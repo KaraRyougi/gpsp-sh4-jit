@@ -181,8 +181,13 @@ static void cgba_crash_panic(uint32_t code)
 		(unsigned long)spc, (unsigned long)tea);
 	cgba_panic_text(row++, "CORE=%s  WILD=%08lX",
 		dynarec_enable ? "JIT" : "INT", (unsigned long)cgba_wild_jump_pc);
-	cgba_panic_text(row++, "GBA PC=%08lX CPSR=%08lX",
-		(unsigned long)reg[REG_PC], (unsigned long)reg[REG_CPSR]);
+	/* Under the JIT the authoritative CPSR lives in host R8 (sh4_emit_core.h)
+	 * and memory is only synced at C-call boundaries, so a crash mid-block
+	 * shows a CPSR that lags by up to a block (NZCV, and the Thumb bit across
+	 * chained dual dispatches). Mark it so a photo doesn't mislead. */
+	cgba_panic_text(row++, "GBA PC=%08lX CPSR%s%08lX",
+		(unsigned long)reg[REG_PC], dynarec_enable ? "~" : "=",
+		(unsigned long)reg[REG_CPSR]);
 	cgba_panic_text(row++, "GBA LR=%08lX SP=%08lX",
 		(unsigned long)reg[REG_LR], (unsigned long)reg[REG_SP]);
 	cgba_panic_text(row++, "GBA R0=%08lX R1=%08lX",
