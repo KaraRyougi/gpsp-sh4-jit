@@ -56,8 +56,10 @@ static inline void sh4g_set_nz64(u8 **tp, unsigned rlo, unsigned rhi)
   sh4g_close(tp, &cg);
 }
 
-/* MUL (rd = rm*rs) / MLA (rd = rm*rs + rn). Returns 0 to fall back to C. */
-static inline int sh4g_arm_multiply_native(u8 **tp, u32 opcode)
+/* MUL (rd = rm*rs) / MLA (rd = rm*rs + rn). Returns 0 to fall back to C.
+ * flag_status = live-flag mask; MUL S writes N/Z only, so dead N+Z skip the
+ * whole materialization. */
+static inline int sh4g_arm_multiply_native(u8 **tp, u32 opcode, u32 flag_status)
 {
   u32 rd = (opcode >> 16) & 0xF;
   u32 rn = (opcode >> 12) & 0xF;
@@ -81,12 +83,12 @@ static inline int sh4g_arm_multiply_native(u8 **tp, u32 opcode)
     sh4_emit_store_greg(&cg, SH4_REG_T0, rd);
     sh4g_close(tp, &cg); }
   if (set_flags)
-    sh4g_set_nz(tp, SH4_REG_T0);                    /* N/Z only, C/V preserved */
+    sh4g_set_nz_m(tp, SH4_REG_T0, flag_status);     /* N/Z only, C/V preserved */
   return 1;
 }
 
 /* UMULL/SMULL (rdhi:rdlo = rm*rs) + UMLAL/SMLAL (accumulate into rdhi:rdlo). */
-static inline int sh4g_arm_multiply_long_native(u8 **tp, u32 opcode)
+static inline int sh4g_arm_multiply_long_native(u8 **tp, u32 opcode, u32 flag_status)
 {
   u32 rdhi = (opcode >> 16) & 0xF;
   u32 rdlo = (opcode >> 12) & 0xF;
@@ -116,7 +118,7 @@ static inline int sh4g_arm_multiply_long_native(u8 **tp, u32 opcode)
     sh4_emit_store_greg(&cg, SH4_REG_T0, rdlo);      /* reg[rdlo] = low  */
     sh4_emit_store_greg(&cg, SH4_REG_T1, rdhi);      /* reg[rdhi] = high */
     sh4g_close(tp, &cg); }
-  if (set_flags)
+  if (set_flags && (flag_status & 0xC))
     sh4g_set_nz64(tp, SH4_REG_T0, SH4_REG_T1);       /* N=bit63, Z=64-bit==0 */
   return 1;
 }
