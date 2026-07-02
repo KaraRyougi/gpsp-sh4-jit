@@ -149,8 +149,16 @@ defsymbl(sh4_update_gba)
   CALL    update_gba
 
   cmp/pz  r0
-  bf      return_to_main          /* bit31 set (negative) -> frame complete */
-
+  bt      1f                      /* bit31 clear -> keep running */
+  /* Frame complete: DISCARD the saved in-block return before unwinding, or
+   * return_to_main pops it into PR and shifts every callee-saved restore by
+   * one slot (R14 <- caller's PR, ...), resuming C with a corrupted register
+   * file. Latent since bring-up (nothing called this entry until the idle-
+   * loop eliminate path); found via the on-screen crash report. */
+  lds.l   @r15+, pr
+  bra     return_to_main
+  nop
+1:
   mov     r0, r13
   mov     #-1, r1
   shlr16  r1
