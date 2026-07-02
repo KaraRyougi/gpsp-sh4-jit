@@ -1251,9 +1251,25 @@ int main(void)
 			menu_state.show_fps = menu_state.show_fps ? 0 : 1;
 
 		if(hotkey_edge & FXCG100_HOTKEY_BIT(FXCG100_HOTKEY_LOAD_STATE)) {
+#if defined(CGBA_DYNAREC) && defined(CGBA_SH4_PROFILE_COUNTERS)
+			/* Profiling build: repurpose the unimplemented loadstate hotkey
+			 * as the JIT memory canary (overclock triage; see gpsp_runner.c).
+			 * The test overwrites the translation cache, so flush after. */
+			{
+				char line[48];
+				extern void flush_dynarec_caches(void);
+				uint32_t bad = cgba_jit_canary(line, sizeof line);
+				flush_dynarec_caches();
+				draw_status(bad ? "JIT CANARY: MEMORY CORRUPTION"
+				                : "JIT canary passed", line);
+			}
+			wait_status();
+			enter_gameplay_display(framebuffer, frame);
+#else
 			draw_status("savestate unavailable", "not implemented yet");
 			wait_status();
 			enter_gameplay_display(framebuffer, frame);
+#endif
 		}
 		if(hotkey_edge & FXCG100_HOTKEY_BIT(FXCG100_HOTKEY_SAVE_STATE)) {
 #if defined(CGBA_DYNAREC) && defined(CGBA_SH4_PROFILE_COUNTERS)

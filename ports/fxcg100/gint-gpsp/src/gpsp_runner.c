@@ -211,6 +211,93 @@ void cgba_sh4_wild_jump(u32 pc)
 	for(;;)                       /* gint_panic never returns */
 		;
 }
+
+/* ---- JIT memory canary -----------------------------------------------------
+ * Overclock triage: the JIT constantly WRITES code to SDRAM, cache-syncs it,
+ * and EXECUTES it — the harshest memory-timing pattern on this machine (the
+ * interpreter never executes freshly written SDRAM). This test hammers the
+ * translation-cache arena with exactly that pattern and reports corruption:
+ *   pass at stock + fail at overclock  => the Ptune profile's memory timings
+ *                                         are past margin (not a cgba bug);
+ *   pass at both                       => keep hunting cgba codegen.
+ * Destroys translated code, so the caller must flush the dynarec caches after.
+ * Returns 0 on pass; nonzero = number of failures, detail in out. */
+#include "ports/fxcg100/sh4/sh4_cache.h"
+
+uint32_t cgba_jit_canary(char *out, unsigned out_len)
+{
+	u8 *arena = rom_translation_cache;
+	u32 span = ROM_TRANSLATION_CACHE_SIZE;
+	u32 fails = 0, first_off = 0, exp = 0, got = 0;
+	u32 seed = 0x2545F491u;
+	unsigned iter;
+
+	for(iter = 0; iter < 8 && fails == 0; iter++) {
+		u32 i, v;
+
+		/* 1) data pattern: fill, write back, read back. */
+		v = seed + iter * 0x9E3779B9u;
+		for(i = 0; i + 3 < span; i += 4) {
+			*(volatile u32 *)(arena + i) = v;
+			v = v * 1664525u + 1013904223u;
+		}
+		cgba_sh4_cache_sync(arena, arena + span);
+		v = seed + iter * 0x9E3779B9u;
+		for(i = 0; i + 3 < span; i += 4) {
+			u32 r = *(volatile u32 *)(arena + i);
+			if(r != v && !fails) {
+				fails++;
+				first_off = i;
+				exp = v;
+				got = r;
+			}
+			v = v * 1664525u + 1013904223u;
+		}
+		if(fails)
+			break;
+
+		/* 2) execute pattern: emit tiny functions computing a known value
+		 *    (MOV #imm,R0; ADD #k,R0 x14; RTS; NOP = 17 insns / 34 bytes),
+		 *    sync, call each, verify — stale/corrupt I-fetch shows up as a
+		 *    wrong sum. Cover the whole arena. */
+		for(i = 0; i + 64 <= span; i += 64) {
+			u16 *p = (u16 *)(arena + i);
+			int k, sum;
+			p[0] = 0xE000 | ((iter + (i >> 6)) & 0x7F);   /* MOV #s,R0 */
+			sum = (int)((iter + (i >> 6)) & 0x7F);
+			for(k = 0; k < 14; k++) {
+				p[1 + k] = 0x7000 | ((k + 1) & 0xFF);      /* ADD #k+1,R0 */
+				sum += k + 1;
+			}
+			p[15] = 0x000B;                                /* RTS */
+			p[16] = 0x0009;                                /* NOP (delay) */
+			((u16 *)(arena + i))[17] = (u16)sum;           /* expected */
+		}
+		cgba_sh4_cache_sync(arena, arena + span);
+		for(i = 0; i + 64 <= span; i += 64) {
+			int (*fn)(void) = (int (*)(void))(arena + i);
+			int r = fn();
+			int want = (int)((u16 *)(arena + i))[17];
+			if(r != want && !fails) {
+				fails++;
+				first_off = i | 1u;                         /* bit0 = exec phase */
+				exp = (u32)want;
+				got = (u32)r;
+			}
+		}
+	}
+
+	if(out && out_len) {
+		if(fails)
+			snprintf(out, out_len, "FAIL@%08lX exp=%08lX got=%08lX it%u",
+				(unsigned long)((uintptr_t)arena + (first_off & ~1u)),
+				(unsigned long)exp, (unsigned long)got, iter);
+		else
+			snprintf(out, out_len, "PASS %u iters x %luk wr+exec", iter,
+				(unsigned long)(span / 1024));
+	}
+	return fails;
+}
 #endif
 
 #if defined(CGBA_DYNAREC) && \
