@@ -1254,9 +1254,21 @@ int main(void)
 			enter_gameplay_display(framebuffer, frame);
 		}
 		if(hotkey_edge & FXCG100_HOTKEY_BIT(FXCG100_HOTKEY_SAVE_STATE)) {
+#if defined(CGBA_DYNAREC) && defined(CGBA_SH4_PROFILE_COUNTERS)
+			/* Profiling build: repurpose the (still unimplemented) savestate
+			 * hotkey as a live JIT/interpreter A/B switch. The cores share
+			 * reg[] and the switch lands on a frame boundary (PC committed),
+			 * which is exactly how the diff harness alternates them. */
+			dynarec_enable = !dynarec_enable;
+			draw_status("core switched",
+				dynarec_enable ? "JIT (dynarec)" : "INTERPRETER");
+			wait_status();
+			enter_gameplay_display(framebuffer, frame);
+#else
 			draw_status("savestate unavailable", "not implemented yet");
 			wait_status();
 			enter_gameplay_display(framebuffer, frame);
+#endif
 		}
 		if(hotkey_edge & FXCG100_HOTKEY_BIT(FXCG100_HOTKEY_SAVE_EXIT)) {
 			draw_status("save+exit unavailable", "not implemented yet");
