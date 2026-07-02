@@ -281,9 +281,9 @@ events:
       1
       /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/bin/ld: dso.c.obj (symbol from plugin): in function `___cxa_atexit':
       (.text+0x0): multiple definition of `___dso_handle'; /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/crtbegin.o:(.data+0x0): first defined here
-      /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/bin/ld: /var/folders/p_/62vqyc5j0vbb0vcv8xjtc3tw0000gn/T//ccJyLeJM.ltrans0.ltrans.o: in function `_exit':
+      /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/bin/ld: /var/folders/p_/62vqyc5j0vbb0vcv8xjtc3tw0000gn/T//ccFrKQny.ltrans0.ltrans.o: in function `_exit':
       <artificial>:(.text+0xb8): undefined reference to `__Exit'
-      /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/bin/ld: /var/folders/p_/62vqyc5j0vbb0vcv8xjtc3tw0000gn/T//ccJyLeJM.ltrans0.ltrans.o: in function `_alloc_dtors':
+      /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/bin/ld: /var/folders/p_/62vqyc5j0vbb0vcv8xjtc3tw0000gn/T//ccFrKQny.ltrans0.ltrans.o: in function `_alloc_dtors':
       <artificial>:(.text.startup+0x18): undefined reference to `_fxlibc_hal_malloc'
       /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/bin/ld: /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/bin/ld: DWARF error: mangled line number section (bad file number)
       /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/crt1.o: in function `main_k':
@@ -1451,9 +1451,9 @@ events:
       1
       /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/bin/ld: dso.c.obj (symbol from plugin): in function `___cxa_atexit':
       (.text+0x0): multiple definition of `___dso_handle'; /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/crtbegin.o:(.data+0x0): first defined here
-      /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/bin/ld: /var/folders/p_/62vqyc5j0vbb0vcv8xjtc3tw0000gn/T//ccWLhL12.ltrans0.ltrans.o: in function `_exit':
+      /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/bin/ld: /var/folders/p_/62vqyc5j0vbb0vcv8xjtc3tw0000gn/T//cclyGhTw.ltrans0.ltrans.o: in function `_exit':
       <artificial>:(.text+0xb8): undefined reference to `__Exit'
-      /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/bin/ld: /var/folders/p_/62vqyc5j0vbb0vcv8xjtc3tw0000gn/T//ccWLhL12.ltrans0.ltrans.o: in function `_alloc_dtors':
+      /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/bin/ld: /var/folders/p_/62vqyc5j0vbb0vcv8xjtc3tw0000gn/T//cclyGhTw.ltrans0.ltrans.o: in function `_alloc_dtors':
       <artificial>:(.text.startup+0x18): undefined reference to `_fxlibc_hal_malloc'
       /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/bin/ld: /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/bin/ld: DWARF error: mangled line number section (bad file number)
       /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/crt1.o: in function `main_k':
@@ -2025,8 +2025,8 @@ events:
     checks:
       - "Detecting C compiler ABI info"
     directories:
-      source: "/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/build-pt-dense2/CMakeFiles/CMakeScratch/TryCompile-TUMvaW"
-      binary: "/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/build-pt-dense2/CMakeFiles/CMakeScratch/TryCompile-TUMvaW"
+      source: "/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/build-pt-dense2/CMakeFiles/CMakeScratch/TryCompile-3oG7iW"
+      binary: "/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/build-pt-dense2/CMakeFiles/CMakeScratch/TryCompile-3oG7iW"
     cmakeVariables:
       CMAKE_CXX_STDLIB_MODULES_JSON: ""
       CMAKE_C_FLAGS: ""
@@ -2037,12 +2037,12 @@ events:
       variable: "CMAKE_C_ABI_COMPILED"
       cached: true
       stdout: |
-        Change Dir: '/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/build-pt-dense2/CMakeFiles/CMakeScratch/TryCompile-TUMvaW'
+        Change Dir: '/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/build-pt-dense2/CMakeFiles/CMakeScratch/TryCompile-3oG7iW'
         
-        Run Build Command(s): /opt/homebrew/bin/cmake -E env VERBOSE=1 /usr/bin/make -f Makefile cmTC_a333b/fast
-        /Library/Developer/CommandLineTools/usr/bin/make  -f CMakeFiles/cmTC_a333b.dir/build.make CMakeFiles/cmTC_a333b.dir/build
-        Building C object CMakeFiles/cmTC_a333b.dir/CMakeCCompilerABI.c.obj
-        /Users/ryougi/.local/bin/sh-elf-gcc -DTARGET_FXCG50  -v -m4-nofpu -mb -ffreestanding -nostdlib -Wa,--dsp -o CMakeFiles/cmTC_a333b.dir/CMakeCCompilerABI.c.obj -c /opt/homebrew/share/cmake/Modules/CMakeCCompilerABI.c
+        Run Build Command(s): /opt/homebrew/bin/cmake -E env VERBOSE=1 /usr/bin/make -f Makefile cmTC_20695/fast
+        /Library/Developer/CommandLineTools/usr/bin/make  -f CMakeFiles/cmTC_20695.dir/build.make CMakeFiles/cmTC_20695.dir/build
+        Building C object CMakeFiles/cmTC_20695.dir/CMakeCCompilerABI.c.obj
+        /Users/ryougi/.local/bin/sh-elf-gcc -DTARGET_FXCG50  -v -m4-nofpu -mb -ffreestanding -nostdlib -Wa,--dsp -o CMakeFiles/cmTC_20695.dir/CMakeCCompilerABI.c.obj -c /opt/homebrew/share/cmake/Modules/CMakeCCompilerABI.c
         Using built-in specs.
         COLLECT_AS_OPTIONS='--dsp'
         COLLECT_GCC=/Users/ryougi/.local/bin/sh-elf-gcc
@@ -2051,8 +2051,8 @@ events:
         Thread model: single
         Supported LTO compression algorithms: zlib zstd
         gcc version 14.1.0 (GCC) 
-        COLLECT_GCC_OPTIONS='-D' 'TARGET_FXCG50' '-v' '-m4-nofpu' '-mb' '-ffreestanding' '-nostdlib' '-o' 'CMakeFiles/cmTC_a333b.dir/CMakeCCompilerABI.c.obj' '-c' '-dumpdir' 'CMakeFiles/cmTC_a333b.dir/'
-         /Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/cc1 -quiet -v -imultilib m4-nofpu -D TARGET_FXCG50 /opt/homebrew/share/cmake/Modules/CMakeCCompilerABI.c -quiet -dumpdir CMakeFiles/cmTC_a333b.dir/ -dumpbase CMakeCCompilerABI.c.c -dumpbase-ext .c -m4-nofpu -mb -version -ffreestanding -o /var/folders/p_/62vqyc5j0vbb0vcv8xjtc3tw0000gn/T//ccm6iwoH.s
+        COLLECT_GCC_OPTIONS='-D' 'TARGET_FXCG50' '-v' '-m4-nofpu' '-mb' '-ffreestanding' '-nostdlib' '-o' 'CMakeFiles/cmTC_20695.dir/CMakeCCompilerABI.c.obj' '-c' '-dumpdir' 'CMakeFiles/cmTC_20695.dir/'
+         /Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/cc1 -quiet -v -imultilib m4-nofpu -D TARGET_FXCG50 /opt/homebrew/share/cmake/Modules/CMakeCCompilerABI.c -quiet -dumpdir CMakeFiles/cmTC_20695.dir/ -dumpbase CMakeCCompilerABI.c.c -dumpbase-ext .c -m4-nofpu -mb -version -ffreestanding -o /var/folders/p_/62vqyc5j0vbb0vcv8xjtc3tw0000gn/T//ccZtnipu.s
         GNU C17 (GCC) version 14.1.0 (sh3eb-elf)
         	compiled by GNU C version Apple LLVM 17.0.0 (clang-1700.6.3.2), GMP version 6.3.0, MPFR version 4.2.2, MPC version 1.4.1, isl version isl-0.27-GMP
         
@@ -2065,13 +2065,13 @@ events:
          /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/include
         End of search list.
         Compiler executable checksum: baa9e1bcbd25fa38fa28d87a2f5e3ec4
-        COLLECT_GCC_OPTIONS='-D' 'TARGET_FXCG50' '-v' '-m4-nofpu' '-mb' '-ffreestanding' '-nostdlib' '-o' 'CMakeFiles/cmTC_a333b.dir/CMakeCCompilerABI.c.obj' '-c' '-dumpdir' 'CMakeFiles/cmTC_a333b.dir/'
-         /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/bin/as -big --isa=sh4a-nofpu --dsp -o CMakeFiles/cmTC_a333b.dir/CMakeCCompilerABI.c.obj /var/folders/p_/62vqyc5j0vbb0vcv8xjtc3tw0000gn/T//ccm6iwoH.s
+        COLLECT_GCC_OPTIONS='-D' 'TARGET_FXCG50' '-v' '-m4-nofpu' '-mb' '-ffreestanding' '-nostdlib' '-o' 'CMakeFiles/cmTC_20695.dir/CMakeCCompilerABI.c.obj' '-c' '-dumpdir' 'CMakeFiles/cmTC_20695.dir/'
+         /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/bin/as -big --isa=sh4a-nofpu --dsp -o CMakeFiles/cmTC_20695.dir/CMakeCCompilerABI.c.obj /var/folders/p_/62vqyc5j0vbb0vcv8xjtc3tw0000gn/T//ccZtnipu.s
         COMPILER_PATH=/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/bin/
         LIBRARY_PATH=/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/m4-nofpu/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/lib/m4-nofpu/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/lib/
-        COLLECT_GCC_OPTIONS='-D' 'TARGET_FXCG50' '-v' '-m4-nofpu' '-mb' '-ffreestanding' '-nostdlib' '-o' 'CMakeFiles/cmTC_a333b.dir/CMakeCCompilerABI.c.obj' '-c' '-dumpdir' 'CMakeFiles/cmTC_a333b.dir/CMakeCCompilerABI.c.'
-        Linking C executable cmTC_a333b
-        /opt/homebrew/bin/cmake -E cmake_link_script CMakeFiles/cmTC_a333b.dir/link.txt --verbose=1
+        COLLECT_GCC_OPTIONS='-D' 'TARGET_FXCG50' '-v' '-m4-nofpu' '-mb' '-ffreestanding' '-nostdlib' '-o' 'CMakeFiles/cmTC_20695.dir/CMakeCCompilerABI.c.obj' '-c' '-dumpdir' 'CMakeFiles/cmTC_20695.dir/CMakeCCompilerABI.c.'
+        Linking C executable cmTC_20695
+        /opt/homebrew/bin/cmake -E cmake_link_script CMakeFiles/cmTC_20695.dir/link.txt --verbose=1
         Using built-in specs.
         COLLECT_GCC=/Users/ryougi/.local/bin/sh-elf-gcc
         COLLECT_LTO_WRAPPER=/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/lto-wrapper
@@ -2082,11 +2082,11 @@ events:
         gcc version 14.1.0 (GCC) 
         COMPILER_PATH=/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/bin/
         LIBRARY_PATH=/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/lib/
-        COLLECT_GCC_OPTIONS='-v' '-nostdlib' '-o' 'cmTC_a333b' '-dumpdir' 'cmTC_a333b.'
-         /Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/collect2 -plugin /Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/liblto_plugin.so -plugin-opt=/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/lto-wrapper -plugin-opt=-fresolution=/var/folders/p_/62vqyc5j0vbb0vcv8xjtc3tw0000gn/T//ccYgSULx.res -m shelf -o cmTC_a333b -L/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0 -L/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/lib --no-warn-rwx-segments CMakeFiles/cmTC_a333b.dir/CMakeCCompilerABI.c.obj -lgcc
+        COLLECT_GCC_OPTIONS='-v' '-nostdlib' '-o' 'cmTC_20695' '-dumpdir' 'cmTC_20695.'
+         /Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/collect2 -plugin /Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/liblto_plugin.so -plugin-opt=/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/lto-wrapper -plugin-opt=-fresolution=/var/folders/p_/62vqyc5j0vbb0vcv8xjtc3tw0000gn/T//cceCYHm7.res -m shelf -o cmTC_20695 -L/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0 -L/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/lib --no-warn-rwx-segments CMakeFiles/cmTC_20695.dir/CMakeCCompilerABI.c.obj -lgcc
         /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/bin/ld: warning: cannot find entry symbol start; defaulting to 00001000
-        COLLECT_GCC_OPTIONS='-v' '-nostdlib' '-o' 'cmTC_a333b' '-dumpdir' 'cmTC_a333b.'
-        /Users/ryougi/.local/bin/sh-elf-gcc  -v -nostdlib -Wl,--no-warn-rwx-segments CMakeFiles/cmTC_a333b.dir/CMakeCCompilerABI.c.obj -o cmTC_a333b  -lgcc
+        COLLECT_GCC_OPTIONS='-v' '-nostdlib' '-o' 'cmTC_20695' '-dumpdir' 'cmTC_20695.'
+        /Users/ryougi/.local/bin/sh-elf-gcc  -v -nostdlib -Wl,--no-warn-rwx-segments CMakeFiles/cmTC_20695.dir/CMakeCCompilerABI.c.obj -o cmTC_20695  -lgcc
         
       exitCode: 0
   -
@@ -2119,12 +2119,12 @@ events:
       Parsed C implicit link information:
         link line regex: [^( *|.*[/\\])(ld[0-9]*(|\\.[a-rt-z][a-z]*|\\.s[a-np-z][a-z]*|\\.so[a-z]+)|CMAKE_LINK_STARTFILE-NOTFOUND|([^/\\]+-)?ld|collect2)[^/\\]*( |$)]
         linker tool regex: [^[ 	]*(->|"|[0-9]+>[ 	-]*Build:[ 	0-9]+ ms[ 	]*)?[ 	]*(([^"]*[/\\])?(ld[0-9]*(|\\.[a-rt-z][a-z]*|\\.s[a-np-z][a-z]*|\\.so[a-z]+)))("|,| |$)]
-        ignore line: [Change Dir: '/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/build-pt-dense2/CMakeFiles/CMakeScratch/TryCompile-TUMvaW']
+        ignore line: [Change Dir: '/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/build-pt-dense2/CMakeFiles/CMakeScratch/TryCompile-3oG7iW']
         ignore line: []
-        ignore line: [Run Build Command(s): /opt/homebrew/bin/cmake -E env VERBOSE=1 /usr/bin/make -f Makefile cmTC_a333b/fast]
-        ignore line: [/Library/Developer/CommandLineTools/usr/bin/make  -f CMakeFiles/cmTC_a333b.dir/build.make CMakeFiles/cmTC_a333b.dir/build]
-        ignore line: [Building C object CMakeFiles/cmTC_a333b.dir/CMakeCCompilerABI.c.obj]
-        ignore line: [/Users/ryougi/.local/bin/sh-elf-gcc -DTARGET_FXCG50  -v -m4-nofpu -mb -ffreestanding -nostdlib -Wa --dsp -o CMakeFiles/cmTC_a333b.dir/CMakeCCompilerABI.c.obj -c /opt/homebrew/share/cmake/Modules/CMakeCCompilerABI.c]
+        ignore line: [Run Build Command(s): /opt/homebrew/bin/cmake -E env VERBOSE=1 /usr/bin/make -f Makefile cmTC_20695/fast]
+        ignore line: [/Library/Developer/CommandLineTools/usr/bin/make  -f CMakeFiles/cmTC_20695.dir/build.make CMakeFiles/cmTC_20695.dir/build]
+        ignore line: [Building C object CMakeFiles/cmTC_20695.dir/CMakeCCompilerABI.c.obj]
+        ignore line: [/Users/ryougi/.local/bin/sh-elf-gcc -DTARGET_FXCG50  -v -m4-nofpu -mb -ffreestanding -nostdlib -Wa --dsp -o CMakeFiles/cmTC_20695.dir/CMakeCCompilerABI.c.obj -c /opt/homebrew/share/cmake/Modules/CMakeCCompilerABI.c]
         ignore line: [Using built-in specs.]
         ignore line: [COLLECT_AS_OPTIONS='--dsp']
         ignore line: [COLLECT_GCC=/Users/ryougi/.local/bin/sh-elf-gcc]
@@ -2133,8 +2133,8 @@ events:
         ignore line: [Thread model: single]
         ignore line: [Supported LTO compression algorithms: zlib zstd]
         ignore line: [gcc version 14.1.0 (GCC) ]
-        ignore line: [COLLECT_GCC_OPTIONS='-D' 'TARGET_FXCG50' '-v' '-m4-nofpu' '-mb' '-ffreestanding' '-nostdlib' '-o' 'CMakeFiles/cmTC_a333b.dir/CMakeCCompilerABI.c.obj' '-c' '-dumpdir' 'CMakeFiles/cmTC_a333b.dir/']
-        ignore line: [ /Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/cc1 -quiet -v -imultilib m4-nofpu -D TARGET_FXCG50 /opt/homebrew/share/cmake/Modules/CMakeCCompilerABI.c -quiet -dumpdir CMakeFiles/cmTC_a333b.dir/ -dumpbase CMakeCCompilerABI.c.c -dumpbase-ext .c -m4-nofpu -mb -version -ffreestanding -o /var/folders/p_/62vqyc5j0vbb0vcv8xjtc3tw0000gn/T//ccm6iwoH.s]
+        ignore line: [COLLECT_GCC_OPTIONS='-D' 'TARGET_FXCG50' '-v' '-m4-nofpu' '-mb' '-ffreestanding' '-nostdlib' '-o' 'CMakeFiles/cmTC_20695.dir/CMakeCCompilerABI.c.obj' '-c' '-dumpdir' 'CMakeFiles/cmTC_20695.dir/']
+        ignore line: [ /Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/cc1 -quiet -v -imultilib m4-nofpu -D TARGET_FXCG50 /opt/homebrew/share/cmake/Modules/CMakeCCompilerABI.c -quiet -dumpdir CMakeFiles/cmTC_20695.dir/ -dumpbase CMakeCCompilerABI.c.c -dumpbase-ext .c -m4-nofpu -mb -version -ffreestanding -o /var/folders/p_/62vqyc5j0vbb0vcv8xjtc3tw0000gn/T//ccZtnipu.s]
         ignore line: [GNU C17 (GCC) version 14.1.0 (sh3eb-elf)]
         ignore line: [	compiled by GNU C version Apple LLVM 17.0.0 (clang-1700.6.3.2)  GMP version 6.3.0  MPFR version 4.2.2  MPC version 1.4.1  isl version isl-0.27-GMP]
         ignore line: []
@@ -2147,13 +2147,13 @@ events:
         ignore line: [ /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/include]
         ignore line: [End of search list.]
         ignore line: [Compiler executable checksum: baa9e1bcbd25fa38fa28d87a2f5e3ec4]
-        ignore line: [COLLECT_GCC_OPTIONS='-D' 'TARGET_FXCG50' '-v' '-m4-nofpu' '-mb' '-ffreestanding' '-nostdlib' '-o' 'CMakeFiles/cmTC_a333b.dir/CMakeCCompilerABI.c.obj' '-c' '-dumpdir' 'CMakeFiles/cmTC_a333b.dir/']
-        ignore line: [ /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/bin/as -big --isa=sh4a-nofpu --dsp -o CMakeFiles/cmTC_a333b.dir/CMakeCCompilerABI.c.obj /var/folders/p_/62vqyc5j0vbb0vcv8xjtc3tw0000gn/T//ccm6iwoH.s]
+        ignore line: [COLLECT_GCC_OPTIONS='-D' 'TARGET_FXCG50' '-v' '-m4-nofpu' '-mb' '-ffreestanding' '-nostdlib' '-o' 'CMakeFiles/cmTC_20695.dir/CMakeCCompilerABI.c.obj' '-c' '-dumpdir' 'CMakeFiles/cmTC_20695.dir/']
+        ignore line: [ /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/bin/as -big --isa=sh4a-nofpu --dsp -o CMakeFiles/cmTC_20695.dir/CMakeCCompilerABI.c.obj /var/folders/p_/62vqyc5j0vbb0vcv8xjtc3tw0000gn/T//ccZtnipu.s]
         ignore line: [COMPILER_PATH=/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/bin/]
         ignore line: [LIBRARY_PATH=/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/m4-nofpu/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/lib/m4-nofpu/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/lib/]
-        ignore line: [COLLECT_GCC_OPTIONS='-D' 'TARGET_FXCG50' '-v' '-m4-nofpu' '-mb' '-ffreestanding' '-nostdlib' '-o' 'CMakeFiles/cmTC_a333b.dir/CMakeCCompilerABI.c.obj' '-c' '-dumpdir' 'CMakeFiles/cmTC_a333b.dir/CMakeCCompilerABI.c.']
-        ignore line: [Linking C executable cmTC_a333b]
-        ignore line: [/opt/homebrew/bin/cmake -E cmake_link_script CMakeFiles/cmTC_a333b.dir/link.txt --verbose=1]
+        ignore line: [COLLECT_GCC_OPTIONS='-D' 'TARGET_FXCG50' '-v' '-m4-nofpu' '-mb' '-ffreestanding' '-nostdlib' '-o' 'CMakeFiles/cmTC_20695.dir/CMakeCCompilerABI.c.obj' '-c' '-dumpdir' 'CMakeFiles/cmTC_20695.dir/CMakeCCompilerABI.c.']
+        ignore line: [Linking C executable cmTC_20695]
+        ignore line: [/opt/homebrew/bin/cmake -E cmake_link_script CMakeFiles/cmTC_20695.dir/link.txt --verbose=1]
         ignore line: [Using built-in specs.]
         ignore line: [COLLECT_GCC=/Users/ryougi/.local/bin/sh-elf-gcc]
         ignore line: [COLLECT_LTO_WRAPPER=/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/lto-wrapper]
@@ -2164,26 +2164,26 @@ events:
         ignore line: [gcc version 14.1.0 (GCC) ]
         ignore line: [COMPILER_PATH=/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/bin/]
         ignore line: [LIBRARY_PATH=/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/lib/]
-        ignore line: [COLLECT_GCC_OPTIONS='-v' '-nostdlib' '-o' 'cmTC_a333b' '-dumpdir' 'cmTC_a333b.']
-        link line: [ /Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/collect2 -plugin /Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/liblto_plugin.so -plugin-opt=/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/lto-wrapper -plugin-opt=-fresolution=/var/folders/p_/62vqyc5j0vbb0vcv8xjtc3tw0000gn/T//ccYgSULx.res -m shelf -o cmTC_a333b -L/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0 -L/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/lib --no-warn-rwx-segments CMakeFiles/cmTC_a333b.dir/CMakeCCompilerABI.c.obj -lgcc]
+        ignore line: [COLLECT_GCC_OPTIONS='-v' '-nostdlib' '-o' 'cmTC_20695' '-dumpdir' 'cmTC_20695.']
+        link line: [ /Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/collect2 -plugin /Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/liblto_plugin.so -plugin-opt=/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/lto-wrapper -plugin-opt=-fresolution=/var/folders/p_/62vqyc5j0vbb0vcv8xjtc3tw0000gn/T//cceCYHm7.res -m shelf -o cmTC_20695 -L/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0 -L/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/lib --no-warn-rwx-segments CMakeFiles/cmTC_20695.dir/CMakeCCompilerABI.c.obj -lgcc]
           arg [/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/collect2] ==> ignore
           arg [-plugin] ==> ignore
           arg [/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/liblto_plugin.so] ==> ignore
           arg [-plugin-opt=/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/lto-wrapper] ==> ignore
-          arg [-plugin-opt=-fresolution=/var/folders/p_/62vqyc5j0vbb0vcv8xjtc3tw0000gn/T//ccYgSULx.res] ==> ignore
+          arg [-plugin-opt=-fresolution=/var/folders/p_/62vqyc5j0vbb0vcv8xjtc3tw0000gn/T//cceCYHm7.res] ==> ignore
           arg [-m] ==> ignore
           arg [shelf] ==> ignore
           arg [-o] ==> ignore
-          arg [cmTC_a333b] ==> ignore
+          arg [cmTC_20695] ==> ignore
           arg [-L/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0] ==> dir [/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0]
           arg [-L/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/lib] ==> dir [/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/lib]
           arg [--no-warn-rwx-segments] ==> ignore
-          arg [CMakeFiles/cmTC_a333b.dir/CMakeCCompilerABI.c.obj] ==> ignore
+          arg [CMakeFiles/cmTC_20695.dir/CMakeCCompilerABI.c.obj] ==> ignore
           arg [-lgcc] ==> lib [gcc]
         ignore line: [/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/bin/ld: warning: cannot find entry symbol start]
         ignore line: [ defaulting to 00001000]
-        ignore line: [COLLECT_GCC_OPTIONS='-v' '-nostdlib' '-o' 'cmTC_a333b' '-dumpdir' 'cmTC_a333b.']
-        ignore line: [/Users/ryougi/.local/bin/sh-elf-gcc  -v -nostdlib -Wl --no-warn-rwx-segments CMakeFiles/cmTC_a333b.dir/CMakeCCompilerABI.c.obj -o cmTC_a333b  -lgcc]
+        ignore line: [COLLECT_GCC_OPTIONS='-v' '-nostdlib' '-o' 'cmTC_20695' '-dumpdir' 'cmTC_20695.']
+        ignore line: [/Users/ryougi/.local/bin/sh-elf-gcc  -v -nostdlib -Wl --no-warn-rwx-segments CMakeFiles/cmTC_20695.dir/CMakeCCompilerABI.c.obj -o cmTC_20695  -lgcc]
         ignore line: []
         ignore line: []
         collapse library dir [/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0] ==> [/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0]
@@ -2203,8 +2203,8 @@ events:
     checks:
       - "Detecting CXX compiler ABI info"
     directories:
-      source: "/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/build-pt-dense2/CMakeFiles/CMakeScratch/TryCompile-VGvdKB"
-      binary: "/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/build-pt-dense2/CMakeFiles/CMakeScratch/TryCompile-VGvdKB"
+      source: "/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/build-pt-dense2/CMakeFiles/CMakeScratch/TryCompile-eyLRlF"
+      binary: "/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/build-pt-dense2/CMakeFiles/CMakeScratch/TryCompile-eyLRlF"
     cmakeVariables:
       CMAKE_CXX_FLAGS: ""
       CMAKE_CXX_FLAGS_DEBUG: "-g"
@@ -2216,12 +2216,12 @@ events:
       variable: "CMAKE_CXX_ABI_COMPILED"
       cached: true
       stdout: |
-        Change Dir: '/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/build-pt-dense2/CMakeFiles/CMakeScratch/TryCompile-VGvdKB'
+        Change Dir: '/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/build-pt-dense2/CMakeFiles/CMakeScratch/TryCompile-eyLRlF'
         
-        Run Build Command(s): /opt/homebrew/bin/cmake -E env VERBOSE=1 /usr/bin/make -f Makefile cmTC_b59b7/fast
-        /Library/Developer/CommandLineTools/usr/bin/make  -f CMakeFiles/cmTC_b59b7.dir/build.make CMakeFiles/cmTC_b59b7.dir/build
-        Building CXX object CMakeFiles/cmTC_b59b7.dir/CMakeCXXCompilerABI.cpp.obj
-        /Users/ryougi/.local/bin/sh-elf-g++ -DTARGET_FXCG50  -v -m4-nofpu -mb -ffreestanding -nostdlib -Wa,--dsp -o CMakeFiles/cmTC_b59b7.dir/CMakeCXXCompilerABI.cpp.obj -c /opt/homebrew/share/cmake/Modules/CMakeCXXCompilerABI.cpp
+        Run Build Command(s): /opt/homebrew/bin/cmake -E env VERBOSE=1 /usr/bin/make -f Makefile cmTC_ced43/fast
+        /Library/Developer/CommandLineTools/usr/bin/make  -f CMakeFiles/cmTC_ced43.dir/build.make CMakeFiles/cmTC_ced43.dir/build
+        Building CXX object CMakeFiles/cmTC_ced43.dir/CMakeCXXCompilerABI.cpp.obj
+        /Users/ryougi/.local/bin/sh-elf-g++ -DTARGET_FXCG50  -v -m4-nofpu -mb -ffreestanding -nostdlib -Wa,--dsp -o CMakeFiles/cmTC_ced43.dir/CMakeCXXCompilerABI.cpp.obj -c /opt/homebrew/share/cmake/Modules/CMakeCXXCompilerABI.cpp
         Using built-in specs.
         COLLECT_AS_OPTIONS='--dsp'
         COLLECT_GCC=/Users/ryougi/.local/bin/sh-elf-g++
@@ -2230,8 +2230,8 @@ events:
         Thread model: single
         Supported LTO compression algorithms: zlib zstd
         gcc version 14.1.0 (GCC) 
-        COLLECT_GCC_OPTIONS='-D' 'TARGET_FXCG50' '-v' '-m4-nofpu' '-mb' '-ffreestanding' '-nostdlib' '-o' 'CMakeFiles/cmTC_b59b7.dir/CMakeCXXCompilerABI.cpp.obj' '-c' '-dumpdir' 'CMakeFiles/cmTC_b59b7.dir/'
-         /Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/cc1plus -quiet -v -imultilib m4-nofpu -D TARGET_FXCG50 /opt/homebrew/share/cmake/Modules/CMakeCXXCompilerABI.cpp -quiet -dumpdir CMakeFiles/cmTC_b59b7.dir/ -dumpbase CMakeCXXCompilerABI.cpp.cpp -dumpbase-ext .cpp -m4-nofpu -mb -version -ffreestanding -o /var/folders/p_/62vqyc5j0vbb0vcv8xjtc3tw0000gn/T//cca7y6eC.s
+        COLLECT_GCC_OPTIONS='-D' 'TARGET_FXCG50' '-v' '-m4-nofpu' '-mb' '-ffreestanding' '-nostdlib' '-o' 'CMakeFiles/cmTC_ced43.dir/CMakeCXXCompilerABI.cpp.obj' '-c' '-dumpdir' 'CMakeFiles/cmTC_ced43.dir/'
+         /Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/cc1plus -quiet -v -imultilib m4-nofpu -D TARGET_FXCG50 /opt/homebrew/share/cmake/Modules/CMakeCXXCompilerABI.cpp -quiet -dumpdir CMakeFiles/cmTC_ced43.dir/ -dumpbase CMakeCXXCompilerABI.cpp.cpp -dumpbase-ext .cpp -m4-nofpu -mb -version -ffreestanding -o /var/folders/p_/62vqyc5j0vbb0vcv8xjtc3tw0000gn/T//ccvntXfd.s
         GNU C++17 (GCC) version 14.1.0 (sh3eb-elf)
         	compiled by GNU C version Apple LLVM 17.0.0 (clang-1700.6.3.2), GMP version 6.3.0, MPFR version 4.2.2, MPC version 1.4.1, isl version isl-0.27-GMP
         
@@ -2247,13 +2247,13 @@ events:
          /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/include
         End of search list.
         Compiler executable checksum: d1d412cc0aea4c17fe7b1c2c9181b07f
-        COLLECT_GCC_OPTIONS='-D' 'TARGET_FXCG50' '-v' '-m4-nofpu' '-mb' '-ffreestanding' '-nostdlib' '-o' 'CMakeFiles/cmTC_b59b7.dir/CMakeCXXCompilerABI.cpp.obj' '-c' '-dumpdir' 'CMakeFiles/cmTC_b59b7.dir/'
-         /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/bin/as -big --isa=sh4a-nofpu --dsp -o CMakeFiles/cmTC_b59b7.dir/CMakeCXXCompilerABI.cpp.obj /var/folders/p_/62vqyc5j0vbb0vcv8xjtc3tw0000gn/T//cca7y6eC.s
+        COLLECT_GCC_OPTIONS='-D' 'TARGET_FXCG50' '-v' '-m4-nofpu' '-mb' '-ffreestanding' '-nostdlib' '-o' 'CMakeFiles/cmTC_ced43.dir/CMakeCXXCompilerABI.cpp.obj' '-c' '-dumpdir' 'CMakeFiles/cmTC_ced43.dir/'
+         /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/bin/as -big --isa=sh4a-nofpu --dsp -o CMakeFiles/cmTC_ced43.dir/CMakeCXXCompilerABI.cpp.obj /var/folders/p_/62vqyc5j0vbb0vcv8xjtc3tw0000gn/T//ccvntXfd.s
         COMPILER_PATH=/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/bin/
         LIBRARY_PATH=/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/m4-nofpu/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/lib/m4-nofpu/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/lib/
-        COLLECT_GCC_OPTIONS='-D' 'TARGET_FXCG50' '-v' '-m4-nofpu' '-mb' '-ffreestanding' '-nostdlib' '-o' 'CMakeFiles/cmTC_b59b7.dir/CMakeCXXCompilerABI.cpp.obj' '-c' '-dumpdir' 'CMakeFiles/cmTC_b59b7.dir/CMakeCXXCompilerABI.cpp.'
-        Linking CXX executable cmTC_b59b7
-        /opt/homebrew/bin/cmake -E cmake_link_script CMakeFiles/cmTC_b59b7.dir/link.txt --verbose=1
+        COLLECT_GCC_OPTIONS='-D' 'TARGET_FXCG50' '-v' '-m4-nofpu' '-mb' '-ffreestanding' '-nostdlib' '-o' 'CMakeFiles/cmTC_ced43.dir/CMakeCXXCompilerABI.cpp.obj' '-c' '-dumpdir' 'CMakeFiles/cmTC_ced43.dir/CMakeCXXCompilerABI.cpp.'
+        Linking CXX executable cmTC_ced43
+        /opt/homebrew/bin/cmake -E cmake_link_script CMakeFiles/cmTC_ced43.dir/link.txt --verbose=1
         Using built-in specs.
         COLLECT_GCC=/Users/ryougi/.local/bin/sh-elf-g++
         COLLECT_LTO_WRAPPER=/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/lto-wrapper
@@ -2264,11 +2264,11 @@ events:
         gcc version 14.1.0 (GCC) 
         COMPILER_PATH=/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/bin/
         LIBRARY_PATH=/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/lib/
-        COLLECT_GCC_OPTIONS='-v' '-nostdlib' '-o' 'cmTC_b59b7' '-dumpdir' 'cmTC_b59b7.'
-         /Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/collect2 -plugin /Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/liblto_plugin.so -plugin-opt=/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/lto-wrapper -plugin-opt=-fresolution=/var/folders/p_/62vqyc5j0vbb0vcv8xjtc3tw0000gn/T//ccQ6kJPL.res -m shelf -o cmTC_b59b7 -L/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0 -L/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/lib --no-warn-rwx-segments CMakeFiles/cmTC_b59b7.dir/CMakeCXXCompilerABI.cpp.obj -lgcc
+        COLLECT_GCC_OPTIONS='-v' '-nostdlib' '-o' 'cmTC_ced43' '-dumpdir' 'cmTC_ced43.'
+         /Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/collect2 -plugin /Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/liblto_plugin.so -plugin-opt=/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/lto-wrapper -plugin-opt=-fresolution=/var/folders/p_/62vqyc5j0vbb0vcv8xjtc3tw0000gn/T//ccHbttea.res -m shelf -o cmTC_ced43 -L/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0 -L/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/lib --no-warn-rwx-segments CMakeFiles/cmTC_ced43.dir/CMakeCXXCompilerABI.cpp.obj -lgcc
         /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/bin/ld: warning: cannot find entry symbol start; defaulting to 00001000
-        COLLECT_GCC_OPTIONS='-v' '-nostdlib' '-o' 'cmTC_b59b7' '-dumpdir' 'cmTC_b59b7.'
-        /Users/ryougi/.local/bin/sh-elf-g++  -v -nostdlib -Wl,--no-warn-rwx-segments CMakeFiles/cmTC_b59b7.dir/CMakeCXXCompilerABI.cpp.obj -o cmTC_b59b7  -lgcc
+        COLLECT_GCC_OPTIONS='-v' '-nostdlib' '-o' 'cmTC_ced43' '-dumpdir' 'cmTC_ced43.'
+        /Users/ryougi/.local/bin/sh-elf-g++  -v -nostdlib -Wl,--no-warn-rwx-segments CMakeFiles/cmTC_ced43.dir/CMakeCXXCompilerABI.cpp.obj -o cmTC_ced43  -lgcc
         
       exitCode: 0
   -
@@ -2307,12 +2307,12 @@ events:
       Parsed CXX implicit link information:
         link line regex: [^( *|.*[/\\])(ld[0-9]*(|\\.[a-rt-z][a-z]*|\\.s[a-np-z][a-z]*|\\.so[a-z]+)|CMAKE_LINK_STARTFILE-NOTFOUND|([^/\\]+-)?ld|collect2)[^/\\]*( |$)]
         linker tool regex: [^[ 	]*(->|"|[0-9]+>[ 	-]*Build:[ 	0-9]+ ms[ 	]*)?[ 	]*(([^"]*[/\\])?(ld[0-9]*(|\\.[a-rt-z][a-z]*|\\.s[a-np-z][a-z]*|\\.so[a-z]+)))("|,| |$)]
-        ignore line: [Change Dir: '/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/build-pt-dense2/CMakeFiles/CMakeScratch/TryCompile-VGvdKB']
+        ignore line: [Change Dir: '/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/build-pt-dense2/CMakeFiles/CMakeScratch/TryCompile-eyLRlF']
         ignore line: []
-        ignore line: [Run Build Command(s): /opt/homebrew/bin/cmake -E env VERBOSE=1 /usr/bin/make -f Makefile cmTC_b59b7/fast]
-        ignore line: [/Library/Developer/CommandLineTools/usr/bin/make  -f CMakeFiles/cmTC_b59b7.dir/build.make CMakeFiles/cmTC_b59b7.dir/build]
-        ignore line: [Building CXX object CMakeFiles/cmTC_b59b7.dir/CMakeCXXCompilerABI.cpp.obj]
-        ignore line: [/Users/ryougi/.local/bin/sh-elf-g++ -DTARGET_FXCG50  -v -m4-nofpu -mb -ffreestanding -nostdlib -Wa --dsp -o CMakeFiles/cmTC_b59b7.dir/CMakeCXXCompilerABI.cpp.obj -c /opt/homebrew/share/cmake/Modules/CMakeCXXCompilerABI.cpp]
+        ignore line: [Run Build Command(s): /opt/homebrew/bin/cmake -E env VERBOSE=1 /usr/bin/make -f Makefile cmTC_ced43/fast]
+        ignore line: [/Library/Developer/CommandLineTools/usr/bin/make  -f CMakeFiles/cmTC_ced43.dir/build.make CMakeFiles/cmTC_ced43.dir/build]
+        ignore line: [Building CXX object CMakeFiles/cmTC_ced43.dir/CMakeCXXCompilerABI.cpp.obj]
+        ignore line: [/Users/ryougi/.local/bin/sh-elf-g++ -DTARGET_FXCG50  -v -m4-nofpu -mb -ffreestanding -nostdlib -Wa --dsp -o CMakeFiles/cmTC_ced43.dir/CMakeCXXCompilerABI.cpp.obj -c /opt/homebrew/share/cmake/Modules/CMakeCXXCompilerABI.cpp]
         ignore line: [Using built-in specs.]
         ignore line: [COLLECT_AS_OPTIONS='--dsp']
         ignore line: [COLLECT_GCC=/Users/ryougi/.local/bin/sh-elf-g++]
@@ -2321,8 +2321,8 @@ events:
         ignore line: [Thread model: single]
         ignore line: [Supported LTO compression algorithms: zlib zstd]
         ignore line: [gcc version 14.1.0 (GCC) ]
-        ignore line: [COLLECT_GCC_OPTIONS='-D' 'TARGET_FXCG50' '-v' '-m4-nofpu' '-mb' '-ffreestanding' '-nostdlib' '-o' 'CMakeFiles/cmTC_b59b7.dir/CMakeCXXCompilerABI.cpp.obj' '-c' '-dumpdir' 'CMakeFiles/cmTC_b59b7.dir/']
-        ignore line: [ /Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/cc1plus -quiet -v -imultilib m4-nofpu -D TARGET_FXCG50 /opt/homebrew/share/cmake/Modules/CMakeCXXCompilerABI.cpp -quiet -dumpdir CMakeFiles/cmTC_b59b7.dir/ -dumpbase CMakeCXXCompilerABI.cpp.cpp -dumpbase-ext .cpp -m4-nofpu -mb -version -ffreestanding -o /var/folders/p_/62vqyc5j0vbb0vcv8xjtc3tw0000gn/T//cca7y6eC.s]
+        ignore line: [COLLECT_GCC_OPTIONS='-D' 'TARGET_FXCG50' '-v' '-m4-nofpu' '-mb' '-ffreestanding' '-nostdlib' '-o' 'CMakeFiles/cmTC_ced43.dir/CMakeCXXCompilerABI.cpp.obj' '-c' '-dumpdir' 'CMakeFiles/cmTC_ced43.dir/']
+        ignore line: [ /Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/cc1plus -quiet -v -imultilib m4-nofpu -D TARGET_FXCG50 /opt/homebrew/share/cmake/Modules/CMakeCXXCompilerABI.cpp -quiet -dumpdir CMakeFiles/cmTC_ced43.dir/ -dumpbase CMakeCXXCompilerABI.cpp.cpp -dumpbase-ext .cpp -m4-nofpu -mb -version -ffreestanding -o /var/folders/p_/62vqyc5j0vbb0vcv8xjtc3tw0000gn/T//ccvntXfd.s]
         ignore line: [GNU C++17 (GCC) version 14.1.0 (sh3eb-elf)]
         ignore line: [	compiled by GNU C version Apple LLVM 17.0.0 (clang-1700.6.3.2)  GMP version 6.3.0  MPFR version 4.2.2  MPC version 1.4.1  isl version isl-0.27-GMP]
         ignore line: []
@@ -2338,13 +2338,13 @@ events:
         ignore line: [ /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/include]
         ignore line: [End of search list.]
         ignore line: [Compiler executable checksum: d1d412cc0aea4c17fe7b1c2c9181b07f]
-        ignore line: [COLLECT_GCC_OPTIONS='-D' 'TARGET_FXCG50' '-v' '-m4-nofpu' '-mb' '-ffreestanding' '-nostdlib' '-o' 'CMakeFiles/cmTC_b59b7.dir/CMakeCXXCompilerABI.cpp.obj' '-c' '-dumpdir' 'CMakeFiles/cmTC_b59b7.dir/']
-        ignore line: [ /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/bin/as -big --isa=sh4a-nofpu --dsp -o CMakeFiles/cmTC_b59b7.dir/CMakeCXXCompilerABI.cpp.obj /var/folders/p_/62vqyc5j0vbb0vcv8xjtc3tw0000gn/T//cca7y6eC.s]
+        ignore line: [COLLECT_GCC_OPTIONS='-D' 'TARGET_FXCG50' '-v' '-m4-nofpu' '-mb' '-ffreestanding' '-nostdlib' '-o' 'CMakeFiles/cmTC_ced43.dir/CMakeCXXCompilerABI.cpp.obj' '-c' '-dumpdir' 'CMakeFiles/cmTC_ced43.dir/']
+        ignore line: [ /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/bin/as -big --isa=sh4a-nofpu --dsp -o CMakeFiles/cmTC_ced43.dir/CMakeCXXCompilerABI.cpp.obj /var/folders/p_/62vqyc5j0vbb0vcv8xjtc3tw0000gn/T//ccvntXfd.s]
         ignore line: [COMPILER_PATH=/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/bin/]
         ignore line: [LIBRARY_PATH=/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/m4-nofpu/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/lib/m4-nofpu/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/lib/]
-        ignore line: [COLLECT_GCC_OPTIONS='-D' 'TARGET_FXCG50' '-v' '-m4-nofpu' '-mb' '-ffreestanding' '-nostdlib' '-o' 'CMakeFiles/cmTC_b59b7.dir/CMakeCXXCompilerABI.cpp.obj' '-c' '-dumpdir' 'CMakeFiles/cmTC_b59b7.dir/CMakeCXXCompilerABI.cpp.']
-        ignore line: [Linking CXX executable cmTC_b59b7]
-        ignore line: [/opt/homebrew/bin/cmake -E cmake_link_script CMakeFiles/cmTC_b59b7.dir/link.txt --verbose=1]
+        ignore line: [COLLECT_GCC_OPTIONS='-D' 'TARGET_FXCG50' '-v' '-m4-nofpu' '-mb' '-ffreestanding' '-nostdlib' '-o' 'CMakeFiles/cmTC_ced43.dir/CMakeCXXCompilerABI.cpp.obj' '-c' '-dumpdir' 'CMakeFiles/cmTC_ced43.dir/CMakeCXXCompilerABI.cpp.']
+        ignore line: [Linking CXX executable cmTC_ced43]
+        ignore line: [/opt/homebrew/bin/cmake -E cmake_link_script CMakeFiles/cmTC_ced43.dir/link.txt --verbose=1]
         ignore line: [Using built-in specs.]
         ignore line: [COLLECT_GCC=/Users/ryougi/.local/bin/sh-elf-g++]
         ignore line: [COLLECT_LTO_WRAPPER=/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/lto-wrapper]
@@ -2355,26 +2355,26 @@ events:
         ignore line: [gcc version 14.1.0 (GCC) ]
         ignore line: [COMPILER_PATH=/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/bin/]
         ignore line: [LIBRARY_PATH=/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/lib/]
-        ignore line: [COLLECT_GCC_OPTIONS='-v' '-nostdlib' '-o' 'cmTC_b59b7' '-dumpdir' 'cmTC_b59b7.']
-        link line: [ /Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/collect2 -plugin /Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/liblto_plugin.so -plugin-opt=/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/lto-wrapper -plugin-opt=-fresolution=/var/folders/p_/62vqyc5j0vbb0vcv8xjtc3tw0000gn/T//ccQ6kJPL.res -m shelf -o cmTC_b59b7 -L/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0 -L/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/lib --no-warn-rwx-segments CMakeFiles/cmTC_b59b7.dir/CMakeCXXCompilerABI.cpp.obj -lgcc]
+        ignore line: [COLLECT_GCC_OPTIONS='-v' '-nostdlib' '-o' 'cmTC_ced43' '-dumpdir' 'cmTC_ced43.']
+        link line: [ /Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/collect2 -plugin /Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/liblto_plugin.so -plugin-opt=/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/lto-wrapper -plugin-opt=-fresolution=/var/folders/p_/62vqyc5j0vbb0vcv8xjtc3tw0000gn/T//ccHbttea.res -m shelf -o cmTC_ced43 -L/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0 -L/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/lib --no-warn-rwx-segments CMakeFiles/cmTC_ced43.dir/CMakeCXXCompilerABI.cpp.obj -lgcc]
           arg [/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/collect2] ==> ignore
           arg [-plugin] ==> ignore
           arg [/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/liblto_plugin.so] ==> ignore
           arg [-plugin-opt=/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/lto-wrapper] ==> ignore
-          arg [-plugin-opt=-fresolution=/var/folders/p_/62vqyc5j0vbb0vcv8xjtc3tw0000gn/T//ccQ6kJPL.res] ==> ignore
+          arg [-plugin-opt=-fresolution=/var/folders/p_/62vqyc5j0vbb0vcv8xjtc3tw0000gn/T//ccHbttea.res] ==> ignore
           arg [-m] ==> ignore
           arg [shelf] ==> ignore
           arg [-o] ==> ignore
-          arg [cmTC_b59b7] ==> ignore
+          arg [cmTC_ced43] ==> ignore
           arg [-L/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0] ==> dir [/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0]
           arg [-L/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/lib] ==> dir [/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/lib]
           arg [--no-warn-rwx-segments] ==> ignore
-          arg [CMakeFiles/cmTC_b59b7.dir/CMakeCXXCompilerABI.cpp.obj] ==> ignore
+          arg [CMakeFiles/cmTC_ced43.dir/CMakeCXXCompilerABI.cpp.obj] ==> ignore
           arg [-lgcc] ==> lib [gcc]
         ignore line: [/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/bin/ld: warning: cannot find entry symbol start]
         ignore line: [ defaulting to 00001000]
-        ignore line: [COLLECT_GCC_OPTIONS='-v' '-nostdlib' '-o' 'cmTC_b59b7' '-dumpdir' 'cmTC_b59b7.']
-        ignore line: [/Users/ryougi/.local/bin/sh-elf-g++  -v -nostdlib -Wl --no-warn-rwx-segments CMakeFiles/cmTC_b59b7.dir/CMakeCXXCompilerABI.cpp.obj -o cmTC_b59b7  -lgcc]
+        ignore line: [COLLECT_GCC_OPTIONS='-v' '-nostdlib' '-o' 'cmTC_ced43' '-dumpdir' 'cmTC_ced43.']
+        ignore line: [/Users/ryougi/.local/bin/sh-elf-g++  -v -nostdlib -Wl --no-warn-rwx-segments CMakeFiles/cmTC_ced43.dir/CMakeCXXCompilerABI.cpp.obj -o cmTC_ced43  -lgcc]
         ignore line: []
         ignore line: []
         collapse library dir [/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0] ==> [/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0]
