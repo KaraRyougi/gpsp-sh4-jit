@@ -8,8 +8,8 @@
 # This is the real, hand-held build (NOT the headless emulator test harness):
 #   - CGBA_DYNAREC=ON              the SH4 dynamic recompiler (the "JIT")
 #   - CGBA_GPSP_HEADLESS_TEST=OFF  normal menu + ROM picker + live input
-#   - Thumb-LDST native ON, ARM-LDST native OFF, 512K/256K translation cache
-#     (the configuration the new-game freeze fix was verified against).
+#   - Thumb LDST/block native ON, ARM-LDST native ON, 768K/256K translation
+#     cache, 12-bit (16 KiB) branch hash — the perf configuration.
 #
 # Copy CGBA-GPSP.g3a to the calculator's main memory and put a GBA ROM named
 # GAME.GBA alongside it (or use the in-app ROM picker).

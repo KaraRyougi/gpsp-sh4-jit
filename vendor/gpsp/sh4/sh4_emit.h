@@ -38,6 +38,10 @@ u32  execute_arm_translate_internal(u32 cycles, void *reg_base);
 
 /* All guest branches/redispatch funnel through this stub entry (R4 = PC). */
 void sh4_block_exit(u32 pc);
+/* Helper-return dispatcher (R4 = PC, R1 = helper code: 1 pure PC change,
+ * 2 store alert) and the pure PC re-dispatch that skips update_gba. */
+void sh4_helper_exit(u32 pc);
+void sh4_pc_redispatch(u32 pc);
 u32  sh4_update_gba(u32 pc);
 void sh4_indirect_branch_arm(u32 address);
 void sh4_indirect_branch_thumb(u32 address);
@@ -188,24 +192,27 @@ static inline void sh4g_prof_block_entry(u8 **tp, u32 pc, int thumb)
          sh4g_load_greg(&translation_ptr, (reg_index), (hostreg));            \
   } while(0)
 
-/* Patch sites: unconditional jump literal, conditional BT/BF disp8. Direct
- * chaining is suppressed while the single-block harness is stepping, so each
- * branch redispatches through sh4_block_exit and can be diffed lockstep. */
+/* Patch sites: unconditional jump chain (near BRA / far literal), conditional
+ * BT/BF disp8. Direct chaining is suppressed while the single-block harness is
+ * stepping, so each branch redispatches through sh4_block_exit and can be
+ * diffed lockstep. */
 #define generate_branch_patch_unconditional(dest, offset)                     \
   do { if(!cgba_dynarec_single_block)                                         \
-         sh4g_patch_jump((u8 *)(dest), (const void *)(offset)); } while(0)
+         sh4g_chain_patch((u8 *)(dest), (const void *)(offset)); } while(0)
 #define generate_branch_patch_internal(dest, offset)                          \
-  sh4g_patch_jump((u8 *)(dest), (const void *)(offset))
+  sh4g_chain_patch((u8 *)(dest), (const void *)(offset))
 #define generate_branch_patch_conditional(dest, offset)                       \
   sh4g_patch_cond_skip((u8 *)(dest), (const void *)(offset))
 
 /* Re-dispatch the block at `pc` (used when a block runs off its end or hits a
- * translation gate). Flush accumulated block cycles first so run-off/gate loops
- * cannot spin without giving update_gba() a chance to retire events. */
+ * translation gate). Flush accumulated block cycles first (the flush exits to
+ * sh4_block_exit when the budget is spent, so run-off/gate loops still give
+ * update_gba() a chance to retire events); the dispatch itself is a pure PC
+ * change and skips the update_gba pass. */
 #define generate_translation_gate(type)                                       \
   do { generate_cycle_update();                                               \
        sh4g_const(&translation_ptr, (u32)pc, SH4_REG_ARG0);                   \
-       sh4g_far_jmp(&translation_ptr, (const void *)sh4_block_exit); } while(0)
+       sh4g_far_jmp(&translation_ptr, (const void *)sh4_pc_redispatch); } while(0)
 
 /* Indirect branches (BX / computed PC) must honour the ARM/Thumb mode of the
  * target: the `dual` trampoline switches mode from the target's bit 0, and the
@@ -600,11 +607,13 @@ static inline void sh4g_prof_block_entry(u8 **tp, u32 pc, int thumb)
        sh4g_cycle_debit_from_global(&translation_ptr,                         \
                                     &cgba_sh4_extra_cycles); } while(0)
 
-/* Same, but the handler returns 1 in R0 when it changed the PC -> redispatch. */
+/* Same, but the handler returns nonzero in R0 when it changed the PC (1) or a
+ * store raised an alert (2) -> leave the block via sh4_helper_exit, which skips
+ * the update_gba pass for pure PC changes. */
 #define SH4_CALL_OP2_PC(fn)                                                   \
   do { SH4_CALL_OP2(fn);                                                      \
        sh4g_redispatch_if_r0_debit(&translation_ptr, (int)cycle_count,        \
-                                   (const void *)sh4_block_exit);             \
+                                   (const void *)sh4_helper_exit);            \
   } while(0)
 
 #define SH4_CALL_OP2_PC_MEM(fn)                                               \
@@ -612,7 +621,7 @@ static inline void sh4g_prof_block_entry(u8 **tp, u32 pc, int thumb)
        sh4g_cycle_debit_from_global(&translation_ptr,                         \
                                     &cgba_sh4_extra_cycles);                  \
        sh4g_redispatch_if_r0_debit(&translation_ptr, (int)cycle_count,        \
-                                   (const void *)sh4_block_exit);             \
+                                   (const void *)sh4_helper_exit);            \
   } while(0)
 
 /* Memory (single + block transfers). */

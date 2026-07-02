@@ -6,7 +6,9 @@
  * (correct-by-reuse of gpSP's memory core) while the inline emitters grow. Each
  * helper interprets exactly one guest instruction against gpSP's `reg[]` state
  * and the execute load/store memory accessors. Helpers that can change the
- * guest PC return 1 so the emitted glue re-dispatches.
+ * guest PC return 1 (pure PC change: re-dispatch, no event pass) or 2 (store
+ * alert: exit via update_gba) so the emitted glue re-dispatches — see
+ * sh4_helper_exit in sh4_stub.S.
  *
  * These keep gpSP's little-endian guest semantics: memory goes through the
  * execute_load / execute_store helpers, never raw host pointers.
@@ -318,10 +320,16 @@ void function_cc execute_store_aligned_u32(u32 address, u32 source)
 }
 
 /* Consume any pending store alert. If set, point PC at the next instruction,
- * flush the RAM code cache on SMC, and return 1 so the emitter glue redispatches
- * through sh4_block_exit -> update_gba (which idles on HALT/DMA and vectors a
- * pending IRQ). Returns 0 — continue the block — when there is no alert, which is
- * always the case after a pure load. */
+ * flush the RAM code cache on SMC, and return 2 so the emitter glue exits the
+ * block through sh4_block_exit -> update_gba (which idles on HALT/DMA and
+ * vectors a pending IRQ). Returns 0 — continue the block — when there is no
+ * alert, which is always the case after a pure load.
+ *
+ * Helper return contract (consumed by sh4_helper_exit in sh4_stub.S):
+ *   0 = fall through to the next translated instruction;
+ *   1 = pure PC change -> re-dispatch WITHOUT an update_gba pass;
+ *   2 = store alert    -> exit via sh4_block_exit so update_gba runs now. */
+#define CGBA_SH4_HELPER_ALERT 2
 static int cgba_store_alert_break(u32 next_pc)
 {
   cpu_alert_type a = cgba_store_alert;
@@ -331,7 +339,7 @@ static int cgba_store_alert_break(u32 next_pc)
   if (a & CPU_ALERT_SMC)
     flush_translation_cache_ram();
   reg[REG_PC] = next_pc;
-  return 1;
+  return CGBA_SH4_HELPER_ALERT;
 }
 
 /* CPSR flag bits (canonical packed form, matching the interpreter). */

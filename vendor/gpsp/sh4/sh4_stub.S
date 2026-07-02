@@ -656,6 +656,39 @@ defsymbl(sh4_cheat_hook)
 sb_flag:
   .long   _cgba_dynarec_single_block
 
+/* ---- helper exit: dispatch on the C helper's return code ----
+ * R4 = target PC (already committed to reg[REG_PC] by the helper),
+ * R1 = helper return code: bit1 set = a store raised an alert (IRQ unmask,
+ * HALT, SMC) and update_gba must process it now -> sh4_block_exit; otherwise
+ * it is a pure PC change (POP {pc}, MOV pc, LDM {pc}, MSR-vectored IRQ, ...)
+ * and re-dispatching without an update_gba pass is exactly the interpreter's
+ * behavior -- it only services events on cycle exhaustion or alerts, and the
+ * dynarec's cycle gates/branch exits still bound the budget. */
+defsymbl(sh4_helper_exit)
+  mov     r1, r0
+  tst     #2, r0                  /* T = 1: no alert -> pure PC change */
+  bt      sh4_pc_redispatch
+  bra     sh4_block_exit          /* alert: process events (R4 = PC) */
+  nop
+
+/* ---- pure PC re-dispatch, no update_gba; R4 = target PC, current mode ---- */
+defsymbl(sh4_pc_redispatch)
+  mov     #REG_PC, r0
+  mov.l   r4, @(r0,r14)           /* reg[REG_PC] = target PC */
+  mov.l   sb_flag2, r0
+  mov.l   @r0, r0
+  tst     r0, r0
+  bt      1f
+  bra     return_to_main          /* single-block diff: stop after this block */
+  mov     r13, r0                 /* delay slot: return remaining cycles */
+1:
+  bra     lookup_pc
+  nop
+
+.align 2
+sb_flag2:
+  .long   _cgba_dynarec_single_block
+
 #if defined(__linux__) && defined(__ELF__)
   .section .note.GNU-stack,"",%progbits
 #endif
