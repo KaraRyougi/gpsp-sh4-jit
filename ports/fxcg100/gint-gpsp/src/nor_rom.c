@@ -322,9 +322,20 @@ static const uint8_t *cached_nor_pointer(unsigned char *address)
 	 * Earlier code only converted a narrow 0xA0B..0xA15 window, but real files
 	 * on the fx-CG100 can sit higher, eg 0xA1B97000. */
 	if(value >= CGBA_SH4_P2_BASE && value < CGBA_SH4_P2_END)
-		value = value - CGBA_SH4_P2_BASE + CGBA_SH4_P1_BASE;
+		return (const uint8_t *)(value - CGBA_SH4_P2_BASE + CGBA_SH4_P1_BASE);
 
-	return (const uint8_t *)value;
+	/* Already a P1 pointer: fine as-is. */
+	if(value >= CGBA_SH4_P1_BASE && value < CGBA_SH4_P2_BASE)
+		return (const uint8_t *)value;
+
+	/* ANYTHING else is not durably readable and must not be mapped. On real
+	 * hardware some blocks of a fragmented file come back as TLB-mapped P0
+	 * addresses (observed 0x001129xx): they only dereference while the OS's
+	 * TLB entry happens to be warm, then fault as `040 TLB miss` long after
+	 * load — from the interpreter or from JIT-translated loads alike (two
+	 * field crashes with TEA=0x001129xx). Reject them here; the block falls
+	 * back to world-switched BFile reads in cgba_nor_rom_read(). */
+	return NULL;
 }
 
 static int make_root_path(uint16_t *path, size_t path_count,
@@ -491,7 +502,6 @@ int cgba_nor_rom_read(cgba_nor_rom *rom, void *dst, uint32_t offset, uint32_t le
 {
 	uint8_t *out = dst;
 
-	(void)rom;
 	while(len > 0) {
 		uint32_t block = offset / CGBA_FLASH_BLOCK_SIZE;
 		uint32_t intra = offset % CGBA_FLASH_BLOCK_SIZE;
@@ -501,10 +511,18 @@ int cgba_nor_rom_read(cgba_nor_rom *rom, void *dst, uint32_t offset, uint32_t le
 		if(chunk > len)
 			chunk = len;
 		src = (block < cgba_block_total) ? cgba_block_addr[block] : NULL;
-		if(src)
+		if(src) {
 			memcpy(out, src + intra, chunk);
-		else
-			memset(out, 0xff, chunk);   /* past file / unresolved -> open bus */
+		} else if(block < cgba_block_total && rom && rom->fd >= 0) {
+			/* Block exists but has no durable direct pointer (rejected
+			 * non-P1/P2 address): a world-switched BFile read is always
+			 * safe, if slow — this only runs for the rare bad blocks. */
+			int got = os_bfile_read(rom->fd, out, (int)chunk, (int)offset);
+			if(!bfile_read_exact_ok(got, (int)chunk))
+				memset(out, 0xff, chunk);
+		} else {
+			memset(out, 0xff, chunk);   /* past file -> open bus */
+		}
 		out += chunk;
 		offset += chunk;
 		len -= chunk;
@@ -538,10 +556,16 @@ static int build_block_table(cgba_nor_rom *rom)
 			rom->first_address = (uintptr_t)(ptr ? (const void *)ptr : raw);
 		}
 		if(!ptr) {
-			rom->block_result = result;
-			rom->fail_block = b;
-			rom->first_address = (uintptr_t)raw;
-			return -1;
+			/* Unusable direct pointer (BFile error or a non-P1/P2 address —
+			 * see cached_nor_pointer). Do NOT fail the load: leave the block
+			 * NULL so its page stays fragmented and cgba_nor_rom_read serves
+			 * it through world-switched BFile reads. Keep first-failure
+			 * diagnostics for the debug page. */
+			if(rom->fail_block == 0 && rom->fail_page == 0) {
+				rom->block_result = result;
+				rom->fail_block = b;
+				rom->first_address = (uintptr_t)raw;
+			}
 		}
 		cgba_block_addr[b] = ptr;
 	}
