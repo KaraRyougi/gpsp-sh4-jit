@@ -723,6 +723,9 @@ static inline void sh4g_prof_block_entry(u8 **tp, u32 pc, int thumb)
          SH4_CALL_OP2_PC(cgba_sh4_arm_psr); } while(0)
 #define arm_swap(type)                             SH4_CALL_OP2_PC_MEM(cgba_sh4_arm_swap)
 
+/* hle_div is the one C helper called WITHOUT a CPSR sync: it touches only
+ * reg[0..3] (quotient/remainder/abs), never reg[REG_CPSR], and the SH4 ABI
+ * preserves the R8 cache across the call. Keep it that way. */
 #define arm_hle_div(cpu_mode)                                                 \
   do { sh4g_const(&translation_ptr, 0u, SH4_REG_ARG0);                        \
        sh4g_const(&translation_ptr, (u32)pc, SH4_REG_ARG1);                   \

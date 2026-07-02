@@ -54,6 +54,7 @@ static int run_sh4(const u8 *code, size_t n, int *ok)
   u32 R[16] = {0};
   int T = 0;
   R[SH4_REG_BASE] = 0;         /* base is virtual; the load is intercepted */
+  R[SH4_REG_CPSR] = g_reg[SH4_GREG_CPSR]; /* runtime contract: R8 = CPSR */
   *ok = 1;
 
   for (size_t i = 0; i + 1 < n; i += 2) {

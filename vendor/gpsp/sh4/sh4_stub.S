@@ -93,6 +93,31 @@
  * garbage). One flush+retry always suffices: a single block fits the fresh cache.
  * Without this, any cache overflow is a hard crash -- latent in upstream gpSP, hit
  * here once blocks grow large enough (e.g. the native Thumb byte-LDR fast path). */
+/* CPSR cache sync: R8 holds the authoritative guest CPSR while generated or
+ * stub code runs (see sh4_emit_core.h SH4_REG_CPSR). reg[REG_CPSR] must be
+ * made current before ANY C call (helpers read it; update_gba/SWI/the BIOS
+ * fallback also write it) and R8 re-fetched after. CPSR_FLUSH/CPSR_RELOAD
+ * clobber r0; CPSR_RELOAD_R1 clobbers r1 for sites where r0 carries a C
+ * return value. */
+.macro CPSR_FLUSH
+  mov     #REG_CPSR, r0
+  mov.l   r8, @(r0,r14)
+.endm
+.macro CPSR_RELOAD
+  mov     #REG_CPSR, r0
+  mov.l   @(r0,r14), r8
+.endm
+.macro CPSR_RELOAD_R1
+  mov     r14, r1
+  add     #REG_CPSR, r1
+  mov.l   @r1, r8
+.endm
+.macro CPSR_FLUSH_R1
+  mov     r14, r1
+  add     #REG_CPSR, r1
+  mov.l   r8, @r1
+.endm
+
 .macro REDISPATCH_IF_NULL
   tst     r0, r0
   bf      7f                      /* R0 != 0: resolved host block -> jump to it */
@@ -116,6 +141,7 @@ defsymbl(execute_arm_translate_internal)
 
   mov     r5, r14                 /* reg[] base */
   mov     r4, r13                 /* cycle counter */
+  CPSR_RELOAD                     /* prime the R8 CPSR cache */
 
   /* CPU might be sleeping; do not wake it up. */
   mov     #CPU_HALT_STATE, r0
@@ -128,6 +154,10 @@ defsymbl(execute_arm_translate_internal)
 
 /* ---- return to the main C caller; ARM state already saved ---- */
 return_to_main:
+  CPSR_FLUSH_R1                   /* commit the cached CPSR. R1-based: R0 is
+                                     the entry point's return value here
+                                     (remaining cycles / frame-complete tag),
+                                     loaded by the callers' delay slots. */
   lds.l   @r15+, pr
   mov.l   @r15+, r14
   mov.l   @r15+, r13
@@ -143,10 +173,12 @@ return_to_main:
 defsymbl(sh4_update_gba)
   mov     #REG_PC, r0
   mov.l   r4, @(r0,r14)           /* reg[REG_PC] = current PC */
+  CPSR_FLUSH
   sts.l   pr, @-r15               /* save return into the block */
 
   mov     r13, r4                 /* arg0 = remaining cycles */
   CALL    update_gba
+  CPSR_RELOAD_R1                  /* update_gba may take an IRQ (CPSR write) */
 
   cmp/pz  r0
   bt      1f                      /* bit31 clear -> keep running */
@@ -189,12 +221,10 @@ lookup_pc:
   mov.l   @r1, r1
   tst     r1, r1
   bf      lookup_pc_c             /* single-block diff -> legacy C resolver */
-  mov     #REG_CPSR, r0
-  mov.l   @(r0,r14), r1
   mov     #REG_PC, r0
   mov.l   @(r0,r14), r4
   mov     #0x20, r0
-  tst     r0, r1                  /* T = (thumb bit clear) */
+  tst     r0, r8                  /* T = (thumb bit clear); CPSR cached in R8 */
   bt      1f                      /* ARM mode */
   bra     sh4_indirect_branch_thumb
   nop
@@ -205,30 +235,34 @@ lookup_pc:
 lookup_sb:
   .long   _cgba_dynarec_single_block
 lookup_pc_c:
-  mov     #REG_CPSR, r0
-  mov.l   @(r0,r14), r1
   mov     #0x20, r0
-  tst     r0, r1                  /* T = (thumb bit clear) */
+  tst     r0, r8                  /* T = (thumb bit clear); CPSR cached in R8 */
   bt      1f                      /* ARM mode */
 
   mov     #REG_PC, r0
   mov.l   @(r0,r14), r4
+  CPSR_FLUSH
   CALL    block_lookup_address_thumb
+  CPSR_RELOAD_R1
   REDISPATCH_IF_NULL
   jmp     @r0
   nop
 1:
   mov     #REG_PC, r0
   mov.l   @(r0,r14), r4
+  CPSR_FLUSH
   CALL    block_lookup_address_arm
+  CPSR_RELOAD_R1
   REDISPATCH_IF_NULL
   jmp     @r0
   nop
 
 /* ---- CPU halted: spin on update_gba until an event wakes it ---- */
 cpu_sleep_loop:
+  CPSR_FLUSH
   mov     r13, r4
   CALL    update_gba
+  CPSR_RELOAD_R1
   cmp/pz  r0
   bf      return_to_main          /* frame complete */
   mov     r0, r13
@@ -249,9 +283,12 @@ cpu_sleep_loop:
 defsymbl(sh4_block_exit)
   mov     #REG_PC, r0
   mov.l   r4, @(r0,r14)           /* reg[REG_PC] = target PC */
+  CPSR_FLUSH
   /* Differential-harness single-block mode: return to the C caller after one
-     block (PC already committed) so the interpreter can be diffed lockstep. */
-  mov.l   sb_flag, r0
+     block (PC already committed) so the interpreter can be diffed lockstep.
+     Local literal: the shared sb_flag pool drifted past MOV.L's +1KB forward
+     reach when the CPSR-cache sync sequences grew this region. */
+  mov.l   bx_sb, r0
   mov.l   @r0, r0
   tst     r0, r0
   bt      1f
@@ -260,6 +297,7 @@ defsymbl(sh4_block_exit)
 1:
   mov     r13, r4                 /* arg0 = remaining cycles */
   CALL    update_gba
+  CPSR_RELOAD_R1                  /* update_gba may take an IRQ (CPSR write) */
   cmp/pz  r0
   bf      return_to_main          /* bit31 set -> frame complete */
   mov     r0, r13
@@ -269,6 +307,10 @@ defsymbl(sh4_block_exit)
   and     r1, r13                 /* cycles = ret & 0x7FFF */
   bra     lookup_pc               /* always re-dispatch on reg[REG_PC] */
   nop
+
+  .align 2
+bx_sb:
+  .long   _cgba_dynarec_single_block
 
 /* ---- indirect branches (BX, computed PC); R4 = target GBA address ----
  * block_lookup_address_* commits reg[REG_PC] (see cpu_threaded.c), so after the
@@ -324,7 +366,9 @@ iba_hit:
   nop
 iba_slow:
   INC_COUNTER cgba_dynarec_ibh_arm_slow_count
+  CPSR_FLUSH
   CALL    block_lookup_address_arm
+  CPSR_RELOAD_R1
   mov.l   sb_flag, r1
   mov.l   @r1, r1
   tst     r1, r1
@@ -381,7 +425,9 @@ ibt_hit:
   nop
 ibt_slow:
   INC_COUNTER cgba_dynarec_ibh_thumb_slow_count
+  CPSR_FLUSH
   CALL    block_lookup_address_thumb
+  CPSR_RELOAD_R1
   mov.l   sb_flag, r1
   mov.l   @r1, r1
   tst     r1, r1
@@ -489,12 +535,8 @@ ibd_arm_hit:
 ibd_arm_commit:
   mov     #REG_PC, r0
   mov.l   r2, @(r0,r14)           /* commit reg[REG_PC] = pc */
-  mov     #REG_CPSR, r0
-  mov.l   @(r0,r14), r1
   mov     #-33, r0
-  and     r0, r1                  /* clear CPSR.T */
-  mov     #REG_CPSR, r0
-  mov.l   r1, @(r0,r14)
+  and     r0, r8                  /* clear CPSR.T (cached) */
   jmp     @r7
   nop
 
@@ -605,18 +647,16 @@ ibd_thumb_commit:
   and     r0, r1                  /* pc = key & ~1 */
   mov     #REG_PC, r0
   mov.l   r1, @(r0,r14)
-  mov     #REG_CPSR, r0
-  mov.l   @(r0,r14), r1
   mov     #0x20, r0
-  or      r0, r1                  /* set CPSR.T */
-  mov     #REG_CPSR, r0
-  mov.l   r1, @(r0,r14)
+  or      r0, r8                  /* set CPSR.T (cached) */
   jmp     @r7
   nop
 
 ibd_slow:
   INC_COUNTER cgba_dynarec_ibh_dual_slow_count
+  CPSR_FLUSH
   CALL    block_lookup_address_dual
+  CPSR_RELOAD_R1                  /* the dual resolver writes CPSR.T */
   mov.l   sb_flag, r1
   mov.l   @r1, r1
   tst     r1, r1
@@ -644,8 +684,10 @@ ibh_dhot_ptr:
 
 /* ---- BIOS fallback: interpret the open-BIOS routine, then resume JIT. ---- */
 defsymbl(sh4_bios_fallback_entry)
+  CPSR_FLUSH
   mov     r13, r4                 /* arg0 = remaining cycles */
   CALL    cgba_sh4_bios_fallback
+  CPSR_RELOAD_R1                  /* the interpreter rewrites CPSR */
   cmp/pz  r0
   bt      1f                      /* helper stopped at BIOS return PC */
   bra     return_to_main          /* helper completed the frame */
@@ -660,23 +702,26 @@ defsymbl(smc_write)
   mov     #REG_PC, r0
   mov.l   r6, @(r0,r14)
   sts.l   pr, @-r15
+  CPSR_FLUSH
   CALL    flush_translation_cache_ram
+  CPSR_RELOAD
   lds.l   @r15+, pr
   bra     lookup_pc
   nop
 
 /* ---- read CPSR: flags are already materialized in CPSR ---- */
 defsymbl(execute_read_cpsr)
-  mov     #REG_CPSR, r0
   rts
-  mov.l   @(r0,r14), r0           /* delay slot: return CPSR */
+  mov     r8, r0                  /* delay slot: cached CPSR */
 
 /* ---- software interrupt; R4 = return PC (next instruction) ---- */
 defsymbl(execute_swi)
   sts.l   pr, @-r15
   mov     #REG_PC, r0
   mov.l   r4, @(r0,r14)           /* stash next PC for the C handler */
+  CPSR_FLUSH
   CALL    sh4_swi_handler
+  CPSR_RELOAD                     /* SVC banking rewrote CPSR */
   lds.l   @r15+, pr
   rts
   nop
@@ -684,7 +729,9 @@ defsymbl(execute_swi)
 /* ---- cheat processing hook (called at the master PC) ---- */
 defsymbl(sh4_cheat_hook)
   sts.l   pr, @-r15
+  CPSR_FLUSH
   CALL    process_cheats
+  CPSR_RELOAD
   lds.l   @r15+, pr
   rts
   nop
@@ -754,11 +801,13 @@ sb_flag2:
 defsymbl(sh4_op2_tramp)             /* plain: fn(opcode, pc), no exits */
   sts     pr, r1
   sts.l   pr, @-r15
+  CPSR_FLUSH
   add     #8, r1                    /* skip the TRAMP literal -> fn */
   mov.l   @r1+, r0                  /* fn */
   mov.l   @r1+, r4                  /* opcode */
   jsr     @r0
   mov.l   @r1+, r5                  /* pc (delay slot: not PC-relative) */
+  CPSR_RELOAD_R1
   lds.l   @r15+, pr
   rts
   nop
@@ -766,11 +815,13 @@ defsymbl(sh4_op2_tramp)             /* plain: fn(opcode, pc), no exits */
 defsymbl(sh4_op2_mem_tramp)         /* + unconditional guest-memory debit */
   sts     pr, r1
   sts.l   pr, @-r15
+  CPSR_FLUSH
   add     #8, r1                    /* skip the TRAMP literal -> fn */
   mov.l   @r1+, r0
   mov.l   @r1+, r4
   jsr     @r0
   mov.l   @r1+, r5
+  CPSR_RELOAD_R1
   mov.l   tram_extra, r1            /* &cgba_sh4_extra_cycles */
   mov.l   @r1, r1
   sub     r1, r13
@@ -781,24 +832,28 @@ defsymbl(sh4_op2_mem_tramp)         /* + unconditional guest-memory debit */
 defsymbl(sh4_op2_pc_tramp)          /* + redispatch when the helper moved PC */
   sts     pr, r1
   sts.l   pr, @-r15
+  CPSR_FLUSH
   add     #8, r1                    /* skip the TRAMP literal -> fn */
   mov.l   @r1+, r0
   mov.l   @r1+, r4
   mov     r1, r12                   /* literal cursor survives the C call */
   jsr     @r0
   mov.l   @r12+, r5                 /* pc; r12 -> cycle_count literal */
+  CPSR_RELOAD_R1
   bra     op2_pc_common
   nop
 
 defsymbl(sh4_op2_pc_mem_tramp)      /* + memory debit + PC redispatch */
   sts     pr, r1
   sts.l   pr, @-r15
+  CPSR_FLUSH
   add     #8, r1                    /* skip the TRAMP literal -> fn */
   mov.l   @r1+, r0
   mov.l   @r1+, r4
   mov     r1, r12
   jsr     @r0
   mov.l   @r12+, r5
+  CPSR_RELOAD_R1
   mov.l   tram_extra, r1
   mov.l   @r1, r1
   sub     r1, r13                   /* memory cycles: both paths (as before) */

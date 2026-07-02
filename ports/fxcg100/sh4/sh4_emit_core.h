@@ -27,6 +27,11 @@
 /* R15 = host SP (hardware). R0 kept free (forced index/operand). */
 #define SH4_REG_BASE     14   /* reg[] base pointer (callee-saved)        */
 #define SH4_REG_CYCLES   13   /* guest cycle counter (callee-saved)       */
+#define SH4_REG_CPSR      8   /* cached guest CPSR (callee-saved). While
+                                 generated or stub code runs, R8 is the
+                                 authoritative reg[REG_CPSR]; memory is synced
+                                 by the stub funnels and helper trampolines
+                                 around every C call (sh4_stub.S).           */
 #define SH4_REG_RET       0   /* C-call return / general scratch          */
 #define SH4_REG_T0        1   /* scratch temporaries                      */
 #define SH4_REG_T1        2
@@ -171,12 +176,16 @@ static inline void sh4_emit_flush_pool(sh4_emitter *e)
 /* Byte offset of guest reg[idx] from the base pointer. */
 static inline unsigned sh4_greg_off(unsigned idx) { return idx * 4; }
 
-/* Load guest reg[idx] -> host rn. Uses @(disp,base) for the ARM r0..r15 window
- * (offsets 0..60), else @(R0,base) with R0 set to the offset (<=127). */
+/* Load guest reg[idx] -> host rn. CPSR is register-cached in R8 (a plain MOV,
+ * strictly less clobbering than the old R0-indexed form). Other indices use
+ * @(disp,base) for the ARM r0..r15 window (offsets 0..60), else @(R0,base)
+ * with R0 set to the offset (<=127). */
 static inline void sh4_emit_load_greg(sh4_codegen *cg, unsigned idx, unsigned rn)
 {
   unsigned off = sh4_greg_off(idx);
-  if (off <= 60) {
+  if (idx == SH4_GREG_CPSR) {
+    sh4_emit_mov_reg(cg, SH4_REG_CPSR, rn);          /* rn = cached CPSR */
+  } else if (off <= 60) {
     sh4_emit_mov_l_load_disp(cg, SH4_REG_BASE, rn, off >> 2);
   } else {
     sh4_emit_mov_imm(cg, (int)off, SH4_REG_RET);     /* R0 = off (<=127) */
@@ -184,11 +193,13 @@ static inline void sh4_emit_load_greg(sh4_codegen *cg, unsigned idx, unsigned rn
   }
 }
 
-/* Store host rn -> guest reg[idx]. Same addressing rules. */
+/* Store host rn -> guest reg[idx]. Same addressing rules; CPSR goes to R8. */
 static inline void sh4_emit_store_greg(sh4_codegen *cg, unsigned rn, unsigned idx)
 {
   unsigned off = sh4_greg_off(idx);
-  if (off <= 60) {
+  if (idx == SH4_GREG_CPSR) {
+    sh4_emit_mov_reg(cg, rn, SH4_REG_CPSR);          /* cached CPSR = rn */
+  } else if (off <= 60) {
     sh4_emit_mov_l_store_disp(cg, rn, SH4_REG_BASE, off >> 2);
   } else {
     sh4_emit_mov_imm(cg, (int)off, SH4_REG_RET);     /* R0 = off (<=127) */
