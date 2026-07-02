@@ -1,0 +1,37 @@
+CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cpu_threaded.c.obj: \
+ /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cpu_threaded.c \
+ /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/common.h \
+ /Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/include/unistd.h \
+ /Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/include/stdio.h \
+ /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/include/stddef.h \
+ /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/include/stdarg.h \
+ /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/include/stdint.h \
+ /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/include/stdint-gcc.h \
+ /Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/include/sys/types.h \
+ /Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/include/bits/confname.h \
+ /Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/include/time.h \
+ /Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/include/stdlib.h \
+ /Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/include/bits/exit.h \
+ /Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/include/string.h \
+ /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cpu.h \
+ /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/include/stdbool.h \
+ /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/gpsp_config.h \
+ /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/gba_memory.h \
+ /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/../../../ports/fxcg100/libretro.h \
+ /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/savestate.h \
+ /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/video.h \
+ /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/input.h \
+ /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/sound.h \
+ /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/main.h \
+ /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cheats.h \
+ /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/serial.h \
+ /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/sh4/sh4_emit.h \
+ /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/../../../ports/fxcg100/sh4/sh4_emit_glue.h \
+ /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/../../../ports/fxcg100/sh4/sh4_codegen.h \
+ /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/../../../ports/fxcg100/sh4/sh4_emit_core.h \
+ /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/../../../ports/fxcg100/sh4/sh4_thumb_dp_emit.h \
+ /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/../../../ports/fxcg100/sh4/sh4_thumb_block_emit.h \
+ /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/../../../ports/fxcg100/sh4/sh4_arm_ldst_emit.h \
+ /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/../../../ports/fxcg100/sh4/sh4_arm_mul_emit.h \
+ /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/../../../ports/fxcg100/sh4/sh4_arm_block_emit.h \
+ /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/../../../ports/fxcg100/sh4/sh4_cache.h

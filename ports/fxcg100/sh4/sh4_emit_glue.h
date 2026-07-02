@@ -217,6 +217,51 @@ static inline void sh4g_thumb_bx_dispatch(u8 **tp, const void *thumb_current_fn,
   sh4g_far_jmp(tp, dual_fn);                               /* ARM target */
 }
 
+/* ---- compact C-helper call site ------------------------------------------ *
+ * Fixed-shape call through a shared stub trampoline (sh4_stub.S): the
+ * (trampoline, fn, opcode, pc[, cycle_count]) tuple lives in ONE literal block
+ * after the call and the trampoline reads it via PR, then handles the memory
+ * debit / PC redispatch generically. ~28-32 bytes per site vs ~70 for the old
+ * inline glue — helper-heavy ARM gameplay blocks shrink ~2x, which is ROM
+ * translation cache CAPACITY (the flush-thrash fix), not just speed.
+ *
+ * Layout (the pad pins site%4 == 2 so the literal block is 4-aligned and the
+ * MOV.L displacement is a constant 2):
+ *   [pad NOP]  mov.l L,r0 ; jsr @r0 ; nop ; bra 2f ; nop
+ *   L: .long TRAMP, fn, opcode, pc [, cycle_count]   2:
+ */
+static inline void sh4g_op2_tramp_call(u8 **tp, const void *tramp,
+                                       const void *fn, uint32_t opcode,
+                                       uint32_t pc, int with_cycles,
+                                       int cycle_count)
+{
+  u8 *site;
+  u8 *lit;
+  unsigned nlit = with_cycles ? 5 : 4;
+  long bra_disp;
+
+  if (((uintptr_t)*tp + 10) & 3)               /* literals must be 4-aligned */
+    sh4g_u16(tp, 0x0009);
+  site = *tp;
+  lit = site + 10;
+  sh4g_u16(tp, (uint16_t)(0xD000 | (SH4_REG_RET << 8) | 2));   /* MOV.L L,R0 */
+  sh4g_u16(tp, (uint16_t)(0x400B | (SH4_REG_RET << 8)));       /* JSR @R0    */
+  sh4g_u16(tp, 0x0009);                                        /* delay      */
+  bra_disp = ((long)(lit + nlit * 4) - ((long)(*tp) + 4)) / 2;
+  sh4g_u16(tp, (uint16_t)(0xA000 | (bra_disp & 0x0FFF)));      /* BRA 2f     */
+  sh4g_u16(tp, 0x0009);                                        /* delay      */
+  {
+    sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_u32_be(&cg, (uint32_t)(uintptr_t)tramp);
+    sh4_emit_u32_be(&cg, (uint32_t)(uintptr_t)fn);
+    sh4_emit_u32_be(&cg, opcode);
+    sh4_emit_u32_be(&cg, pc);
+    if (with_cycles)
+      sh4_emit_u32_be(&cg, (uint32_t)cycle_count);
+    sh4g_close(tp, &cg);
+  }
+}
+
 /* ---- N/Z materialization (literal-free) into REG_CPSR -------------------- */
 
 /* result must be in R1 (SH4_REG_T0); clobbers R0/R2/R3. */

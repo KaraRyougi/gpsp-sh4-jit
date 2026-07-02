@@ -76,6 +76,10 @@ void sh4_indirect_branch_thumb(u32 address)
   (void)address;
 }
 
+void sh4_op2_pc_mem_tramp(void)
+{
+}
+
 static _Alignas(32) u8 code[4096];
 static int fail;
 

@@ -697,6 +697,102 @@ defsymbl(sh4_pc_redispatch)
 sb_flag2:
   .long   _cgba_dynarec_single_block
 
+/* ---- compact per-instruction C-helper calls -------------------------------
+ * Call sites in translated code are the FOOTPRINT problem: the classic glue
+ * (two inline literal consts + far call + debit + redispatch) is ~70 bytes per
+ * helper-called guest instruction, and ARM gameplay code is helper-heavy, so
+ * blocks blow the ROM translation cache and it wholesale-flushes every few
+ * frames. The compact form is a fixed ~28-byte site:
+ *
+ *   [pad NOP]              ; parity fix so the literal block is 4-aligned
+ *   mov.l  L, r0           ; first literal = trampoline address
+ *   jsr    @r0             ; PR -> the `bra 2f` below
+ *   nop
+ *   bra    2f              ; helper continue-path returns HERE
+ *   nop
+ * L:.long  TRAMP, fn, opcode, pc [, cycle_count]
+ * 2:
+ *
+ * The trampolines read (fn, opcode, pc[, cycles]) through PR, run the helper,
+ * apply the memory-cycle debit and the PC-change redispatch generically, and
+ * `rts` back to the site's `bra 2f` on the continue path. R12 is callee-saved
+ * and unused by generated code, so it carries the literal cursor across the
+ * C call. Semantics mirror the old inline glue exactly: the extra-cycles
+ * debit is unconditional (MEM forms), the accumulated cycle_count is debited
+ * only on the PC-change exit, and helper return codes route through
+ * sh4_helper_exit (1 = pure PC change, 2 = store alert). */
+
+defsymbl(sh4_op2_tramp)             /* plain: fn(opcode, pc), no exits */
+  sts     pr, r1
+  sts.l   pr, @-r15
+  add     #8, r1                    /* skip the TRAMP literal -> fn */
+  mov.l   @r1+, r0                  /* fn */
+  mov.l   @r1+, r4                  /* opcode */
+  jsr     @r0
+  mov.l   @r1+, r5                  /* pc (delay slot: not PC-relative) */
+  lds.l   @r15+, pr
+  rts
+  nop
+
+defsymbl(sh4_op2_mem_tramp)         /* + unconditional guest-memory debit */
+  sts     pr, r1
+  sts.l   pr, @-r15
+  add     #8, r1                    /* skip the TRAMP literal -> fn */
+  mov.l   @r1+, r0
+  mov.l   @r1+, r4
+  jsr     @r0
+  mov.l   @r1+, r5
+  mov.l   tram_extra, r1            /* &cgba_sh4_extra_cycles */
+  mov.l   @r1, r1
+  sub     r1, r13
+  lds.l   @r15+, pr
+  rts
+  nop
+
+defsymbl(sh4_op2_pc_tramp)          /* + redispatch when the helper moved PC */
+  sts     pr, r1
+  sts.l   pr, @-r15
+  add     #8, r1                    /* skip the TRAMP literal -> fn */
+  mov.l   @r1+, r0
+  mov.l   @r1+, r4
+  mov     r1, r12                   /* literal cursor survives the C call */
+  jsr     @r0
+  mov.l   @r12+, r5                 /* pc; r12 -> cycle_count literal */
+  bra     op2_pc_common
+  nop
+
+defsymbl(sh4_op2_pc_mem_tramp)      /* + memory debit + PC redispatch */
+  sts     pr, r1
+  sts.l   pr, @-r15
+  add     #8, r1                    /* skip the TRAMP literal -> fn */
+  mov.l   @r1+, r0
+  mov.l   @r1+, r4
+  mov     r1, r12
+  jsr     @r0
+  mov.l   @r12+, r5
+  mov.l   tram_extra, r1
+  mov.l   @r1, r1
+  sub     r1, r13                   /* memory cycles: both paths (as before) */
+op2_pc_common:
+  tst     r0, r0
+  bt      1f                        /* R0 == 0: continue the block */
+  mov.l   @r12, r1
+  sub     r1, r13                   /* accumulated cycles: exit path only */
+  mov     r0, r1                    /* helper code for sh4_helper_exit */
+  mov     #REG_PC, r0
+  mov.l   @(r0,r14), r4             /* R4 = committed reg[REG_PC] */
+  lds.l   @r15+, pr                 /* balance the stack (value unused) */
+  bra     sh4_helper_exit
+  nop
+1:
+  lds.l   @r15+, pr
+  rts
+  nop
+
+.align 2
+tram_extra:
+  .long   _cgba_sh4_extra_cycles
+
 #if defined(__linux__) && defined(__ELF__)
   .section .note.GNU-stack,"",%progbits
 #endif

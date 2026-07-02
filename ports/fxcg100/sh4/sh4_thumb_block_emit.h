@@ -17,6 +17,7 @@ extern u8 iwram[];
 int  cgba_sh4_thumb_block(u32 opcode, u32 pc);
 void sh4_block_exit(u32 pc);
 void sh4_helper_exit(u32 pc);
+void sh4_op2_pc_mem_tramp(void);   /* compact slow-path call (sh4_stub.S) */
 void sh4_indirect_branch_thumb(u32 address);
 #if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
 extern u32 cgba_sh4_native_thumb_push_iwram_count;
@@ -133,11 +134,9 @@ static inline int sh4g_thumb_push_iwram_native(u8 **tp, u32 opcode, u32 pc,
 
   for (int i = 0; i < ng; i++)
     sh4g_patch_bra(guards[i], *tp);
-  sh4g_const(tp, (u32)opcode, SH4_REG_ARG0);
-  sh4g_const(tp, (u32)pc, SH4_REG_ARG1);
-  sh4g_far_call(tp, (const void *)cgba_sh4_thumb_block);
-  sh4g_cycle_debit_from_global(tp, &cgba_sh4_extra_cycles);
-  sh4g_redispatch_if_r0_debit(tp, cycle_count, (const void *)sh4_helper_exit);
+  sh4g_op2_tramp_call(tp, (const void *)sh4_op2_pc_mem_tramp,
+                      (const void *)cgba_sh4_thumb_block, (u32)opcode, (u32)pc,
+                      1, cycle_count);
 
   sh4g_patch_bra(bra_done, *tp);
   return 1;
@@ -348,11 +347,9 @@ static inline int sh4g_thumb_block_native(u8 **tp, u32 opcode, u32 pc,
 
   for (i = 0; i < (u32)ng; i++)
     sh4g_patch_bra(guards[i], *tp);
-  sh4g_const(tp, (u32)opcode, SH4_REG_ARG0);
-  sh4g_const(tp, (u32)pc, SH4_REG_ARG1);
-  sh4g_far_call(tp, (const void *)cgba_sh4_thumb_block);
-  sh4g_cycle_debit_from_global(tp, &cgba_sh4_extra_cycles);
-  sh4g_redispatch_if_r0_debit(tp, cycle_count, (const void *)sh4_helper_exit);
+  sh4g_op2_tramp_call(tp, (const void *)sh4_op2_pc_mem_tramp,
+                      (const void *)cgba_sh4_thumb_block, (u32)opcode, (u32)pc,
+                      1, cycle_count);
 
   if (bra_done)
     sh4g_patch_bra(bra_done, *tp);
