@@ -460,6 +460,145 @@ static inline int sh4g_arm_psr_native(u8 **tp, u32 opcode, u32 pc)
   }
 }
 
+/* Thumb register-amount shifts (LSL/LSR/ASR/ROR Rd,Rs), the last fmt4 forms on
+ * the C path — MP2K envelope/volume scaling hits these ~33K/session. Semantics
+ * mirror cgba_sh4_thumb_shift_reg exactly: amount = reg[rs] & 0xFF;
+ *   amount==0             -> result and C unchanged, N/Z from the value;
+ *   1..31                 -> normal shift, C = last bit out;
+ *   LSL/LSR ==32          -> result 0, C = bit0 / bit31;   >32 -> 0, C=0;
+ *   ASR >=32              -> sign-fill, C = bit31;
+ *   ROR amount&31==0      -> result unchanged, C = bit31; else rotate,
+ *                            C = bit(a-1) of val = bit31 of the result.
+ * SHLD/SHAD take signed amounts (negative = right by -n for n in 1..31), which
+ * gives every carry recipe in one instruction. C work is skipped when the
+ * liveness mask says C is dead (fm & 2 == 0). Layout:
+ *   prologue; amount==0 -> zero:
+ *   <kind body: {small | big} paths merging at join>
+ *   join: store rd; pack NZC;  BRA end
+ *   zero: pack NZ only (C architecturally preserved)
+ *   end: */
+static inline int sh4g_thumb_shift_reg_native(u8 **tp, u32 opcode, u32 pc,
+                                              u32 flag_status)
+{
+  u32 sub = (opcode >> 6) & 0xF;     /* 0x2=LSL 0x3=LSR 0x4=ASR 0x7=ROR */
+  unsigned rd = opcode & 7;
+  unsigned rs = (opcode >> 3) & 7;
+  u32 fm = flag_status & 0xF;
+  int want_c = (fm & 0x2) != 0;
+  const unsigned val = SH4_REG_T0;   /* R1: value, then result */
+  const unsigned amt = SH4_REG_RET;  /* R0: amount (and_imm target) */
+  const unsigned am32 = SH4_REG_T2;  /* R3: amount-32 */
+  const unsigned rc  = SH4_REG_ARG0; /* R4: carry out (0/1) */
+  const unsigned s1  = SH4_REG_ARG1; /* R5 scratch */
+  const unsigned s2  = SH4_REG_ARG2; /* R6 scratch */
+  u8 *zero_ph, *end_ph, *skip_ph = NULL;
+  (void)pc;
+
+  if (sub != 0x2 && sub != 0x3 && sub != 0x4 && sub != 0x7)
+    return 0;
+
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_load_greg(&cg, rd, val);
+    sh4_emit_load_greg(&cg, rs, amt);
+    sh4_emit_and_imm(&cg, 0xFF);                 /* R0 = amount */
+    sh4_emit_tst(&cg, amt, amt);                 /* T = (amount == 0) */
+    sh4g_close(tp, &cg); }
+  zero_ph = sh4g_emit_bt_placeholder(tp);
+
+  if (sub == 0x7) {                              /* ROR */
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_and_imm(&cg, 0x1F);               /* R0 = a = amount & 31 */
+      sh4_emit_tst(&cg, amt, amt);               /* T = (a == 0): mult of 32 */
+      sh4g_close(tp, &cg); }
+    { u8 *m32_ph = sh4g_emit_bt_placeholder(tp);
+      { sh4_codegen cg = sh4g_open(tp);         /* a in 1..31: rotate */
+        sh4_emit_mov_reg(&cg, val, rc);
+        sh4_emit_neg(&cg, amt, s2);
+        sh4_emit_shld(&cg, s2, rc);              /* rc = val >> a */
+        sh4_emit_mov_imm(&cg, 32, s1);
+        sh4_emit_sub(&cg, amt, s1);              /* s1 = 32 - a */
+        sh4_emit_shld(&cg, s1, val);             /* val <<= (32 - a) */
+        sh4_emit_or(&cg, rc, val);               /* result */
+        sh4g_close(tp, &cg); }
+      sh4g_patch_cond(m32_ph, *tp); }            /* a==0: result unchanged */
+    if (want_c) {                                /* both paths: C = result b31 */
+      sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_reg(&cg, val, rc);
+      sh4_emit_shll(&cg, rc);                    /* T = bit31 */
+      sh4_emit_movt(&cg, rc);
+      sh4g_close(tp, &cg);
+    }
+  } else {                                       /* LSL / LSR / ASR */
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_reg(&cg, amt, am32);
+      sh4_emit_add_imm(&cg, -32, am32);          /* R3 = amount - 32 */
+      sh4_emit_cmppz(&cg, am32);                 /* T = (amount >= 32) */
+      sh4g_close(tp, &cg); }
+    { u8 *big_ph = sh4g_emit_bt_placeholder(tp);
+      { sh4_codegen cg = sh4g_open(tp);         /* amount in 1..31 */
+        if (want_c) {
+          if (sub == 0x2) {                      /* LSL: C = val>>(32-amt) & 1 */
+            sh4_emit_mov_reg(&cg, val, rc);
+            sh4_emit_shld(&cg, am32, rc);        /* am32 = -(32-amt) */
+          } else {                               /* LSR/ASR: C = val>>(amt-1) & 1 */
+            sh4_emit_mov_imm(&cg, 1, s1);
+            sh4_emit_sub(&cg, amt, s1);          /* s1 = 1 - amt (<= 0) */
+            sh4_emit_mov_reg(&cg, val, rc);
+            sh4_emit_shld(&cg, s1, rc);
+          }
+          sh4_emit_mov_imm(&cg, 1, s1);
+          sh4_emit_and(&cg, s1, rc);             /* rc = C */
+        }
+        if (sub == 0x2)
+          sh4_emit_shld(&cg, amt, val);          /* result = val << amt */
+        else {
+          sh4_emit_neg(&cg, amt, s2);
+          if (sub == 0x3) sh4_emit_shld(&cg, s2, val);   /* logical right */
+          else            sh4_emit_shad(&cg, s2, val);   /* arithmetic right */
+        }
+        sh4g_close(tp, &cg); }
+      skip_ph = sh4g_emit_bra_placeholder(tp);
+      sh4g_patch_cond(big_ph, *tp); }
+    { sh4_codegen cg = sh4g_open(tp);           /* amount >= 32 */
+      if (sub == 0x4) {                          /* ASR: sign-fill, C = b31 */
+        if (want_c) {
+          sh4_emit_mov_reg(&cg, val, rc);
+          sh4_emit_shll(&cg, rc);
+          sh4_emit_movt(&cg, rc);
+        }
+        sh4_emit_mov_imm(&cg, -31, s2);
+        sh4_emit_shad(&cg, s2, val);
+      } else {                                   /* LSL/LSR: 0; C only at ==32 */
+        if (want_c) {
+          sh4_emit_tst(&cg, am32, am32);         /* T = (amount == 32) */
+          sh4_emit_movt(&cg, s1);
+          sh4_emit_mov_reg(&cg, val, rc);
+          if (sub == 0x2) {                      /* LSL#32: C = bit0 */
+            sh4_emit_mov_imm(&cg, 1, s2);
+            sh4_emit_and(&cg, s2, rc);
+          } else {                               /* LSR#32: C = bit31 */
+            sh4_emit_shll(&cg, rc);
+            sh4_emit_movt(&cg, rc);
+          }
+          sh4_emit_and(&cg, s1, rc);             /* zero unless amount==32 */
+        }
+        sh4_emit_mov_imm(&cg, 0, val);
+      }
+      sh4g_close(tp, &cg); }
+    sh4g_patch_bra(skip_ph, *tp);                /* small path joins here */
+  }
+
+  sh4g_store_greg(tp, val, rd);                  /* result -> reg[rd] */
+  sh4g_set_flags(tp, val, rc, rc,
+                 sh4g_flags_round(fm & (want_c ? 0xE : 0xC)));
+  end_ph = sh4g_emit_bra_placeholder(tp);
+
+  sh4g_patch_cond(zero_ph, *tp);                 /* amount==0: N/Z only */
+  sh4g_set_flags(tp, val, rc, rc, sh4g_flags_round(fm & 0xC));
+  sh4g_patch_bra(end_ph, *tp);
+  return 1;
+}
+
 enum {
   SH4_THUMB_LDK_W = 0,
   SH4_THUMB_LDK_B,
