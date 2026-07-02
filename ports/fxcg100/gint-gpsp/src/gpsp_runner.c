@@ -144,6 +144,16 @@ static uint32_t cgba_wild_jump_pc = 0xFFFFFFFFu;
 
 extern int dynarec_enable;
 
+/* Panic rendering must not depend on interrupts or the DMA driver: the
+ * exception may have hit mid display-DMA with interrupts disabled, and a
+ * dupdate()-based present can hang forever (observed on overclocked hardware
+ * as "black screen for a few seconds" before the report appeared). The
+ * renderer lives in crash_panic.c (own TU: <gint/display.h> clashes with
+ * gpSP's typedefs) and presents through the R61524 CPU programmed-I/O path. */
+void cgba_panic_draw_begin(void);
+void cgba_panic_draw_line(int row, const char *text);
+void cgba_panic_draw_present(void);
+
 static void cgba_panic_text(int row, const char *fmt, ...)
 {
 	char line[44];
@@ -152,7 +162,7 @@ static void cgba_panic_text(int row, const char *fmt, ...)
 	va_start(ap, fmt);
 	vsnprintf(line, sizeof line, fmt, ap);
 	va_end(ap);
-	fxcg100_lcd_draw_text(4, 4 + (unsigned)row * 14, line, 0xFFFF, 0x0000);
+	cgba_panic_draw_line(row, line);
 }
 
 __attribute__((noreturn))
@@ -164,7 +174,7 @@ static void cgba_crash_panic(uint32_t code)
 
 	__asm__ volatile("stc spc, %0" : "=r"(spc));
 
-	fxcg100_lcd_clear(0x0000);
+	cgba_panic_draw_begin();
 	cgba_panic_text(row++, "CGBA CRASH  EXC=%03lX%s", (unsigned long)code,
 		code == CGBA_EXC_WILD_JUMP ? " (JIT WILD JUMP)" : "");
 	cgba_panic_text(row++, "HOST PC=%08lX TEA=%08lX",
@@ -185,7 +195,7 @@ static void cgba_crash_panic(uint32_t code)
 			(uintptr_t)ram_translation_cache) / 1024u);
 #endif
 	cgba_panic_text(row++, "photo this screen; then RESTART");
-	fxcg100_lcd_update();
+	cgba_panic_draw_present();
 
 	for(;;)
 		;

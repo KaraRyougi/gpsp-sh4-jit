@@ -43,6 +43,8 @@ file(REMOVE_RECURSE
   "CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/sh4/sh4_stub.S.obj"
   "CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/video.cc.obj"
   "CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/video.cc.obj.d"
+  "CMakeFiles/cgba-gint-gpsp.dir/src/crash_panic.c.obj"
+  "CMakeFiles/cgba-gint-gpsp.dir/src/crash_panic.c.obj.d"
   "CMakeFiles/cgba-gint-gpsp.dir/src/frame_pacing.c.obj"
   "CMakeFiles/cgba-gint-gpsp.dir/src/frame_pacing.c.obj.d"
   "CMakeFiles/cgba-gint-gpsp.dir/src/gint_platform.c.obj"

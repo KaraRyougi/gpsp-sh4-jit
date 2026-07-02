@@ -678,14 +678,28 @@ static inline int sh4g_thumb_ldst_native(u8 **tp, u32 opcode, u32 pc,
       sh4g_close(tp, &cg); }
     guards[ng++] = sh4g_thumb_ldst_guard(tp, 1);     /* backup -> slow */
   } else {
-    /* Fast stores are safe only for plain RAM: 0x02/0x03. */
+    /* Fast stores: plain RAM (0x02/0x03, SMC tag-checked below) or VRAM
+     * word/half (plain; mirroring in the read map; no region-6 side effects).
+     * Byte stores to VRAM duplicate to the halfword -> C helper. */
+    u8 *vram_ok = NULL;
     { sh4_codegen cg = sh4g_open(tp);
       sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
-      sh4_emit_mov_imm(&cg, -25, SH4_REG_T1);
-      sh4_emit_shld(&cg, SH4_REG_T1, SH4_REG_RET);   /* R0 = addr >> 25 */
+      sh4_emit_shlr16(&cg, SH4_REG_RET);
+      sh4_emit_shlr8(&cg, SH4_REG_RET);              /* R0 = addr >> 24 */
+      sh4g_close(tp, &cg); }
+    if (kind != SH4_THUMB_LDK_B) {
+      { sh4_codegen cg = sh4g_open(tp);
+        sh4_emit_cmpeq_imm(&cg, 6);                  /* T = VRAM */
+        sh4g_close(tp, &cg); }
+      vram_ok = sh4g_emit_bt_placeholder(tp);
+    }
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_shlr(&cg, SH4_REG_RET);               /* R0 = addr >> 25 */
       sh4_emit_cmpeq_imm(&cg, 1);                    /* regions 2 or 3 */
       sh4g_close(tp, &cg); }
     guards[ng++] = sh4g_thumb_ldst_guard(tp, 0);
+    if (vram_ok)
+      sh4g_patch_cond(vram_ok, *tp);
   }
   if (align_mask) {
     sh4_codegen cg = sh4g_open(tp);
@@ -713,7 +727,16 @@ static inline int sh4g_thumb_ldst_native(u8 **tp, u32 opcode, u32 pc,
   }
 
   if (!is_load) {
-    u8 *bf_iwram, *bra_tag_ready;
+    u8 *bf_iwram, *bra_tag_ready, *vram_skip;
+    /* VRAM has no SMC tag mirror (region 6 is never translated code). */
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_T1);
+      sh4_emit_shlr16(&cg, SH4_REG_T1);
+      sh4_emit_shlr8(&cg, SH4_REG_T1);                  /* R2 = addr >> 24 */
+      sh4_emit_mov_imm(&cg, 6, SH4_REG_ARG0);
+      sh4_emit_cmpeq(&cg, SH4_REG_ARG0, SH4_REG_T1);    /* T = VRAM */
+      sh4g_close(tp, &cg); }
+    vram_skip = sh4g_emit_bt_placeholder(tp);
     /* Build SMC tag page in R5:
      *   EWRAM: data page + 0x40000, IWRAM: data page - 0x8000. */
     { sh4_codegen cg = sh4g_open(tp);
@@ -748,6 +771,7 @@ static inline int sh4g_thumb_ldst_native(u8 **tp, u32 opcode, u32 pc,
       sh4_emit_tst(&cg, SH4_REG_ARG0, SH4_REG_ARG0);    /* T = tag == 0 */
       sh4g_close(tp, &cg); }
     guards[ng++] = sh4g_thumb_ldst_guard(tp, 0);         /* SMC -> slow */
+    sh4g_patch_cond(vram_skip, *tp);                     /* VRAM: no tags */
   }
 
   { sh4_codegen cg = sh4g_open(tp);
