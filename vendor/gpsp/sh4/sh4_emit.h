@@ -48,6 +48,9 @@ void sh4_indirect_branch_thumb(u32 address);
 void sh4_indirect_branch_dual(u32 address);
 void sh4_indirect_branch_dual_thumb_current(u32 address);
 void sh4_bios_fallback_entry(void);
+/* Port-provided trap for an executed wild guest branch (untranslatable PC):
+ * panics with the guest target on-screen instead of jumping to garbage. */
+void cgba_sh4_wild_jump(u32 pc) __attribute__((noreturn));
 void smc_write(void);
 void execute_swi(u32 pc);
 void sh4_cheat_hook(void);
@@ -565,13 +568,6 @@ static inline void sh4g_prof_block_entry(u8 **tp, u32 pc, int thumb)
          block_exits[block_exit_position].branch_source,                      \
          block_exits[block_exit_position].branch_target);                     \
        block_exit_position++; } while(0)
-
-#define thumb_bl_prefix()                                                     \
-  do { thumb_decode_branch();                                                 \
-       u32 _ct_lr = (u32)(pc + 4 + ((s32)((offset & 0x07FF) << 21) >> 9));    \
-       sh4g_const(&translation_ptr, _ct_lr, SH4_REG_T0);                      \
-       sh4g_store_greg(&translation_ptr, SH4_REG_T0, REG_LR);                 \
-       sh4_thumb_const_set(REG_LR, _ct_lr); } while(0)
 
 #define thumb_blh()                                                           \
   do { thumb_decode_branch();                                                 \

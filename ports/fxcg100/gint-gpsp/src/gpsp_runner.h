@@ -49,4 +49,8 @@ unsigned cgba_gpsp_state_lines(unsigned frame, const char *phase,
 int cgba_gpsp_diff_test(uint32_t cycles, char *out, unsigned out_len);
 #endif
 
+/* Install the CGBA panic handler: any CPU exception (and the JIT wild-jump
+ * trap) renders guest CPU state alongside the hardware exception info. */
+void cgba_crash_reporting_init(void);
+
 #endif
