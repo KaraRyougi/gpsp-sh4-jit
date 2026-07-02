@@ -53,4 +53,11 @@ int cgba_gpsp_diff_test(uint32_t cycles, char *out, unsigned out_len);
  * trap) renders guest CPU state alongside the hardware exception info. */
 void cgba_crash_reporting_init(void);
 
+#ifdef CGBA_DYNAREC
+/* Overclock triage: hammer the translation-cache arena with the JIT's
+ * write -> cache-sync -> execute pattern; 0 = pass. Destroys translated code —
+ * flush the dynarec caches afterwards. Result text into out. */
+uint32_t cgba_jit_canary(char *out, unsigned out_len);
+#endif
+
 #endif
