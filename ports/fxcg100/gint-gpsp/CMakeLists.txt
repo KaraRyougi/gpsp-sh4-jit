@@ -64,9 +64,11 @@ option(CGBA_FXCG100_STORAGE
   "Enable gint_world_switch-backed fx-CG100 BFile storage for ROM/config files" ON)
 # Sized from a 1300-frame Metroid soak: the hot translated set is ~800 KB and a
 # 768 KB cache wholesale-flushed 44 times (once per ~30 frames — a hash wipe +
-# ~300-block retranslation storm each). 1.5 MB fits the set with room to grow
-# and still leaves ~400 KB of .cgba.highbss arena headroom (limit 0x8c780000).
-set(CGBA_GPSP_ROM_TRANSLATION_CACHE_SIZE "1572864" CACHE STRING
+# ~300-block retranslation storm each). 1152 KB fits the set with headroom.
+# DO NOT grow past what the linker arena allows: the resident MPM loader lives
+# at 0x8c700000 and a 1.5 MB cache (arena end 0x8c715300) overwrote it,
+# HARD-RESETTING the calculator — the .ld ASSERT now enforces the real bound.
+set(CGBA_GPSP_ROM_TRANSLATION_CACHE_SIZE "1179648" CACHE STRING
   "SH4 dynarec ROM translation cache size in bytes")
 set(CGBA_GPSP_RAM_TRANSLATION_CACHE_SIZE "262144" CACHE STRING
   "SH4 dynarec RAM translation cache size in bytes")
