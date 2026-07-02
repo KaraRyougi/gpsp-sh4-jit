@@ -66,6 +66,16 @@ void sh4_block_exit(u32 pc)
   (void)pc;
 }
 
+void sh4_helper_exit(u32 pc)
+{
+  (void)pc;
+}
+
+void sh4_indirect_branch_thumb(u32 address)
+{
+  (void)address;
+}
+
 static _Alignas(32) u8 code[4096];
 static int fail;
 

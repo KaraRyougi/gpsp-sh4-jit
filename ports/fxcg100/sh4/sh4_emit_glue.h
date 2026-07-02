@@ -624,6 +624,29 @@ static inline void sh4g_patch_jump(u8 *site, const void *target)
    * executed as an instruction. See the SH4G_RESYNC note above. */
 }
 
+/* Chain-patch a sh4g_emit_patch_jump site. A near target (BRA disp12 reach,
+ * +-4 KiB) overwrites the MOV.L/JMP pair with a direct BRA + delay NOP: the hot
+ * loop back-edge and most intra-cache chains become one predicted branch
+ * instead of a literal D-load feeding an indirect JMP @R0. Far targets keep the
+ * literal form. Chain sites are patched at most twice (the emit-time default to
+ * sh4_block_exit stays a far literal; the driver then aims it once at the real
+ * target), always before the enclosing block's I-cache sync, so rewriting
+ * instruction bytes here needs no extra sync. */
+static inline void sh4g_chain_patch(u8 *site, const void *target)
+{
+  long d = ((long)(uintptr_t)target - ((long)(uintptr_t)site + 4)) / 2;
+  unsigned form = site[0] & 0xF0;
+  if (d >= -2048 && d <= 2047 && (form == 0xD0 || form == 0xA0)) {
+    site[0] = (uint8_t)(0xA0 | ((d >> 8) & 0x0F));
+    site[1] = (uint8_t)(d & 0xFF);
+    site[2] = 0x00;                  /* NOP in the delay slot (replaces JMP) */
+    site[3] = 0x09;
+    SH4G_RESYNC(site, 4);
+    return;
+  }
+  sh4g_patch_jump(site, target);
+}
+
 /* Conditional skip over a predicated body of UNBOUNDED length (the ARM
  * same-condition run, which can be many instructions). sh4g_cond_to_T has left
  * T = (ARM condition satisfied): emit BT over a far (literal) jump, so when the
@@ -641,24 +664,21 @@ static inline u8 *sh4g_emit_cond_skip_far(u8 **tp)
   return site;
 }
 
-/* Materialize a guest PC value into R4 (ARG0) and store it to reg[REG_PC]. */
-static inline void sh4g_store_pc_imm(u8 **tp, uint32_t new_pc)
-{
-  sh4g_const(tp, new_pc, SH4_REG_ARG0);
-  sh4g_store_greg(tp, SH4_REG_ARG0, SH4_GREG_PC);
-}
-
-/* Block exit to `new_pc`. reg[REG_PC] and R4 are set to new_pc; if the cycle
- * counter is exhausted (R13 < 0) control leaves to `block_exit_fn` (which
- * processes events and re-dispatches), otherwise it takes a patchable jump that
- * the driver back-patches to the resolved target block for direct chaining
- * (initialized to `block_exit_fn` so the unpatched path is still correct).
- * Returns the patch site. */
+/* Block exit to `new_pc`. R4 is set to new_pc; if the cycle counter is
+ * exhausted (R13 <= 0) control leaves to `block_exit_fn` (which commits R4 to
+ * reg[REG_PC], processes events and re-dispatches), otherwise it takes a
+ * patchable jump that the driver back-patches to the resolved target block for
+ * direct chaining (initialized to `block_exit_fn` so the unpatched path is
+ * still correct). reg[REG_PC] is deliberately NOT stored here: every consumer
+ * of the exhausted/unpatched path (sh4_block_exit, sh4_update_gba) commits R4
+ * itself, and the chained path runs straight into the next block, which never
+ * reads reg[REG_PC] before the next commit point — dropping the store saves a
+ * memory write on every taken branch. Returns the patch site. */
 static inline u8 *sh4g_branch_exit(u8 **tp, uint32_t new_pc,
                                    const void *block_exit_fn)
 {
   u8 *bt, *site;
-  sh4g_store_pc_imm(tp, new_pc);                /* R4 = reg[REG_PC] = new_pc */
+  sh4g_const(tp, new_pc, SH4_REG_ARG0);         /* R4 = new_pc */
 
   { sh4_codegen cg = sh4g_open(tp);
     sh4_emit_cmppl(&cg, SH4_REG_CYCLES);        /* T = (cycles > 0) */
@@ -673,9 +693,12 @@ static inline u8 *sh4g_branch_exit(u8 **tp, uint32_t new_pc,
   return site;
 }
 
-/* After a C handler that returns nonzero in R0 when it changed the guest PC,
- * re-dispatch: TST R0,R0 ; BT skip ; (R4 = reg[REG_PC]) ; jmp block_exit ; skip:. */
-static inline void sh4g_redispatch_if_r0(u8 **tp, const void *block_exit_fn)
+/* After a C handler that returns nonzero in R0 when it changed the guest PC
+ * (1 = pure PC change, 2 = store alert; see sh4_interp_helpers.c), leave the
+ * block: TST R0,R0 ; BT skip ; R4 = reg[REG_PC] ; R1 = code ; jmp helper_exit.
+ * sh4_helper_exit (sh4_stub.S) reads the code from R1 and re-dispatches pure PC
+ * changes without an update_gba pass; alerts exit through sh4_block_exit. */
+static inline void sh4g_redispatch_if_r0(u8 **tp, const void *helper_exit_fn)
 {
   u8 *bt;
   { sh4_codegen cg = sh4g_open(tp);
@@ -684,7 +707,8 @@ static inline void sh4g_redispatch_if_r0(u8 **tp, const void *block_exit_fn)
   bt = *tp;
   sh4g_u16(tp, 0x8900);                               /* BT skip (no PC change) */
   sh4g_load_greg(tp, SH4_GREG_PC, SH4_REG_ARG0);      /* R4 = reg[REG_PC] */
-  sh4g_far_jmp(tp, block_exit_fn);
+  sh4g_mov_reg(tp, SH4_REG_RET, SH4_REG_T0);          /* R1 = helper code */
+  sh4g_far_jmp(tp, helper_exit_fn);
   { long d = ((long)(*tp) - ((long)bt + 4)) / 2; bt[1] = (uint8_t)(d & 0xFF); }
 }
 
@@ -693,11 +717,11 @@ static inline void sh4g_redispatch_if_r0(u8 **tp, const void *block_exit_fn)
  * The no-PC-change path deliberately keeps accumulating: it skips this debit and
  * the normal block-end/branch gate will flush the full run later. */
 static inline void sh4g_redispatch_if_r0_debit(u8 **tp, int cycle_count,
-                                               const void *block_exit_fn)
+                                               const void *helper_exit_fn)
 {
   u8 *bt;
   if (cycle_count == 0) {
-    sh4g_redispatch_if_r0(tp, block_exit_fn);
+    sh4g_redispatch_if_r0(tp, helper_exit_fn);
     return;
   }
   { sh4_codegen cg = sh4g_open(tp);
@@ -707,7 +731,8 @@ static inline void sh4g_redispatch_if_r0_debit(u8 **tp, int cycle_count,
   sh4g_u16(tp, 0x8900);                              /* BT skip (no PC change) */
   sh4g_cycle_debit(tp, cycle_count);
   sh4g_load_greg(tp, SH4_GREG_PC, SH4_REG_ARG0);     /* R4 = reg[REG_PC] */
-  sh4g_far_jmp(tp, block_exit_fn);
+  sh4g_mov_reg(tp, SH4_REG_RET, SH4_REG_T0);         /* R1 = helper code */
+  sh4g_far_jmp(tp, helper_exit_fn);
   { long d = ((long)(*tp) - ((long)bt + 4)) / 2; bt[1] = (uint8_t)(d & 0xFF); }
 }
 
@@ -811,13 +836,15 @@ static inline void sh4g_patch_cond(u8 *site, const void *target)
 /* Patch a conditional skip back to `target`. One close path serves both skip
  * forms, dispatched on the placeholder opcode: a BT/BF disp8 (0x8?00 — the
  * bounded Thumb-branch body) vs a far jump's MOV.L @(d,PC),R0 (0xD?00 — the
- * unbounded ARM run from sh4g_emit_cond_skip_far). */
+ * unbounded ARM run from sh4g_emit_cond_skip_far). The far form chain-patches:
+ * a skip target inside BRA reach (the common case — the predicated body is
+ * rarely 4 KiB long) becomes a direct branch. */
 static inline void sh4g_patch_cond_skip(u8 *site, const void *target)
 {
   if ((site[0] & 0xF0) == 0x80)
     sh4g_patch_cond(site, target);               /* disp8 BT/BF */
   else
-    sh4g_patch_jump(site, target);               /* far literal jump */
+    sh4g_chain_patch(site, target);              /* near BRA / far literal */
 }
 
 /* Emit an unconditional local forward branch placeholder (BRA 0 + delay NOP);

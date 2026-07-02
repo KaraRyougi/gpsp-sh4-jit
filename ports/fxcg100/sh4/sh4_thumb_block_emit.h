@@ -16,6 +16,8 @@ extern u8 *memory_map_read[];
 extern u8 iwram[];
 int  cgba_sh4_thumb_block(u32 opcode, u32 pc);
 void sh4_block_exit(u32 pc);
+void sh4_helper_exit(u32 pc);
+void sh4_indirect_branch_thumb(u32 address);
 #if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
 extern u32 cgba_sh4_native_thumb_push_iwram_count;
 #endif
@@ -135,7 +137,7 @@ static inline int sh4g_thumb_push_iwram_native(u8 **tp, u32 opcode, u32 pc,
   sh4g_const(tp, (u32)pc, SH4_REG_ARG1);
   sh4g_far_call(tp, (const void *)cgba_sh4_thumb_block);
   sh4g_cycle_debit_from_global(tp, &cgba_sh4_extra_cycles);
-  sh4g_redispatch_if_r0_debit(tp, cycle_count, (const void *)sh4_block_exit);
+  sh4g_redispatch_if_r0_debit(tp, cycle_count, (const void *)sh4_helper_exit);
 
   sh4g_patch_bra(bra_done, *tp);
   return 1;
@@ -330,10 +332,16 @@ static inline int sh4g_thumb_block_native(u8 **tp, u32 opcode, u32 pc,
 
   sh4g_charge_mem_run(tp, SH4_REG_ARG1, /*seq=*/1, /*is_word=*/1, count);
   if (load_pc) {
+    /* POP {..,pc}: a pure Thumb-mode return (ARMv4T LDM to PC does not switch
+     * mode). Dispatch through the inline ROM branch-hash trampoline — a hot,
+     * already-translated return target is one hash probe + JMP, with no
+     * update_gba pass and no C-resolver call. The stub handles the BIOS
+     * fallback, single-block diff mode, and hash misses; the cycle budget is
+     * re-checked at the target block's gates/branch exits. */
     if (cycle_count)
       sh4g_cycle_debit(tp, cycle_count);
     sh4g_load_greg(tp, SH4_GREG_PC, SH4_REG_ARG0);
-    sh4g_far_jmp(tp, (const void *)sh4_block_exit);
+    sh4g_far_jmp(tp, (const void *)sh4_indirect_branch_thumb);
   } else {
     bra_done = sh4g_emit_bra_placeholder(tp);
   }
@@ -344,7 +352,7 @@ static inline int sh4g_thumb_block_native(u8 **tp, u32 opcode, u32 pc,
   sh4g_const(tp, (u32)pc, SH4_REG_ARG1);
   sh4g_far_call(tp, (const void *)cgba_sh4_thumb_block);
   sh4g_cycle_debit_from_global(tp, &cgba_sh4_extra_cycles);
-  sh4g_redispatch_if_r0_debit(tp, cycle_count, (const void *)sh4_block_exit);
+  sh4g_redispatch_if_r0_debit(tp, cycle_count, (const void *)sh4_helper_exit);
 
   if (bra_done)
     sh4g_patch_bra(bra_done, *tp);

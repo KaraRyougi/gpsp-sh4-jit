@@ -97,10 +97,11 @@ static int run_sh4(const u8 *code, size_t n, int *ok)
 /* ---- conditional-skip reach test ----------------------------------------- *
  * sh4g_emit_cond_skip_far must let the condition-FALSE path reach a post-body
  * target at ANY distance (the [P1] bug: a disp8/disp12 skip silently wraps once
- * the predicated run is large). Emit the skip, a body bigger than the disp12
- * range, patch, and confirm the far jump stores the full 32-bit target and the
- * BT lands on the body. Also confirm the shared patcher still fixes a disp8 BF
- * (the bounded Thumb path). */
+ * the predicated run is large). Emit the skip, patch, and confirm the reach:
+ * within BRA disp12 range the patcher chain-converts the site to a direct
+ * BRA + delay NOP landing on the target; past that range it stores the full
+ * 32-bit target in the far jump's literal. Also confirm the shared patcher
+ * still fixes a disp8 BF (the bounded Thumb path). */
 static int test_cond_skip(void)
 {
   static _Alignas(32) u8 buf[16384];
@@ -123,13 +124,38 @@ static int test_cond_skip(void)
     u8 *target = p;
     sh4g_patch_cond_skip(site, target);
 
-    u8 *lit = (u8 *)(((uintptr_t)(site + 6) + 3u) & ~(uintptr_t)3u);
-    uint32_t stored = ((uint32_t)lit[0] << 24) | ((uint32_t)lit[1] << 16) |
-                      ((uint32_t)lit[2] << 8) | lit[3];
-    if (stored != (uint32_t)(uintptr_t)target) {
-      fprintf(stderr, "skip: body=%zu far target truncated (%08X != %08X)\n",
-              body_bytes[t], stored, (uint32_t)(uintptr_t)target);
-      fail = 1;
+    long disp = ((long)(uintptr_t)target - ((long)(uintptr_t)site + 4)) / 2;
+    if (disp >= -2048 && disp <= 2047) {
+      /* near: chain-converted to BRA disp12 + delay-slot NOP */
+      u16 bra = (u16)((site[0] << 8) | site[1]);
+      u16 slot = (u16)((site[2] << 8) | site[3]);
+      long d12 = (long)(bra & 0x0FFF);
+      if (d12 >= 0x800) d12 -= 0x1000;            /* sign-extend disp12 */
+      u8 *bra_target = site + 4 + d12 * 2;
+      if ((bra & 0xF000) != 0xA000) {
+        fprintf(stderr, "skip: body=%zu near patch is not a BRA (%04X)\n",
+                body_bytes[t], bra);
+        fail = 1;
+      }
+      if (bra_target != target) {
+        fprintf(stderr, "skip: body=%zu BRA misses target\n", body_bytes[t]);
+        fail = 1;
+      }
+      if (slot != 0x0009) {
+        fprintf(stderr, "skip: body=%zu BRA delay slot not a NOP (%04X)\n",
+                body_bytes[t], slot);
+        fail = 1;
+      }
+    } else {
+      /* far: full 32-bit target in the literal */
+      u8 *lit = (u8 *)(((uintptr_t)(site + 6) + 3u) & ~(uintptr_t)3u);
+      uint32_t stored = ((uint32_t)lit[0] << 24) | ((uint32_t)lit[1] << 16) |
+                        ((uint32_t)lit[2] << 8) | lit[3];
+      if (stored != (uint32_t)(uintptr_t)target) {
+        fprintf(stderr, "skip: body=%zu far target truncated (%08X != %08X)\n",
+                body_bytes[t], stored, (uint32_t)(uintptr_t)target);
+        fail = 1;
+      }
     }
   }
 
