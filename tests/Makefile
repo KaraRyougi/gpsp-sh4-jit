@@ -18,8 +18,9 @@ all: smoke core thumb cond native-ldst input cycle exec audit
 # Execution oracle: run emitted native code in a mini SH4 interpreter against
 # the C-helper semantics (closes the pixel-soak blind spot on the audio path).
 exec: $(ROOT)/tests/sh4_exec_oracle.c $(ROOT)/ports/fxcg100/sh4/sh4_thumb_dp_emit.h \
-      $(ROOT)/ports/fxcg100/sh4/sh4_emit_glue.h
-	$(CC) $(CFLAGS) -I$(ROOT) $(ROOT)/tests/sh4_exec_oracle.c -o $(BIN)-exec
+      $(ROOT)/ports/fxcg100/sh4/sh4_emit_glue.h $(ROOT)/ports/fxcg100/sh4/sh4_fastmem.h
+	$(CC) $(CFLAGS) -DCGBA_SH4_ARM_LDST_NATIVE=1 -DCGBA_SH4_THUMB_LDST_NATIVE=1 \
+	  -DCGBA_SH4_THUMB_BLOCK_NATIVE=1 -I$(ROOT) $(ROOT)/tests/sh4_exec_oracle.c -o $(BIN)-exec
 	$(BIN)-exec
 
 smoke: $(ROOT)/tests/sh4_codegen_smoke.c $(ROOT)/ports/fxcg100/sh4/sh4_codegen.h

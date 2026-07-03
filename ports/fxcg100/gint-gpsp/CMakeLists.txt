@@ -85,6 +85,7 @@ if(CGBA_DYNAREC)
     ${GPSP}/cpu_threaded.c
     ${GPSP}/memmap.c
     ${FXCG100}/sh4/sh4_interp_helpers.c
+    ${FXCG100}/sh4/sh4_fastmem.c
     ${FXCG100}/sh4/sh4_dynarec_state.c
     ${FXCG100}/sh4/sh4_diff_harness.c
   )

@@ -1,0 +1,343 @@
+#ifndef CGBA_SH4_FASTMEM_H
+#define CGBA_SH4_FASTMEM_H
+
+/*
+ * Out-of-line native memory fast paths — the translation-cache DENSITY fix.
+ *
+ * Metroid's in-world working set overflows the 896KB ROM translation cache
+ * when every native load/store site inlines its ~90-130 byte fast path
+ * (guards + page probe + transfer + SMC tags + wait-state charge): the JIT
+ * wholesale-flushes ~3x per FRAME and spends the frame retranslating (~3fps,
+ * measured: FL R15 / TX T7025 / IC 12.5MB per 5-frame window).
+ *
+ * Fix: emit each fast-path SHAPE exactly once at init into a small resident
+ * buffer, and call it from a fixed ~36-byte site — the same literal-tuple
+ * mechanism as the compact C-helper trampolines, with one extra twist: the
+ * tuple is laid out so the routine's guard-failure path can jump STRAIGHT
+ * into the existing sh4_op2_pc_mem_tramp, which then reads the helper fn /
+ * opcode / pc / cycles from the very same tuple. One site shape serves both
+ * the native fast path and the C fallback.
+ *
+ *   site:  [addr calc, site-specific]           ; R1 = address, R6 = wb value
+ *          [pad NOP so the literals align]
+ *          MOV.L  L, r0
+ *          JSR    @r0                            ; PR -> the BRA below
+ *          NOP
+ *          BRA    2f
+ *          NOP
+ *   L:     .long  ROUTINE                        ; PR+4
+ *          .long  helper_fn                      ; PR+8   (tramp: fn)
+ *          .long  opcode                         ; PR+12  (tramp: opcode)
+ *          .long  pc                             ; PR+16  (tramp: pc)
+ *          .long  cycle_count                    ; PR+20  (tramp: cycles)
+ *          .long  params                         ; PR+24  (routine only)
+ *   2:
+ *
+ * Routine contract:
+ *   in:  R1 = guest transfer address, R6 = writeback value (wb variants),
+ *        PR = site return (also the tuple cursor), R8 = cached CPSR (do not
+ *        touch), R13/R14 cycle counter / reg base as everywhere.
+ *   out: fast path performs transfer + reg[rd] + writeback + cycle charge,
+ *        returns with RTS. Guard failure jumps to sh4_op2_pc_mem_tramp with
+ *        PR intact — the C helper re-executes the instruction from original
+ *        state (writeback is NOT committed before any guard).
+ *   params: bits 0-7 = rd byte-offset in reg[] (rd*4);
+ *           bits 8-15 = writeback rn byte-offset (wb variants only).
+ *
+ * The generator reuses the exact inline emitter recipes (guards, byte-order
+ * swaps, SMC tag scan, charge) — this file reorganizes WHERE the code lives,
+ * not what it does. Routines live in a normal .bss buffer (NOT the high
+ * arena) and survive translation-cache flushes.
+ */
+
+#include "ports/fxcg100/sh4/sh4_emit_glue.h"
+
+/* Routine variants: kind x direction, plus ARM writeback twins. */
+enum {
+  CGBA_FM_LOAD_W = 0, CGBA_FM_LOAD_B, CGBA_FM_LOAD_UH, CGBA_FM_LOAD_SH,
+  CGBA_FM_LOAD_SB, CGBA_FM_STORE_W, CGBA_FM_STORE_UH, CGBA_FM_STORE_B,
+  CGBA_FM_BASE_COUNT,
+  CGBA_FM_WB = CGBA_FM_BASE_COUNT,   /* +CGBA_FM_WB = writeback variant */
+  CGBA_FM_COUNT = CGBA_FM_BASE_COUNT * 2
+};
+
+extern u8 *memory_map_read[];
+void sh4_op2_pc_mem_tramp(void);
+
+static inline int cgba_fm_is_load(int fm)
+{ return (fm % CGBA_FM_BASE_COUNT) <= CGBA_FM_LOAD_SB; }
+
+static inline int cgba_fm_align_mask(int fm)
+{
+  switch (fm % CGBA_FM_BASE_COUNT) {
+  case CGBA_FM_LOAD_W: case CGBA_FM_STORE_W:   return 3;
+  case CGBA_FM_LOAD_UH: case CGBA_FM_LOAD_SH:
+  case CGBA_FM_STORE_UH:                       return 1;
+  default:                                     return 0;
+  }
+}
+
+/* ---- the shared routine body ------------------------------------------- */
+/* Emits one variant at *tp; returns its entry point. Mirrors the inline
+ * bodies of sh4_arm_ldst_emit.h / sh4g_thumb_ldst_native instruction for
+ * instruction, with reg[rd]/writeback offsets read from the site tuple. */
+static inline u8 *sh4g_fastmem_emit_routine(u8 **tp, int fm)
+{
+  u8 *entry = *tp;
+  int is_load = cgba_fm_is_load(fm);
+  int kind = fm % CGBA_FM_BASE_COUNT;
+  int align_mask = cgba_fm_align_mask(fm);
+  int wb = fm >= CGBA_FM_WB;
+  u8 *guards[8]; int ng = 0;
+  int i;
+
+  /* params -> R5 early (R5 is untouched by everything below). */
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_sts_pr(&cg, SH4_REG_ARG1);
+    sh4_emit_mov_l_load_disp(&cg, SH4_REG_ARG1, SH4_REG_ARG1, 24 >> 2);
+    sh4g_close(tp, &cg); }
+
+  /* map guard: memory_map_read[] covers 0x00000000..0x0fffffff only */
+  sh4g_const(tp, 0x10000000u, SH4_REG_T1);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_cmphs(&cg, SH4_REG_T1, SH4_REG_T0);     /* T = addr >= 0x10000000 */
+    sh4g_close(tp, &cg); }
+  guards[ng++] = sh4g_emit_bt_placeholder(tp);
+
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
+    sh4_emit_mov_imm(&cg, -15, SH4_REG_T1);
+    sh4_emit_shld(&cg, SH4_REG_T1, SH4_REG_RET);     /* R0 = addr >> 15 */
+    sh4_emit_shll2(&cg, SH4_REG_RET);                /* page index * 4 */
+    sh4g_close(tp, &cg); }
+  sh4g_const(tp, (u32)(uintptr_t)memory_map_read, SH4_REG_T2);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_l_load_r0(&cg, SH4_REG_T2, SH4_REG_T2);
+    sh4_emit_tst(&cg, SH4_REG_T2, SH4_REG_T2);       /* T = (page == NULL) */
+    sh4g_close(tp, &cg); }
+  guards[ng++] = sh4g_emit_bt_placeholder(tp);
+
+  if (is_load) {
+    /* regions 2..12 (RAM/IO/video/gamepak); BIOS + backup stay on C */
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
+      sh4_emit_shlr16(&cg, SH4_REG_RET);
+      sh4_emit_shlr8(&cg, SH4_REG_RET);              /* R0 = addr >> 24 */
+      sh4_emit_mov_imm(&cg, 2, SH4_REG_T1);
+      sh4_emit_cmphs(&cg, SH4_REG_T1, SH4_REG_RET);  /* T = region >= 2 */
+      sh4g_close(tp, &cg); }
+    guards[ng++] = sh4g_emit_bf_placeholder(tp);
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_imm(&cg, 13, SH4_REG_T1);
+      sh4_emit_cmphs(&cg, SH4_REG_T1, SH4_REG_RET);  /* T = backup/EEPROM */
+      sh4g_close(tp, &cg); }
+    guards[ng++] = sh4g_emit_bt_placeholder(tp);
+  } else {
+    /* stores: RAM (SMC-tagged) or VRAM word/half (byte stores stay on C) */
+    u8 *vram_ok = NULL;
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
+      sh4_emit_shlr16(&cg, SH4_REG_RET);
+      sh4_emit_shlr8(&cg, SH4_REG_RET);              /* R0 = addr >> 24 */
+      sh4g_close(tp, &cg); }
+    if (kind != CGBA_FM_STORE_B) {
+      { sh4_codegen cg = sh4g_open(tp);
+        sh4_emit_cmpeq_imm(&cg, 6);                  /* T = VRAM */
+        sh4g_close(tp, &cg); }
+      vram_ok = sh4g_emit_bt_placeholder(tp);
+    }
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_shlr(&cg, SH4_REG_RET);               /* R0 = addr >> 25 */
+      sh4_emit_cmpeq_imm(&cg, 1);                    /* regions 2 or 3 */
+      sh4g_close(tp, &cg); }
+    guards[ng++] = sh4g_emit_bf_placeholder(tp);
+    if (vram_ok)
+      sh4g_patch_cond(vram_ok, *tp);
+  }
+  if (align_mask) {
+    sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
+    sh4_emit_tst_imm(&cg, align_mask);               /* T = guest aligned */
+    sh4g_close(tp, &cg);
+    guards[ng++] = sh4g_emit_bf_placeholder(tp);
+  }
+
+  /* R0 = addr & 0x7FFF (in-page offset) */
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
+    sh4_emit_shll16(&cg, SH4_REG_RET); sh4_emit_shll(&cg, SH4_REG_RET);
+    sh4_emit_shlr16(&cg, SH4_REG_RET); sh4_emit_shlr(&cg, SH4_REG_RET);
+    sh4g_close(tp, &cg); }
+  if (is_load && align_mask) {                       /* unaligned host (NOR) */
+    sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_reg(&cg, SH4_REG_RET, SH4_REG_T1);  /* T1 = page offset */
+    sh4_emit_add_reg(&cg, SH4_REG_T2, SH4_REG_RET);  /* R0 = host pointer */
+    sh4_emit_tst_imm(&cg, align_mask);               /* T = host ptr aligned */
+    sh4_emit_mov_reg(&cg, SH4_REG_T1, SH4_REG_RET);  /* restore offset */
+    sh4g_close(tp, &cg);
+    guards[ng++] = sh4g_emit_bf_placeholder(tp);
+  }
+
+  if (!is_load) {
+    /* SMC tag scan (RAM only; VRAM has no tag mirror). */
+    u8 *bf_iwram, *bra_tag_ready, *vram_skip;
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_T1);
+      sh4_emit_shlr16(&cg, SH4_REG_T1);
+      sh4_emit_shlr8(&cg, SH4_REG_T1);               /* R2 = addr >> 24 */
+      sh4_emit_mov_imm(&cg, 6, SH4_REG_ARG0);
+      sh4_emit_cmpeq(&cg, SH4_REG_ARG0, SH4_REG_T1); /* T = VRAM */
+      sh4g_close(tp, &cg); }
+    vram_skip = sh4g_emit_bt_placeholder(tp);
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_reg(&cg, SH4_REG_T2, SH4_REG_ARG3);
+      sh4_emit_mov_imm(&cg, 2, SH4_REG_ARG0);
+      sh4_emit_cmpeq(&cg, SH4_REG_ARG0, SH4_REG_T1); /* T = EWRAM */
+      sh4g_close(tp, &cg); }
+    bf_iwram = sh4g_emit_bf_placeholder(tp);
+    sh4g_const(tp, 0x40000u, SH4_REG_ARG0);
+    sh4g_add_reg(tp, SH4_REG_ARG0, SH4_REG_ARG3);
+    bra_tag_ready = sh4g_emit_bra_placeholder(tp);
+    sh4g_patch_cond(bf_iwram, *tp);
+    sh4g_const(tp, (u32)-0x8000, SH4_REG_ARG0);
+    sh4g_add_reg(tp, SH4_REG_ARG0, SH4_REG_ARG3);
+    sh4g_patch_bra(bra_tag_ready, *tp);
+    { sh4_codegen cg = sh4g_open(tp);
+      switch (kind) {
+      case CGBA_FM_STORE_W:
+        sh4_emit_mov_l_load_r0(&cg, SH4_REG_ARG3, SH4_REG_ARG0); break;
+      case CGBA_FM_STORE_UH:
+        sh4_emit_mov_w_load_r0(&cg, SH4_REG_ARG3, SH4_REG_ARG0); break;
+      default:
+        sh4_emit_mov_b_load_r0(&cg, SH4_REG_ARG3, SH4_REG_ARG0); break;
+      }
+      sh4_emit_tst(&cg, SH4_REG_ARG0, SH4_REG_ARG0); /* T = tag clear */
+      sh4g_close(tp, &cg); }
+    guards[ng++] = sh4g_emit_bf_placeholder(tp);      /* SMC -> slow */
+    sh4g_patch_cond(vram_skip, *tp);
+  }
+
+  /* transfer */
+  { sh4_codegen cg = sh4g_open(tp);
+    if (is_load) {
+      switch (kind) {
+      case CGBA_FM_LOAD_W:
+        sh4_emit_mov_l_load_r0(&cg, SH4_REG_T2, SH4_REG_T1);
+        sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_ARG0);
+        sh4_emit_swap_w(&cg, SH4_REG_ARG0, SH4_REG_ARG0);
+        sh4_emit_swap_b(&cg, SH4_REG_ARG0, SH4_REG_T1);
+        break;
+      case CGBA_FM_LOAD_B:
+        sh4_emit_mov_b_load_r0(&cg, SH4_REG_T2, SH4_REG_T1);
+        sh4_emit_extu_b(&cg, SH4_REG_T1, SH4_REG_T1);
+        break;
+      case CGBA_FM_LOAD_UH:
+        sh4_emit_mov_w_load_r0(&cg, SH4_REG_T2, SH4_REG_T1);
+        sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
+        sh4_emit_extu_w(&cg, SH4_REG_T1, SH4_REG_T1);
+        break;
+      case CGBA_FM_LOAD_SH:
+        sh4_emit_mov_w_load_r0(&cg, SH4_REG_T2, SH4_REG_T1);
+        sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
+        sh4_emit_exts_w(&cg, SH4_REG_T1, SH4_REG_T1);
+        break;
+      default: /* LOAD_SB: mov.b sign-extends */
+        sh4_emit_mov_b_load_r0(&cg, SH4_REG_T2, SH4_REG_T1);
+        break;
+      }
+      /* reg[rd] = value; rd offset from params */
+      sh4_emit_mov_reg(&cg, SH4_REG_ARG1, SH4_REG_RET);
+      sh4_emit_and_imm(&cg, 0xFF);                   /* R0 = rd byte-offset */
+      sh4_emit_mov_l_store_r0(&cg, SH4_REG_T1, SH4_REG_BASE);
+    } else {
+      /* value = reg[rd]; then rebuild R0 = page offset for the store */
+      sh4_emit_mov_reg(&cg, SH4_REG_ARG1, SH4_REG_RET);
+      sh4_emit_and_imm(&cg, 0xFF);
+      sh4_emit_mov_l_load_r0(&cg, SH4_REG_BASE, SH4_REG_T1);
+      sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
+      sh4_emit_shll16(&cg, SH4_REG_RET); sh4_emit_shll(&cg, SH4_REG_RET);
+      sh4_emit_shlr16(&cg, SH4_REG_RET); sh4_emit_shlr(&cg, SH4_REG_RET);
+      switch (kind) {
+      case CGBA_FM_STORE_W:
+        sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_ARG0);
+        sh4_emit_swap_w(&cg, SH4_REG_ARG0, SH4_REG_ARG0);
+        sh4_emit_swap_b(&cg, SH4_REG_ARG0, SH4_REG_T1);
+        sh4_emit_mov_l_store_r0(&cg, SH4_REG_T1, SH4_REG_T2);
+        break;
+      case CGBA_FM_STORE_UH:
+        sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
+        sh4_emit_mov_w_store_r0(&cg, SH4_REG_T1, SH4_REG_T2);
+        break;
+      default:
+        sh4_emit_mov_b_store_r0(&cg, SH4_REG_T1, SH4_REG_T2);
+        break;
+      }
+    }
+    sh4g_close(tp, &cg); }
+
+  /* wb variants: commit reg[rn] = R6 AFTER the transfer (rd==rn loads are
+   * translate-time bailed) — and after every guard, so the C fallback always
+   * re-executes from the original base. */
+  if (wb) {
+    sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_reg(&cg, SH4_REG_ARG1, SH4_REG_RET);
+    sh4_emit_shlr8(&cg, SH4_REG_RET);
+    sh4_emit_and_imm(&cg, 0xFF);                     /* R0 = rn byte-offset */
+    sh4_emit_mov_l_store_r0(&cg, SH4_REG_ARG2, SH4_REG_BASE);
+    sh4g_close(tp, &cg);
+  }
+
+  /* charge the access (nonseq; word column for 32-bit) and return */
+  sh4g_charge_mem_run(tp, SH4_REG_T0, /*seq=*/0,
+                      /*is_word=*/(kind == CGBA_FM_LOAD_W || kind == CGBA_FM_STORE_W), 1);
+  sh4g_u16(tp, 0x000B);                              /* RTS */
+  sh4g_u16(tp, 0x0009);                              /* delay NOP */
+
+  /* guard failure: straight into the compact C-helper trampoline. PR still
+   * points at the site's BRA, so the tramp reads fn/opcode/pc/cycles from
+   * the same tuple this routine was called with. */
+  for (i = 0; i < ng; i++)
+    sh4g_patch_cond(guards[i], *tp);
+  sh4g_far_jmp(tp, (const void *)sh4_op2_pc_mem_tramp);
+
+  return entry;
+}
+
+/* ---- per-site call ------------------------------------------------------ */
+/* Same geometry as sh4g_op2_tramp_call, with the 6-literal fastmem tuple. */
+static inline void sh4g_fastmem_site(u8 **tp, const u8 *routine,
+                                     const void *helper_fn, u32 opcode, u32 pc,
+                                     int cycle_count, unsigned rd, int wb_rn)
+{
+  u8 *site;
+  u8 *lit;
+  long bra_disp;
+  u32 params = (rd * 4u) | (wb_rn >= 0 ? ((u32)wb_rn * 4u) << 8 : 0);
+
+  if (((uintptr_t)*tp + 10) & 3)               /* literals must be 4-aligned */
+    sh4g_u16(tp, 0x0009);
+  site = *tp;
+  lit = site + 10;
+  sh4g_u16(tp, (uint16_t)(0xD000 | (SH4_REG_RET << 8) | 2));   /* MOV.L L,R0 */
+  sh4g_u16(tp, (uint16_t)(0x400B | (SH4_REG_RET << 8)));       /* JSR @R0    */
+  sh4g_u16(tp, 0x0009);                                        /* delay      */
+  bra_disp = ((long)(lit + 6 * 4) - ((long)(*tp) + 4)) / 2;
+  sh4g_u16(tp, (uint16_t)(0xA000 | (bra_disp & 0x0FFF)));      /* BRA 2f     */
+  sh4g_u16(tp, 0x0009);                                        /* delay      */
+  {
+    sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_u32_be(&cg, (u32)(uintptr_t)routine);
+    sh4_emit_u32_be(&cg, (u32)(uintptr_t)helper_fn);
+    sh4_emit_u32_be(&cg, opcode);
+    sh4_emit_u32_be(&cg, pc);
+    sh4_emit_u32_be(&cg, (u32)cycle_count);
+    sh4_emit_u32_be(&cg, params);
+    sh4g_close(tp, &cg);
+  }
+}
+
+/* Routine table, filled by cgba_sh4_fastmem_init() (sh4_fastmem.c). */
+extern u8 *cgba_sh4_fastmem_routine[CGBA_FM_COUNT];
+void cgba_sh4_fastmem_init(void);
+
+#endif /* CGBA_SH4_FASTMEM_H */

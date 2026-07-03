@@ -31,6 +31,7 @@ CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen
  /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/../../../ports/fxcg100/sh4/sh4_emit_core.h \
  /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/../../../ports/fxcg100/sh4/sh4_cache.h \
  /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/../../../ports/fxcg100/sh4/sh4_thumb_dp_emit.h \
+ /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/../../../ports/fxcg100/sh4/sh4_fastmem.h \
  /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/../../../ports/fxcg100/sh4/sh4_thumb_block_emit.h \
  /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/../../../ports/fxcg100/sh4/sh4_arm_ldst_emit.h \
  /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/../../../ports/fxcg100/sh4/sh4_arm_mul_emit.h \

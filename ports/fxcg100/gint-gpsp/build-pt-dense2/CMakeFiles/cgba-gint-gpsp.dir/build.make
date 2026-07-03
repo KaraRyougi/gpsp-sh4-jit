@@ -422,10 +422,24 @@ CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_interp_helpers.c.s"
 	/Users/ryougi/.local/bin/sh-elf-gcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_interp_helpers.c -o CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_interp_helpers.c.s
 
+CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_fastmem.c.obj: CMakeFiles/cgba-gint-gpsp.dir/flags.make
+CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_fastmem.c.obj: /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_fastmem.c
+CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_fastmem.c.obj: CMakeFiles/cgba-gint-gpsp.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/build-pt-dense2/CMakeFiles --progress-num=$(CMAKE_PROGRESS_26) "Building C object CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_fastmem.c.obj"
+	/Users/ryougi/.local/bin/sh-elf-gcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_fastmem.c.obj -MF CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_fastmem.c.obj.d -o CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_fastmem.c.obj -c /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_fastmem.c
+
+CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_fastmem.c.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing C source to CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_fastmem.c.i"
+	/Users/ryougi/.local/bin/sh-elf-gcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_fastmem.c > CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_fastmem.c.i
+
+CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_fastmem.c.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_fastmem.c.s"
+	/Users/ryougi/.local/bin/sh-elf-gcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_fastmem.c -o CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_fastmem.c.s
+
 CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_dynarec_state.c.obj: CMakeFiles/cgba-gint-gpsp.dir/flags.make
 CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_dynarec_state.c.obj: /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_dynarec_state.c
 CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_dynarec_state.c.obj: CMakeFiles/cgba-gint-gpsp.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/build-pt-dense2/CMakeFiles --progress-num=$(CMAKE_PROGRESS_26) "Building C object CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_dynarec_state.c.obj"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/build-pt-dense2/CMakeFiles --progress-num=$(CMAKE_PROGRESS_27) "Building C object CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_dynarec_state.c.obj"
 	/Users/ryougi/.local/bin/sh-elf-gcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_dynarec_state.c.obj -MF CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_dynarec_state.c.obj.d -o CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_dynarec_state.c.obj -c /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_dynarec_state.c
 
 CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_dynarec_state.c.i: cmake_force
@@ -439,7 +453,7 @@ CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen
 CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_diff_harness.c.obj: CMakeFiles/cgba-gint-gpsp.dir/flags.make
 CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_diff_harness.c.obj: /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_diff_harness.c
 CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_diff_harness.c.obj: CMakeFiles/cgba-gint-gpsp.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/build-pt-dense2/CMakeFiles --progress-num=$(CMAKE_PROGRESS_27) "Building C object CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_diff_harness.c.obj"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/build-pt-dense2/CMakeFiles --progress-num=$(CMAKE_PROGRESS_28) "Building C object CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_diff_harness.c.obj"
 	/Users/ryougi/.local/bin/sh-elf-gcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_diff_harness.c.obj -MF CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_diff_harness.c.obj.d -o CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_diff_harness.c.obj -c /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_diff_harness.c
 
 CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_diff_harness.c.i: cmake_force
@@ -453,7 +467,7 @@ CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen
 CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cpu.cc.obj: CMakeFiles/cgba-gint-gpsp.dir/flags.make
 CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cpu.cc.obj: /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cpu.cc
 CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cpu.cc.obj: CMakeFiles/cgba-gint-gpsp.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/build-pt-dense2/CMakeFiles --progress-num=$(CMAKE_PROGRESS_28) "Building CXX object CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cpu.cc.obj"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/build-pt-dense2/CMakeFiles --progress-num=$(CMAKE_PROGRESS_29) "Building CXX object CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cpu.cc.obj"
 	/Users/ryougi/.local/bin/sh-elf-g++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cpu.cc.obj -MF CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cpu.cc.obj.d -o CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cpu.cc.obj -c /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cpu.cc
 
 CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cpu.cc.i: cmake_force
@@ -467,7 +481,7 @@ CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen
 CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/video.cc.obj: CMakeFiles/cgba-gint-gpsp.dir/flags.make
 CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/video.cc.obj: /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/video.cc
 CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/video.cc.obj: CMakeFiles/cgba-gint-gpsp.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/build-pt-dense2/CMakeFiles --progress-num=$(CMAKE_PROGRESS_29) "Building CXX object CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/video.cc.obj"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/build-pt-dense2/CMakeFiles --progress-num=$(CMAKE_PROGRESS_30) "Building CXX object CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/video.cc.obj"
 	/Users/ryougi/.local/bin/sh-elf-g++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/video.cc.obj -MF CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/video.cc.obj.d -o CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/video.cc.obj -c /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/video.cc
 
 CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/video.cc.i: cmake_force
@@ -480,7 +494,7 @@ CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen
 
 CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/bios_data.S.obj: CMakeFiles/cgba-gint-gpsp.dir/flags.make
 CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/bios_data.S.obj: /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/bios_data.S
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/build-pt-dense2/CMakeFiles --progress-num=$(CMAKE_PROGRESS_30) "Building ASM object CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/bios_data.S.obj"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/build-pt-dense2/CMakeFiles --progress-num=$(CMAKE_PROGRESS_31) "Building ASM object CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/bios_data.S.obj"
 	/Users/ryougi/.local/bin/sh-elf-gcc $(ASM_DEFINES) $(ASM_INCLUDES) $(ASM_FLAGS) -o CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/bios_data.S.obj -c /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/bios_data.S
 
 CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/bios_data.S.i: cmake_force
@@ -493,7 +507,7 @@ CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen
 
 CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/sh4/sh4_stub.S.obj: CMakeFiles/cgba-gint-gpsp.dir/flags.make
 CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/sh4/sh4_stub.S.obj: /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/sh4/sh4_stub.S
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/build-pt-dense2/CMakeFiles --progress-num=$(CMAKE_PROGRESS_31) "Building ASM object CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/sh4/sh4_stub.S.obj"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/build-pt-dense2/CMakeFiles --progress-num=$(CMAKE_PROGRESS_32) "Building ASM object CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/sh4/sh4_stub.S.obj"
 	/Users/ryougi/.local/bin/sh-elf-gcc $(ASM_DEFINES) $(ASM_INCLUDES) $(ASM_FLAGS) -o CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/sh4/sh4_stub.S.obj -c /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/sh4/sh4_stub.S
 
 CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/sh4/sh4_stub.S.i: cmake_force
@@ -531,6 +545,7 @@ cgba__gint__gpsp_OBJECTS = \
 "CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cpu_threaded.c.obj" \
 "CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/memmap.c.obj" \
 "CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_interp_helpers.c.obj" \
+"CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_fastmem.c.obj" \
 "CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_dynarec_state.c.obj" \
 "CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_diff_harness.c.obj" \
 "CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cpu.cc.obj" \
@@ -566,6 +581,7 @@ cgba-gint-gpsp: CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claud
 cgba-gint-gpsp: CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cpu_threaded.c.obj
 cgba-gint-gpsp: CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/memmap.c.obj
 cgba-gint-gpsp: CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_interp_helpers.c.obj
+cgba-gint-gpsp: CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_fastmem.c.obj
 cgba-gint-gpsp: CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_dynarec_state.c.obj
 cgba-gint-gpsp: CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_diff_harness.c.obj
 cgba-gint-gpsp: CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cpu.cc.obj
@@ -579,7 +595,7 @@ cgba-gint-gpsp: /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.
 cgba-gint-gpsp: /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/lib/libc.a
 cgba-gint-gpsp: /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/fxcg100_gpsp.ld
 cgba-gint-gpsp: CMakeFiles/cgba-gint-gpsp.dir/link.txt
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/build-pt-dense2/CMakeFiles --progress-num=$(CMAKE_PROGRESS_32) "Linking CXX executable cgba-gint-gpsp"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/build-pt-dense2/CMakeFiles --progress-num=$(CMAKE_PROGRESS_33) "Linking CXX executable cgba-gint-gpsp"
 	$(CMAKE_COMMAND) -E cmake_link_script CMakeFiles/cgba-gint-gpsp.dir/link.txt --verbose=$(VERBOSE)
 	/Users/ryougi/.local/bin/sh-elf-objcopy -O binary -R .bss -R .gint_bss cgba-gint-gpsp cgba-gint-gpsp.bin
 	fxgxa --g3a -n CGBA-GPSP --version=00.01.0000 cgba-gint-gpsp.bin -o /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/CGBA-GPSP.g3a

@@ -23,6 +23,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 
 typedef uint32_t u32;
 typedef uint16_t u16;
@@ -40,6 +41,7 @@ u8 ws_cyc_seq[16][2], ws_cyc_nseq[16][2];
 u32 cgba_sh4_native_thumb_const_io_count, cgba_sh4_native_thumb_runtime_io_count;
 int cgba_sh4_extra_cycles;
 int cgba_sh4_thumb_ldst(u32 o, u32 p){(void)o;(void)p;return 0;}
+int cgba_sh4_arm_ldst(u32 o, u32 p){(void)o;(void)p;return 0;}
 int cgba_sh4_arm_psr(u32 o, u32 p){(void)o;(void)p;return 0;}
 void sh4_block_exit(u32 pc){(void)pc;}
 void sh4_helper_exit(u32 pc){(void)pc;}
@@ -50,89 +52,193 @@ void sh4_op2_mem_tramp(void){}
 void sh4_headless_trace_op(char k, u32 pc, u32 op){(void)k;(void)pc;(void)op;}
 
 #include "ports/fxcg100/sh4/sh4_thumb_dp_emit.h"
+#include "ports/fxcg100/sh4/sh4_arm_ldst_emit.h"
+
+u8 *cgba_sh4_fastmem_routine[CGBA_FM_COUNT];
 
 /* ---- guest state used by the interpreter ---- */
 static u32 g_reg[64];
 
-/* ---- SH4 mini-interpreter: branches, delay slots, PC-relative literals ---- */
+/* ---- SH4 mini-interpreter -------------------------------------------------
+ * Virtual addresses are 32-bit-truncated HOST pointers, resolved through
+ * registered memory windows — so emitted literals holding &io_registers,
+ * &memory_map_read, page pointers and the fastmem routine buffer all work.
+ * Supports calls (JSR/RTS/STS PR), delay slots, and detects the fastmem
+ * guard-failure far_jmp into sh4_op2_pc_mem_tramp as the "slow path". */
 static char unmodeled[64];
 
-static int run_sh4x(const u8 *code, size_t n)
+#define ORC_MAX_WIN 24
+static struct { u32 base; u32 size; u8 *host; int is_maptab; } orc_win[ORC_MAX_WIN];
+static int orc_nwin;
+
+static void orc_reset_windows(void) { orc_nwin = 0; }
+static void orc_add_window(const void *host, u32 size, int is_maptab)
+{
+  orc_win[orc_nwin].base = (u32)(uintptr_t)host;
+  orc_win[orc_nwin].size = size;
+  orc_win[orc_nwin].host = (u8 *)host;
+  orc_win[orc_nwin].is_maptab = is_maptab;
+  orc_nwin++;
+}
+static u8 *orc_resolve(u32 addr, int *is_maptab)
+{
+  for (int i = 0; i < orc_nwin; i++) {
+    u32 off = addr - orc_win[i].base;
+    if (off < orc_win[i].size) {
+      if (is_maptab) *is_maptab = orc_win[i].is_maptab;
+      return orc_win[i].host + off;
+    }
+  }
+  if (getenv("ORC_DEBUG")) {
+    fprintf(stderr, "resolve miss %08X; windows:", addr);
+    for (int i = 0; i < orc_nwin; i++)
+      fprintf(stderr, " [%08X+%X]", orc_win[i].base, orc_win[i].size);
+    fprintf(stderr, "\n");
+  }
+  return NULL;
+}
+static u32 orc_read(u32 addr, int size_log2, int *ok)
+{
+  int maptab = 0;
+  u8 *hp = orc_resolve(addr, &maptab);
+  if (!hp) { *ok = 0; return 0; }
+  if (maptab) {                    /* pointer table: emitted code indexes
+                                      4-byte slots; host slots are 8 bytes */
+    u32 idx = (u32)(hp - (u8 *)(void *)memory_map_read) / 4;
+    return (u32)(uintptr_t)memory_map_read[idx];
+  }
+  switch (size_log2) {             /* big-endian, as the SH4 would */
+  case 0: return hp[0];
+  case 1: return (u32)((hp[0] << 8) | hp[1]);
+  default: return ((u32)hp[0] << 24) | ((u32)hp[1] << 16) |
+                  ((u32)hp[2] << 8) | hp[3];
+  }
+}
+static void orc_write(u32 addr, u32 v, int size_log2, int *ok)
+{
+  u8 *hp = orc_resolve(addr, NULL);
+  if (!hp) { *ok = 0; return; }
+  switch (size_log2) {
+  case 0: hp[0] = (u8)v; break;
+  case 1: hp[0] = (u8)(v >> 8); hp[1] = (u8)v; break;
+  default: hp[0] = (u8)(v >> 24); hp[1] = (u8)(v >> 16);
+           hp[2] = (u8)(v >> 8);  hp[3] = (u8)v; break;
+  }
+}
+
+static u32 orc_slow_target;        /* trunc(&sh4_op2_pc_mem_tramp) */
+static u32 orc_slow_target2;       /* trunc(&sh4_op2_pc_tramp) */
+static int orc_took_slow;
+
+static int orc_is_slow_target(u32 a)
+{ return a == orc_slow_target || a == orc_slow_target2; }
+
+static int run_at(u32 pc, u32 pc_end)
 {
   u32 R[16] = {0};
-  u32 MACL = 0;
+  u32 MACL = 0, PR = 0;
   int T = 0;
-  size_t pc = 0;
   int steps = 0;
 
-  R[SH4_REG_BASE] = 0;                       /* virtual base: intercepted */
-  R[SH4_REG_CPSR] = g_reg[SH4_GREG_CPSR];    /* runtime contract: R8 = CPSR */
+  R[SH4_REG_BASE] = 0;
+  R[SH4_REG_CPSR] = g_reg[SH4_GREG_CPSR];
   unmodeled[0] = 0;
+  orc_took_slow = 0;
 
-  while (pc + 1 < n) {
-    if (++steps > 20000) { snprintf(unmodeled, sizeof unmodeled, "step cap"); return 0; }
-    u16 op = (u16)((code[pc] << 8) | code[pc + 1]);
+  while (pc != pc_end) {
+    int okf = 1;
+    if (++steps > 40000) { snprintf(unmodeled, sizeof unmodeled, "step cap"); return 0; }
+    u32 opw = orc_read(pc, 1, &okf);
+    if (!okf) { snprintf(unmodeled, sizeof unmodeled, "fetch @%08X", pc); return 0; }
+    u16 op = (u16)opw;
     unsigned nn = (op >> 8) & 0xF, mm = (op >> 4) & 0xF;
-    size_t next = pc + 2;
+    u32 next = pc + 2;
 
     if      (op == 0x0009) { /* NOP */ }
-    else if (op == 0x0018) T = 1;                                   /* SETT */
-    else if (op == 0x0008) T = 0;                                   /* CLRT */
+    else if (op == 0x0018) T = 1;
+    else if (op == 0x0008) T = 0;
+    else if (op == 0x000B) {                                        /* RTS */
+      u32 slot = orc_read(pc + 2, 1, &okf);
+      if (!okf || (u16)slot != 0x0009) { snprintf(unmodeled, sizeof unmodeled, "rts slot"); return 0; }
+      next = PR;
+    }
+    else if ((op & 0xF0FF) == 0x400B) {                             /* JSR @Rn */
+      u32 slot = orc_read(pc + 2, 1, &okf);
+      if (!okf || (u16)slot != 0x0009) { snprintf(unmodeled, sizeof unmodeled, "jsr slot"); return 0; }
+      if (orc_is_slow_target(R[nn])) {          /* call into a C tramp stub */
+        orc_took_slow = 1;
+        snprintf(unmodeled, sizeof unmodeled, "jmp/jsr (slow path taken)");
+        return 0;
+      }
+      PR = pc + 4;
+      next = R[nn];
+    }
+    else if ((op & 0xF0FF) == 0x402B) {                             /* JMP @Rn */
+      if (orc_is_slow_target(R[nn])) {
+        orc_took_slow = 1;
+        snprintf(unmodeled, sizeof unmodeled, "jmp/jsr (slow path taken)");
+        return 0;
+      }
+      snprintf(unmodeled, sizeof unmodeled, "jmp %08X", R[nn]);
+      return 0;
+    }
+    else if ((op & 0xF0FF) == 0x002A) R[nn] = PR;                   /* STS PR,Rn */
     else if ((op & 0xF000) == 0xE000) R[nn] = (u32)(s32)(s8)(op & 0xFF);
     else if ((op & 0xF000) == 0x7000) R[nn] += (u32)(s32)(s8)(op & 0xFF);
     else if ((op & 0xFF00) == 0x8800) T = ((s32)R[0] == (s32)(s8)(op & 0xFF));
-    else if ((op & 0xFF00) == 0xC900) R[0] &= (u32)(op & 0xFF);     /* AND #imm */
+    else if ((op & 0xFF00) == 0xC900) R[0] &= (u32)(op & 0xFF);
     else if ((op & 0xFF00) == 0xC800) T = ((R[0] & (u32)(op & 0xFF)) == 0);
-    else if ((op & 0xF00F) == 0x6003) R[nn] = R[mm];                /* MOV */
-    else if ((op & 0xF00F) == 0x6007) R[nn] = ~R[mm];               /* NOT */
-    else if ((op & 0xF00F) == 0x600B) R[nn] = 0u - R[mm];           /* NEG */
-    else if ((op & 0xF00F) == 0x6008) {                             /* SWAP.B */
+    else if ((op & 0xF00F) == 0x6003) R[nn] = R[mm];
+    else if ((op & 0xF00F) == 0x6007) R[nn] = ~R[mm];
+    else if ((op & 0xF00F) == 0x600B) R[nn] = 0u - R[mm];
+    else if ((op & 0xF00F) == 0x6008) {
       u32 v = R[mm];
       R[nn] = (v & 0xFFFF0000u) | ((v >> 8) & 0xFF) | ((v & 0xFF) << 8);
     }
-    else if ((op & 0xF00F) == 0x600C) R[nn] = R[mm] & 0xFF;         /* EXTU.B */
-    else if ((op & 0xF00F) == 0x600D) R[nn] = R[mm] & 0xFFFF;       /* EXTU.W */
-    else if ((op & 0xF00F) == 0x600E) R[nn] = (u32)(s32)(s8)R[mm];  /* EXTS.B */
+    else if ((op & 0xF00F) == 0x6009) R[nn] = (R[mm] >> 16) | (R[mm] << 16); /* SWAP.W */
+    else if ((op & 0xF00F) == 0x600C) R[nn] = R[mm] & 0xFF;
+    else if ((op & 0xF00F) == 0x600D) R[nn] = R[mm] & 0xFFFF;
+    else if ((op & 0xF00F) == 0x600E) R[nn] = (u32)(s32)(s8)R[mm];
     else if ((op & 0xF00F) == 0x600F) R[nn] = (u32)(s32)(int16_t)R[mm];
-    else if ((op & 0xF00F) == 0x2008) T = ((R[mm] & R[nn]) == 0);   /* TST */
+    else if ((op & 0xF00F) == 0x2008) T = ((R[mm] & R[nn]) == 0);
     else if ((op & 0xF00F) == 0x2009) R[nn] &= R[mm];
     else if ((op & 0xF00F) == 0x200A) R[nn] ^= R[mm];
     else if ((op & 0xF00F) == 0x200B) R[nn] |= R[mm];
-    else if ((op & 0xF00F) == 0x3000) T = (R[nn] == R[mm]);         /* CMP/EQ */
-    else if ((op & 0xF00F) == 0x3002) T = (R[nn] >= R[mm]);         /* CMP/HS */
-    else if ((op & 0xF00F) == 0x3006) T = (R[nn] > R[mm]);          /* CMP/HI */
-    else if ((op & 0xF00F) == 0x3008) R[nn] -= R[mm];               /* SUB */
-    else if ((op & 0xF00F) == 0x300C) R[nn] += R[mm];               /* ADD */
-    else if ((op & 0xF00F) == 0x300E) {                             /* ADDC */
-      u64 s = (u64)R[nn] + R[mm] + (u32)T;
-      R[nn] = (u32)s; T = (int)(s >> 32);
+    else if ((op & 0xF00F) == 0x3000) T = (R[nn] == R[mm]);
+    else if ((op & 0xF00F) == 0x3002) T = (R[nn] >= R[mm]);
+    else if ((op & 0xF00F) == 0x3006) T = (R[nn] > R[mm]);
+    else if ((op & 0xF00F) == 0x3008) R[nn] -= R[mm];
+    else if ((op & 0xF00F) == 0x300C) R[nn] += R[mm];
+    else if ((op & 0xF00F) == 0x300E) {
+      u64 sm = (u64)R[nn] + R[mm] + (u32)T;
+      R[nn] = (u32)sm; T = (int)(sm >> 32);
     }
-    else if ((op & 0xF00F) == 0x300F) {                             /* ADDV */
+    else if ((op & 0xF00F) == 0x300F) {
       u32 a = R[nn], b = R[mm], r = a + b;
       T = (int)((~(a ^ b) & (a ^ r)) >> 31); R[nn] = r;
     }
-    else if ((op & 0xF00F) == 0x300A) {                             /* SUBC */
-      u64 s = (u64)R[nn] - R[mm] - (u32)T;
-      R[nn] = (u32)s; T = (int)((s >> 32) & 1);
+    else if ((op & 0xF00F) == 0x300A) {
+      u64 sm = (u64)R[nn] - R[mm] - (u32)T;
+      R[nn] = (u32)sm; T = (int)((sm >> 32) & 1);
     }
-    else if ((op & 0xF00F) == 0x300B) {                             /* SUBV */
+    else if ((op & 0xF00F) == 0x300B) {
       u32 a = R[nn], b = R[mm], r = a - b;
       T = (int)(((a ^ b) & (a ^ r)) >> 31); R[nn] = r;
     }
-    else if ((op & 0xF00F) == 0x0007) MACL = R[nn] * R[mm];         /* MUL.L */
-    else if ((op & 0xF0FF) == 0x001A) R[nn] = MACL;                 /* STS MACL */
-    else if ((op & 0xF0FF) == 0x0029) R[nn] = (u32)T;               /* MOVT */
-    else if ((op & 0xF00F) == 0x400C) {                             /* SHAD */
-      s32 s = (s32)R[mm];
-      if (s >= 0)               R[nn] <<= (s & 0x1F);
-      else if ((s & 0x1F) == 0) R[nn] = (u32)((s32)R[nn] >> 31);
-      else                      R[nn] = (u32)((s32)R[nn] >> (32 - (s & 0x1F)));
+    else if ((op & 0xF00F) == 0x0007) MACL = R[nn] * R[mm];
+    else if ((op & 0xF0FF) == 0x001A) R[nn] = MACL;
+    else if ((op & 0xF0FF) == 0x0029) R[nn] = (u32)T;
+    else if ((op & 0xF00F) == 0x400C) {
+      s32 sh = (s32)R[mm];
+      if (sh >= 0)               R[nn] <<= (sh & 0x1F);
+      else if ((sh & 0x1F) == 0) R[nn] = (u32)((s32)R[nn] >> 31);
+      else                       R[nn] = (u32)((s32)R[nn] >> (32 - (sh & 0x1F)));
     }
-    else if ((op & 0xF00F) == 0x400D) {                             /* SHLD */
-      s32 s = (s32)R[mm];
-      if (s >= 0)               R[nn] <<= (s & 0x1F);
-      else if ((s & 0x1F) == 0) R[nn] = 0;
-      else                      R[nn] >>= (32 - (s & 0x1F));
+    else if ((op & 0xF00F) == 0x400D) {
+      s32 sh = (s32)R[mm];
+      if (sh >= 0)               R[nn] <<= (sh & 0x1F);
+      else if ((sh & 0x1F) == 0) R[nn] = 0;
+      else                       R[nn] >>= (32 - (sh & 0x1F));
     }
     else if ((op & 0xF0FF) == 0x4000) { T = (int)(R[nn] >> 31); R[nn] <<= 1; }
     else if ((op & 0xF0FF) == 0x4001) { T = (int)(R[nn] & 1); R[nn] >>= 1; }
@@ -144,64 +250,104 @@ static int run_sh4x(const u8 *code, size_t n)
     else if ((op & 0xF0FF) == 0x4029) R[nn] >>= 16;
     else if ((op & 0xF0FF) == 0x4004) { T = (int)(R[nn] >> 31); R[nn] = (R[nn] << 1) | (u32)T; }
     else if ((op & 0xF0FF) == 0x4005) { T = (int)(R[nn] & 1); R[nn] = (R[nn] >> 1) | ((u32)T << 31); }
-    else if ((op & 0xF0FF) == 0x4011) T = ((s32)R[nn] >= 0);        /* CMP/PZ */
-    else if ((op & 0xF0FF) == 0x4015) T = ((s32)R[nn] > 0);         /* CMP/PL */
+    else if ((op & 0xF0FF) == 0x4011) T = ((s32)R[nn] >= 0);
+    else if ((op & 0xF0FF) == 0x4015) T = ((s32)R[nn] > 0);
     else if ((op & 0xF000) == 0xD000) {                             /* MOV.L @(d,PC) */
-      size_t a = ((pc & ~(size_t)3) + 4) + (size_t)(op & 0xFF) * 4;
-      if (a + 3 >= n) { snprintf(unmodeled, sizeof unmodeled, "lit OOB"); return 0; }
-      R[nn] = ((u32)code[a] << 24) | ((u32)code[a+1] << 16) |
-              ((u32)code[a+2] << 8) | code[a+3];
+      u32 a = ((pc & ~3u) + 4) + (u32)(op & 0xFF) * 4;
+      R[nn] = orc_read(a, 2, &okf);
+      if (!okf) { snprintf(unmodeled, sizeof unmodeled, "lit @%08X", a); return 0; }
     }
     else if ((op & 0xF000) == 0x5000) {                             /* MOV.L @(d,Rm) */
-      if (mm != SH4_REG_BASE) { snprintf(unmodeled, sizeof unmodeled, "5xxx rm=%u", mm); return 0; }
-      R[nn] = g_reg[op & 0xF];
+      if (mm == SH4_REG_BASE) R[nn] = g_reg[op & 0xF];
+      else {
+        R[nn] = orc_read(R[mm] + (u32)(op & 0xF) * 4, 2, &okf);
+        if (!okf) { snprintf(unmodeled, sizeof unmodeled, "5xxx @%08X", R[mm]); return 0; }
+      }
     }
     else if ((op & 0xF000) == 0x1000) {                             /* MOV.L Rm,@(d,Rn) */
-      if (nn != SH4_REG_BASE) { snprintf(unmodeled, sizeof unmodeled, "1xxx rn=%u", nn); return 0; }
-      g_reg[op & 0xF] = R[mm];
-    }
-    else if ((op & 0xF00F) == 0x6001) {                             /* MOV.W @Rm,Rn */
-      u32 base = (u32)(uintptr_t)io_registers;
-      u32 off = R[mm] - base;
-      if (off >= sizeof(io_registers) - 1) {
-        snprintf(unmodeled, sizeof unmodeled, "mov.w @%08X", R[mm]); return 0;
+      if (nn == SH4_REG_BASE) g_reg[op & 0xF] = R[mm];
+      else {
+        orc_write(R[nn] + (u32)(op & 0xF) * 4, R[mm], 2, &okf);
+        if (!okf) { snprintf(unmodeled, sizeof unmodeled, "1xxx @%08X", R[nn]); return 0; }
       }
-      const u8 *bp = (const u8 *)io_registers + off;
-      R[nn] = (u32)(s32)(int16_t)(u16)(((u16)bp[0] << 8) | bp[1]);  /* BE read */
     }
     else if ((op & 0xF00F) == 0x000E) {                             /* MOV.L @(R0,Rm) */
-      if (mm != SH4_REG_BASE) { snprintf(unmodeled, sizeof unmodeled, "r0-ld rm=%u", mm); return 0; }
-      R[nn] = g_reg[R[0] >> 2];
+      if (mm == SH4_REG_BASE) R[nn] = g_reg[R[0] >> 2];
+      else {
+        R[nn] = orc_read(R[mm] + R[0], 2, &okf);
+        if (!okf) { snprintf(unmodeled, sizeof unmodeled, "r0-ld @%08X", R[mm] + R[0]); return 0; }
+      }
     }
     else if ((op & 0xF00F) == 0x0006) {                             /* MOV.L Rm,@(R0,Rn) */
-      if (nn != SH4_REG_BASE) { snprintf(unmodeled, sizeof unmodeled, "r0-st rn=%u", nn); return 0; }
-      g_reg[R[0] >> 2] = R[mm];
+      if (nn == SH4_REG_BASE) g_reg[R[0] >> 2] = R[mm];
+      else {
+        orc_write(R[nn] + R[0], R[mm], 2, &okf);
+        if (!okf) { snprintf(unmodeled, sizeof unmodeled, "r0-st @%08X", R[nn] + R[0]); return 0; }
+      }
     }
-    else if ((op & 0xFF00) == 0x8900) {                             /* BT */
-      if (T) next = pc + 4 + (size_t)((ptrdiff_t)(s8)(op & 0xFF) * 2);
+    else if ((op & 0xF00F) == 0x000D) {                             /* MOV.W @(R0,Rm) */
+      R[nn] = (u32)(s32)(int16_t)(u16)orc_read(R[mm] + R[0], 1, &okf);
+      if (!okf) { snprintf(unmodeled, sizeof unmodeled, "r0-ldw @%08X", R[mm] + R[0]); return 0; }
     }
-    else if ((op & 0xFF00) == 0x8B00) {                             /* BF */
-      if (!T) next = pc + 4 + (size_t)((ptrdiff_t)(s8)(op & 0xFF) * 2);
+    else if ((op & 0xF00F) == 0x000C) {                             /* MOV.B @(R0,Rm) */
+      R[nn] = (u32)(s32)(s8)orc_read(R[mm] + R[0], 0, &okf);
+      if (!okf) {
+        if (getenv("ORC_DEBUG"))
+          fprintf(stderr, "r0-ldb state: R0=%08X R1=%08X R2=%08X R3=%08X R5=%08X mm=%u\n",
+                  R[0], R[1], R[2], R[3], R[5], mm);
+        snprintf(unmodeled, sizeof unmodeled, "r0-ldb @%08X", R[mm] + R[0]); return 0; }
     }
-    else if ((op & 0xF000) == 0xA000) {                             /* BRA (delay) */
+    else if ((op & 0xF00F) == 0x0005) {                             /* MOV.W Rm,@(R0,Rn) */
+      orc_write(R[nn] + R[0], R[mm], 1, &okf);
+      if (!okf) { snprintf(unmodeled, sizeof unmodeled, "r0-stw"); return 0; }
+    }
+    else if ((op & 0xF00F) == 0x0004) {                             /* MOV.B Rm,@(R0,Rn) */
+      orc_write(R[nn] + R[0], R[mm], 0, &okf);
+      if (!okf) { snprintf(unmodeled, sizeof unmodeled, "r0-stb"); return 0; }
+    }
+    else if ((op & 0xF00F) == 0x6001) {                             /* MOV.W @Rm,Rn */
+      R[nn] = (u32)(s32)(int16_t)(u16)orc_read(R[mm], 1, &okf);
+      if (!okf) { snprintf(unmodeled, sizeof unmodeled, "mov.w @%08X", R[mm]); return 0; }
+    }
+    else if ((op & 0xF00F) == 0x6000) {                             /* MOV.B @Rm,Rn */
+      R[nn] = (u32)(s32)(s8)orc_read(R[mm], 0, &okf);
+      if (!okf) { snprintf(unmodeled, sizeof unmodeled, "mov.b @%08X", R[mm]); return 0; }
+    }
+    else if ((op & 0xF00F) == 0x6002) {                             /* MOV.L @Rm,Rn */
+      R[nn] = orc_read(R[mm], 2, &okf);
+      if (!okf) { snprintf(unmodeled, sizeof unmodeled, "mov.l @%08X", R[mm]); return 0; }
+    }
+    else if ((op & 0xFF00) == 0x8900) {
+      if (T) next = pc + 4 + (u32)((s32)(s8)(op & 0xFF) * 2);
+    }
+    else if ((op & 0xFF00) == 0x8B00) {
+      if (!T) next = pc + 4 + (u32)((s32)(s8)(op & 0xFF) * 2);
+    }
+    else if ((op & 0xF000) == 0xA000) {                             /* BRA */
       s32 d = (s32)(op & 0x0FFF); if (d & 0x800) d -= 0x1000;
-      size_t tgt = pc + 4 + (size_t)((ptrdiff_t)d * 2);
-      u16 slot = (u16)((code[pc+2] << 8) | code[pc+3]);
-      if (slot != 0x0009) { snprintf(unmodeled, sizeof unmodeled, "bra slot %04x", slot); return 0; }
-      next = tgt;
-    }
-    else if ((op & 0xF0FF) == 0x402B || (op & 0xF0FF) == 0x400B) {  /* JMP/JSR */
-      snprintf(unmodeled, sizeof unmodeled, "jmp/jsr (slow path taken)");
-      return 0;
+      u32 slot = orc_read(pc + 2, 1, &okf);
+      if (!okf || (u16)slot != 0x0009) { snprintf(unmodeled, sizeof unmodeled, "bra slot"); return 0; }
+      next = pc + 4 + (u32)(d * 2);
     }
     else {
-      snprintf(unmodeled, sizeof unmodeled, "op %04x @%zu", op, pc);
+      snprintf(unmodeled, sizeof unmodeled, "op %04x @%08X", op, pc);
       return 0;
     }
     pc = next;
   }
-  g_reg[SH4_GREG_CPSR] = R[SH4_REG_CPSR];    /* commit the R8 cache */
+  g_reg[SH4_GREG_CPSR] = R[SH4_REG_CPSR];
   return 1;
+}
+
+/* Back-compat wrapper for the ALU/PSR sections: single code window. */
+static int run_sh4x(const u8 *code, size_t n)
+{
+  orc_reset_windows();
+  orc_add_window(code, (u32)n + 64, 0);          /* +64: literal pool slack */
+  orc_add_window(io_registers, sizeof(io_registers), 0);
+  orc_slow_target = (u32)(uintptr_t)sh4_op2_pc_mem_tramp;
+  orc_slow_target2 = (u32)(uintptr_t)sh4_op2_pc_tramp;
+  return run_at((u32)(uintptr_t)code, (u32)(uintptr_t)code + (u32)n);
 }
 
 /* ---- C-helper reference semantics (mirrors sh4_interp_helpers.c) ---- */
@@ -565,6 +711,332 @@ int main(void)
                 fails++;
               }
             }
+  }
+
+  /* ---- fastmem: real sites calling real routines over a modeled map ---- */
+  {
+    static u8 fm_buf[8192];
+    static u8 iwram[0x10000];    /* tags 0..0x7FFF, data 0x8000.. */
+    static u8 ewram[0x48000];    /* data page 0, tag mirror at +0x40000 */
+    static u8 vram[0x8000];
+    static u8 rom[0x8000];
+    u8 *tp = fm_buf;
+    const u32 pc = 0x08000100;
+
+    for (int fm = 0; fm < CGBA_FM_COUNT; fm++)
+      cgba_sh4_fastmem_routine[fm] = sh4g_fastmem_emit_routine(&tp, fm);
+
+    memset(memory_map_read, 0, sizeof memory_map_read);
+    memory_map_read[0x02000000u >> 15] = ewram;
+    memory_map_read[0x03000000u >> 15] = iwram + 0x8000;
+    memory_map_read[0x04000000u >> 15] = (u8 *)io_registers;
+    memory_map_read[0x06000000u >> 15] = vram;
+    memory_map_read[0x08000000u >> 15] = rom;
+
+    for (unsigned i = 0; i < sizeof rom; i++)   rom[i]   = (u8)(0x11 + i * 7);
+    for (unsigned i = 0; i < 0x8000; i++) {
+      iwram[0x8000 + i] = (u8)(0x23 + i * 3);
+      ewram[i]          = (u8)(0x35 + i * 5);
+      vram[i]           = (u8)(0x47 + i * 11);
+    }
+    for (unsigned i = 0x1230; i < 0x1260; i++)  /* SMC tag range: covers the
+        pre/post/reg-offset effective addresses of the smc targets */
+      iwram[i] = 1;
+    for (unsigned i = 0x2330; i < 0x2360; i++)
+      ewram[0x40000 + i] = 1;
+
+    struct tgt { u32 base; int slow_ld; int slow_st; const char *nm; } tgts[] = {
+      { 0x03000100u, 0, 0, "iwram" },
+      { 0x02000200u, 0, 0, "ewram" },
+      { 0x06000300u, 0, -1, "vram" },           /* -1: word/half ok, byte slow */
+      { 0x04000000u, 0, 1, "io" },
+      { 0x08000400u, 0, 1, "rom" },
+      { 0x00000100u, 1, 1, "bios" },
+      { 0x0C000000u, 1, 1, "unmapped" },
+      { 0x03001234u, 0, 2, "iwram-smc" },       /* 2: store hits an SMC tag */
+      { 0x02002340u, 0, 2, "ewram-smc" },
+    };
+
+    /* ARM single transfers: every kind x addressing form x target */
+    struct form { u32 op_base; int kind; int is_load; int wb; const char *nm; } forms[] = {
+      /* word/byte form: cond=E, bits fixed; imm offset 0x10, rn=2, rd=3 */
+      { 0xE5923010u, LDK_W, 1, 0, "ldr  [r2,#imm]" },
+      { 0xE5D23010u, LDK_B, 1, 0, "ldrb [r2,#imm]" },
+      { 0xE5B23010u, LDK_W, 1, 1, "ldr  [r2,#imm]!" },
+      { 0xE4923010u, LDK_W, 1, 1, "ldr  [r2],#imm" },
+      { 0xE5823010u, LDK_W, 0, 0, "str  [r2,#imm]" },
+      { 0xE5C23010u, LDK_B, 0, 0, "strb [r2,#imm]" },
+      { 0xE4823010u, LDK_W, 0, 1, "str  [r2],#imm" },
+      { 0xE7923004u, LDK_W, 1, 0, "ldr  [r2,r4]" },
+      { 0xE7923104u, LDK_W, 1, 0, "ldr  [r2,r4,lsl#2]" },
+      /* halfword/signed form: imm offset 0x10 (hi nibble 1, lo 0) */
+      { 0xE1D231B0u, LDK_UH, 1, 0, "ldrh [r2,#imm]" },
+      { 0xE1D231D0u, LDK_SB, 1, 0, "ldrsb[r2,#imm]" },
+      { 0xE1D231F0u, LDK_SH, 1, 0, "ldrsh[r2,#imm]" },
+      { 0xE1C231B0u, LDK_UH, 0, 0, "strh [r2,#imm]" },
+      { 0xE1F231B0u, LDK_UH, 1, 1, "ldrh [r2,#imm]!" },
+    };
+
+    for (unsigned fi = 0; fi < sizeof forms / sizeof *forms; fi++)
+      for (unsigned ti = 0; ti < sizeof tgts / sizeof *tgts; ti++)
+        for (int mis = 0; mis <= 1; mis++) {
+          static u8 sbuf[512];
+          u8 *sp = sbuf;
+          u32 op = forms[fi].op_base;
+          int kind = forms[fi].kind, is_load = forms[fi].is_load;
+          int align = (kind == LDK_W) ? 3 :
+                      (kind == LDK_UH || kind == LDK_SH) ? 1 : 0;
+          int pre = (op >> 24) & 1, up = (op >> 23) & 1;
+          u32 imm_form = ((op & 0x0E000090u) == 0x90u)
+            ? ((op >> 22) & 1) : !((op >> 25) & 1);
+          u32 off = imm_form ? 0x10 : (g_reg[4] = 0x10, 0x10);
+          u32 shifted = (!imm_form && (op & 0x0FF0u)) ? 1 : 0;
+          u32 base = tgts[ti].base + (mis ? 1 : 0);
+          u32 eff, wbv;
+
+          if (mis && align == 0) continue;      /* byte: no misalign case */
+          memset(g_reg, 0, sizeof g_reg);
+          for (int i = 0; i < 16; i++) g_reg[i] = 0x51AB0000u + (u32)i;
+          g_reg[SH4_GREG_CPSR] = 0x2000001Fu;
+          g_reg[4] = shifted ? 0x04 : 0x10;     /* reg offset (lsl#2 -> 0x10) */
+          g_reg[2] = base;
+          g_reg[3] = is_load ? 0xDEAD0001u : 0xCAFE1234u;
+          eff = pre ? (up ? base + off : base - off) : base;
+          wbv = up ? base + off : base - off;
+
+          if (!sh4g_arm_ldst_native(&sp, op, pc, 0))
+            { if (ti == 0 && !mis) { printf("FAIL emit reject %s\n", forms[fi].nm); fails++; } continue; }
+          cases++;
+
+          /* fresh copies of mutable memory for the reference diff */
+          u8 mem_before[8]; const u8 *page = NULL; u32 poff = 0;
+          u32 reg = eff >> 24;
+          if (reg == 2) { page = ewram; poff = eff & 0x7FFF; }
+          else if (reg == 3) { page = iwram + 0x8000; poff = eff & 0x7FFF; }
+          else if (reg == 6) { page = vram; poff = eff & 0x7FFF; }
+          if (page) memcpy(mem_before, page + poff, 4);
+
+          orc_reset_windows();
+          orc_add_window(sbuf, sizeof sbuf, 0);
+          orc_add_window(fm_buf, sizeof fm_buf, 0);
+          orc_add_window(io_registers, sizeof io_registers, 0);
+          orc_add_window(memory_map_read, 8192 * 4, 1);
+          orc_add_window(iwram, sizeof iwram, 0);
+          orc_add_window(ewram, sizeof ewram, 0);
+          orc_add_window(vram, sizeof vram, 0);
+          orc_add_window(rom, sizeof rom, 0);
+          orc_add_window(ws_cyc_seq, sizeof ws_cyc_seq, 0);
+          orc_add_window(ws_cyc_nseq, sizeof ws_cyc_nseq, 0);
+          orc_slow_target = (u32)(uintptr_t)sh4_op2_pc_mem_tramp;
+          orc_slow_target2 = (u32)(uintptr_t)sh4_op2_pc_tramp;
+
+          int ran = run_at((u32)(uintptr_t)sbuf, (u32)(uintptr_t)sbuf + (u32)(sp - sbuf));
+          int slow = (!ran && orc_took_slow);
+          if (!ran && !slow) {
+            printf("FAIL fm %s @%s%s: interpreter: %s\n",
+                   forms[fi].nm, tgts[ti].nm, mis ? "+1" : "", unmodeled);
+            fails++;
+            if (page) memcpy((void *)(page + poff), mem_before, 4);
+            continue;
+          }
+
+          /* expected route */
+          int want_slow;
+          if (mis) want_slow = 1;
+          else if (is_load) want_slow = tgts[ti].slow_ld;
+          else {
+            want_slow = tgts[ti].slow_st;
+            if (want_slow == -1) want_slow = (kind == LDK_B);   /* vram byte */
+            else if (want_slow == 2) want_slow = 1;             /* smc tag */
+          }
+          if (want_slow != slow) {
+            printf("FAIL fm %s @%s%s: slow=%d want %d\n",
+                   forms[fi].nm, tgts[ti].nm, mis ? "+1" : "", slow, want_slow);
+            fails++;
+            if (page) memcpy((void *)(page + poff), mem_before, 4);
+            continue;
+          }
+          if (slow) { if (page) memcpy((void *)(page + poff), mem_before, 4); continue; }
+
+          /* fast path: check rd / writeback / memory / other regs */
+          u32 want_rd = g_reg[3];
+          if (is_load && page) {
+            u32 lo = page[poff], b1 = page[poff+1], b2 = page[poff+2], b3 = page[poff+3];
+            u32 lev = lo | (b1 << 8) | (b2 << 16) | (b3 << 24);
+            switch (kind) {
+            case LDK_W:  want_rd = lev; break;
+            case LDK_B:  want_rd = lev & 0xFF; break;
+            case LDK_UH: want_rd = lev & 0xFFFF; break;
+            case LDK_SH: want_rd = (u32)(s32)(int16_t)(lev & 0xFFFF); break;
+            default:     want_rd = (u32)(s32)(s8)(lev & 0xFF); break;
+            }
+          } else if (is_load && (eff >> 24) == 4) {
+            const u8 *iop = (const u8 *)io_registers + (eff & 0x3FF);
+            u32 lev = iop[0] | (iop[1] << 8) | ((kind == LDK_W) ?
+                      ((u32)iop[2] << 16) | ((u32)iop[3] << 24) : 0);
+            switch (kind) {
+            case LDK_W:  want_rd = lev; break;
+            case LDK_B:  want_rd = lev & 0xFF; break;
+            case LDK_UH: want_rd = lev & 0xFFFF; break;
+            case LDK_SH: want_rd = (u32)(s32)(int16_t)(lev & 0xFFFF); break;
+            default:     want_rd = (u32)(s32)(s8)(lev & 0xFF); break;
+            }
+          } else if (is_load && (eff >> 24) == 8) {
+            const u8 *rp = rom + (eff & 0x7FFF);
+            u32 lev = rp[0] | (rp[1] << 8) | ((u32)rp[2] << 16) | ((u32)rp[3] << 24);
+            switch (kind) {
+            case LDK_W:  want_rd = lev; break;
+            case LDK_B:  want_rd = lev & 0xFF; break;
+            case LDK_UH: want_rd = lev & 0xFFFF; break;
+            case LDK_SH: want_rd = (u32)(s32)(int16_t)(lev & 0xFFFF); break;
+            default:     want_rd = (u32)(s32)(s8)(lev & 0xFF); break;
+            }
+          }
+          if (g_reg[3] != want_rd) {
+            printf("FAIL fm %s @%s: rd=%08X want %08X\n",
+                   forms[fi].nm, tgts[ti].nm, g_reg[3], want_rd);
+            fails++;
+          }
+          if (forms[fi].wb && g_reg[2] != wbv) {
+            printf("FAIL fm %s @%s: wb rn=%08X want %08X\n",
+                   forms[fi].nm, tgts[ti].nm, g_reg[2], wbv);
+            fails++;
+          }
+          if (!forms[fi].wb && g_reg[2] != base) {
+            printf("FAIL fm %s @%s: rn clobbered %08X\n",
+                   forms[fi].nm, tgts[ti].nm, g_reg[2]);
+            fails++;
+          }
+          if (!is_load && page) {
+            u32 v = 0xCAFE1234u;
+            u8 want[4] = { mem_before[0], mem_before[1], mem_before[2], mem_before[3] };
+            switch (kind) {
+            case LDK_W: want[0] = (u8)v; want[1] = (u8)(v >> 8);
+                        want[2] = (u8)(v >> 16); want[3] = (u8)(v >> 24); break;
+            case LDK_UH: want[0] = (u8)v; want[1] = (u8)(v >> 8); break;
+            default:     want[0] = (u8)v; break;
+            }
+            if (memcmp(page + poff, want, 4) != 0) {
+              printf("FAIL fm %s @%s: mem %02X%02X%02X%02X want %02X%02X%02X%02X\n",
+                     forms[fi].nm, tgts[ti].nm,
+                     page[poff], page[poff+1], page[poff+2], page[poff+3],
+                     want[0], want[1], want[2], want[3]);
+              fails++;
+            }
+            memcpy((void *)(page + poff), mem_before, 4);
+          }
+        }
+
+  /* ---- fastmem: Thumb sites (same routines; checks the kind mapping) ---- */
+  {
+    /* rd=0, rb=1, ro=2 forms; imm5 slot 4 (word: <<2, half: <<1, byte: <<0) */
+    struct tf { u32 op; int kind; int is_load; const char *nm; } tforms[] = {
+      { 0x6908u, SH4_THUMB_LDK_W, 1, "ldr  [r1,#16]" },
+      { 0x6108u, SH4_THUMB_LDK_W, 0, "str  [r1,#16]" },
+      { 0x7C08u, SH4_THUMB_LDK_B, 1, "ldrb [r1,#16]" },
+      { 0x7408u, SH4_THUMB_LDK_B, 0, "strb [r1,#16]" },
+      { 0x8A08u, SH4_THUMB_LDK_UH, 1, "ldrh [r1,#16]" },
+      { 0x8208u, SH4_THUMB_LDK_UH, 0, "strh [r1,#16]" },
+      { 0x5888u, SH4_THUMB_LDK_W, 1, "ldr  [r1,r2]" },
+      { 0x5688u, SH4_THUMB_LDK_SB, 1, "ldrsb[r1,r2]" },
+      { 0x5E88u, SH4_THUMB_LDK_SH, 1, "ldrsh[r1,r2]" },
+    };
+    u32 tbases[] = { 0x03000400u, 0x02000500u, 0x06000600u, 0x08000700u };
+    for (unsigned fi = 0; fi < sizeof tforms / sizeof *tforms; fi++)
+      for (unsigned bi = 0; bi < sizeof tbases / sizeof *tbases; bi++) {
+        static u8 sbuf[512];
+        u8 *sp = sbuf;
+        int kind = tforms[fi].kind, is_load = tforms[fi].is_load;
+        u32 base = tbases[bi];
+        u32 reg_off = (tforms[fi].op & 0xF000u) == 0x5000u;
+        u32 eff = base + 0x10;
+        u32 regn = eff >> 24;
+        const u8 *page = (regn == 2) ? ewram : (regn == 3) ? iwram + 0x8000
+                       : (regn == 6) ? vram : rom;
+        u32 poff = eff & 0x7FFF;
+        u8 mem_before[4];
+        int st_slow = (regn == 6) ? (kind == SH4_THUMB_LDK_B) : (regn >= 8);
+
+        memset(g_reg, 0, sizeof g_reg);
+        for (int i = 0; i < 16; i++) g_reg[i] = 0x7EB00000u + (u32)i;
+        g_reg[SH4_GREG_CPSR] = 0x2000001Fu;
+        g_reg[1] = base;
+        g_reg[2] = 0x10;
+        g_reg[0] = is_load ? 0xDEAD0002u : 0xBEEF5678u;
+        memcpy(mem_before, page + poff, 4);
+
+        if (!sh4g_thumb_ldst_native(&sp, tforms[fi].op, pc, 0)) {
+          printf("FAIL temit reject %s\n", tforms[fi].nm);
+          fails++;
+          continue;
+        }
+        cases++;
+
+        orc_reset_windows();
+        orc_add_window(sbuf, sizeof sbuf, 0);
+        orc_add_window(fm_buf, sizeof fm_buf, 0);
+        orc_add_window(io_registers, sizeof io_registers, 0);
+        orc_add_window(memory_map_read, 8192 * 4, 1);
+        orc_add_window(iwram, sizeof iwram, 0);
+        orc_add_window(ewram, sizeof ewram, 0);
+        orc_add_window(vram, sizeof vram, 0);
+        orc_add_window(rom, sizeof rom, 0);
+        orc_add_window(ws_cyc_seq, sizeof ws_cyc_seq, 0);
+        orc_add_window(ws_cyc_nseq, sizeof ws_cyc_nseq, 0);
+        orc_slow_target = (u32)(uintptr_t)sh4_op2_pc_mem_tramp;
+        orc_slow_target2 = (u32)(uintptr_t)sh4_op2_pc_tramp;
+
+        int ran = run_at((u32)(uintptr_t)sbuf, (u32)(uintptr_t)sbuf + (u32)(sp - sbuf));
+        int slow = (!ran && orc_took_slow);
+        int want_slow = is_load ? 0 : st_slow;
+        if (!ran && !slow) {
+          printf("FAIL tfm %s @%X: interpreter: %s\n", tforms[fi].nm, base, unmodeled);
+          fails++;
+          memcpy((void *)(page + poff), mem_before, 4);
+          continue;
+        }
+        if (slow != want_slow) {
+          printf("FAIL tfm %s @%X: slow=%d want %d\n", tforms[fi].nm, base, slow, want_slow);
+          fails++;
+          memcpy((void *)(page + poff), mem_before, 4);
+          continue;
+        }
+        if (!slow) {
+          if (is_load) {
+            u32 lev = page[poff] | ((u32)page[poff+1] << 8) |
+                      ((u32)page[poff+2] << 16) | ((u32)page[poff+3] << 24);
+            u32 want;
+            switch (kind) {
+            case SH4_THUMB_LDK_W:  want = lev; break;
+            case SH4_THUMB_LDK_B:  want = lev & 0xFF; break;
+            case SH4_THUMB_LDK_UH: want = lev & 0xFFFF; break;
+            case SH4_THUMB_LDK_SH: want = (u32)(s32)(int16_t)(lev & 0xFFFF); break;
+            default:               want = (u32)(s32)(s8)(lev & 0xFF); break;
+            }
+            if (g_reg[0] != want) {
+              printf("FAIL tfm %s @%X: rd=%08X want %08X\n",
+                     tforms[fi].nm, base, g_reg[0], want);
+              fails++;
+            }
+          } else {
+            u32 v = 0xBEEF5678u;
+            u8 want[4] = { mem_before[0], mem_before[1], mem_before[2], mem_before[3] };
+            switch (kind) {
+            case SH4_THUMB_LDK_W: want[0]=(u8)v; want[1]=(u8)(v>>8);
+                                  want[2]=(u8)(v>>16); want[3]=(u8)(v>>24); break;
+            case SH4_THUMB_LDK_UH: want[0]=(u8)v; want[1]=(u8)(v>>8); break;
+            default:               want[0]=(u8)v; break;
+            }
+            if (memcmp(page + poff, want, 4) != 0) {
+              printf("FAIL tfm %s @%X: mem mismatch\n", tforms[fi].nm, base);
+              fails++;
+            }
+            memcpy((void *)(page + poff), mem_before, 4);
+          }
+        }
+        (void)reg_off;
+      }
+  }
   }
 
   if (fails) {

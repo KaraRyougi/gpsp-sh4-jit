@@ -13,6 +13,8 @@ file(REMOVE_RECURSE
   "CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_diff_harness.c.obj.d"
   "CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_dynarec_state.c.obj"
   "CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_dynarec_state.c.obj.d"
+  "CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_fastmem.c.obj"
+  "CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_fastmem.c.obj.d"
   "CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_interp_helpers.c.obj"
   "CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_interp_helpers.c.obj.d"
   "CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/bios_data.S.obj"
