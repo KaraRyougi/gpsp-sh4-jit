@@ -348,6 +348,14 @@ static void show_diag_overlay(void)
 #define CGBA_GPSP_HEADLESS_STAT_EVERY 0u
 #endif
 
+/* Render 1 frame in (FRAMESKIP+1): deep-progression soaks (reaching real
+ * gameplay needs ~17000+ frames of held A) spend most emulator time in the
+ * renderer otherwise. Stat-checkpoint frames always render so the pixel-hash
+ * comparisons stay valid. Default 3 = the old hardcoded (frame %% 4) == 0. */
+#ifndef CGBA_GPSP_HEADLESS_FRAMESKIP
+#define CGBA_GPSP_HEADLESS_FRAMESKIP 3u
+#endif
+
 #ifndef CGBA_GPSP_HEADLESS_STATE_EVERY
 #define CGBA_GPSP_HEADLESS_STATE_EVERY 0u
 #endif
@@ -955,7 +963,11 @@ static int cgba_headless_test(uint16_t *framebuffer)
 	cgba_fps_init(&cgba_fps);
 	for(i = 0; i < CGBA_GPSP_HEADLESS_FRAMES; i++) {
 		unsigned frame = frame_base + i;
-		int rendered = (frame % 4) == 0;
+		int rendered = (frame % (CGBA_GPSP_HEADLESS_FRAMESKIP + 1u)) == 0
+#if CGBA_GPSP_HEADLESS_STAT_EVERY > 0
+			|| (frame % CGBA_GPSP_HEADLESS_STAT_EVERY) == 0
+#endif
+			;
 		int log_frame = headless_log_frame(frame);
 		uint32_t buttons = headless_buttons_for_frame(frame);
 
