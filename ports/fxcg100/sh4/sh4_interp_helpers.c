@@ -143,6 +143,12 @@ u32 cgba_sh4_helper_thumb_ldst_imm_count;
 u32 cgba_sh4_native_thumb_const_io_count;
 u32 cgba_sh4_native_thumb_runtime_io_count;
 u32 cgba_sh4_native_thumb_push_iwram_count;
+/* BIOS-fallback residency: calls into the interpreter fallback and the guest
+ * cycles it consumed. When the ON-menu page shows all-zero JIT counters (e.g.
+ * during the open-BIOS boot screen after a soft reset), these say explicitly
+ * that the time went to interpreted BIOS code rather than to a JIT stall. */
+u32 cgba_sh4_bios_fallback_call_count;
+u32 cgba_sh4_bios_fallback_cycle_count;
 #define CGBA_SH4_HELPER_HIT(name) (cgba_sh4_helper_##name##_count++)
 static void cgba_sh4_helper_arm_ldst_detail(u32 is_load, u32 address)
 {
@@ -1146,6 +1152,14 @@ u32 cgba_sh4_bios_fallback(u32 cycles)
   execute_arm(cycles);
   cgba_diff_stop_active = 0;
   cgba_diff_stop_on_bios_exit = 0;
+#if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
+  cgba_sh4_bios_fallback_call_count++;
+  {
+    s32 used = (s32)cycles - cgba_diff_stop_cycles_remaining;
+    if (used > 0)
+      cgba_sh4_bios_fallback_cycle_count += (u32)used;
+  }
+#endif
 
   if (reg[REG_PC] >= 0x00004000u) {      /* left the BIOS: back to the JIT */
     s32 remaining = cgba_diff_stop_cycles_remaining;
