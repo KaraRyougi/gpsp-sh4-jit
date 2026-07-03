@@ -418,14 +418,14 @@ static inline void sh4g_prof_block_entry(u8 **tp, u32 pc, int thumb)
 /* Each form first tries native SH4 emission (sh4g_thumb_dp_native, op-by-op
  * allow-list); on a 0 it falls back to the C helper, untouched. */
 #define thumb_data_proc(type, name, rn_type, _rd, _rs, _rn)                   \
-  do { if(!sh4g_thumb_dp_native(&translation_ptr, (u32)opcode, (u32)pc, (u32)flag_status))      \
+  do { if(!sh4g_thumb_dp_native(&translation_ptr, (u32)opcode, (u32)pc, (u32)flag_status, (int)cycle_count))      \
          SH4_CALL_OP2(cgba_sh4_thumb_dp);                                     \
        sh4_thumb_const_kill(sh4g_thumb_dp_write_reg_index((u32)opcode)); } while(0)
 #define thumb_data_proc_test(type, name, rn_type, _rs, _rn)                   \
-  do { if(!sh4g_thumb_dp_native(&translation_ptr, (u32)opcode, (u32)pc, (u32)flag_status))      \
+  do { if(!sh4g_thumb_dp_native(&translation_ptr, (u32)opcode, (u32)pc, (u32)flag_status, (int)cycle_count))      \
          SH4_CALL_OP2(cgba_sh4_thumb_dp); } while(0)
 #define thumb_data_proc_unary(type, name, rn_type, _rd, _rn)                  \
-  do { if(!sh4g_thumb_dp_native(&translation_ptr, (u32)opcode, (u32)pc, (u32)flag_status))      \
+  do { if(!sh4g_thumb_dp_native(&translation_ptr, (u32)opcode, (u32)pc, (u32)flag_status, (int)cycle_count))      \
          SH4_CALL_OP2(cgba_sh4_thumb_dp);                                     \
        if(((u32)opcode & 0xF800u) == 0x2000u)                                 \
          sh4_thumb_const_set(sh4g_thumb_dp_write_reg_index((u32)opcode),      \
@@ -436,16 +436,16 @@ static inline void sh4g_prof_block_entry(u8 **tp, u32 pc, int thumb)
 /* Hi-register ADD/MOV can target r15 -> re-dispatch when the helper returns 1.
  * The native path returns 0 for the rd==15 cases so they stay on the C path. */
 #define thumb_data_proc_hi(name)                                              \
-  do { if(!sh4g_thumb_dp_native(&translation_ptr, (u32)opcode, (u32)pc, (u32)flag_status))      \
+  do { if(!sh4g_thumb_dp_native(&translation_ptr, (u32)opcode, (u32)pc, (u32)flag_status, (int)cycle_count))      \
          SH4_CALL_OP2_PC(cgba_sh4_thumb_dp);                                  \
        { unsigned _ct_rd = (((u32)opcode >> 4) & 8u) | ((u32)opcode & 7u);     \
          if(_ct_rd == REG_PC) sh4_thumb_const_clear_all();                    \
          else sh4_thumb_const_kill(_ct_rd); } } while(0)
 #define thumb_data_proc_test_hi(name)                                         \
-  do { if(!sh4g_thumb_dp_native(&translation_ptr, (u32)opcode, (u32)pc, (u32)flag_status))      \
+  do { if(!sh4g_thumb_dp_native(&translation_ptr, (u32)opcode, (u32)pc, (u32)flag_status, (int)cycle_count))      \
          SH4_CALL_OP2(cgba_sh4_thumb_dp); } while(0)
 #define thumb_data_proc_mov_hi()                                              \
-  do { if(!sh4g_thumb_dp_native(&translation_ptr, (u32)opcode, (u32)pc, (u32)flag_status))      \
+  do { if(!sh4g_thumb_dp_native(&translation_ptr, (u32)opcode, (u32)pc, (u32)flag_status, (int)cycle_count))      \
          SH4_CALL_OP2_PC(cgba_sh4_thumb_dp);                                  \
        { unsigned _ct_rs = ((u32)opcode >> 3) & 0x0Fu;                        \
          unsigned _ct_rd = (((u32)opcode >> 4) & 8u) | ((u32)opcode & 7u);     \
@@ -719,7 +719,8 @@ static inline void sh4g_prof_block_entry(u8 **tp, u32 pc, int thumb)
                                          (u32)flag_status))                    \
          SH4_CALL_OP2(cgba_sh4_arm_multiply_long); } while(0)
 #define arm_psr(op_type, transfer_type, psr_reg)                              \
-  do { if (!sh4g_arm_psr_native(&translation_ptr, (u32)opcode, (u32)pc))      \
+  do { if (!sh4g_arm_psr_native(&translation_ptr, (u32)opcode, (u32)pc,       \
+                                (int)cycle_count))                            \
          SH4_CALL_OP2_PC(cgba_sh4_arm_psr); } while(0)
 #define arm_swap(type)                             SH4_CALL_OP2_PC_MEM(cgba_sh4_arm_swap)
 

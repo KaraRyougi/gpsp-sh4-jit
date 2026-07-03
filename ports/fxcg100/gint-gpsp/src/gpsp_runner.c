@@ -93,6 +93,110 @@ extern uint32_t cgba_sh4_native_thumb_runtime_io_count;
 extern uint32_t cgba_sh4_native_thumb_push_iwram_count;
 #endif
 
+#if defined(CGBA_DYNAREC) && \
+	(defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS))
+/* 5-frame profiling window: the ON-menu debug page shows counter DELTAS over
+ * the last COMPLETED window instead of boot-cumulative totals, so a reading
+ * taken in a slow scene describes THAT scene. The live counters keep
+ * accumulating (the headless end-of-run "jit stats" line stays cumulative);
+ * only the display snapshots here. The PROF PC-histogram is instead RESET at
+ * each boundary — its ranking covers the current window, at most 5 frames
+ * old at read time — which also keeps its 2048-slot table from overflowing. */
+#define CGBA_PROF_WIN_FRAMES 5u
+void cgba_sh4_prof_reset(void);   /* cpu_threaded.c */
+#define CGBA_PROF_WIN_LIST(X) \
+	X(cgba_dynarec_rom_flush_count) \
+	X(cgba_dynarec_ram_flush_count) \
+	X(cgba_dynarec_arm_translate_count) \
+	X(cgba_dynarec_thumb_translate_count) \
+	X(cgba_dynarec_lookup_arm_count) \
+	X(cgba_dynarec_lookup_thumb_count) \
+	X(cgba_dynarec_lookup_dual_count) \
+	X(cgba_dynarec_icache_sync_count) \
+	X(cgba_dynarec_icache_sync_bytes) \
+	X(cgba_dynarec_ibh_arm_hit_count) \
+	X(cgba_dynarec_ibh_arm_slow_count) \
+	X(cgba_dynarec_ibh_thumb_hit_count) \
+	X(cgba_dynarec_ibh_thumb_slow_count) \
+	X(cgba_dynarec_ibh_dual_arm_hit_count) \
+	X(cgba_dynarec_ibh_dual_thumb_hit_count) \
+	X(cgba_dynarec_ibh_dual_slow_count) \
+	X(cgba_dynarec_ibh_dual_hot_arm_count) \
+	X(cgba_dynarec_ibh_dual_hot_thumb_count) \
+	X(cgba_sh4_helper_thumb_ldst_count) \
+	X(cgba_sh4_helper_thumb_block_count) \
+	X(cgba_sh4_helper_thumb_shift_count) \
+	X(cgba_sh4_helper_thumb_dp_count) \
+	X(cgba_sh4_helper_arm_ldst_count) \
+	X(cgba_sh4_helper_arm_block_count) \
+	X(cgba_sh4_helper_arm_dp_count) \
+	X(cgba_sh4_helper_arm_mul_count) \
+	X(cgba_sh4_helper_arm_psr_count) \
+	X(cgba_sh4_helper_arm_swap_count) \
+	X(cgba_sh4_helper_hle_div_count) \
+	X(cgba_sh4_helper_arm_ldst_load_count) \
+	X(cgba_sh4_helper_arm_ldst_store_count) \
+	X(cgba_sh4_helper_arm_ldst_ram_count) \
+	X(cgba_sh4_helper_arm_ldst_io_count) \
+	X(cgba_sh4_helper_arm_ldst_video_count) \
+	X(cgba_sh4_helper_arm_ldst_rom_count) \
+	X(cgba_sh4_helper_arm_ldst_other_count) \
+	X(cgba_sh4_helper_arm_block_load_count) \
+	X(cgba_sh4_helper_arm_block_store_count) \
+	X(cgba_sh4_helper_thumb_ldst_load_count) \
+	X(cgba_sh4_helper_thumb_ldst_store_count) \
+	X(cgba_sh4_helper_thumb_ldst_ram_count) \
+	X(cgba_sh4_helper_thumb_ldst_io_count) \
+	X(cgba_sh4_helper_thumb_ldst_video_count) \
+	X(cgba_sh4_helper_thumb_ldst_rom_count) \
+	X(cgba_sh4_helper_thumb_ldst_other_count) \
+	X(cgba_sh4_helper_thumb_ldst_unmapped_count) \
+	X(cgba_sh4_helper_thumb_ldst_guest_unaligned_count) \
+	X(cgba_sh4_helper_thumb_ldst_host_unaligned_count) \
+	X(cgba_sh4_helper_thumb_ldst_unsafe_region_count) \
+	X(cgba_sh4_helper_thumb_ldst_smc_count) \
+	X(cgba_sh4_helper_thumb_ldst_native_ready_count) \
+	X(cgba_sh4_helper_thumb_ldst_word_count) \
+	X(cgba_sh4_helper_thumb_ldst_byte_count) \
+	X(cgba_sh4_helper_thumb_ldst_half_count) \
+	X(cgba_sh4_helper_thumb_ldst_pc_count) \
+	X(cgba_sh4_helper_thumb_ldst_sp_count) \
+	X(cgba_sh4_helper_thumb_ldst_reg_count) \
+	X(cgba_sh4_helper_thumb_ldst_imm_count) \
+	X(cgba_sh4_native_thumb_const_io_count) \
+	X(cgba_sh4_native_thumb_runtime_io_count) \
+	X(cgba_sh4_native_thumb_push_iwram_count)
+enum {
+#define CGBA_PROF_WIN_ENUM(n) cgba_win_##n,
+	CGBA_PROF_WIN_LIST(CGBA_PROF_WIN_ENUM)
+#undef CGBA_PROF_WIN_ENUM
+	CGBA_PROF_WIN_N
+};
+static uint32_t *const cgba_prof_win_live[CGBA_PROF_WIN_N] = {
+#define CGBA_PROF_WIN_PTR(n) &n,
+	CGBA_PROF_WIN_LIST(CGBA_PROF_WIN_PTR)
+#undef CGBA_PROF_WIN_PTR
+};
+static uint32_t cgba_prof_win_prev[CGBA_PROF_WIN_N];
+static uint32_t cgba_prof_win_delta[CGBA_PROF_WIN_N];
+static unsigned cgba_prof_win_tick;
+#define WV(n) ((unsigned long)cgba_prof_win_delta[cgba_win_##n])
+
+static void cgba_prof_window_frame(void)
+{
+	unsigned i;
+	if(++cgba_prof_win_tick < CGBA_PROF_WIN_FRAMES)
+		return;
+	cgba_prof_win_tick = 0;
+	for(i = 0; i < (unsigned)CGBA_PROF_WIN_N; i++) {
+		uint32_t v = *cgba_prof_win_live[i];
+		cgba_prof_win_delta[i] = v - cgba_prof_win_prev[i];
+		cgba_prof_win_prev[i] = v;
+	}
+	cgba_sh4_prof_reset();
+}
+#endif
+
 typedef struct cgba_rom_source {
 	const char *name;
 	const uint8_t *data;
@@ -698,6 +802,10 @@ void cgba_gpsp_run_frame(uint32_t gba_buttons, int render_video)
 #endif
 		execute_arm(cycles);
 	skip_next_frame = 0;
+#if defined(CGBA_DYNAREC) && \
+	(defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS))
+	cgba_prof_window_frame();
+#endif
 	if(render_video && cgba_mode3_debug_copy_active)
 		copy_mode3_vram_to_framebuffer();
 }
@@ -854,43 +962,44 @@ void cgba_gpsp_debug_menu(fxcg100_debug_info *debug, unsigned frame,
 		(unsigned long)r->first_address, sh4_area_tag(r->first_address));
 #if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
 	{
-		unsigned f = frame ? frame : 1;
-		uint32_t arm_helpers = cgba_sh4_helper_arm_ldst_count +
-			cgba_sh4_helper_arm_block_count + cgba_sh4_helper_arm_dp_count +
-			cgba_sh4_helper_arm_mul_count + cgba_sh4_helper_arm_psr_count +
-			cgba_sh4_helper_arm_swap_count;
-		uint32_t thumb_helpers = cgba_sh4_helper_thumb_ldst_count +
-			cgba_sh4_helper_thumb_block_count +
-			cgba_sh4_helper_thumb_shift_count +
-			cgba_sh4_helper_thumb_dp_count;
-		debug_line(debug, "JIT FL R%lu M%lu TX A%lu T%lu",
-			(unsigned long)cgba_dynarec_rom_flush_count,
-			(unsigned long)cgba_dynarec_ram_flush_count,
-			(unsigned long)cgba_dynarec_arm_translate_count,
-			(unsigned long)cgba_dynarec_thumb_translate_count);
+		/* All figures below are 5-frame-window deltas (WV), not cumulative. */
+		unsigned f = CGBA_PROF_WIN_FRAMES;
+		uint32_t arm_helpers = (uint32_t)(WV(cgba_sh4_helper_arm_ldst_count) +
+			WV(cgba_sh4_helper_arm_block_count) + WV(cgba_sh4_helper_arm_dp_count) +
+			WV(cgba_sh4_helper_arm_mul_count) + WV(cgba_sh4_helper_arm_psr_count) +
+			WV(cgba_sh4_helper_arm_swap_count));
+		uint32_t thumb_helpers = (uint32_t)(WV(cgba_sh4_helper_thumb_ldst_count) +
+			WV(cgba_sh4_helper_thumb_block_count) +
+			WV(cgba_sh4_helper_thumb_shift_count) +
+			WV(cgba_sh4_helper_thumb_dp_count));
+		debug_line(debug, "JIT W5 FL R%lu M%lu TX A%lu T%lu",
+			WV(cgba_dynarec_rom_flush_count),
+			WV(cgba_dynarec_ram_flush_count),
+			WV(cgba_dynarec_arm_translate_count),
+			WV(cgba_dynarec_thumb_translate_count));
 		debug_line(debug, "JIT TX/f A%lu T%lu H/f A%lu T%lu",
-			(unsigned long)(cgba_dynarec_arm_translate_count / f),
-			(unsigned long)(cgba_dynarec_thumb_translate_count / f),
+			(unsigned long)(WV(cgba_dynarec_arm_translate_count) / f),
+			(unsigned long)(WV(cgba_dynarec_thumb_translate_count) / f),
 			(unsigned long)(arm_helpers / f),
 			(unsigned long)(thumb_helpers / f));
 		debug_line(debug, "JIT LK A%lu T%lu D%lu IC%lu/%luk",
-			(unsigned long)cgba_dynarec_lookup_arm_count,
-			(unsigned long)cgba_dynarec_lookup_thumb_count,
-			(unsigned long)cgba_dynarec_lookup_dual_count,
-			(unsigned long)cgba_dynarec_icache_sync_count,
-			(unsigned long)(cgba_dynarec_icache_sync_bytes / 1024u));
+			WV(cgba_dynarec_lookup_arm_count),
+			WV(cgba_dynarec_lookup_thumb_count),
+			WV(cgba_dynarec_lookup_dual_count),
+			WV(cgba_dynarec_icache_sync_count),
+			(unsigned long)(WV(cgba_dynarec_icache_sync_bytes) / 1024u));
 		debug_line(debug, "JIT IH hit A%lu T%lu DA%lu DT%lu",
-			(unsigned long)cgba_dynarec_ibh_arm_hit_count,
-			(unsigned long)cgba_dynarec_ibh_thumb_hit_count,
-			(unsigned long)cgba_dynarec_ibh_dual_arm_hit_count,
-			(unsigned long)cgba_dynarec_ibh_dual_thumb_hit_count);
+			WV(cgba_dynarec_ibh_arm_hit_count),
+			WV(cgba_dynarec_ibh_thumb_hit_count),
+			WV(cgba_dynarec_ibh_dual_arm_hit_count),
+			WV(cgba_dynarec_ibh_dual_thumb_hit_count));
 		debug_line(debug, "JIT IH slow A%lu T%lu D%lu",
-			(unsigned long)cgba_dynarec_ibh_arm_slow_count,
-			(unsigned long)cgba_dynarec_ibh_thumb_slow_count,
-			(unsigned long)cgba_dynarec_ibh_dual_slow_count);
+			WV(cgba_dynarec_ibh_arm_slow_count),
+			WV(cgba_dynarec_ibh_thumb_slow_count),
+			WV(cgba_dynarec_ibh_dual_slow_count));
 		debug_line(debug, "JIT IH hot DA%lu DT%lu",
-			(unsigned long)cgba_dynarec_ibh_dual_hot_arm_count,
-			(unsigned long)cgba_dynarec_ibh_dual_hot_thumb_count);
+			WV(cgba_dynarec_ibh_dual_hot_arm_count),
+			WV(cgba_dynarec_ibh_dual_hot_thumb_count));
 		debug_line(debug, "PROF entries=%lu ovf=%lu",
 			(unsigned long)cgba_sh4_prof_entry_count,
 			(unsigned long)cgba_sh4_prof_overflow_count);
@@ -915,59 +1024,59 @@ void cgba_gpsp_debug_menu(fxcg100_debug_info *debug, unsigned frame,
 				}
 			}
 		debug_line(debug, "H ARM ld%lu st%lu blk%lu dp%lu",
-			(unsigned long)cgba_sh4_helper_arm_ldst_load_count,
-			(unsigned long)cgba_sh4_helper_arm_ldst_store_count,
-			(unsigned long)cgba_sh4_helper_arm_block_count,
-			(unsigned long)cgba_sh4_helper_arm_dp_count);
+			WV(cgba_sh4_helper_arm_ldst_load_count),
+			WV(cgba_sh4_helper_arm_ldst_store_count),
+			WV(cgba_sh4_helper_arm_block_count),
+			WV(cgba_sh4_helper_arm_dp_count));
 		debug_line(debug, "H ARM mul%lu psr%lu swp%lu",
-			(unsigned long)cgba_sh4_helper_arm_mul_count,
-			(unsigned long)cgba_sh4_helper_arm_psr_count,
-			(unsigned long)cgba_sh4_helper_arm_swap_count);
+			WV(cgba_sh4_helper_arm_mul_count),
+			WV(cgba_sh4_helper_arm_psr_count),
+			WV(cgba_sh4_helper_arm_swap_count));
 		debug_line(debug, "H TH ld%lu blk%lu sh%lu dp%lu",
-			(unsigned long)cgba_sh4_helper_thumb_ldst_count,
-			(unsigned long)cgba_sh4_helper_thumb_block_count,
-			(unsigned long)cgba_sh4_helper_thumb_shift_count,
-			(unsigned long)cgba_sh4_helper_thumb_dp_count);
+			WV(cgba_sh4_helper_thumb_ldst_count),
+			WV(cgba_sh4_helper_thumb_block_count),
+			WV(cgba_sh4_helper_thumb_shift_count),
+			WV(cgba_sh4_helper_thumb_dp_count));
 		debug_line(debug, "H TLD l%lu s%lu ram%lu io%lu",
-			(unsigned long)cgba_sh4_helper_thumb_ldst_load_count,
-			(unsigned long)cgba_sh4_helper_thumb_ldst_store_count,
-			(unsigned long)cgba_sh4_helper_thumb_ldst_ram_count,
-			(unsigned long)cgba_sh4_helper_thumb_ldst_io_count);
+			WV(cgba_sh4_helper_thumb_ldst_load_count),
+			WV(cgba_sh4_helper_thumb_ldst_store_count),
+			WV(cgba_sh4_helper_thumb_ldst_ram_count),
+			WV(cgba_sh4_helper_thumb_ldst_io_count));
 		debug_line(debug, "H TLD vid%lu rom%lu oth%lu",
-			(unsigned long)cgba_sh4_helper_thumb_ldst_video_count,
-			(unsigned long)cgba_sh4_helper_thumb_ldst_rom_count,
-			(unsigned long)cgba_sh4_helper_thumb_ldst_other_count);
+			WV(cgba_sh4_helper_thumb_ldst_video_count),
+			WV(cgba_sh4_helper_thumb_ldst_rom_count),
+			WV(cgba_sh4_helper_thumb_ldst_other_count));
 		debug_line(debug, "H TWHY U%lu GA%lu HA%lu",
-			(unsigned long)cgba_sh4_helper_thumb_ldst_unmapped_count,
-			(unsigned long)cgba_sh4_helper_thumb_ldst_guest_unaligned_count,
-			(unsigned long)cgba_sh4_helper_thumb_ldst_host_unaligned_count);
+			WV(cgba_sh4_helper_thumb_ldst_unmapped_count),
+			WV(cgba_sh4_helper_thumb_ldst_guest_unaligned_count),
+			WV(cgba_sh4_helper_thumb_ldst_host_unaligned_count));
 		debug_line(debug, "H TWHY R%lu S%lu OK%lu",
-			(unsigned long)cgba_sh4_helper_thumb_ldst_unsafe_region_count,
-			(unsigned long)cgba_sh4_helper_thumb_ldst_smc_count,
-			(unsigned long)cgba_sh4_helper_thumb_ldst_native_ready_count);
+			WV(cgba_sh4_helper_thumb_ldst_unsafe_region_count),
+			WV(cgba_sh4_helper_thumb_ldst_smc_count),
+			WV(cgba_sh4_helper_thumb_ldst_native_ready_count));
 		debug_line(debug, "H TK W%lu B%lu H%lu",
-			(unsigned long)cgba_sh4_helper_thumb_ldst_word_count,
-			(unsigned long)cgba_sh4_helper_thumb_ldst_byte_count,
-			(unsigned long)cgba_sh4_helper_thumb_ldst_half_count);
+			WV(cgba_sh4_helper_thumb_ldst_word_count),
+			WV(cgba_sh4_helper_thumb_ldst_byte_count),
+			WV(cgba_sh4_helper_thumb_ldst_half_count));
 		debug_line(debug, "H TS PC%lu SP%lu R%lu I%lu",
-			(unsigned long)cgba_sh4_helper_thumb_ldst_pc_count,
-			(unsigned long)cgba_sh4_helper_thumb_ldst_sp_count,
-			(unsigned long)cgba_sh4_helper_thumb_ldst_reg_count,
-			(unsigned long)cgba_sh4_helper_thumb_ldst_imm_count);
+			WV(cgba_sh4_helper_thumb_ldst_pc_count),
+			WV(cgba_sh4_helper_thumb_ldst_sp_count),
+			WV(cgba_sh4_helper_thumb_ldst_reg_count),
+			WV(cgba_sh4_helper_thumb_ldst_imm_count));
 		debug_line(debug, "H TF C%lu R%lu P%lu",
-			(unsigned long)cgba_sh4_native_thumb_const_io_count,
-			(unsigned long)cgba_sh4_native_thumb_runtime_io_count,
-			(unsigned long)cgba_sh4_native_thumb_push_iwram_count);
+			WV(cgba_sh4_native_thumb_const_io_count),
+			WV(cgba_sh4_native_thumb_runtime_io_count),
+			WV(cgba_sh4_native_thumb_push_iwram_count));
 		debug_line(debug, "H LD ram%lu io%lu vid%lu rom%lu oth%lu",
-			(unsigned long)cgba_sh4_helper_arm_ldst_ram_count,
-			(unsigned long)cgba_sh4_helper_arm_ldst_io_count,
-			(unsigned long)cgba_sh4_helper_arm_ldst_video_count,
-			(unsigned long)cgba_sh4_helper_arm_ldst_rom_count,
-			(unsigned long)cgba_sh4_helper_arm_ldst_other_count);
+			WV(cgba_sh4_helper_arm_ldst_ram_count),
+			WV(cgba_sh4_helper_arm_ldst_io_count),
+			WV(cgba_sh4_helper_arm_ldst_video_count),
+			WV(cgba_sh4_helper_arm_ldst_rom_count),
+			WV(cgba_sh4_helper_arm_ldst_other_count));
 		debug_line(debug, "H ABLK load%lu store%lu div%lu",
-			(unsigned long)cgba_sh4_helper_arm_block_load_count,
-			(unsigned long)cgba_sh4_helper_arm_block_store_count,
-			(unsigned long)cgba_sh4_helper_hle_div_count);
+			WV(cgba_sh4_helper_arm_block_load_count),
+			WV(cgba_sh4_helper_arm_block_store_count),
+			WV(cgba_sh4_helper_hle_div_count));
 	}
 #endif
 #else

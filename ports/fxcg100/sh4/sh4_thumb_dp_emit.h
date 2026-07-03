@@ -144,7 +144,8 @@ static inline void sh4g_dp_carry(u8 **tp, int is_sub, unsigned rd,
  * every PC-changer — so skipping its materialization is unobservable except at
  * mid-block store-alert exits, the same trade the upstream x86/ARM backends
  * ship. Producing extra flags is always safe; sh4g_flags_round exploits that. */
-static inline int sh4g_thumb_dp_native(u8 **tp, u32 opcode, u32 pc, u32 flag_status)
+static inline int sh4g_thumb_dp_native(u8 **tp, u32 opcode, u32 pc, u32 flag_status,
+                                       int cycles)
 {
   u32 hi = (opcode >> 8) & 0xFF;
   u32 fm = flag_status & 0xF;
@@ -264,6 +265,11 @@ static inline int sh4g_thumb_dp_native(u8 **tp, u32 opcode, u32 pc, u32 flag_sta
       if (op != 2 || rs == 15)
         return 0;
       sh4g_load_greg(tp, rs, SH4_REG_RET);
+      sh4g_cycle_debit(tp, cycles);   /* PC-change exit: debit the accumulated
+                                       * run, exactly like the op2_pc tramp
+                                       * path this replaced (dropping it let
+                                       * the budget drift long on every
+                                       * mov pc,lr return) */
       { sh4_codegen cg = sh4g_open(tp);
         sh4_emit_mov_imm(&cg, -2, SH4_REG_T1);
         sh4_emit_and(&cg, SH4_REG_T1, SH4_REG_RET);      /* new PC = rs & ~1 */
@@ -322,7 +328,7 @@ static inline int sh4g_thumb_dp_native(u8 **tp, u32 opcode, u32 pc, u32 flag_sta
  * result with an interrupt actually pending (needs the vector + redispatch).
  * The hot MP2K bracket — MSR cpsr_c toggling only the I bit with no IRQ due —
  * stays fully native. SPSR forms and MSR with a PC operand stay on C. */
-static inline int sh4g_arm_psr_native(u8 **tp, u32 opcode, u32 pc)
+static inline int sh4g_arm_psr_native(u8 **tp, u32 opcode, u32 pc, int cycles)
 {
   u32 is_msr   = (opcode >> 21) & 1;
   u32 use_spsr = (opcode >> 22) & 1;
@@ -444,11 +450,16 @@ static inline int sh4g_arm_psr_native(u8 **tp, u32 opcode, u32 pc)
         sh4g_close(tp, &cg); }
       to_store[nst++] = sh4g_emit_bt_placeholder(tp);
 
-      /* fall-through: an IRQ will fire -> full C helper (vector + exit) */
+      /* fall-through: an IRQ will fire -> full C helper (vector + exit).
+       * with_cycles MUST be 1: sh4_op2_pc_tramp unconditionally reads the
+       * fifth (cycle_count) literal on its PC-change exit — a 4-literal site
+       * makes it debit its own instruction bytes from the cycle counter,
+       * which detonated exactly when gameplay IRQ traffic started. */
       for (i = 0; i < ns; i++)
         sh4g_patch_cond(to_slow[i], *tp);
       sh4g_op2_tramp_call(tp, (const void *)sh4_op2_pc_tramp,
-                          (const void *)cgba_sh4_arm_psr, opcode, pc, 0, 0);
+                          (const void *)cgba_sh4_arm_psr, opcode, pc,
+                          1, cycles);
       done = sh4g_emit_bra_placeholder(tp);
 
       for (i = 0; i < nst; i++)
