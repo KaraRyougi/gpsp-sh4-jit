@@ -138,6 +138,25 @@
 7:
 .endm
 
+/* ---- resident vector table (base pinned in R9 by the entry prologue) ----
+ * Generated code reaches these with MOV.L @(disp4,R9),Rn (2 bytes) instead of
+ * a 10-12 byte inline literal island. Entry ORDER must match the SH4G_VEC_*
+ * enum in ports/fxcg100/sh4/sh4_emit_glue.h. */
+  .align 2
+defsymbl(cgba_sh4_vec_table)
+  .long   sh4_pc_redispatch                     /*  0 SH4G_VEC_pc_redispatch */
+  .long   sh4_indirect_branch_arm               /*  1 SH4G_VEC_ib_arm        */
+  .long   sh4_indirect_branch_thumb             /*  2 SH4G_VEC_ib_thumb      */
+  .long   sh4_indirect_branch_dual              /*  3 SH4G_VEC_ib_dual       */
+  .long   sh4_indirect_branch_dual_thumb_current /* 4 SH4G_VEC_ib_dual_thumb_current */
+  .long   sh4_update_gba                        /*  5 SH4G_VEC_update_gba    */
+  .long   sh4_helper_exit                       /*  6 SH4G_VEC_helper_exit   */
+  .long   execute_swi                           /*  7 SH4G_VEC_execute_swi   */
+  .long   sh4_cheat_hook                        /*  8 SH4G_VEC_cheat_hook    */
+  .long   _cgba_sh4_hle_div                     /*  9 SH4G_VEC_hle_div       */
+  .long   _ws_cyc_seq                           /* 10 SH4G_VEC_ws_cyc_seq    */
+  .long   _ws_cyc_nseq                          /* 11 SH4G_VEC_ws_cyc_nseq   */
+
 /* ---- main entry: execute_arm_translate_internal(cycles, reg_ptr) ---- */
 /* R4 = cycle counter, R5 = pointer to reg[] */
 
@@ -153,6 +172,10 @@ defsymbl(execute_arm_translate_internal)
 
   mov     r5, r14                 /* reg[] base */
   mov     r4, r13                 /* cycle counter */
+  mov.l   9f, r9                  /* pin &cgba_sh4_vec_table (see enum in
+                                     sh4_emit_glue.h; callee-saved across all
+                                     C calls, so loaded exactly once here) */
+  mov.l   10f, r10                /* pin &sh4_block_exit for JMP @R10 exits */
   CPSR_RELOAD                     /* prime the R8 CPSR cache */
 
   /* CPU might be sleeping; do not wake it up. */
@@ -163,6 +186,11 @@ defsymbl(execute_arm_translate_internal)
 
   bra     lookup_pc
   nop
+  .align 2
+9:
+  .long   cgba_sh4_vec_table
+10:
+  .long   sh4_block_exit
 
 /* ---- return to the main C caller; ARM state already saved ---- */
 return_to_main:

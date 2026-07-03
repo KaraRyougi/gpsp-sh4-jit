@@ -180,18 +180,17 @@ static inline void sh4g_prof_block_entry(u8 **tp, u32 pc, int thumb)
 
 #define generate_cycle_update()                                               \
   do { if(cycle_count != 0) {                                                 \
-         sh4g_cycle_sub(&translation_ptr, (int)cycle_count, (u32)pc,          \
-                        (const void *)sh4_block_exit); cycle_count = 0;       \
+         sh4g_cycle_sub(&translation_ptr, (int)cycle_count, (u32)pc);        \
+         cycle_count = 0;                                                     \
        } } while(0)
 
 #define generate_cycle_update_force()                                         \
-  do { sh4g_cycle_sub(&translation_ptr, (int)cycle_count, (u32)pc,            \
-                      (const void *)sh4_block_exit); cycle_count = 0; } while(0)
+  do { sh4g_cycle_sub(&translation_ptr, (int)cycle_count, (u32)pc);           \
+       cycle_count = 0; } while(0)
 
 /* Loop-break gate only (no flush) emitted AT a block-entry / loop-back target. */
 #define generate_cycle_gate(is_word)                                          \
-  sh4g_cycle_gate(&translation_ptr, (u32)pc, (is_word),                       \
-                  (const void *)sh4_block_exit)
+  sh4g_cycle_gate(&translation_ptr, (u32)pc, (is_word))
 
 /* materialize an immediate / PC value into a host register */
 #define generate_load_pc(hostreg, value)                                      \
@@ -224,7 +223,7 @@ static inline void sh4g_prof_block_entry(u8 **tp, u32 pc, int thumb)
 #define generate_translation_gate(type)                                       \
   do { generate_cycle_update();                                               \
        sh4g_const(&translation_ptr, (u32)pc, SH4_REG_ARG0);                   \
-       sh4g_far_jmp(&translation_ptr, (const void *)sh4_pc_redispatch); } while(0)
+       sh4g_vec_jmp(&translation_ptr, SH4G_VEC_pc_redispatch); } while(0)
 
 /* Indirect branches (BX / computed PC) must honour the ARM/Thumb mode of the
  * target: the `dual` trampoline switches mode from the target's bit 0, and the
@@ -232,7 +231,7 @@ static inline void sh4g_prof_block_entry(u8 **tp, u32 pc, int thumb)
  * dispatches on the *current* CPSR Thumb bit) would miss the BX mode switch.
  * The target PC is already in R4 (SH4_REG_ARG0). */
 #define generate_indirect_branch_no_cycle_update(type)                        \
-  sh4g_far_jmp(&translation_ptr, (const void *)sh4_indirect_branch_##type)
+  sh4g_vec_jmp(&translation_ptr, SH4G_VEC_ib_##type)
 #define generate_indirect_branch_cycle_update(type)                           \
   do { generate_cycle_update();                                               \
        sh4g_far_jmp(&translation_ptr,                                         \
@@ -267,8 +266,7 @@ static inline void sh4g_prof_block_entry(u8 **tp, u32 pc, int thumb)
 
 #define generate_branch_idle_eliminate(writeback_location, new_pc)            \
   (writeback_location) = sh4g_branch_exit_idle(&translation_ptr,              \
-      (u32)(new_pc), (const void *)sh4_update_gba,                            \
-      (const void *)sh4_block_exit)
+      (u32)(new_pc), (const void *)sh4_block_exit)
 
 #define generate_branch_current_update(writeback_location, new_pc)            \
   do { sh4g_cycle_debit(&translation_ptr, (int)cycle_count);                  \
@@ -545,7 +543,7 @@ static inline void sh4g_prof_block_entry(u8 **tp, u32 pc, int thumb)
 
 #define arm_swi()                                                             \
   do { sh4g_const(&translation_ptr, (u32)(pc + 4), SH4_REG_ARG0);             \
-       sh4g_far_call(&translation_ptr, (const void *)execute_swi);            \
+       sh4g_vec_call(&translation_ptr, SH4G_VEC_execute_swi);            \
        generate_branch_current_update(                                        \
          block_exits[block_exit_position].branch_source,                      \
          block_exits[block_exit_position].branch_target);                     \
@@ -610,9 +608,7 @@ static inline void sh4g_prof_block_entry(u8 **tp, u32 pc, int thumb)
        sh4g_charge_thumb_bx_target_fetch(&translation_ptr, SH4_REG_ARG0);     \
        generate_cycle_update();                                               \
        sh4_thumb_const_clear_all();                                           \
-       sh4g_thumb_bx_dispatch(&translation_ptr,                               \
-         (const void *)sh4_indirect_branch_dual_thumb_current,                \
-         (const void *)sh4_indirect_branch_dual); } while(0)
+       sh4g_thumb_bx_dispatch(&translation_ptr); } while(0)
 
 #define thumb_conditional_branch(condition)                                   \
   do { generate_condition_##condition();                                      \
@@ -625,7 +621,7 @@ static inline void sh4g_prof_block_entry(u8 **tp, u32 pc, int thumb)
 
 #define thumb_swi()                                                           \
   do { sh4g_const(&translation_ptr, (u32)(pc + 2), SH4_REG_ARG0);             \
-       sh4g_far_call(&translation_ptr, (const void *)execute_swi);            \
+       sh4g_vec_call(&translation_ptr, SH4G_VEC_execute_swi);            \
        cycle_count -= ws_cyc_seq[(pc >> 24) & 0x0F][0];                      \
        generate_branch_current_update(                                        \
          block_exits[block_exit_position].branch_source,                      \
@@ -637,10 +633,10 @@ static inline void sh4g_prof_block_entry(u8 **tp, u32 pc, int thumb)
 /* Cheats                                                              */
 /* ================================================================== */
 #define thumb_process_cheats()                                                \
-  do { sh4g_far_call(&translation_ptr, (const void *)sh4_cheat_hook);         \
+  do { sh4g_vec_call(&translation_ptr, SH4G_VEC_cheat_hook);         \
        sh4_thumb_const_clear_all(); } while(0)
 #define arm_process_cheats()                                                  \
-  sh4g_far_call(&translation_ptr, (const void *)sh4_cheat_hook)
+  sh4g_vec_call(&translation_ptr, SH4G_VEC_cheat_hook)
 
 /* ================================================================== */
 /* C-helper handlers (bring-up): pass opcode in R4, pc in R5, JSR.     */
@@ -730,7 +726,7 @@ static inline void sh4g_prof_block_entry(u8 **tp, u32 pc, int thumb)
 #define arm_hle_div(cpu_mode)                                                 \
   do { sh4g_const(&translation_ptr, 0u, SH4_REG_ARG0);                        \
        sh4g_const(&translation_ptr, (u32)pc, SH4_REG_ARG1);                   \
-       sh4g_far_call(&translation_ptr, (const void *)cgba_sh4_hle_div); } while(0)
+       sh4g_vec_call(&translation_ptr, SH4G_VEC_hle_div); } while(0)
 #define arm_hle_div_arm(cpu_mode)                  arm_hle_div(cpu_mode)
 
 #endif /* SH4_EMIT_H */

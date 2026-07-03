@@ -1072,6 +1072,13 @@ static int cgba_headless_test(uint16_t *framebuffer)
 	for(i = 0; i < n; i++)
 		hputs_dbg(lines[i]);
 	#ifdef CGBA_DYNAREC
+	{
+	extern unsigned long cgba_em_const_small, cgba_em_const_large, cgba_em_const_bytes;
+	extern unsigned long cgba_em_fcall_n, cgba_em_fcall_bytes;
+	extern unsigned long cgba_em_fjmp_n, cgba_em_fjmp_bytes;
+	extern unsigned long cgba_em_pj_n, cgba_em_pj_bytes;
+	extern unsigned long cgba_em_fm_n, cgba_em_fm_bytes;
+	extern unsigned long cgba_em_blk_n, cgba_em_blk_bytes;
 	#if CGBA_GPSP_HEADLESS_BENCH_FRAMES > 0
 	snprintf(buf, sizeof buf,
 		"jit stats rom_flush=%lu ram_flush=%lu arm_tx=%lu thumb_tx=%lu "
@@ -1083,6 +1090,16 @@ static int cgba_headless_test(uint16_t *framebuffer)
 		(unsigned long)cgba_sh4_bios_fallback_call_count,
 		(unsigned long)(cgba_sh4_bios_fallback_cycle_count / 1024u),
 		(unsigned long)cgba_dynarec_cold_interp_count);
+	hputs_dbg(buf);
+	snprintf(buf, sizeof buf,
+		"jit emit blk=%lu blk_b=%lu cS=%lu cL=%lu c_b=%lu fc=%lu fc_b=%lu "
+		"fj=%lu fj_b=%lu pj=%lu pj_b=%lu fm=%lu fm_b=%lu",
+		cgba_em_blk_n, cgba_em_blk_bytes,
+		cgba_em_const_small, cgba_em_const_large, cgba_em_const_bytes,
+		cgba_em_fcall_n, cgba_em_fcall_bytes,
+		cgba_em_fjmp_n, cgba_em_fjmp_bytes,
+		cgba_em_pj_n, cgba_em_pj_bytes,
+		cgba_em_fm_n, cgba_em_fm_bytes);
 	hputs_dbg(buf);
 	snprintf(buf, sizeof buf,
 		"jit helpers arm ldst=%lu blk=%lu dp=%lu mul=%lu psr=%lu swp=%lu",
@@ -1132,6 +1149,16 @@ static int cgba_headless_test(uint16_t *framebuffer)
 		(unsigned long)cgba_dynarec_cold_interp_count);
 	hputs_dbg(buf);
 	snprintf(buf, sizeof buf,
+		"jit emit blk=%lu blk_b=%lu cS=%lu cL=%lu c_b=%lu fc=%lu fc_b=%lu "
+		"fj=%lu fj_b=%lu pj=%lu pj_b=%lu fm=%lu fm_b=%lu",
+		cgba_em_blk_n, cgba_em_blk_bytes,
+		cgba_em_const_small, cgba_em_const_large, cgba_em_const_bytes,
+		cgba_em_fcall_n, cgba_em_fcall_bytes,
+		cgba_em_fjmp_n, cgba_em_fjmp_bytes,
+		cgba_em_pj_n, cgba_em_pj_bytes,
+		cgba_em_fm_n, cgba_em_fm_bytes);
+	hputs_dbg(buf);
+	snprintf(buf, sizeof buf,
 		"jit helpers arm ldst=%lu blk=%lu dp=%lu mul=%lu psr=%lu swp=%lu",
 		(unsigned long)cgba_sh4_helper_arm_ldst_count,
 		(unsigned long)cgba_sh4_helper_arm_block_count,
@@ -1163,6 +1190,7 @@ static int cgba_headless_test(uint16_t *framebuffer)
 		(unsigned long)cgba_sh4_helper_arm_block_store_count);
 	hputs_dbg(buf);
 	#endif
+	}
 	#endif
 	hputs_dbg("=== done ===");
 	for(;;)   /* idle until the headless timeout kills us */

@@ -54,6 +54,26 @@ void sh4_pc_redispatch(u32 pc){(void)pc;}
 void sh4_update_gba(u32 pc){(void)pc;}
 void sh4_op2_mem_tramp(void){}
 void sh4_headless_trace_op(char k, u32 pc, u32 op){(void)k;(void)pc;(void)op;}
+void sh4_indirect_branch_arm(u32 a){(void)a;}
+void sh4_indirect_branch_dual(u32 a){(void)a;}
+void sh4_indirect_branch_dual_thumb_current(u32 a){(void)a;}
+void execute_swi(u32 pc){(void)pc;}
+void sh4_cheat_hook(void){}
+u32 cgba_sh4_hle_div(u32 o, u32 p){(void)o;(void)p;return 0;}
+
+/* Host analog of cgba_sh4_vec_table (sh4_stub.S): entries stored BIG-ENDIAN so
+ * the mini-interpreter's byte-wise MOV.L read returns the truncated host
+ * address, matching the calculator layout. R9 points here; R10 holds
+ * sh4_block_exit directly. Filled in orc_vec_init(). */
+static u8 orc_vec_table[12 * 4];
+static void orc_vec_put(unsigned idx, const void *pf)
+{
+  u32 v = (u32)(uintptr_t)pf;
+  orc_vec_table[idx * 4 + 0] = (u8)(v >> 24);
+  orc_vec_table[idx * 4 + 1] = (u8)(v >> 16);
+  orc_vec_table[idx * 4 + 2] = (u8)(v >> 8);
+  orc_vec_table[idx * 4 + 3] = (u8)v;
+}
 
 #include "ports/fxcg100/sh4/sh4_thumb_dp_emit.h"
 #include "ports/fxcg100/sh4/sh4_arm_ldst_emit.h"
@@ -66,6 +86,23 @@ u32 cgba_sh4_native_thumb_push_iwram_count2;
 #include "ports/fxcg100/sh4/sh4_thumb_block_emit.h"
 
 u8 *cgba_sh4_fastmem_routine[CGBA_FM_TOTAL];
+
+static void orc_vec_init(void)
+{
+  orc_vec_put(SH4G_VEC_pc_redispatch, (const void *)sh4_pc_redispatch);
+  orc_vec_put(SH4G_VEC_ib_arm, (const void *)sh4_indirect_branch_arm);
+  orc_vec_put(SH4G_VEC_ib_thumb, (const void *)sh4_indirect_branch_thumb);
+  orc_vec_put(SH4G_VEC_ib_dual, (const void *)sh4_indirect_branch_dual);
+  orc_vec_put(SH4G_VEC_ib_dual_thumb_current,
+              (const void *)sh4_indirect_branch_dual_thumb_current);
+  orc_vec_put(SH4G_VEC_update_gba, (const void *)sh4_update_gba);
+  orc_vec_put(SH4G_VEC_helper_exit, (const void *)sh4_helper_exit);
+  orc_vec_put(SH4G_VEC_execute_swi, (const void *)execute_swi);
+  orc_vec_put(SH4G_VEC_cheat_hook, (const void *)sh4_cheat_hook);
+  orc_vec_put(SH4G_VEC_hle_div, (const void *)cgba_sh4_hle_div);
+  orc_vec_put(SH4G_VEC_ws_cyc_seq, (const void *)ws_cyc_seq);
+  orc_vec_put(SH4G_VEC_ws_cyc_nseq, (const void *)ws_cyc_nseq);
+}
 
 /* ---- guest state used by the interpreter ---- */
 static u32 g_reg[64];
@@ -153,6 +190,8 @@ static int run_at(u32 pc, u32 pc_end)
 
   R[SH4_REG_BASE] = 0;
   R[SH4_REG_CPSR] = g_reg[SH4_GREG_CPSR];
+  R[SH4_REG_VEC] = (u32)(uintptr_t)orc_vec_table;
+  R[SH4_REG_BEXIT] = (u32)(uintptr_t)sh4_block_exit;
   unmodeled[0] = 0;
   orc_took_slow = 0;
 
@@ -357,6 +396,9 @@ static int run_sh4x(const u8 *code, size_t n)
   orc_reset_windows();
   orc_add_window(code, (u32)n + 64, 0);          /* +64: literal pool slack */
   orc_add_window(io_registers, sizeof(io_registers), 0);
+  orc_add_window(orc_vec_table, sizeof orc_vec_table, 0);
+  orc_add_window(ws_cyc_seq, sizeof ws_cyc_seq, 0);
+  orc_add_window(ws_cyc_nseq, sizeof ws_cyc_nseq, 0);
   orc_slow_target = (u32)(uintptr_t)sh4_op2_pc_mem_tramp;
   orc_slow_target2 = (u32)(uintptr_t)sh4_op2_pc_tramp;
   return run_at((u32)(uintptr_t)code, (u32)(uintptr_t)code + (u32)n);
@@ -571,6 +613,7 @@ static void check(const char *what, u32 opcode, u32 mask, const u32 init[16],
 
 int main(void)
 {
+  orc_vec_init();
   static const u32 vals[] = {
     0, 1, 2, 0x80000000u, 0x80000001u, 0x7FFFFFFFu, 0xFFFFFFFFu,
     0x12345678u, 0xA5A5A5A5u, 0x00000100u, 0xFFFFFF00u
@@ -994,6 +1037,7 @@ int main(void)
           orc_add_window(rom, sizeof rom, 0);
           orc_add_window(ws_cyc_seq, sizeof ws_cyc_seq, 0);
           orc_add_window(ws_cyc_nseq, sizeof ws_cyc_nseq, 0);
+          orc_add_window(orc_vec_table, sizeof orc_vec_table, 0);
           orc_slow_target = (u32)(uintptr_t)sh4_op2_pc_mem_tramp;
           orc_slow_target2 = (u32)(uintptr_t)sh4_op2_pc_tramp;
 
@@ -1150,6 +1194,7 @@ int main(void)
         orc_add_window(rom, sizeof rom, 0);
         orc_add_window(ws_cyc_seq, sizeof ws_cyc_seq, 0);
         orc_add_window(ws_cyc_nseq, sizeof ws_cyc_nseq, 0);
+        orc_add_window(orc_vec_table, sizeof orc_vec_table, 0);
         orc_slow_target = (u32)(uintptr_t)sh4_op2_pc_mem_tramp;
         orc_slow_target2 = (u32)(uintptr_t)sh4_op2_pc_tramp;
 
@@ -1303,6 +1348,7 @@ int main(void)
         orc_add_window(rom, sizeof rom, 0);
         orc_add_window(ws_cyc_seq, sizeof ws_cyc_seq, 0);
         orc_add_window(ws_cyc_nseq, sizeof ws_cyc_nseq, 0);
+        orc_add_window(orc_vec_table, sizeof orc_vec_table, 0);
         orc_slow_target = (u32)(uintptr_t)sh4_op2_pc_mem_tramp;
         orc_slow_target2 = (u32)(uintptr_t)sh4_op2_pc_tramp;
 

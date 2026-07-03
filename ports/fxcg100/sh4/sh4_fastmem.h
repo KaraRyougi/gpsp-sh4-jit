@@ -319,6 +319,10 @@ static inline u8 *sh4g_fastmem_emit_routine(u8 **tp, int fm)
 
 /* ---- per-site call ------------------------------------------------------ */
 /* Same geometry as sh4g_op2_tramp_call, with the 6-literal fastmem tuple. */
+#ifdef CGBA_GPSP_HEADLESS_TEST
+extern unsigned long cgba_em_fm_n, cgba_em_fm_bytes;
+#endif
+
 static inline void sh4g_fastmem_site_raw(u8 **tp, const u8 *routine,
                                          const void *helper_fn, u32 opcode,
                                          u32 pc, int cycle_count, u32 params)
@@ -326,6 +330,10 @@ static inline void sh4g_fastmem_site_raw(u8 **tp, const u8 *routine,
   u8 *site;
   u8 *lit;
   long bra_disp;
+#ifdef CGBA_GPSP_HEADLESS_TEST
+  u8 *stat0 = *tp;
+  cgba_em_fm_n++;
+#endif
 
   if (((uintptr_t)*tp + 10) & 3)               /* literals must be 4-aligned */
     sh4g_u16(tp, 0x0009);
@@ -347,6 +355,9 @@ static inline void sh4g_fastmem_site_raw(u8 **tp, const u8 *routine,
     sh4_emit_u32_be(&cg, params);
     sh4g_close(tp, &cg);
   }
+#ifdef CGBA_GPSP_HEADLESS_TEST
+  cgba_em_fm_bytes += (unsigned long)(*tp - stat0);
+#endif
 }
 
 static inline void sh4g_fastmem_site(u8 **tp, const u8 *routine,

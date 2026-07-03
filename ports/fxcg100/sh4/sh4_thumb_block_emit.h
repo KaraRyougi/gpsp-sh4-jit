@@ -393,7 +393,7 @@ static inline int sh4g_thumb_block_native(u8 **tp, u32 opcode, u32 pc,
     if (cycle_count)
       sh4g_cycle_debit(tp, cycle_count);
     sh4g_load_greg(tp, SH4_GREG_PC, SH4_REG_ARG0);
-    sh4g_far_jmp(tp, (const void *)sh4_indirect_branch_thumb);
+    sh4g_vec_jmp(tp, SH4G_VEC_ib_thumb);
   } else {
     bra_done = sh4g_emit_bra_placeholder(tp);
   }
