@@ -1971,6 +1971,8 @@ void translate_icache_sync() {
   {                                                                           \
     if((opcode & 0x00100000) && (((opcode >> 12) & 0xF) == 15))               \
       fstat |= 0xF00;                           /* LDR pc */                  \
+    if((opcode & 0x02000000) && ((opcode >> 4) & 0xFF) == 0x06)               \
+      fstat |= 0x200;                           /* [Rn, Rm, RRX] reads C */   \
   }                                                                           \
   else if(fclass == 4)                                                        \
   {                                                                           \
@@ -3336,6 +3338,11 @@ extern int cgba_dynarec_single_block;
     smc_write_##type##_##smc_write_op();                                      \
     type##_load_opcode();                                                     \
     type##_flag_status();                                                     \
+    /* Initialize here, NOT at the loop bottom: exit-point breaks skip the   \
+       bottom, and a stale 1 from a previous translation at this index       \
+       emits a spurious (history-dependent) cycle gate at the final          \
+       instruction. The branch-target seam pass sets real 1s after the scan. */ \
+    block_data[block_data_position].update_cycles = 0;                        \
                                                                               \
     if(type##_exit_point)                                                     \
     {                                                                         \
@@ -3392,7 +3399,6 @@ extern int cgba_dynarec_single_block;
         goto block_end;                                                       \
     }                                                                         \
                                                                               \
-    block_data[block_data_position].update_cycles = 0;                        \
     block_data_position++;                                                    \
     if((block_data_position == MAX_BLOCK_SIZE) ||                             \
      CGBA_DIAG_ONE_INSN_BLOCK(cgba_blk_start) ||                             \
