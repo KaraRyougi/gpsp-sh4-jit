@@ -11,9 +11,16 @@ CFLAGS  ?= -std=c11 -Wall -Wextra
 ROOT    := ..
 BIN     := /tmp/cgba-sh4
 
-.PHONY: all smoke audit core thumb cond native-ldst input cycle clean
+.PHONY: all smoke audit core thumb cond native-ldst input cycle exec clean
 
-all: smoke core thumb cond native-ldst input cycle audit
+all: smoke core thumb cond native-ldst input cycle exec audit
+
+# Execution oracle: run emitted native code in a mini SH4 interpreter against
+# the C-helper semantics (closes the pixel-soak blind spot on the audio path).
+exec: $(ROOT)/tests/sh4_exec_oracle.c $(ROOT)/ports/fxcg100/sh4/sh4_thumb_dp_emit.h \
+      $(ROOT)/ports/fxcg100/sh4/sh4_emit_glue.h
+	$(CC) $(CFLAGS) -I$(ROOT) $(ROOT)/tests/sh4_exec_oracle.c -o $(BIN)-exec
+	$(BIN)-exec
 
 smoke: $(ROOT)/tests/sh4_codegen_smoke.c $(ROOT)/ports/fxcg100/sh4/sh4_codegen.h
 	$(CC) $(CFLAGS) -I$(ROOT) $(ROOT)/tests/sh4_codegen_smoke.c -o $(BIN)-smoke
