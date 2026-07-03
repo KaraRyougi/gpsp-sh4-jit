@@ -12,6 +12,7 @@
 #include "nor_rom.h"
 #include "vendor/gpsp/common.h"
 #include "vendor/gpsp/gba_memory.h"
+#include "vendor/gpsp/savestate.h"
 
 #ifndef CGBA_GPSP_HEADLESS_TRACE_JIT
 #define CGBA_GPSP_HEADLESS_TRACE_JIT 0
@@ -775,6 +776,77 @@ static void copy_mode3_vram_to_framebuffer(void)
 		uint16_t gba = eswap16(src[i]);
 		dst[i] = convert_palette(gba);
 	}
+}
+
+/* ---- savestates -----------------------------------------------------------
+ * Raw gba_save_state() image (GBA_STATE_MEM_SIZE = 416KB), written whole to
+ * \\fls0\CGBAST<slot>.SAV — byte-compatible with the headless checkpoint
+ * blob, so a state saved on the calculator loads directly in the emulator
+ * harness (copy it over USB into the HLE_FLS0 dir as CGBACHK.SAV).
+ *
+ * Staging buffer: the 416KB image cannot live in the high arena statically
+ * (the arena end is pinned at the hardware-proven 0x8c655300 — growing it
+ * hard-resets the machine), so JIT builds BORROW the ROM translation cache:
+ * it is larger than the image, at a proven-safe address, and save/load must
+ * invalidate translated code anyway. Interpreter builds have an empty arena
+ * and use a static buffer there instead. */
+#ifdef CGBA_DYNAREC
+_Static_assert(GBA_STATE_MEM_SIZE <= ROM_TRANSLATION_CACHE_SIZE,
+	"savestate staging borrows the ROM translation cache");
+void flush_translation_cache_rom(void);
+
+static u8 *cgba_state_buffer(void)
+{
+	return rom_translation_cache;
+}
+#else
+static u8 *cgba_state_buffer(void)
+{
+	static u8 state_buf[GBA_STATE_MEM_SIZE]
+		__attribute__((section(".cgba.highbss"), aligned(32)));
+	return state_buf;
+}
+#endif
+
+static void cgba_state_path(uint16_t *path, unsigned slot)
+{
+	static const char tmpl[] = "\\\\fls0\\CGBAST0.SAV";
+	unsigned i;
+
+	for (i = 0; tmpl[i]; i++)
+		path[i] = (uint16_t)tmpl[i];
+	path[i] = 0;
+	path[13] = (uint16_t)('0' + (slot % 10));
+}
+
+int cgba_gpsp_state_save(unsigned slot)
+{
+	u8 *buf = cgba_state_buffer();
+	uint16_t path[24];
+	int ok;
+
+	cgba_state_path(path, slot);
+	gba_save_state(buf);
+	ok = fxcg100_storage_write_blob(path, buf, GBA_STATE_MEM_SIZE);
+#ifdef CGBA_DYNAREC
+	flush_translation_cache_rom();      /* the buffer was the code cache */
+#endif
+	return ok;
+}
+
+int cgba_gpsp_state_load(unsigned slot)
+{
+	u8 *buf = cgba_state_buffer();
+	uint16_t path[24];
+	int ok;
+
+	cgba_state_path(path, slot);
+	ok = fxcg100_storage_read_blob(path, buf, GBA_STATE_MEM_SIZE) &&
+		gba_load_state(buf);            /* validates magic/version/size */
+#ifdef CGBA_DYNAREC
+	flush_translation_cache_rom();      /* clobbered even on a failed load */
+#endif
+	return ok;
 }
 
 void cgba_gpsp_run_frame(uint32_t gba_buttons, int render_video)

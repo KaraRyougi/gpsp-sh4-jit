@@ -118,6 +118,11 @@ const char *fxcg100_hotkey_label(uint32_t index);
 int fxcg100_config_load(fxcg100_menu_state *state);
 int fxcg100_config_save(const fxcg100_menu_state *state);
 
+/* Whole-file storage blobs over world-switched BFile (savestates). */
+int fxcg100_storage_blob_size(const uint16_t *path);
+int fxcg100_storage_read_blob(const uint16_t *path, void *dst, unsigned size);
+int fxcg100_storage_write_blob(const uint16_t *path, const void *src, unsigned size);
+
 void fxcg100_menu_init(fxcg100_menu_state *state);
 fxcg100_menu_result fxcg100_menu_run(fxcg100_menu_state *state,
                                      uint32_t frame, uint32_t last_hash,

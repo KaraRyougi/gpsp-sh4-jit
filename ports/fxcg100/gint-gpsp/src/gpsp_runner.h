@@ -31,6 +31,11 @@ void cgba_gpsp_debug_menu(fxcg100_debug_info *debug, unsigned frame,
 	const uint16_t *framebuffer, uint32_t host_sp);
 void cgba_gpsp_shutdown(void);
 
+/* Savestates: raw gba_save_state image at \\fls0\CGBAST<slot>.SAV (also
+ * loadable by the emulator harness as its checkpoint blob). 1 = ok. */
+int cgba_gpsp_state_save(unsigned slot);
+int cgba_gpsp_state_load(unsigned slot);
+
 /* Fill up to max_lines short strings with a pipeline snapshot (ROM load result,
  * first ROM bytes as seen by gpSP, gpSP PC/DISPCNT/VCOUNT, framebuffer state)
  * for on-screen hardware debugging. Returns the number of lines written. */

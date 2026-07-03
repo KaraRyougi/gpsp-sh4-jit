@@ -18,6 +18,13 @@ int fxcg100_config_save(const fxcg100_menu_state *state)
   return 0;
 }
 
+int fxcg100_storage_blob_size(const uint16_t *path)
+{ (void)path; return -1; }
+int fxcg100_storage_read_blob(const uint16_t *path, void *dst, unsigned size)
+{ (void)path; (void)dst; (void)size; return 0; }
+int fxcg100_storage_write_blob(const uint16_t *path, const void *src, unsigned size)
+{ (void)path; (void)src; (void)size; return 0; }
+
 #else
 
 #ifndef CGBA_FXCG100_STORAGE
@@ -291,6 +298,44 @@ static int write_config(const fxcg100_config_file *config)
   }
 
   return write_blob_contents(config_path, config, sizeof(*config));
+}
+
+/* Generic whole-file storage blobs (savestates): world-switched BFile. */
+int fxcg100_storage_blob_size(const uint16_t *path)
+{
+  return storage_blob_size(path);
+}
+
+int fxcg100_storage_read_blob(const uint16_t *path, void *dst, unsigned size)
+{
+  int fd;
+  int ok = 0;
+
+  fd = os_bfile_open(path, CGBA_BFILE_READ_ONLY);
+  if (fd < 0)
+    return 0;
+  if (os_bfile_size(fd) == (int)size) {
+    int r = os_bfile_read(fd, dst, (int)size, 0);
+    ok = bfile_read_exact_ok(r, (int)size);
+  }
+  os_bfile_close(fd);
+  return ok;
+}
+
+int fxcg100_storage_write_blob(const uint16_t *path, const void *src, unsigned size)
+{
+  int existing_size = storage_blob_size(path);
+
+  if (existing_size == (int)size)
+    return write_blob_contents(path, src, size);
+  if (existing_size >= 0)
+    os_bfile_remove(path);
+  if (!create_blob(path, size)) {
+    os_bfile_remove(path);
+    if (!create_blob(path, size))
+      return 0;
+  }
+  return write_blob_contents(path, src, size);
 }
 
 int fxcg100_config_load(fxcg100_menu_state *state)
