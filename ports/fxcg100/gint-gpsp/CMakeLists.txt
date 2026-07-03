@@ -55,6 +55,8 @@ option(CGBA_SH4_THUMB_LDST_NATIVE
   "Enable SH4 native Thumb RAM load fast path" ON)
 option(CGBA_SH4_THUMB_BLOCK_NATIVE
   "Enable SH4 native Thumb RAM block-load fast path" ON)
+option(CGBA_SH4_ARM_DEAD_FLAGS
+  "ARM dead-flag elimination (OFF forces all-flags-live; A/B diagnostic)" ON)
 option(CGBA_SH4_EXACT_CYCLE_BOUNDARIES
   "Headless/debug: check the SH4 dynarec cycle budget at each translated instruction boundary" OFF)
 option(CGBA_SH4_DIFF_DUMP_OPS
@@ -153,6 +155,9 @@ if(CGBA_DYNAREC)
   endif()
   if(CGBA_SH4_THUMB_BLOCK_NATIVE)
     target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_SH4_THUMB_BLOCK_NATIVE=1)
+  endif()
+  if(NOT CGBA_SH4_ARM_DEAD_FLAGS)
+    target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_SH4_ARM_DEAD_FLAGS=0)
   endif()
   # Re-sync the I-cache line for every INSTRUCTION patch (BT/BF/BRA rewrites).
   # All such patches are in not-yet-synced memory by construction, so this is
