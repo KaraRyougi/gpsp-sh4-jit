@@ -13,9 +13,9 @@
 #include "ports/fxcg100/sh4/sh4_cache.h"
 #endif
 
-u8 *cgba_sh4_fastmem_routine[CGBA_FM_COUNT];
+u8 *cgba_sh4_fastmem_routine[CGBA_FM_TOTAL];
 
-static u8 cgba_fastmem_buf[6144] __attribute__((aligned(32)));
+static u8 cgba_fastmem_buf[8192] __attribute__((aligned(32)));
 
 void cgba_sh4_fastmem_init(void)
 {
@@ -26,6 +26,8 @@ void cgba_sh4_fastmem_init(void)
     return;
   for (fm = 0; fm < CGBA_FM_COUNT; fm++)
     cgba_sh4_fastmem_routine[fm] = sh4g_fastmem_emit_routine(&tp, fm);
+  for (fm = CGBA_FMB_LDM; fm < CGBA_FM_TOTAL; fm++)
+    cgba_sh4_fastmem_routine[fm] = sh4g_fastmem_emit_block_routine(&tp, fm);
 #ifdef CGBA_FXCG100
   cgba_sh4_cache_sync(cgba_fastmem_buf, tp);
 #endif

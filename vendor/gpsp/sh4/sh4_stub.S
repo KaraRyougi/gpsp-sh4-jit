@@ -121,8 +121,20 @@
 .macro REDISPATCH_IF_NULL
   tst     r0, r0
   bf      7f                      /* R0 != 0: resolved host block -> jump to it */
-  bra     lookup_pc               /* R0 == 0: re-dispatch (BRA disp12 reaches) */
+  mov.l   8f, r0                  /* NULL: cold-code gate or overflow retry */
+  mov.l   @r0, r1
+  tst     r1, r1
+  bt      6f                      /* not cold: cache-overflow retry */
+  mov     #0, r1
+  mov.l   r1, @r0                 /* clear cgba_cold_pending */
+  bra     sh4_cold_interp_entry   /* interpret a not-yet-hot chunk */
   nop
+6:
+  bra     lookup_pc
+  nop
+  .align 2
+8:
+  .long   _cgba_cold_pending
 7:
 .endm
 
@@ -322,7 +334,7 @@ bx_sb:
  * host block. Keep single-block diff mode on the old C path, and keep open-BIOS
  * targets on the interpreter fallback used by the Metroid cutscene fix. */
 defsymbl(sh4_indirect_branch_arm)
-  mov.l   sb_flag, r1
+  mov.l   ibh_sb, r1
   mov.l   @r1, r1
   tst     r1, r1
   bf      iba_slow                /* single-block diff -> unchanged C path */
@@ -369,7 +381,7 @@ iba_slow:
   CPSR_FLUSH
   CALL    block_lookup_address_arm
   CPSR_RELOAD_R1
-  mov.l   sb_flag, r1
+  mov.l   ibh_sb, r1
   mov.l   @r1, r1
   tst     r1, r1
   bt      iba_disp                /* not single-block -> dispatch */
@@ -381,7 +393,7 @@ iba_disp:
   nop
 
 defsymbl(sh4_indirect_branch_thumb)
-  mov.l   sb_flag, r1
+  mov.l   ibh_sb, r1
   mov.l   @r1, r1
   tst     r1, r1
   bf      ibt_slow
@@ -428,7 +440,7 @@ ibt_slow:
   CPSR_FLUSH
   CALL    block_lookup_address_thumb
   CPSR_RELOAD_R1
-  mov.l   sb_flag, r1
+  mov.l   ibh_sb, r1
   mov.l   @r1, r1
   tst     r1, r1
   bt      ibt_disp
@@ -440,7 +452,7 @@ ibt_disp:
   nop
 
 defsymbl(sh4_indirect_branch_dual)
-  mov.l   sb_flag, r1
+  mov.l   ibh_sb, r1
   mov.l   @r1, r1
   tst     r1, r1
   bt      1f
@@ -546,7 +558,7 @@ ibd_arm_commit:
  * ARM/Thumb split and the redundant CPSR.T store. Misses and single-block diff
  * mode rejoin the exact generic dual resolver below. */
 defsymbl(sh4_indirect_branch_dual_thumb_current)
-  mov.l   sb_flag, r1
+  mov.l   ibh_sb, r1
   mov.l   @r1, r1
   tst     r1, r1
   bt      1f
@@ -657,7 +669,7 @@ ibd_slow:
   CPSR_FLUSH
   CALL    block_lookup_address_dual
   CPSR_RELOAD_R1                  /* the dual resolver writes CPSR.T */
-  mov.l   sb_flag, r1
+  mov.l   ibh_sb, r1
   mov.l   @r1, r1
   tst     r1, r1
   bt      1f
@@ -669,6 +681,8 @@ ibd_slow:
   nop
 
   .align 2
+ibh_sb:
+  .long   _cgba_dynarec_single_block
 ibh_bios_limit:
   .long   0x00004000
 ibh_mul:
@@ -694,6 +708,21 @@ defsymbl(sh4_bios_fallback_entry)
   nop
 1:
   mov     r0, r13                 /* helper stopped at BIOS return PC */
+  bra     lookup_pc
+  nop
+
+/* ---- cold-code gate: interpret a chunk of not-yet-hot code ---- */
+defsymbl(sh4_cold_interp_entry)
+  CPSR_FLUSH
+  mov     r13, r4                 /* arg0 = remaining cycles */
+  CALL    cgba_sh4_cold_interp
+  CPSR_RELOAD_R1                  /* the interpreter rewrites CPSR */
+  cmp/pz  r0
+  bt      1f
+  bra     return_to_main          /* frame completed inside */
+  nop
+1:
+  mov     r0, r13
   bra     lookup_pc
   nop
 

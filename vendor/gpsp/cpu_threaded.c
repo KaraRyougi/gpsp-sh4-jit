@@ -2824,6 +2824,17 @@ inline static ramtag_type* get_ram_tag(u16 tagval) {
   pc &= ~0x01                                                                 \
 
 
+#ifdef SH4_ARCH
+#ifndef CGBA_SH4_HOT_THRESHOLD
+#define CGBA_SH4_HOT_THRESHOLD 0   /* cold gate OFF: bring-up incomplete */
+#endif
+extern u8  cgba_hot_count[16384];
+extern int cgba_cold_pending;
+extern int cgba_cold_gate_enable;
+#else
+#define cgba_cold_gate_enable 0
+#endif
+
 #define block_lookup_translate_builder(type)                                  \
 u8 function_cc *block_lookup_translate_##type(u32 pc)                         \
 {                                                                             \
@@ -2884,6 +2895,21 @@ u8 function_cc *block_lookup_translate_##type(u32 pc)                         \
                                                                               \
         blk_offset = bhdr->next_entry;                                        \
         blk_offset_addr = &bhdr->next_entry;                                  \
+      }                                                                       \
+                                                                              \
+      /* Cold-code gate (SH4): only translate ROM blocks that have proven   \
+         hot; colder dispatches interpret a chunk instead (the stub routes   \
+         NULL + cgba_cold_pending to sh4_cold_interp_entry). Enabled only    \
+         for the stub resolvers; translation gates and the single-block     \
+         diff harness translate unconditionally. */                          \
+      if(cgba_cold_gate_enable && pcregion >= 0x8 &&                          \
+         !cgba_dynarec_single_block) {                                        \
+        u32 hot_idx = (key * 2654435761U) >> 18;                              \
+        if(cgba_hot_count[hot_idx] < CGBA_SH4_HOT_THRESHOLD) {                \
+          cgba_hot_count[hot_idx]++;                                          \
+          cgba_cold_pending = 1;                                              \
+          return NULL;                                                        \
+        }                                                                     \
       }                                                                       \
                                                                               \
       { /* Not found, go ahead and translate, and backfill the hash table */  \
@@ -2989,8 +3015,17 @@ u8 function_cc *block_lookup_address_arm(u32 pc)
     return (u8 *)sh4_bios_fallback_entry;
 #endif
   cgba_wj_note(pc);
+#ifdef SH4_ARCH
+  cgba_cold_gate_enable = 1;
+#endif
   for (i = 0; i < 4; i++) {
     u8 *ret = block_lookup_translate_arm(pc);
+#ifdef SH4_ARCH
+    if (cgba_cold_pending) {
+      cgba_cold_gate_enable = 0;
+      return NULL;                /* stub: interpret a cold chunk */
+    }
+#endif
     if (ret) {
 #ifdef SH4_ARCH
       /* An EXECUTED branch resolved to the untranslatable-address sentinel:
@@ -2999,11 +3034,17 @@ u8 function_cc *block_lookup_address_arm(u32 pc)
       if (ret == (u8 *)(~(uintptr_t)0))
         cgba_sh4_wild_jump(pc);
 #endif
+#ifdef SH4_ARCH
+      cgba_cold_gate_enable = 0;
+#endif
       translate_icache_sync();
       return ret;
     }
   }
 
+#ifdef SH4_ARCH
+  cgba_cold_gate_enable = 0;
+#endif
   printf("bad jump %x (%x)\n", pc, reg[REG_PC]);
   fflush(stdout);
   return NULL;
@@ -3021,17 +3062,32 @@ u8 function_cc *block_lookup_address_thumb(u32 pc)
     return (u8 *)sh4_bios_fallback_entry;
 #endif
   cgba_wj_note(pc);
+#ifdef SH4_ARCH
+  cgba_cold_gate_enable = 1;
+#endif
   for (i = 0; i < 4; i++) {
     u8 *ret = block_lookup_translate_thumb(pc);
+#ifdef SH4_ARCH
+    if (cgba_cold_pending) {
+      cgba_cold_gate_enable = 0;
+      return NULL;                /* stub: interpret a cold chunk */
+    }
+#endif
     if (ret) {
 #ifdef SH4_ARCH
       if (ret == (u8 *)(~(uintptr_t)0))   /* see block_lookup_address_arm */
         cgba_sh4_wild_jump(pc);
 #endif
+#ifdef SH4_ARCH
+      cgba_cold_gate_enable = 0;
+#endif
       translate_icache_sync();
       return ret;
     }
   }
+#ifdef SH4_ARCH
+  cgba_cold_gate_enable = 0;
+#endif
   printf("bad jump %x (%x)\n", pc, reg[REG_PC]);
   fflush(stdout);
   return NULL;
@@ -3948,6 +4004,8 @@ void init_dynarec_caches(void)
 {
 #ifdef SH4_ARCH
   cgba_sh4_fastmem_init();     /* resident ldst fast paths (sh4_fastmem.c) */
+  memset(cgba_hot_count, 0, sizeof(cgba_hot_count));
+  cgba_cold_pending = 0;
 #endif
   /* Initialize caches so that we can start initalizing the emitter. */
   rom_translation_ptr = last_rom_translation_ptr = &rom_translation_cache[0];

@@ -158,6 +158,10 @@ CGBA_SH4_DIFF_DUMP_OPS:BOOL=OFF
 // instruction boundary
 CGBA_SH4_EXACT_CYCLE_BOUNDARIES:BOOL=OFF
 
+//Cold-code gate: translate ROM blocks after N dispatches (0 =
+// off; bring-up)
+CGBA_SH4_HOT_THRESHOLD:STRING=0
+
 //Hardware/debug: count SH4 JIT translations, cache flushes, and
 // helper calls for the ON-menu debug page
 CGBA_SH4_PROFILE_COUNTERS:BOOL=OFF
