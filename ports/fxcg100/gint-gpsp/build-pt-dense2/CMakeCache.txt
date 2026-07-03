@@ -64,6 +64,9 @@ CGBA_GPSP_HEADLESS_DYNAREC:STRING=1
 //Number of frames to run in CGBA_GPSP_HEADLESS_TEST
 CGBA_GPSP_HEADLESS_FRAMES:STRING=2600
 
+//Headless: render 1 frame in N+1 (stat frames always render)
+CGBA_GPSP_HEADLESS_FRAMESKIP:STRING=3
+
 //Absolute frame number for the first CGBA_GPSP_HEADLESS_TEST frame
 CGBA_GPSP_HEADLESS_FRAME_BASE:STRING=0
 
