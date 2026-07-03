@@ -14,6 +14,9 @@ extern uint32_t execute_cycles;
 extern uint32_t reg[64];
 #if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
 extern uint32_t cgba_dynarec_rom_flush_count;
+extern uint32_t cgba_sh4_bios_fallback_call_count;
+extern uint32_t cgba_sh4_bios_fallback_cycle_count;
+extern uint32_t cgba_dynarec_cold_interp_count;
 extern uint32_t cgba_dynarec_ram_flush_count;
 extern uint32_t cgba_dynarec_arm_translate_count;
 extern uint32_t cgba_dynarec_thumb_translate_count;
@@ -1052,11 +1055,15 @@ static int cgba_headless_test(uint16_t *framebuffer)
 	#ifdef CGBA_DYNAREC
 	#if CGBA_GPSP_HEADLESS_BENCH_FRAMES > 0
 	snprintf(buf, sizeof buf,
-		"jit stats rom_flush=%lu ram_flush=%lu arm_tx=%lu thumb_tx=%lu",
+		"jit stats rom_flush=%lu ram_flush=%lu arm_tx=%lu thumb_tx=%lu "
+		"bios_n=%lu bios_kc=%lu cold_n=%lu",
 		(unsigned long)cgba_dynarec_rom_flush_count,
 		(unsigned long)cgba_dynarec_ram_flush_count,
 		(unsigned long)cgba_dynarec_arm_translate_count,
-		(unsigned long)cgba_dynarec_thumb_translate_count);
+		(unsigned long)cgba_dynarec_thumb_translate_count,
+		(unsigned long)cgba_sh4_bios_fallback_call_count,
+		(unsigned long)(cgba_sh4_bios_fallback_cycle_count / 1024u),
+		(unsigned long)cgba_dynarec_cold_interp_count);
 	hputs_dbg(buf);
 	snprintf(buf, sizeof buf,
 		"jit helpers arm ldst=%lu blk=%lu dp=%lu mul=%lu psr=%lu swp=%lu",
@@ -1095,11 +1102,15 @@ static int cgba_headless_test(uint16_t *framebuffer)
 		hputs_dbg(lines[i]);
 	#else
 	snprintf(buf, sizeof buf,
-		"jit stats rom_flush=%lu ram_flush=%lu arm_tx=%lu thumb_tx=%lu",
+		"jit stats rom_flush=%lu ram_flush=%lu arm_tx=%lu thumb_tx=%lu "
+		"bios_n=%lu bios_kc=%lu cold_n=%lu",
 		(unsigned long)cgba_dynarec_rom_flush_count,
 		(unsigned long)cgba_dynarec_ram_flush_count,
 		(unsigned long)cgba_dynarec_arm_translate_count,
-		(unsigned long)cgba_dynarec_thumb_translate_count);
+		(unsigned long)cgba_dynarec_thumb_translate_count,
+		(unsigned long)cgba_sh4_bios_fallback_call_count,
+		(unsigned long)(cgba_sh4_bios_fallback_cycle_count / 1024u),
+		(unsigned long)cgba_dynarec_cold_interp_count);
 	hputs_dbg(buf);
 	snprintf(buf, sizeof buf,
 		"jit helpers arm ldst=%lu blk=%lu dp=%lu mul=%lu psr=%lu swp=%lu",
