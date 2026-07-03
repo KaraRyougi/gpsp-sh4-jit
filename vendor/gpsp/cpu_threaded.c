@@ -3937,6 +3937,9 @@ void flush_translation_cache_rom(void)
 
 void init_dynarec_caches(void)
 {
+#ifdef SH4_ARCH
+  cgba_sh4_fastmem_init();     /* resident ldst fast paths (sh4_fastmem.c) */
+#endif
   /* Initialize caches so that we can start initalizing the emitter. */
   rom_translation_ptr = last_rom_translation_ptr = &rom_translation_cache[0];
   memset(rom_branch_hash, 0, sizeof(rom_branch_hash));

@@ -151,6 +151,16 @@ CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen
   /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/sound.h \
   /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/video.h
 
+CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_fastmem.c.obj: /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_fastmem.c \
+  /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/include/stddef.h \
+  /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/include/stdint-gcc.h \
+  /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/include/stdint.h \
+  /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_cache.h \
+  /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_codegen.h \
+  /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_emit_core.h \
+  /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_emit_glue.h \
+  /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_fastmem.h
+
 CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_interp_helpers.c.obj: /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_interp_helpers.c \
   /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/include/stdarg.h \
   /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/include/stdbool.h \
@@ -259,6 +269,7 @@ CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen
   /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_codegen.h \
   /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_emit_core.h \
   /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_emit_glue.h \
+  /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_fastmem.h \
   /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_thumb_block_emit.h \
   /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_thumb_dp_emit.h \
   /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cheats.h \
@@ -507,37 +518,6 @@ CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen
   /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/sound.h \
   /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/video.h
 
-CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/video.cc.obj: /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/video.cc \
-  /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/include/stdarg.h \
-  /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/include/stdbool.h \
-  /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/include/stddef.h \
-  /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/include/stdint-gcc.h \
-  /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/include/stdint.h \
-  /Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/include/bits/confname.h \
-  /Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/include/c++/14.1.0/cstdlib \
-  /Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/include/c++/14.1.0/pstl/pstl_config.h \
-  /Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/include/c++/14.1.0/sh3eb-elf/m4-nofpu/bits/c++config.h \
-  /Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/include/c++/14.1.0/sh3eb-elf/m4-nofpu/bits/cpu_defines.h \
-  /Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/include/c++/14.1.0/sh3eb-elf/m4-nofpu/bits/os_defines.h \
-  /Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/include/c++/14.1.0/stdlib.h \
-  /Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/include/stdio.h \
-  /Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/include/string.h \
-  /Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/include/sys/types.h \
-  /Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/include/time.h \
-  /Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/include/unistd.h \
-  /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/libretro.h \
-  /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cheats.h \
-  /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/common.h \
-  /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cpu.h \
-  /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/gba_memory.h \
-  /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/gpsp_config.h \
-  /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/input.h \
-  /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/main.h \
-  /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/savestate.h \
-  /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/serial.h \
-  /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/sound.h \
-  /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/video.h
-
 CMakeFiles/cgba-gint-gpsp.dir/src/crash_panic.c.obj: /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/src/crash_panic.c \
   /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/include/stdarg.h \
   /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/include/stdbool.h \
@@ -763,12 +743,6 @@ CMakeFiles/cgba-gint-gpsp.dir/src/nor_rom.c.obj: /Users/ryougi/Documents/cgba/.c
 
 /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_thumb_block_emit.h:
 
-/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_platform.h:
-
-/Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/include/gint/rtc.h:
-
-/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_emit_glue.h:
-
 /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_diff_harness.h:
 
 /Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/include/ctype.h:
@@ -813,6 +787,14 @@ CMakeFiles/cgba-gint-gpsp.dir/src/nor_rom.c.obj: /Users/ryougi/Documents/cgba/.c
 
 /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_interp_helpers.c:
 
+/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_fastmem.h:
+
+/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_platform.h:
+
+/Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/include/gint/rtc.h:
+
+/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_emit_glue.h:
+
 /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/libretro/libretro-common/include/boolean.h:
 
 /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/src/gint_platform.c:
@@ -836,8 +818,6 @@ CMakeFiles/cgba-gint-gpsp.dir/src/nor_rom.c.obj: /Users/ryougi/Documents/cgba/.c
 /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/libretro/libretro-common/include/vfs/vfs.h:
 
 /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/serial.h:
-
-/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/video.cc:
 
 /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/src/no_osheap.c:
 
@@ -879,6 +859,12 @@ CMakeFiles/cgba-gint-gpsp.dir/src/nor_rom.c.obj: /Users/ryougi/Documents/cgba/.c
 
 /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/libretro/libretro-common/include/retro_environment.h:
 
+/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_diff_harness.c:
+
+/Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/include/stdio.h:
+
+/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_fastmem.c:
+
 /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/src/main.c:
 
 /Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/include/gint/defs/types.h:
@@ -904,10 +890,6 @@ CMakeFiles/cgba-gint-gpsp.dir/src/nor_rom.c.obj: /Users/ryougi/Documents/cgba/.c
 /Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/include/gint/defs/attributes.h:
 
 /Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/include/unistd.h:
-
-/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_diff_harness.c:
-
-/Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/include/stdio.h:
 
 /Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/include/gint/gint.h:
 

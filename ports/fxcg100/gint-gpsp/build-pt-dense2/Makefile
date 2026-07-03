@@ -297,6 +297,30 @@ Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/s
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_dynarec_state.c.s
 .PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_dynarec_state.c.s
 
+Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_fastmem.obj: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_fastmem.c.obj
+.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_fastmem.obj
+
+# target to build an object file
+Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_fastmem.c.obj:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_fastmem.c.obj
+.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_fastmem.c.obj
+
+Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_fastmem.i: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_fastmem.c.i
+.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_fastmem.i
+
+# target to preprocess a source file
+Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_fastmem.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_fastmem.c.i
+.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_fastmem.c.i
+
+Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_fastmem.s: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_fastmem.c.s
+.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_fastmem.s
+
+# target to generate assembly for a file
+Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_fastmem.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_fastmem.c.s
+.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_fastmem.c.s
+
 Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_interp_helpers.obj: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_interp_helpers.c.obj
 .PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_interp_helpers.obj
 
@@ -871,6 +895,9 @@ help:
 	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_dynarec_state.obj"
 	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_dynarec_state.i"
 	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_dynarec_state.s"
+	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_fastmem.obj"
+	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_fastmem.i"
+	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_fastmem.s"
 	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_interp_helpers.obj"
 	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_interp_helpers.i"
 	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_interp_helpers.s"
