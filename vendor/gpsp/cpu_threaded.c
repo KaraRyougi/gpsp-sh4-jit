@@ -3708,8 +3708,44 @@ bool translate_block_arm(u32 pc, bool ram_region)
     branch_target = external_block_exits[i].branch_target;
     if(branch_target == 0x00000008)
       translation_target = bios_swi_entrypoint;
-    else
+    else {
+#ifdef SH4_ARCH
+      /* BIOS targets must keep dispatching through block_lookup_address so
+         they hit sh4_bios_fallback_entry — translating BIOS natively here
+         would bypass the fallback the port relies on. */
+      if (branch_target < 0x00004000u)
+        continue;
+#endif
       translation_target = block_lookup_translate_arm(branch_target);
+    }
+#ifdef SH4_ARCH
+    if (translation_target == (u8 *)(~(uintptr_t)0)) {
+      /* Untranslatable-address sentinel: dispatch traps it loudly via
+         cgba_sh4_wild_jump if the branch is ever taken; hard-patching it
+         would jump to host 0xFFFFFFFF with no diagnostics. */
+      continue;
+    }
+    if (!translation_target && cgba_cold_pending) {
+      /* Cold-gate target: leave the exit unpatched — it keeps dispatching
+         through sh4_block_exit and the gate decides later. Treating this
+         as translate-failure wholesale-flushed the cache in a loop. */
+      cgba_cold_pending = 0;
+      continue;
+    }
+    if (translation_target && branch_target != 0x00000008) {
+      /* Never chain across caches: flush_translation_cache_ram leaves the
+         ROM cache in place (and vice versa), so a cross-cache direct chain
+         dangles into freed memory once the other side flushes — EXC=180 at
+         a host PC inside the arena, long after the flush (field crash with
+         RAM=102k churn). Cross-cache branches keep dispatching through
+         sh4_block_exit. */
+      int tgt_ram = ((u8 *)translation_target >= ram_translation_cache &&
+                     (u8 *)translation_target <
+                       ram_translation_cache + RAM_TRANSLATION_CACHE_SIZE);
+      if ((ram_region != 0) != tgt_ram)
+        continue;
+    }
+#endif
     if (!translation_target)
       return false;
     generate_branch_patch_unconditional(
@@ -3916,8 +3952,44 @@ bool translate_block_thumb(u32 pc, bool ram_region)
     branch_target = external_block_exits[i].branch_target;
     if(branch_target == 0x00000008)
       translation_target = bios_swi_entrypoint;
-    else
+    else {
+#ifdef SH4_ARCH
+      /* BIOS targets must keep dispatching through block_lookup_address so
+         they hit sh4_bios_fallback_entry — translating BIOS natively here
+         would bypass the fallback the port relies on. */
+      if (branch_target < 0x00004000u)
+        continue;
+#endif
       translation_target = block_lookup_translate_thumb(branch_target);
+    }
+#ifdef SH4_ARCH
+    if (translation_target == (u8 *)(~(uintptr_t)0)) {
+      /* Untranslatable-address sentinel: dispatch traps it loudly via
+         cgba_sh4_wild_jump if the branch is ever taken; hard-patching it
+         would jump to host 0xFFFFFFFF with no diagnostics. */
+      continue;
+    }
+    if (!translation_target && cgba_cold_pending) {
+      /* Cold-gate target: leave the exit unpatched — it keeps dispatching
+         through sh4_block_exit and the gate decides later. Treating this
+         as translate-failure wholesale-flushed the cache in a loop. */
+      cgba_cold_pending = 0;
+      continue;
+    }
+    if (translation_target && branch_target != 0x00000008) {
+      /* Never chain across caches: flush_translation_cache_ram leaves the
+         ROM cache in place (and vice versa), so a cross-cache direct chain
+         dangles into freed memory once the other side flushes — EXC=180 at
+         a host PC inside the arena, long after the flush (field crash with
+         RAM=102k churn). Cross-cache branches keep dispatching through
+         sh4_block_exit. */
+      int tgt_ram = ((u8 *)translation_target >= ram_translation_cache &&
+                     (u8 *)translation_target <
+                       ram_translation_cache + RAM_TRANSLATION_CACHE_SIZE);
+      if ((ram_region != 0) != tgt_ram)
+        continue;
+    }
+#endif
     if (!translation_target)
       return false;
     generate_branch_patch_unconditional(

@@ -359,6 +359,17 @@ static void show_diag_overlay(void)
 #define CGBA_GPSP_HEADLESS_FRAMESKIP 3u
 #endif
 
+/* In-world movement (user recipe): from RUN_FRAME on, hold LEFT so the
+ * character actually runs through rooms instead of standing at the ship,
+ * flipping direction every RUN_FLIP frames to bounce between walls; the
+ * A-press cadence keeps firing/confirming on top. 0 = off. */
+#ifndef CGBA_GPSP_HEADLESS_RUN_FRAME
+#define CGBA_GPSP_HEADLESS_RUN_FRAME 0u
+#endif
+#ifndef CGBA_GPSP_HEADLESS_RUN_FLIP
+#define CGBA_GPSP_HEADLESS_RUN_FLIP 900u
+#endif
+
 #ifndef CGBA_GPSP_HEADLESS_STATE_EVERY
 #define CGBA_GPSP_HEADLESS_STATE_EVERY 0u
 #endif
@@ -846,6 +857,14 @@ static uint32_t headless_buttons_for_frame(unsigned frame)
 		buttons |= FXCG100_GBA_BUTTON_START;
 	if(headless_a_down(frame))
 		buttons |= FXCG100_GBA_BUTTON_A;
+#if CGBA_GPSP_HEADLESS_RUN_FRAME > 0
+	if(frame >= (unsigned)CGBA_GPSP_HEADLESS_RUN_FRAME) {
+		unsigned phase = (frame - (unsigned)CGBA_GPSP_HEADLESS_RUN_FRAME) /
+			(unsigned)CGBA_GPSP_HEADLESS_RUN_FLIP;
+		buttons |= (phase & 1) ? FXCG100_GBA_BUTTON_RIGHT
+			: FXCG100_GBA_BUTTON_LEFT;
+	}
+#endif
 
 	return buttons;
 }
