@@ -79,7 +79,7 @@ void sh4_indirect_branch_thumb(u32 address)
 void sh4_op2_pc_mem_tramp(void)
 {
 }
-u8 *cgba_sh4_fastmem_routine[CGBA_FM_COUNT];
+u8 *cgba_sh4_fastmem_routine[CGBA_FM_TOTAL];
 
 static _Alignas(32) u8 code[4096];
 static int fail;

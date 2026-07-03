@@ -27,6 +27,7 @@
  */
 
 #include "ports/fxcg100/sh4/sh4_emit_glue.h"
+#include "ports/fxcg100/sh4/sh4_fastmem.h"
 
 extern u8 *memory_map_read[];                 /* gba_memory.c host-page table */
 int  cgba_sh4_arm_block(u32 opcode, u32 pc);  /* C oracle / slow path */
@@ -78,6 +79,31 @@ static inline int sh4g_arm_block_native(u8 **tp, u32 opcode, u32 pc,
   offset_a  = up ? (pre ? 4 : 0) : (pre ? -(int)(count * 4) : -(int)(count * 4) + 4);
   offset_nb = up ? (int)(count * 4) : -(int)(count * 4);
   do_wb = writeback && !(rlist & (1u << rn));
+
+  if (count >= CGBA_SH4_FASTMEM_BLOCK_MIN) {
+    /* Out-of-line fast path (sh4_fastmem.h): the shared runtime-rlist block
+     * routine replaces the unrolled inline body — the last inline-fat site
+     * class behind the formal-gameplay translation thrash. Sites: A calc +
+     * a 36-byte tuple call. Small lists stay unrolled below (faster, and
+     * already small). */
+    int fm = (is_load ? CGBA_FMB_LDM : CGBA_FMB_STM) + (do_wb ? 2 : 0);
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_load_greg(&cg, rn, SH4_REG_T0);
+      if (do_wb) {
+        sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_ARG2);
+        sh4_emit_add_imm(&cg, offset_nb, SH4_REG_ARG2);  /* R6 = wb base */
+      }
+      sh4_emit_shlr2(&cg, SH4_REG_T0);                   /* R1 = A */
+      sh4_emit_shll2(&cg, SH4_REG_T0);
+      sh4_emit_add_imm(&cg, offset_a, SH4_REG_T0);
+      sh4g_close(tp, &cg); }
+    sh4g_fastmem_site_raw(tp, cgba_sh4_fastmem_routine[fm],
+                          (const void *)cgba_sh4_arm_block, (u32)opcode,
+                          (u32)pc, cycle_count,
+                          sh4g_fastmem_block_params(rlist, count,
+                                                    do_wb ? (int)rn : -1));
+    return 1;
+  }
 
   /* base = reg[rn] in R1; A = (base & ~3) + offset_a in R5 */
   { sh4_codegen cg = sh4g_open(tp);

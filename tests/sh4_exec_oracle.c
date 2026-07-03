@@ -37,6 +37,7 @@ typedef uint64_t u64;
 u32 reg[64];
 u16 io_registers[512];
 u8 *memory_map_read[8192];
+u8 iwram[0x10000];                 /* gpSP global (push_iwram fast path) */
 u8 ws_cyc_seq[16][2], ws_cyc_nseq[16][2];
 u32 cgba_sh4_native_thumb_const_io_count, cgba_sh4_native_thumb_runtime_io_count;
 int cgba_sh4_extra_cycles;
@@ -48,13 +49,23 @@ void sh4_helper_exit(u32 pc){(void)pc;}
 void sh4_op2_pc_mem_tramp(void){}
 void sh4_op2_pc_tramp(void){}
 void sh4_op2_tramp(void){}
+void sh4_indirect_branch_thumb(u32 a){(void)a;}
+void sh4_pc_redispatch(u32 pc){(void)pc;}
+void sh4_update_gba(u32 pc){(void)pc;}
 void sh4_op2_mem_tramp(void){}
 void sh4_headless_trace_op(char k, u32 pc, u32 op){(void)k;(void)pc;(void)op;}
 
 #include "ports/fxcg100/sh4/sh4_thumb_dp_emit.h"
 #include "ports/fxcg100/sh4/sh4_arm_ldst_emit.h"
+int cgba_sh4_arm_block(u32 o, u32 p);
+int cgba_sh4_thumb_block(u32 o, u32 p);
+int cgba_sh4_arm_block(u32 o, u32 p){(void)o;(void)p;return 0;}
+int cgba_sh4_thumb_block(u32 o, u32 p){(void)o;(void)p;return 0;}
+u32 cgba_sh4_native_thumb_push_iwram_count2;
+#include "ports/fxcg100/sh4/sh4_arm_block_emit.h"
+#include "ports/fxcg100/sh4/sh4_thumb_block_emit.h"
 
-u8 *cgba_sh4_fastmem_routine[CGBA_FM_COUNT];
+u8 *cgba_sh4_fastmem_routine[CGBA_FM_TOTAL];
 
 /* ---- guest state used by the interpreter ---- */
 static u32 g_reg[64];
@@ -228,6 +239,7 @@ static int run_at(u32 pc, u32 pc_end)
     else if ((op & 0xF00F) == 0x0007) MACL = R[nn] * R[mm];
     else if ((op & 0xF0FF) == 0x001A) R[nn] = MACL;
     else if ((op & 0xF0FF) == 0x0029) R[nn] = (u32)T;
+    else if ((op & 0xF0FF) == 0x4010) { R[nn] -= 1; T = (R[nn] == 0); }  /* DT */
     else if ((op & 0xF00F) == 0x400C) {
       s32 sh = (s32)R[mm];
       if (sh >= 0)               R[nn] <<= (sh & 0x1F);
@@ -869,7 +881,7 @@ int main(void)
   /* ---- fastmem: real sites calling real routines over a modeled map ---- */
   {
     static u8 fm_buf[8192];
-    static u8 iwram[0x10000];    /* tags 0..0x7FFF, data 0x8000.. */
+    static u8 giwram[0x10000];   /* tags 0..0x7FFF, data 0x8000.. */
     static u8 ewram[0x48000];    /* data page 0, tag mirror at +0x40000 */
     static u8 vram[0x8000];
     static u8 rom[0x8000];
@@ -878,23 +890,25 @@ int main(void)
 
     for (int fm = 0; fm < CGBA_FM_COUNT; fm++)
       cgba_sh4_fastmem_routine[fm] = sh4g_fastmem_emit_routine(&tp, fm);
+    for (int fm = CGBA_FMB_LDM; fm < CGBA_FM_TOTAL; fm++)
+      cgba_sh4_fastmem_routine[fm] = sh4g_fastmem_emit_block_routine(&tp, fm);
 
     memset(memory_map_read, 0, sizeof memory_map_read);
     memory_map_read[0x02000000u >> 15] = ewram;
-    memory_map_read[0x03000000u >> 15] = iwram + 0x8000;
+    memory_map_read[0x03000000u >> 15] = giwram + 0x8000;
     memory_map_read[0x04000000u >> 15] = (u8 *)io_registers;
     memory_map_read[0x06000000u >> 15] = vram;
     memory_map_read[0x08000000u >> 15] = rom;
 
     for (unsigned i = 0; i < sizeof rom; i++)   rom[i]   = (u8)(0x11 + i * 7);
     for (unsigned i = 0; i < 0x8000; i++) {
-      iwram[0x8000 + i] = (u8)(0x23 + i * 3);
+      giwram[0x8000 + i] = (u8)(0x23 + i * 3);
       ewram[i]          = (u8)(0x35 + i * 5);
       vram[i]           = (u8)(0x47 + i * 11);
     }
     for (unsigned i = 0x1230; i < 0x1260; i++)  /* SMC tag range: covers the
         pre/post/reg-offset effective addresses of the smc targets */
-      iwram[i] = 1;
+      giwram[i] = 1;
     for (unsigned i = 0x2330; i < 0x2360; i++)
       ewram[0x40000 + i] = 1;
 
@@ -965,7 +979,7 @@ int main(void)
           u8 mem_before[8]; const u8 *page = NULL; u32 poff = 0;
           u32 reg = eff >> 24;
           if (reg == 2) { page = ewram; poff = eff & 0x7FFF; }
-          else if (reg == 3) { page = iwram + 0x8000; poff = eff & 0x7FFF; }
+          else if (reg == 3) { page = giwram + 0x8000; poff = eff & 0x7FFF; }
           else if (reg == 6) { page = vram; poff = eff & 0x7FFF; }
           if (page) memcpy(mem_before, page + poff, 4);
 
@@ -974,7 +988,7 @@ int main(void)
           orc_add_window(fm_buf, sizeof fm_buf, 0);
           orc_add_window(io_registers, sizeof io_registers, 0);
           orc_add_window(memory_map_read, 8192 * 4, 1);
-          orc_add_window(iwram, sizeof iwram, 0);
+          orc_add_window(giwram, sizeof giwram, 0);
           orc_add_window(ewram, sizeof ewram, 0);
           orc_add_window(vram, sizeof vram, 0);
           orc_add_window(rom, sizeof rom, 0);
@@ -1104,7 +1118,7 @@ int main(void)
         u32 reg_off = (tforms[fi].op & 0xF000u) == 0x5000u;
         u32 eff = base + 0x10;
         u32 regn = eff >> 24;
-        const u8 *page = (regn == 2) ? ewram : (regn == 3) ? iwram + 0x8000
+        const u8 *page = (regn == 2) ? ewram : (regn == 3) ? giwram + 0x8000
                        : (regn == 6) ? vram : rom;
         u32 poff = eff & 0x7FFF;
         u8 mem_before[4];
@@ -1130,7 +1144,7 @@ int main(void)
         orc_add_window(fm_buf, sizeof fm_buf, 0);
         orc_add_window(io_registers, sizeof io_registers, 0);
         orc_add_window(memory_map_read, 8192 * 4, 1);
-        orc_add_window(iwram, sizeof iwram, 0);
+        orc_add_window(giwram, sizeof giwram, 0);
         orc_add_window(ewram, sizeof ewram, 0);
         orc_add_window(vram, sizeof vram, 0);
         orc_add_window(rom, sizeof rom, 0);
@@ -1188,6 +1202,165 @@ int main(void)
           }
         }
         (void)reg_off;
+      }
+  }
+
+  /* ---- fastmem: block transfers through the runtime-rlist routines ---- */
+  {
+    struct bf { u32 op; int is_arm; const char *nm; } bforms[] = {
+      { 0xE8B20039u, 1, "ldmia r2!,{r0,r3-r5}" },
+      { 0xE8920039u, 1, "ldmia r2,{r0,r3-r5}"  },
+      { 0xE8A200F0u, 1, "stmia r2!,{r4-r7}"    },
+      { 0xE92200F0u, 1, "stmdb r2!,{r4-r7}"    },
+      { 0xE9320039u, 1, "ldmdb r2!,{r0,r3-r5}" },
+      { 0x0000B407u, 0, "push {r0-r2}"         },
+      { 0x0000B507u, 0, "push {r0-r2,lr}"      },
+      { 0x0000BC07u, 0, "pop  {r0-r2}"         },
+      { 0x0000C11Cu, 0, "stmia r1!,{r2-r4}"    },
+      { 0x0000C91Cu, 0, "ldmia r1!,{r2-r4}"    },
+      { 0x0000C916u, 0, "ldmia r1!,{r1,r2,r4}" },
+    };
+    struct bt2 { u32 base; int slow_ld; int slow_st; const char *nm; } btgts[] = {
+      { 0x03000200u, 0, 0, "iwram" },
+      { 0x02000300u, 0, 0, "ewram" },
+      { 0x06000400u, 0, 0, "vram" },
+      { 0x08000500u, 0, 1, "rom" },
+      { 0x00000100u, 1, 1, "bios" },
+      { 0x03000203u, 1, 1, "unaligned" },
+      { 0x03007FF8u, 1, 1, "straddle" },
+      { 0x03001240u, 0, 1, "iwram-smc" },
+    };
+    for (unsigned fi = 0; fi < sizeof bforms / sizeof *bforms; fi++)
+      for (unsigned ti = 0; ti < sizeof btgts / sizeof *btgts; ti++) {
+        static u8 sbuf[1024];
+        u8 *sp = sbuf;
+        u32 op = bforms[fi].op;
+        int is_arm = bforms[fi].is_arm;
+        u32 rlist, base_reg, is_load, wb, pre, up_, count = 0, lrbit = 0;
+        u32 base = btgts[ti].base;
+
+        if (is_arm) {
+          rlist = op & 0xFFFF; base_reg = (op >> 16) & 0xF;
+          is_load = (op >> 20) & 1; wb = (op >> 21) & 1;
+          pre = (op >> 24) & 1; up_ = (op >> 23) & 1;
+        } else {
+          u32 hi2 = (op >> 8) & 0xFF;
+          rlist = op & 0xFF;
+          if (hi2 == 0xB4 || hi2 == 0xB5) { base_reg = 13; is_load = 0; pre = 0; up_ = 0; wb = 1; lrbit = (hi2 == 0xB5); }
+          else if (hi2 == 0xBC) { base_reg = 13; is_load = 1; pre = 0; up_ = 1; wb = 1; }
+          else { base_reg = (op >> 8) & 7; is_load = (op >> 11) & 1; pre = 0; up_ = 1; wb = 1; }
+        }
+        for (int b = 0; b < 16; b++) if (rlist & (1u << b)) count++;
+        if (lrbit) { count++; rlist |= 1u << 14; }
+
+        u32 A, wbv;
+        if (is_arm) {
+          int offa = up_ ? (pre ? 4 : 0) : (pre ? -(int)(count*4) : -(int)(count*4) + 4);
+          A = (base & ~3u) + (u32)offa;
+          wbv = up_ ? base + count*4 : base - count*4;
+        } else if (base_reg == 13 && !is_load) {   /* push */
+          A = base - count*4; wbv = A;
+        } else {                                    /* pop / (ld/st)mia */
+          A = base; wbv = base + count*4;
+        }
+        int ldm_base_in_list = is_load && !is_arm && base_reg < 8 &&
+                               (rlist & (1u << base_reg));
+        int do_wb = wb && !(is_arm && wb && (rlist & (1u << base_reg)) && !is_load)
+                       && !(is_arm && is_load && (rlist & (1u << base_reg)))
+                       && !ldm_base_in_list;
+
+        memset(g_reg, 0, sizeof g_reg);
+        for (int i = 0; i < 16; i++) g_reg[i] = 0x33000000u + ((u32)i << 8);
+        g_reg[SH4_GREG_CPSR] = 0x2000001Fu;
+        g_reg[base_reg] = base;
+
+        int emitted = is_arm
+          ? sh4g_arm_block_native(&sp, op, pc, 0)
+          : sh4g_thumb_block_native(&sp, op, pc, 0);
+        if (!emitted) {
+          printf("FAIL bfm emit reject %s\n", bforms[fi].nm);
+          fails++;
+          continue;
+        }
+        cases++;
+
+        u8 mem_before[64]; const u8 *page = NULL; u32 poff = 0;
+        u32 regn = A >> 24;
+        if (regn == 2) { page = ewram; poff = A & 0x7FFF; }
+        else if (regn == 3) { page = giwram + 0x8000; poff = A & 0x7FFF; }
+        else if (regn == 6) { page = vram; poff = A & 0x7FFF; }
+        else if (regn == 8) { page = rom; poff = A & 0x7FFF; }
+        if (page && poff + count*4 <= 0x8000) memcpy(mem_before, page + poff, count*4);
+
+        orc_reset_windows();
+        orc_add_window(sbuf, sizeof sbuf, 0);
+        orc_add_window(fm_buf, sizeof fm_buf, 0);
+        orc_add_window(io_registers, sizeof io_registers, 0);
+        orc_add_window(memory_map_read, 8192 * 4, 1);
+        orc_add_window(giwram, sizeof giwram, 0);
+        orc_add_window(ewram, sizeof ewram, 0);
+        orc_add_window(vram, sizeof vram, 0);
+        orc_add_window(rom, sizeof rom, 0);
+        orc_add_window(ws_cyc_seq, sizeof ws_cyc_seq, 0);
+        orc_add_window(ws_cyc_nseq, sizeof ws_cyc_nseq, 0);
+        orc_slow_target = (u32)(uintptr_t)sh4_op2_pc_mem_tramp;
+        orc_slow_target2 = (u32)(uintptr_t)sh4_op2_pc_tramp;
+
+        int ran = run_at((u32)(uintptr_t)sbuf, (u32)(uintptr_t)sbuf + (u32)(sp - sbuf));
+        int slow = (!ran && orc_took_slow);
+        int want_slow = is_load ? btgts[ti].slow_ld : btgts[ti].slow_st;
+        if (regn == 6 && !is_load) want_slow = 0;    /* vram word stores ok */
+        if (ti == 5)                                 /* unaligned: ARM masks */
+          want_slow = !is_arm;
+        if (ti == 6)                                 /* straddle: form-dependent */
+          want_slow = ((A >> 15) != ((A + count*4 - 1) >> 15));
+        if (!ran && !slow) {
+          printf("FAIL bfm %s @%s: interpreter: %s\n",
+                 bforms[fi].nm, btgts[ti].nm, unmodeled);
+          fails++;
+          goto brestore;
+        }
+        if (slow != want_slow) {
+          printf("FAIL bfm %s @%s: slow=%d want %d\n",
+                 bforms[fi].nm, btgts[ti].nm, slow, want_slow);
+          fails++;
+          goto brestore;
+        }
+        if (!slow) {
+          u32 off2 = poff, gi2 = 0;
+          for (int b = 0; b < 16; b++) {
+            if (!(rlist & (1u << b))) continue;
+            if (is_load) {
+              u32 lev = page[off2] | ((u32)page[off2+1] << 8) |
+                        ((u32)page[off2+2] << 16) | ((u32)page[off2+3] << 24);
+              if (g_reg[b] != lev) {
+                printf("FAIL bfm %s @%s: r%d=%08X want %08X\n",
+                       bforms[fi].nm, btgts[ti].nm, b, g_reg[b], lev);
+                fails++; goto brestore;
+              }
+            } else {
+              u32 v = (b == (int)base_reg) ? base : 0x33000000u | ((u32)b << 8);
+              u8 want[4] = { (u8)v, (u8)(v>>8), (u8)(v>>16), (u8)(v>>24) };
+              if (memcmp(page + off2, want, 4) != 0) {
+                printf("FAIL bfm %s @%s: mem[%u] mismatch\n",
+                       bforms[fi].nm, btgts[ti].nm, gi2);
+                fails++; goto brestore;
+              }
+            }
+            off2 += 4; gi2++;
+          }
+          u32 want_base = do_wb ? wbv : base;
+          if (is_load && (rlist & (1u << base_reg)))
+            want_base = g_reg[base_reg];             /* loaded value wins */
+          if (g_reg[base_reg] != want_base) {
+            printf("FAIL bfm %s @%s: base=%08X want %08X\n",
+                   bforms[fi].nm, btgts[ti].nm, g_reg[base_reg], want_base);
+            fails++;
+          }
+        }
+      brestore:
+        if (page && !is_load && poff + count*4 <= 0x8000)
+          memcpy((void *)(page + poff), mem_before, count*4);
       }
   }
   }

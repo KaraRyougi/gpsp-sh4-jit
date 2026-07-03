@@ -11,6 +11,7 @@
  */
 
 #include "ports/fxcg100/sh4/sh4_emit_glue.h"
+#include "ports/fxcg100/sh4/sh4_fastmem.h"
 
 extern u8 *memory_map_read[];
 extern u8 iwram[];
@@ -181,6 +182,32 @@ static inline int sh4g_thumb_block_native(u8 **tp, u32 opcode, u32 pc,
     if (rlist & (1u << i)) count++;
   if (load_pc || push_lr) count++;
   if (count == 0) return 0;
+
+  if (count >= CGBA_SH4_FASTMEM_BLOCK_MIN && !load_pc) {
+    /* Out-of-line fast path (sh4_fastmem.h). PUSH{..,lr} maps LR to rlist
+     * bit 14; POP{..,pc} keeps the inline path (its dispatch tail).
+     * LDMIA with the base in the list keeps the loaded value (no wb). */
+    u32 rlist16 = rlist | (push_lr ? (1u << 14) : 0);
+    int do_wb = !(is_load && !is_push && (rlist & (1u << base_reg)) &&
+                  hi >= 0xC0);
+    int off_nb = is_push ? -(int)(count * 4) : (int)(count * 4);
+    int fm = (is_load ? CGBA_FMB_LDM : CGBA_FMB_STM) + (do_wb ? 2 : 0);
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_load_greg(&cg, base_reg, SH4_REG_T0);
+      if (do_wb) {
+        sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_ARG2);
+        sh4_emit_add_imm(&cg, off_nb, SH4_REG_ARG2);   /* R6 = wb base */
+      }
+      if (is_push)
+        sh4_emit_add_imm(&cg, -(int)(count * 4), SH4_REG_T0);  /* R1 = A */
+      sh4g_close(tp, &cg); }
+    sh4g_fastmem_site_raw(tp, cgba_sh4_fastmem_routine[fm],
+                          (const void *)cgba_sh4_thumb_block, (u32)opcode,
+                          (u32)pc, cycle_count,
+                          sh4g_fastmem_block_params(rlist16, count,
+                                                    do_wb ? (int)base_reg : -1));
+    return 1;
+  }
 
   /* R1 = original base, R5 = first transfer address. PUSH starts below SP. */
   { sh4_codegen cg = sh4g_open(tp);

@@ -1494,10 +1494,18 @@ s32 cgba_diff_stop_cycles_remaining;
  * wrapper -> the GAME's handler), not just SWI calls with a known LR: without
  * it every VBlank/HBlank IRQ interpreted the whole rest of the frame. */
 int cgba_diff_stop_on_bios_exit;
+/* Budget mode: return the moment the running budget goes non-positive —
+ * lets the SH4 cold-code gate interpret small chunks of not-yet-hot code
+ * without translating it (see cgba_sh4_cold_interp). */
+int cgba_diff_stop_on_budget;
 }
 #define CGBA_DIFF_STOP_CHECK()                                                \
   do { if(cgba_diff_stop_active) {                                            \
-         if(cgba_diff_stop_on_bios_exit) {                                    \
+         if(cgba_diff_stop_on_budget) {                                       \
+           if(cycles_remaining <= 0) {                                        \
+             cgba_diff_stop_cycles_remaining = cycles_remaining; return;      \
+           }                                                                  \
+         } else if(cgba_diff_stop_on_bios_exit) {                             \
            if(reg[REG_PC] >= 0x00004000u) {                                   \
              cgba_diff_stop_cycles_remaining = cycles_remaining; return;      \
            }                                                                  \
@@ -1544,7 +1552,17 @@ void execute_arm(u32 cycles)
   {
     /* Do not execute until CPU is active */
     if (reg[CPU_HALT_STATE] != CPU_ACTIVE) {
-       u32 ret = update_gba(cycles_remaining);
+       u32 ret;
+#if defined(CGBA_DYNAREC)
+       if (cgba_diff_stop_active && cgba_diff_stop_on_budget) {
+          /* budget chunk (cold-code gate): hand halts back to the caller —
+           * event processing belongs to the JIT's sleep loop, not to an
+           * interpreted chunk (it would swallow the whole frame here). */
+          cgba_diff_stop_cycles_remaining = cycles_remaining;
+          return;
+       }
+#endif
+       ret = update_gba(cycles_remaining);
        if (completed_frame(ret))
           return;
 
@@ -3135,6 +3153,12 @@ skip_instruction:
     } while(cycles_remaining > 0);
 
     collapse_flags();
+#if defined(CGBA_DYNAREC)
+    if (cgba_diff_stop_active && cgba_diff_stop_on_budget) {
+       cgba_diff_stop_cycles_remaining = cycles_remaining;
+       return;                       /* budget chunk: never refill the slice */
+    }
+#endif
     update_ret = update_gba(cycles_remaining);
     if (completed_frame(update_ret))
        return;
@@ -3631,6 +3655,12 @@ thumb_loop:
     } while(cycles_remaining > 0);
 
     collapse_flags();
+#if defined(CGBA_DYNAREC)
+    if (cgba_diff_stop_active && cgba_diff_stop_on_budget) {
+       cgba_diff_stop_cycles_remaining = cycles_remaining;
+       return;                       /* budget chunk: never refill the slice */
+    }
+#endif
     update_ret = update_gba(cycles_remaining);
     if (completed_frame(update_ret))
        return;

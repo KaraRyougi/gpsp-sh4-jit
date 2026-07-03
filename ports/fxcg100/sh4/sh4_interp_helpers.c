@@ -25,6 +25,25 @@ extern u32 cgba_diff_stop_pc;
 extern int cgba_diff_stop_active;
 extern int cgba_diff_stop_skip_initial;
 extern s32 cgba_diff_stop_cycles_remaining;
+extern int cgba_diff_stop_on_budget;
+
+/* Cold-code gate: ROM blocks are only translated once dispatched this many
+ * times; colder code runs on the interpreter in small budget chunks. The
+ * in-world Metroid working set (~thousands of live blocks) can never fit the
+ * 896KB ROM cache, so unconditional translation wholesale-flushes ~1.3x per
+ * FRAME (profiled: 95% of the slow regime was translate_block_thumb + the
+ * emitters). Hotness survives flushes, so after warmup only the hot set is
+ * cached and the flush cycle stops. Collisions in the counter hash only
+ * pre-heat a block — harmless. */
+#ifndef CGBA_SH4_HOT_THRESHOLD
+#define CGBA_SH4_HOT_THRESHOLD 0   /* cold gate OFF: bring-up incomplete */
+#endif
+u8  cgba_hot_count[16384];
+int cgba_cold_pending;
+int cgba_cold_gate_enable;
+#if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
+u32 cgba_dynarec_cold_interp_count;
+#endif
 extern int cgba_diff_stop_on_bios_exit;
 
 #if defined(CGBA_GPSP_HEADLESS_TEST) && CGBA_GPSP_HEADLESS_TRACE_PC != 0
@@ -1170,6 +1189,52 @@ u32 cgba_sh4_bios_fallback(u32 cycles)
     return (u32)remaining;
   }
   return 0x80000000u;                    /* frame completed inside the BIOS */
+}
+
+/* Interpret a small chunk of not-yet-hot code (cold-code gate). Entered from
+ * sh4_cold_interp_entry with R4 = remaining JIT cycles; same return contract
+ * as the BIOS fallback: new cycle budget, or 0x80000000 when the frame
+ * completed inside the interpreter. */
+u32 cgba_sh4_cold_interp(u32 cycles)
+{
+  s32 budget = (s32)cycles;
+  s32 chunk = budget < 128 ? budget : 128;
+  s32 sentinel = (s32)0x7FFFFFFF;
+  s32 used;
+
+  if (chunk <= 0)
+    chunk = 1;                           /* always make forward progress */
+#if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
+  cgba_dynarec_cold_interp_count++;
+#endif
+  cgba_diff_stop_on_budget = 1;
+  cgba_diff_stop_active = 1;
+  cgba_diff_stop_skip_initial = 0;
+  cgba_diff_stop_cycles_remaining = sentinel;
+  execute_arm((u32)chunk);
+  cgba_diff_stop_active = 0;
+  cgba_diff_stop_on_budget = 0;
+
+  if (cgba_diff_stop_cycles_remaining == sentinel)
+    return 0x80000000u;                  /* frame completed inside (cannot
+                                            happen with the hard stops, but
+                                            keep the safe interpretation) */
+  used = chunk - cgba_diff_stop_cycles_remaining;
+  budget -= used;
+
+  /* A halt raised inside the chunk is handed back undigested: run the sleep
+   * loop here (the stub funnels expect an ACTIVE cpu after this returns). */
+  while (reg[CPU_HALT_STATE] != 0 /* CPU_ACTIVE */) {
+    u32 ret = update_gba(budget);
+    if (completed_frame(ret))
+      return ret;
+    budget = (s32)cycles_to_run(ret);
+  }
+  if (budget <= 0) {
+    u32 ret = update_gba(budget);
+    return completed_frame(ret) ? ret : cycles_to_run(ret);
+  }
+  return (u32)budget;
 }
 
 /* Host-emitter init hook (main.c calls this under HAVE_DYNAREC). The MIPS/x86
