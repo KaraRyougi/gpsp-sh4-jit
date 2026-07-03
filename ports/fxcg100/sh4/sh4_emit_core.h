@@ -27,6 +27,15 @@
 /* R15 = host SP (hardware). R0 kept free (forced index/operand). */
 #define SH4_REG_BASE     14   /* reg[] base pointer (callee-saved)        */
 #define SH4_REG_CYCLES   13   /* guest cycle counter (callee-saved)       */
+#define SH4_REG_VEC       9   /* &cgba_sh4_vec_table (callee-saved): resident
+                                 table of hot stub/helper/table addresses so
+                                 generated code reaches them with a 2-byte
+                                 MOV.L @(disp,R9) instead of a 10-12B inline
+                                 literal island. Loaded once in the
+                                 execute_arm_translate_internal prologue
+                                 (sh4_stub.S); preserved by every C call.  */
+#define SH4_REG_BEXIT    10   /* &sh4_block_exit (callee-saved): the hottest
+                                 exit target gets a bare JMP @R10 (4 bytes). */
 #define SH4_REG_CPSR      8   /* cached guest CPSR (callee-saved). While
                                  generated or stub code runs, R8 is the
                                  authoritative reg[REG_CPSR]; memory is synced

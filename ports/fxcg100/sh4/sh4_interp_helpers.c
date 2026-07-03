@@ -43,6 +43,15 @@ int cgba_cold_pending;
 int cgba_cold_gate_enable;
 #if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
 u32 cgba_dynarec_cold_interp_count;
+#ifdef CGBA_GPSP_HEADLESS_TEST
+/* Emission-mix counters (see sh4_emit_glue.h). */
+unsigned long cgba_em_const_small, cgba_em_const_large, cgba_em_const_bytes;
+unsigned long cgba_em_fcall_n, cgba_em_fcall_bytes;
+unsigned long cgba_em_fjmp_n, cgba_em_fjmp_bytes;
+unsigned long cgba_em_pj_n, cgba_em_pj_bytes;
+unsigned long cgba_em_fm_n, cgba_em_fm_bytes;
+unsigned long cgba_em_blk_n, cgba_em_blk_bytes;
+#endif
 #endif
 extern int cgba_diff_stop_on_bios_exit;
 

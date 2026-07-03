@@ -2824,6 +2824,14 @@ inline static ramtag_type* get_ram_tag(u16 tagval) {
   pc &= ~0x01                                                                 \
 
 
+#if defined(SH4_ARCH) && defined(CGBA_GPSP_HEADLESS_TEST)
+extern unsigned long cgba_em_blk_n, cgba_em_blk_bytes;
+#define CGBA_EM_BLK_STAT(nbytes) \
+  (cgba_em_blk_n++, cgba_em_blk_bytes += (unsigned long)(nbytes))
+#else
+#define CGBA_EM_BLK_STAT(nbytes) ((void)0)
+#endif
+
 #ifdef SH4_ARCH
 #ifndef CGBA_SH4_HOT_THRESHOLD
 #define CGBA_SH4_HOT_THRESHOLD 64
@@ -2923,8 +2931,10 @@ u8 function_cc *block_lookup_translate_##type(u32 pc)                         \
         blkptr = rom_translation_ptr + block_prologue_size;                   \
         result = translate_block_##type(pc, false);                           \
                                                                               \
-        if (result)                                                           \
+        if (result) {                                                         \
+          CGBA_EM_BLK_STAT(rom_translation_ptr - (u8 *)bhdr);                 \
           return blkptr;                                                      \
+        }                                                                     \
       }                                                                       \
       return NULL;                                                            \
     }                                                                         \
@@ -3448,7 +3458,13 @@ extern int cgba_dynarec_single_block;
         }                                                                     \
                                                                               \
         if(i < 0)                                                             \
+        {                                                                     \
+          /* Nothing branches to block_end_pc and the last instruction is an  \
+             unconditional branch: the end-of-block translation gate would be \
+             unreachable (SH4: both branch_exit legs jump). */                \
+          ended_uncond = 1;                                                   \
           break;                                                              \
+        }                                                                     \
       }                                                                       \
       if(block_exit_position == MAX_EXITS)                                    \
         break;                                                                \
@@ -3495,6 +3511,7 @@ if (ram_region) {                                                             \
 
 bool translate_block_arm(u32 pc, bool ram_region)
 {
+  u32 ended_uncond = 0;
   u32 opcode = 0;
   u32 last_opcode;
   u32 condition;
@@ -3656,11 +3673,15 @@ bool translate_block_arm(u32 pc, bool ram_region)
   /* This can happen if the last instruction is *not* inconditional */
   if ((last_condition & 0x0F) != 0x0E) {
     generate_branch_patch_conditional(backpatch_address, translation_ptr);
+    ended_uncond = 0;   /* the open conditional's skip target IS the gate */
   }
 
-  /* Unconditionally generate translation targets. In case we hit one or
-     in the unlikely case that block was too big (and not finalized) */
-  generate_translation_gate(arm);
+  /* Generate the fall-through translation gate unless the scan provably ended
+     at an unconditional branch nothing falls past (then it is dead code —
+     ~20-24 bytes on most blocks). Kept for MAX_EXITS / gate-target /
+     size-limit ends, where fall-through is real. */
+  if (!ended_uncond)
+    generate_translation_gate(arm);
 
   for(i = 0; i < block_exit_position; i++)
   {
@@ -3692,6 +3713,16 @@ bool translate_block_arm(u32 pc, bool ram_region)
     }
   }
 
+#ifdef SH4_ARCH
+  /* Keep the cache cursor 4-aligned: the next block's hashhdr/ramtag and any
+     leading literal tuples are written with 32-bit stores, and vec-jmp exits
+     (JMP @R9-table / @R10) end on 2-byte granularity unlike the old
+     literal-island exits which always ended at literal+4. */
+  if ((uintptr_t)translation_ptr & 3) {
+    *(u16 *)translation_ptr = 0x0009;             /* NOP pad (never executed) */
+    translation_ptr += 2;
+  }
+#endif
   if (ram_region)
     ram_translation_ptr = translation_ptr;
   else
@@ -3756,6 +3787,7 @@ bool translate_block_arm(u32 pc, bool ram_region)
 
 bool translate_block_thumb(u32 pc, bool ram_region)
 {
+  u32 ended_uncond = 0;
   u32 opcode = 0;
   u32 last_opcode;
   u32 condition;
@@ -3903,9 +3935,10 @@ bool translate_block_thumb(u32 pc, bool ram_region)
 #endif
   }
 
-  /* Unconditionally generate translation targets. In case we hit one or
-     in the unlikely case that block was too big (and not finalized) */
-  generate_translation_gate(thumb);
+  /* See translate_block_arm: the gate is dead code after a clean
+     unconditional-branch block end. */
+  if (!ended_uncond)
+    generate_translation_gate(thumb);
 
   for(i = 0; i < block_exit_position; i++)
   {
@@ -3937,6 +3970,16 @@ bool translate_block_thumb(u32 pc, bool ram_region)
     }
   }
 
+#ifdef SH4_ARCH
+  /* Keep the cache cursor 4-aligned: the next block's hashhdr/ramtag and any
+     leading literal tuples are written with 32-bit stores, and vec-jmp exits
+     (JMP @R9-table / @R10) end on 2-byte granularity unlike the old
+     literal-island exits which always ended at literal+4. */
+  if ((uintptr_t)translation_ptr & 3) {
+    *(u16 *)translation_ptr = 0x0009;             /* NOP pad (never executed) */
+    translation_ptr += 2;
+  }
+#endif
   if (ram_region)
     ram_translation_ptr = translation_ptr;
   else

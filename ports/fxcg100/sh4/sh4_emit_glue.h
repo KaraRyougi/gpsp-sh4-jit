@@ -93,11 +93,120 @@ static inline void sh4g_u16(u8 **tp, uint16_t op)
  *     [.long value]  (4-byte aligned)
  *   9:
  */
+/* ---- resident vector table (R9) + pinned block exit (R10) ---------------- *
+ * cgba_sh4_vec_table (sh4_stub.S) holds the fixed stub/helper/table addresses
+ * generated code jumps to or reads constantly. Entry ORDER here must match the
+ * .long list in sh4_stub.S exactly. Lowercase members let sh4_emit.h's
+ * token-pasting macros map sh4_indirect_branch_##type directly. */
+enum {
+  SH4G_VEC_pc_redispatch = 0,
+  SH4G_VEC_ib_arm,
+  SH4G_VEC_ib_thumb,
+  SH4G_VEC_ib_dual,
+  SH4G_VEC_ib_dual_thumb_current,
+  SH4G_VEC_update_gba,
+  SH4G_VEC_helper_exit,
+  SH4G_VEC_execute_swi,
+  SH4G_VEC_cheat_hook,
+  SH4G_VEC_hle_div,
+  SH4G_VEC_ws_cyc_seq,
+  SH4G_VEC_ws_cyc_nseq,
+  SH4G_VEC_COUNT                       /* MOV.L disp4 reach caps this at 16 */
+};
+
+/* rn = vec_table[idx]; 2 bytes. */
+static inline void sh4g_vec_load(u8 **tp, unsigned idx, unsigned rn)
+{
+  sh4g_u16(tp, (uint16_t)(0x5000 | (rn << 8) | (SH4_REG_VEC << 4) | idx));
+}
+
+/* JMP @vec_table[idx]; clobbers R0. 6 bytes (vs 10-12 for a literal far_jmp). */
+static inline void sh4g_vec_jmp(u8 **tp, unsigned idx)
+{
+  sh4g_vec_load(tp, idx, SH4_REG_RET);
+  sh4g_u16(tp, (uint16_t)(0x402B | (SH4_REG_RET << 8)));   /* JMP @R0 */
+  sh4g_u16(tp, 0x0009);                                    /* NOP (delay) */
+}
+
+/* JSR @vec_table[idx]; clobbers R0. 6 bytes (vs 14-16 for a literal far_call). */
+static inline void sh4g_vec_call(u8 **tp, unsigned idx)
+{
+  sh4g_vec_load(tp, idx, SH4_REG_RET);
+  sh4g_u16(tp, (uint16_t)(0x400B | (SH4_REG_RET << 8)));   /* JSR @R0 */
+  sh4g_u16(tp, 0x0009);                                    /* NOP (delay) */
+}
+
+/* JMP @R10 (= sh4_block_exit); 4 bytes, no literal, no clobber. */
+static inline void sh4g_block_exit_jmp(u8 **tp)
+{
+  sh4g_u16(tp, (uint16_t)(0x402B | (SH4_REG_BEXIT << 8))); /* JMP @R10 */
+  sh4g_u16(tp, 0x0009);                                    /* NOP (delay) */
+}
+
+#ifdef CGBA_GPSP_HEADLESS_TEST
+/* Emission-mix counters (headless builds only): where do translated bytes go?
+ * Categories overlap deliberately (a fastmem site's inner far_jmp also counts
+ * as fjmp) — read them as per-category totals, not a partition. */
+extern unsigned long cgba_em_const_small, cgba_em_const_large, cgba_em_const_bytes;
+extern unsigned long cgba_em_fcall_n, cgba_em_fcall_bytes;
+extern unsigned long cgba_em_fjmp_n, cgba_em_fjmp_bytes;
+extern unsigned long cgba_em_pj_n, cgba_em_pj_bytes;
+#define SH4G_EMSTAT(expr) (expr)
+#else
+#define SH4G_EMSTAT(expr) ((void)0)
+#endif
+
 static inline void sh4g_const(u8 **tp, uint32_t value, unsigned rn)
 {
   if ((int32_t)value >= -128 && (int32_t)value <= 127) {
+    SH4G_EMSTAT(cgba_em_const_small++);
     sh4g_u16(tp, (uint16_t)(0xE000 | (rn << 8) | (value & 0xFF)));   /* MOV #imm8 */
     return;
+  }
+
+  /* Cheap synthesis tiers before paying for a 10-12B literal island. Every op
+   * used here (EXTU.B, NOT, SHLL2/SHLL8/SHLL16) leaves the T bit alone, so
+   * these are drop-in safe anywhere a literal was. */
+  if (value >= 128 && value <= 255) {                 /* MOV #s8; EXTU.B = 4B */
+    SH4G_EMSTAT(cgba_em_const_small++);
+    sh4g_u16(tp, (uint16_t)(0xE000 | (rn << 8) | (value & 0xFF)));
+    sh4g_u16(tp, (uint16_t)(0x600C | (rn << 8) | (rn << 4)));  /* EXTU.B rn,rn */
+    return;
+  }
+  if ((int32_t)(~value) >= -128 && (int32_t)(~value) <= 127) { /* MOV; NOT = 4B */
+    SH4G_EMSTAT(cgba_em_const_small++);
+    sh4g_u16(tp, (uint16_t)(0xE000 | (rn << 8) | (~value & 0xFF)));
+    sh4g_u16(tp, (uint16_t)(0x6007 | (rn << 8) | (rn << 4)));  /* NOT rn,rn */
+    return;
+  }
+  /* value == s8 << n with n composed from {16,8,2} (T-safe shifts only):
+   * MOV #s8 + 1..3 shifts = 4-8B. Covers 0x80000000 (-128<<24), 0x40000
+   * (1<<18), SP/PC*4 offsets, etc. The ctz pre-filter keeps this O(1) for
+   * the dominant address-literal case — sh4g_const runs tens of millions of
+   * times in flush-thrash scenes, so the search itself must stay cheap. */
+  if ((value & 3) == 0 && value != 0) {
+    static const u8 sh4g_shift_cand[8] = {16, 8, 2, 24, 18, 10, 4, 26};
+    unsigned tz = (unsigned)__builtin_ctz(value);
+    unsigned k;
+    for (k = 0; k < 8; k++) {
+      unsigned n = sh4g_shift_cand[k];     /* ordered by shift-op count */
+      int32_t sv;
+      if (n > tz)
+        continue;                          /* low bits would be lost */
+      sv = (int32_t)value >> n;            /* n <= tz => (sv << n) == value */
+      if (sv >= -128 && sv <= 127) {
+        unsigned r;
+        SH4G_EMSTAT(cgba_em_const_small++);
+        sh4g_u16(tp, (uint16_t)(0xE000 | (rn << 8) | ((uint32_t)sv & 0xFF)));
+        for (r = n; r >= 16; r -= 16)
+          sh4g_u16(tp, (uint16_t)(0x4028 | (rn << 8)));        /* SHLL16 */
+        for (; r >= 8; r -= 8)
+          sh4g_u16(tp, (uint16_t)(0x4018 | (rn << 8)));        /* SHLL8 */
+        for (; r >= 2; r -= 2)
+          sh4g_u16(tp, (uint16_t)(0x4008 | (rn << 8)));        /* SHLL2 */
+        return;
+      }
+    }
   }
 
   {
@@ -124,6 +233,7 @@ static inline void sh4g_const(u8 **tp, uint32_t value, unsigned rn)
       sh4_emit_u32_be(&cg, value);
       sh4g_close(tp, &cg);
     }
+    SH4G_EMSTAT((cgba_em_const_large++, cgba_em_const_bytes += (unsigned long)(*tp - load)));
   }
 }
 
@@ -157,6 +267,7 @@ static inline void sh4g_store_greg(u8 **tp, unsigned rn, unsigned idx)
 static inline void sh4g_far_call(u8 **tp, const void *fn)
 {
   u8 *load = *tp, *lit;
+  SH4G_EMSTAT(cgba_em_fcall_n++);
   long ld_disp, bra_disp;
 
   /* MOV.L(2) JSR(2) NOP(2) BRA(2) NOP(2) [pad] .long ; 9: */
@@ -176,12 +287,14 @@ static inline void sh4g_far_call(u8 **tp, const void *fn)
     sh4_emit_u32_be(&cg, (uint32_t)(uintptr_t)fn);
     sh4g_close(tp, &cg);
   }
+  SH4G_EMSTAT(cgba_em_fcall_bytes += (unsigned long)(*tp - load));
 }
 
 /* JMP @literal(fn), no return; literal sits after the (taken) JMP. */
 static inline void sh4g_far_jmp(u8 **tp, const void *fn)
 {
   u8 *load = *tp, *lit;
+  SH4G_EMSTAT(cgba_em_fjmp_n++);
   long ld_disp;
 
   lit = (u8 *)(((uintptr_t)(load + 6) + 3u) & ~(uintptr_t)3u);
@@ -196,14 +309,14 @@ static inline void sh4g_far_jmp(u8 **tp, const void *fn)
     sh4_emit_u32_be(&cg, (uint32_t)(uintptr_t)fn);
     sh4g_close(tp, &cg);
   }
+  SH4G_EMSTAT(cgba_em_fjmp_bytes += (unsigned long)(*tp - load));
 }
 
 /* Thumb BX almost always returns to another Thumb block in GBA games. Split that
  * hot subcase before the generic dual resolver so the runtime hit path can avoid
  * the ARM/Thumb mode split and redundant CPSR.T store. R4/ARG0 remains the target.
  * TST #1,R0 sets T when the target is ARM (bit clear), so BT skips to generic. */
-static inline void sh4g_thumb_bx_dispatch(u8 **tp, const void *thumb_current_fn,
-                                          const void *dual_fn)
+static inline void sh4g_thumb_bx_dispatch(u8 **tp)
 {
   u8 *bt;
   { sh4_codegen cg = sh4g_open(tp);
@@ -212,9 +325,9 @@ static inline void sh4g_thumb_bx_dispatch(u8 **tp, const void *thumb_current_fn,
   sh4g_u16(tp, (uint16_t)(0xC800 | 0x01));                 /* TST #1,R0 */
   bt = *tp;
   sh4g_u16(tp, 0x8900);                                    /* BT generic */
-  sh4g_far_jmp(tp, thumb_current_fn);                      /* Thumb target */
+  sh4g_vec_jmp(tp, SH4G_VEC_ib_dual_thumb_current);        /* Thumb target */
   { long d = ((long)(*tp) - ((long)bt + 4)) / 2; bt[1] = (uint8_t)(d & 0xFF); }
-  sh4g_far_jmp(tp, dual_fn);                               /* ARM target */
+  sh4g_vec_jmp(tp, SH4G_VEC_ib_dual);                      /* ARM target */
 }
 
 /* ---- compact C-helper call site ------------------------------------------ *
@@ -510,7 +623,7 @@ static inline void sh4g_charge_mem_run(u8 **tp, unsigned addr_reg, int seq,
     if (is_word)
       sh4_emit_add_imm(&cg, 1, SH4_REG_RET);     /* + word column                 */
     sh4g_close(tp, &cg); }
-  sh4g_const(tp, (uint32_t)(uintptr_t)(seq ? ws_cyc_seq : ws_cyc_nseq), SH4_REG_T2);
+  sh4g_vec_load(tp, seq ? SH4G_VEC_ws_cyc_seq : SH4G_VEC_ws_cyc_nseq, SH4_REG_T2);
   { sh4_codegen cg = sh4g_open(tp);
     sh4_emit_mov_b_load_r0(&cg, SH4_REG_T2, SH4_REG_T1);  /* T1 = table[region][col]*/
     sh4_emit_extu_b(&cg, SH4_REG_T1, SH4_REG_T1);         /* zero-extend cost (>=0) */
@@ -541,7 +654,7 @@ static inline void sh4g_charge_thumb_bx_target_fetch(u8 **tp, unsigned target_re
     sh4_emit_shlr8(&cg, SH4_REG_RET);                    /* R0 = target >> 24      */
     sh4_emit_shll(&cg, SH4_REG_RET);                     /* R0 = region * 2        */
     sh4g_close(tp, &cg); }
-  sh4g_const(tp, (uint32_t)(uintptr_t)ws_cyc_seq, SH4_REG_T2);
+  sh4g_vec_load(tp, SH4G_VEC_ws_cyc_seq, SH4_REG_T2);
   { sh4_codegen cg = sh4g_open(tp);
     sh4_emit_mov_b_load_r0(&cg, SH4_REG_T2, SH4_REG_T1); /* seq[region][halfword]  */
     sh4_emit_extu_b(&cg, SH4_REG_T1, SH4_REG_T1);
@@ -570,13 +683,13 @@ static inline void sh4g_charge_indirect_refill(u8 **tp, unsigned target_reg)
     sh4_emit_shll(&cg, SH4_REG_RET);                     /* R0 = region * 2          */
     sh4_emit_add_imm(&cg, 1, SH4_REG_RET);               /* + word column            */
     sh4g_close(tp, &cg); }
-  sh4g_const(tp, (uint32_t)(uintptr_t)ws_cyc_nseq, SH4_REG_T2);
+  sh4g_vec_load(tp, SH4G_VEC_ws_cyc_nseq, SH4_REG_T2);
   { sh4_codegen cg = sh4g_open(tp);
     sh4_emit_mov_b_load_r0(&cg, SH4_REG_T2, SH4_REG_T1); /* T1 = ws_cyc_nseq[reg][1] */
     sh4_emit_extu_b(&cg, SH4_REG_T1, SH4_REG_T1);
     sh4_emit_sub(&cg, SH4_REG_T1, SH4_REG_CYCLES);       /* R13 -= refill            */
     sh4g_close(tp, &cg); }
-  sh4g_const(tp, (uint32_t)(uintptr_t)ws_cyc_seq, SH4_REG_T2);
+  sh4g_vec_load(tp, SH4G_VEC_ws_cyc_seq, SH4_REG_T2);
   { sh4_codegen cg = sh4g_open(tp);
     sh4_emit_mov_b_load_r0(&cg, SH4_REG_T2, SH4_REG_T1); /* T1 = ws_cyc_seq[reg][1]  */
     sh4_emit_extu_b(&cg, SH4_REG_T1, SH4_REG_T1);
@@ -585,8 +698,7 @@ static inline void sh4g_charge_indirect_refill(u8 **tp, unsigned target_reg)
   { long d = ((long)(*tp) - ((long)bf + 4)) / 2; bf[1] = (uint8_t)(d & 0xFF); }
 }
 
-static inline void sh4g_cycle_sub(u8 **tp, int n, uint32_t pc,
-                                  const void *block_exit_fn)
+static inline void sh4g_cycle_sub(u8 **tp, int n, uint32_t pc)
 {
   u8 *bt;
   if (n == 0)
@@ -598,7 +710,7 @@ static inline void sh4g_cycle_sub(u8 **tp, int n, uint32_t pc,
   bt = *tp;
   sh4g_u16(tp, 0x8900);                        /* BT skip update */
   sh4g_const(tp, pc, SH4_REG_ARG0);
-  sh4g_far_jmp(tp, block_exit_fn);
+  sh4g_block_exit_jmp(tp);
   { long d = ((long)(*tp) - ((long)bt + 4)) / 2; bt[1] = (uint8_t)(d & 0xFF); }
 }
 
@@ -611,17 +723,17 @@ static inline void sh4g_cycle_sub(u8 **tp, int n, uint32_t pc,
  * before it checks the event boundary. */
 static inline void sh4g_charge_fetch_cell(u8 **tp, uint32_t pc, int is_word)
 {
-  const u8 *cell = &ws_cyc_seq[(pc >> 24) & 0x0F][is_word ? 1 : 0];
-  sh4g_const(tp, (uint32_t)(uintptr_t)cell, SH4_REG_T2);
+  int cell_off = (int)(((pc >> 24) & 0x0F) * 2 + (is_word ? 1 : 0));
+  sh4g_vec_load(tp, SH4G_VEC_ws_cyc_seq, SH4_REG_T2);
   { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_add_imm(&cg, cell_off, SH4_REG_T2);   /* &seq[region][col] */
     sh4_emit_mov_b_load(&cg, SH4_REG_T2, SH4_REG_T1);
     sh4_emit_extu_b(&cg, SH4_REG_T1, SH4_REG_T1);
     sh4_emit_sub(&cg, SH4_REG_T1, SH4_REG_CYCLES);
     sh4g_close(tp, &cg); }
 }
 
-static inline void sh4g_cycle_gate(u8 **tp, uint32_t pc, int is_word,
-                                   const void *block_exit_fn)
+static inline void sh4g_cycle_gate(u8 **tp, uint32_t pc, int is_word)
 {
   u8 *bt;
   { sh4_codegen cg = sh4g_open(tp);
@@ -631,7 +743,7 @@ static inline void sh4g_cycle_gate(u8 **tp, uint32_t pc, int is_word,
   sh4g_u16(tp, 0x8900);                        /* BT skip (budget remains) */
   sh4g_charge_fetch_cell(tp, pc, is_word);
   sh4g_const(tp, pc, SH4_REG_ARG0);
-  sh4g_far_jmp(tp, block_exit_fn);
+  sh4g_block_exit_jmp(tp);
   { long d = ((long)(*tp) - ((long)bt + 4)) / 2; bt[1] = (uint8_t)(d & 0xFF); }
 }
 
@@ -655,6 +767,7 @@ static inline u8 *sh4g_emit_patch_jump(u8 **tp)
     sh4_emit_u32_be(&cg, 0);                                                  /* target placeholder */
     sh4g_close(tp, &cg);
   }
+  SH4G_EMSTAT((cgba_em_pj_n++, cgba_em_pj_bytes += (unsigned long)(*tp - site)));
   return site;
 }
 
@@ -731,7 +844,7 @@ static inline u8 *sh4g_branch_exit(u8 **tp, uint32_t new_pc,
     sh4g_close(tp, &cg); }
   bt = *tp;
   sh4g_u16(tp, 0x8900);                          /* BT over (skip exit if budget left) */
-  sh4g_far_jmp(tp, block_exit_fn);               /* exhausted: events + redispatch */
+  sh4g_block_exit_jmp(tp);                       /* exhausted: events + redispatch */
   { long d = ((long)(*tp) - ((long)bt + 4)) / 2; bt[1] = (uint8_t)(d & 0xFF); }
 
   site = sh4g_emit_patch_jump(tp);               /* chain to target block (patched) */
@@ -750,7 +863,6 @@ static inline u8 *sh4g_branch_exit(u8 **tp, uint32_t new_pc,
  * patchable chain jump, so exactly one loop iteration runs per event slice
  * instead of thousands of spins. Returns the patch site. */
 static inline u8 *sh4g_branch_exit_idle(u8 **tp, uint32_t new_pc,
-                                        const void *update_gba_fn,
                                         const void *block_exit_fn)
 {
   u8 *site;
@@ -760,7 +872,7 @@ static inline u8 *sh4g_branch_exit_idle(u8 **tp, uint32_t new_pc,
     sh4g_close(tp, &cg); }
   sh4g_u16(tp, 0x8B00);                              /* BF +0: keep <=0 budget */
   sh4g_u16(tp, (uint16_t)(0xE000 | (SH4_REG_CYCLES << 8))); /* MOV #0,R13 */
-  sh4g_far_call(tp, update_gba_fn);                  /* fast-forward events */
+  sh4g_vec_call(tp, SH4G_VEC_update_gba);            /* fast-forward events */
   sh4g_const(tp, new_pc, SH4_REG_ARG0);              /* R4 clobbered by C call */
   site = sh4g_emit_patch_jump(tp);                   /* chain to target block */
   sh4g_patch_jump(site, block_exit_fn);              /* default: full exit */
@@ -772,7 +884,7 @@ static inline u8 *sh4g_branch_exit_idle(u8 **tp, uint32_t new_pc,
  * block: TST R0,R0 ; BT skip ; R4 = reg[REG_PC] ; R1 = code ; jmp helper_exit.
  * sh4_helper_exit (sh4_stub.S) reads the code from R1 and re-dispatches pure PC
  * changes without an update_gba pass; alerts exit through sh4_block_exit. */
-static inline void sh4g_redispatch_if_r0(u8 **tp, const void *helper_exit_fn)
+static inline void sh4g_redispatch_if_r0(u8 **tp)
 {
   u8 *bt;
   { sh4_codegen cg = sh4g_open(tp);
@@ -782,7 +894,7 @@ static inline void sh4g_redispatch_if_r0(u8 **tp, const void *helper_exit_fn)
   sh4g_u16(tp, 0x8900);                               /* BT skip (no PC change) */
   sh4g_load_greg(tp, SH4_GREG_PC, SH4_REG_ARG0);      /* R4 = reg[REG_PC] */
   sh4g_mov_reg(tp, SH4_REG_RET, SH4_REG_T0);          /* R1 = helper code */
-  sh4g_far_jmp(tp, helper_exit_fn);
+  sh4g_vec_jmp(tp, SH4G_VEC_helper_exit);
   { long d = ((long)(*tp) - ((long)bt + 4)) / 2; bt[1] = (uint8_t)(d & 0xFF); }
 }
 
@@ -790,12 +902,11 @@ static inline void sh4g_redispatch_if_r0(u8 **tp, const void *helper_exit_fn)
  * debits the translated instructions accumulated since the previous cycle gate.
  * The no-PC-change path deliberately keeps accumulating: it skips this debit and
  * the normal block-end/branch gate will flush the full run later. */
-static inline void sh4g_redispatch_if_r0_debit(u8 **tp, int cycle_count,
-                                               const void *helper_exit_fn)
+static inline void sh4g_redispatch_if_r0_debit(u8 **tp, int cycle_count)
 {
   u8 *bt;
   if (cycle_count == 0) {
-    sh4g_redispatch_if_r0(tp, helper_exit_fn);
+    sh4g_redispatch_if_r0(tp);
     return;
   }
   { sh4_codegen cg = sh4g_open(tp);
@@ -806,7 +917,7 @@ static inline void sh4g_redispatch_if_r0_debit(u8 **tp, int cycle_count,
   sh4g_cycle_debit(tp, cycle_count);
   sh4g_load_greg(tp, SH4_GREG_PC, SH4_REG_ARG0);     /* R4 = reg[REG_PC] */
   sh4g_mov_reg(tp, SH4_REG_RET, SH4_REG_T0);         /* R1 = helper code */
-  sh4g_far_jmp(tp, helper_exit_fn);
+  sh4g_vec_jmp(tp, SH4G_VEC_helper_exit);
   { long d = ((long)(*tp) - ((long)bt + 4)) / 2; bt[1] = (uint8_t)(d & 0xFF); }
 }
 

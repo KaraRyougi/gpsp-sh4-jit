@@ -278,7 +278,7 @@ static inline int sh4g_thumb_dp_native(u8 **tp, u32 opcode, u32 pc, u32 flag_sta
         sh4_emit_mov_reg(&cg, SH4_REG_RET, SH4_REG_ARG0);/* R4 = new PC */
         sh4_emit_mov_imm(&cg, 1, SH4_REG_T0);            /* R1 = pure PC change */
         sh4g_close(tp, &cg); }
-      sh4g_far_jmp(tp, (const void *)sh4_helper_exit);
+      sh4g_vec_jmp(tp, SH4G_VEC_helper_exit);
       return 1;
     }
     if (op == 1) {                                       /* CMP */
