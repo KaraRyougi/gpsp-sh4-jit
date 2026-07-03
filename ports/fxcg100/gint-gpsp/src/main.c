@@ -1186,14 +1186,22 @@ int main(void)
 	previous_hotkeys = fxcg100_poll_hotkeys_mapped(menu_state.hotkey_map);
 
 	current_rom = normalize_rom_id(menu_state.rom_source);
-	if(menu_result == FXCG100_MENU_LOAD_STATE ||
-			menu_result == FXCG100_MENU_SAVE_STATE) {
-		draw_status("savestate unavailable", "booting selected ROM");
+	if(menu_result == FXCG100_MENU_SAVE_STATE) {
+		draw_status("nothing to save yet", "booting selected ROM");
 		wait_status();
 	}
 
 	if(start_gpsp(framebuffer, current_rom) != 0)
 		return exit_to_os(1);
+
+	if(menu_result == FXCG100_MENU_LOAD_STATE) {
+		draw_status("loading state...", NULL);
+		if(!cgba_gpsp_state_load(menu_state.savestate_slot)) {
+			draw_status("state load FAILED (no file?)",
+				"starting from reset");
+			wait_status();
+		}
+	}
 
 #ifdef CGBA_GPSP_DIAG
 	show_diag_overlay();
@@ -1245,7 +1253,18 @@ int main(void)
 			}
 			if(result == FXCG100_MENU_LOAD_STATE ||
 					result == FXCG100_MENU_SAVE_STATE) {
-				draw_status("savestate unavailable", "not implemented yet");
+				int save = result == FXCG100_MENU_SAVE_STATE;
+				char slot_line[32];
+				int ok;
+				snprintf(slot_line, sizeof slot_line, "slot %u",
+					(unsigned)menu_state.savestate_slot);
+				draw_status(save ? "saving state (416KB)..."
+					: "loading state...", slot_line);
+				ok = save ? cgba_gpsp_state_save(menu_state.savestate_slot)
+					: cgba_gpsp_state_load(menu_state.savestate_slot);
+				draw_status(ok ? (save ? "state saved" : "state loaded")
+					: (save ? "state save FAILED"
+						: "state load FAILED (no file?)"), slot_line);
 				wait_status();
 			}
 			enter_gameplay_display(framebuffer, frame);
@@ -1278,7 +1297,8 @@ int main(void)
 			wait_status();
 			enter_gameplay_display(framebuffer, frame);
 #else
-			draw_status("savestate unavailable", "not implemented yet");
+			draw_status(cgba_gpsp_state_load(menu_state.savestate_slot)
+				? "state loaded" : "state load FAILED (no file?)", NULL);
 			wait_status();
 			enter_gameplay_display(framebuffer, frame);
 #endif
@@ -1295,7 +1315,8 @@ int main(void)
 			wait_status();
 			enter_gameplay_display(framebuffer, frame);
 #else
-			draw_status("savestate unavailable", "not implemented yet");
+			draw_status(cgba_gpsp_state_save(menu_state.savestate_slot)
+				? "state saved" : "state save FAILED", NULL);
 			wait_status();
 			enter_gameplay_display(framebuffer, frame);
 #endif

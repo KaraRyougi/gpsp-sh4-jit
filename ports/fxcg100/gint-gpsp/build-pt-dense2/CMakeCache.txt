@@ -145,6 +145,9 @@ CGBA_GPSP_ROM_BRANCH_HASH_BITS:STRING=12
 //SH4 dynarec ROM translation cache size in bytes
 CGBA_GPSP_ROM_TRANSLATION_CACHE_SIZE:STRING=917504
 
+//ARM dead-flag elimination (OFF forces all-flags-live; A/B diagnostic)
+CGBA_SH4_ARM_DEAD_FLAGS:BOOL=ON
+
 //Enable SH4 native ARM single load fast path
 CGBA_SH4_ARM_LDST_NATIVE:BOOL=ON
 
