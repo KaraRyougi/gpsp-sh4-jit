@@ -91,6 +91,8 @@ extern uint32_t cgba_sh4_helper_thumb_ldst_imm_count;
 extern uint32_t cgba_sh4_native_thumb_const_io_count;
 extern uint32_t cgba_sh4_native_thumb_runtime_io_count;
 extern uint32_t cgba_sh4_native_thumb_push_iwram_count;
+extern uint32_t cgba_sh4_bios_fallback_call_count;
+extern uint32_t cgba_sh4_bios_fallback_cycle_count;
 #endif
 
 #if defined(CGBA_DYNAREC) && \
@@ -165,7 +167,9 @@ void cgba_sh4_prof_reset(void);   /* cpu_threaded.c */
 	X(cgba_sh4_helper_thumb_ldst_imm_count) \
 	X(cgba_sh4_native_thumb_const_io_count) \
 	X(cgba_sh4_native_thumb_runtime_io_count) \
-	X(cgba_sh4_native_thumb_push_iwram_count)
+	X(cgba_sh4_native_thumb_push_iwram_count) \
+	X(cgba_sh4_bios_fallback_call_count) \
+	X(cgba_sh4_bios_fallback_cycle_count)
 enum {
 #define CGBA_PROF_WIN_ENUM(n) cgba_win_##n,
 	CGBA_PROF_WIN_LIST(CGBA_PROF_WIN_ENUM)
@@ -1077,6 +1081,12 @@ void cgba_gpsp_debug_menu(fxcg100_debug_info *debug, unsigned frame,
 			WV(cgba_sh4_helper_arm_block_load_count),
 			WV(cgba_sh4_helper_arm_block_store_count),
 			WV(cgba_sh4_helper_hle_div_count));
+		/* Interpreter-fallback residency: n calls / guest kilocycles in the
+		 * window. All-zero JIT lines + big BIOS numbers = interpreted BIOS
+		 * (soft-reset boot screen, IntrWait) — not a JIT stall. */
+		debug_line(debug, "H BIOS n%lu kc%lu",
+			WV(cgba_sh4_bios_fallback_call_count),
+			(unsigned long)(WV(cgba_sh4_bios_fallback_cycle_count) / 1024u));
 	}
 #endif
 #else
