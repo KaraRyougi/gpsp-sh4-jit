@@ -1985,9 +1985,18 @@ void translate_icache_sync() {
   block_data[block_data_position].flag_data = fstat;                          \
 }
 
+/* A/B diagnostic: CGBA_SH4_ARM_DEAD_FLAGS=0 forces every ARM instruction to
+ * see all-flags-live (the pre-liveness behavior) while keeping the scan
+ * running — isolates the ARM dead-flag ANALYSIS from every other layer. */
+#if defined(CGBA_SH4_ARM_DEAD_FLAGS) && (CGBA_SH4_ARM_DEAD_FLAGS == 0)
+#define arm_load_flag_status()                                                \
+  flag_status = 0xF;                                                          \
+
+#else
 #define arm_load_flag_status()                                                \
   flag_status = block_data[block_data_position].flag_data;                    \
 
+#endif
 #else
 
 #define arm_flag_status()                                                     \

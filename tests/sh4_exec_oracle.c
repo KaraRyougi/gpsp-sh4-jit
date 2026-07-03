@@ -713,6 +713,159 @@ int main(void)
             }
   }
 
+  /* ---- ARM data-processing native: the interrupt-dispatcher workload ---- */
+  {
+    /* op2 forms: imm rot0, imm rotated, plain reg, reg LSL#4, reg LSR#4,
+     * reg ASR#4, reg LSR#32(field 0), reg ASR#32(field 0) */
+    static const u32 op2s[] = {
+      0x020000A5u,          /* imm 0xA5, rot 0 */
+      0x02000FA5u,          /* imm 0xA5 ror 30 -> shifter C = bit31 */
+      0x00000004u,          /* r4 */
+      0x00000204u,          /* r4, lsl #4 */
+      0x00000224u,          /* r4, lsr #4 */
+      0x00000244u,          /* r4, asr #4 */
+      0x00000024u,          /* r4, lsr #32 */
+      0x00000044u,          /* r4, asr #32 */
+    };
+    static const u32 vals2[] = {
+      0, 1, 0x80000000u, 0x7FFFFFFFu, 0xFFFFFFFFu, 0x12345678u, 0xA5A50000u
+    };
+    for (u32 aop = 0; aop <= 0xF; aop++)
+      for (unsigned oi = 0; oi < sizeof op2s / sizeof *op2s; oi++)
+        for (unsigned vi = 0; vi < sizeof vals2 / sizeof *vals2; vi++)
+          for (unsigned wi = 0; wi < sizeof vals2 / sizeof *vals2; wi += 2)
+            for (int S = 0; S <= 1; S++)
+              for (int cin = 0; cin <= 1; cin++)
+                for (unsigned mi = 0; mi < sizeof masks / sizeof *masks; mi++) {
+                  int is_test = (aop >= 8 && aop <= 0xB);
+                  if (is_test && !S) continue;              /* not encodable */
+                  u32 opcode = 0xE0000000u | (aop << 21) | ((u32)S << 20)
+                             | (2u << 16) | (3u << 12) | op2s[oi];
+                  static u8 abuf[1024]; u8 *ap = abuf;
+                  u32 fm2 = S ? masks[mi] : 0;
+
+                  memset(g_reg, 0, sizeof g_reg);
+                  for (int i = 0; i < 16; i++) g_reg[i] = 0xAB000000u + (u32)i;
+                  g_reg[2] = vals2[vi];                     /* rn */
+                  g_reg[4] = vals2[wi];                     /* rm */
+                  g_reg[3] = 0x51515151u;                   /* rd before */
+                  g_reg[SH4_GREG_CPSR] = ((u32)cin << 29) | 0x1000001Fu;
+
+                  if (!sh4g_arm_dp_native(&ap, opcode, pc, fm2))
+                    continue;
+                  cases++;
+
+                  if (!run_sh4x(abuf, (size_t)(ap - abuf))) {
+                    printf("FAIL adp op=%08X: interpreter: %s\n", opcode, unmodeled);
+                    fails++; continue;
+                  }
+
+                  /* reference: mirror cgba_sh4_arm_dp + arm_shifter_operand */
+                  u32 a = vals2[vi];
+                  u32 carry = (u32)cin, oldc = (u32)cin;
+                  u32 b;
+                  if (opcode & 0x02000000u) {
+                    u32 imm = opcode & 0xFF, rot = ((opcode >> 8) & 0xF) * 2;
+                    b = rot ? ((imm >> rot) | (imm << (32 - rot))) : imm;
+                    if (rot) carry = (b >> 31) & 1;
+                  } else {
+                    u32 val = vals2[wi];
+                    u32 type = (opcode >> 5) & 3;
+                    u32 amount = (opcode >> 7) & 0x1F;
+                    switch (type) {
+                    case 0:
+                      if (amount == 0) b = val;
+                      else { carry = (val >> (32 - amount)) & 1; b = val << amount; }
+                      break;
+                    case 1:
+                      if (amount == 0) { carry = (val >> 31) & 1; b = 0; }
+                      else { carry = (val >> (amount - 1)) & 1; b = val >> amount; }
+                      break;
+                    default:
+                      if (amount == 0) { carry = (val >> 31) & 1; b = (u32)((s32)val >> 31); }
+                      else { carry = (val >> (amount - 1)) & 1; b = (u32)((s32)val >> amount); }
+                      break;
+                    }
+                  }
+                  u32 cf = carry, vf = ((u32)0x1000001Fu >> 28) & 1, res = 0;
+                  int writes = 1;
+                  u64 tmp;
+                  switch (aop) {
+                  case 0x0: res = a & b; break;
+                  case 0x1: res = a ^ b; break;
+                  case 0x2: tmp = (u64)a - b; res = (u32)tmp; cf = a >= b;
+                            vf = ((a ^ b) & (a ^ res)) >> 31; break;
+                  case 0x3: tmp = (u64)b - a; res = (u32)tmp; cf = b >= a;
+                            vf = ((b ^ a) & (b ^ res)) >> 31; break;
+                  case 0x4: tmp = (u64)a + b; res = (u32)tmp; cf = (u32)(tmp >> 32);
+                            vf = (~(a ^ b) & (a ^ res)) >> 31; break;
+                  case 0x5: tmp = (u64)a + b + oldc; res = (u32)tmp; cf = (u32)(tmp >> 32);
+                            vf = (~(a ^ b) & (a ^ res)) >> 31; break;
+                  case 0x6: tmp = (u64)a - b - (1 - oldc); res = (u32)tmp;
+                            cf = a >= ((u64)b + (1 - oldc));
+                            vf = ((a ^ b) & (a ^ res)) >> 31; break;
+                  case 0x7: tmp = (u64)b - a - (1 - oldc); res = (u32)tmp;
+                            cf = b >= ((u64)a + (1 - oldc));
+                            vf = ((b ^ a) & (b ^ res)) >> 31; break;
+                  case 0x8: res = a & b; writes = 0; break;
+                  case 0x9: res = a ^ b; writes = 0; break;
+                  case 0xA: tmp = (u64)a - b; res = (u32)tmp; cf = a >= b;
+                            vf = ((a ^ b) & (a ^ res)) >> 31; writes = 0; break;
+                  case 0xB: tmp = (u64)a + b; res = (u32)tmp; cf = (u32)(tmp >> 32);
+                            vf = (~(a ^ b) & (a ^ res)) >> 31; writes = 0; break;
+                  case 0xC: res = a | b; break;
+                  case 0xD: res = b; break;
+                  case 0xE: res = a & ~b; break;
+                  default:  res = ~b; break;
+                  }
+
+                  u32 want_rd = writes ? res : 0x51515151u;
+                  if (g_reg[3] != want_rd) {
+                    printf("FAIL adp op=%08X a=%08X b(rm)=%08X cin=%d: rd=%08X want %08X\n",
+                           opcode, a, vals2[wi], cin, g_reg[3], want_rd);
+                    fails++; continue;
+                  }
+                  if (g_reg[2] != vals2[vi] || g_reg[4] != vals2[wi]) {
+                    printf("FAIL adp op=%08X: operand regs clobbered\n", opcode);
+                    fails++; continue;
+                  }
+                  u32 got = g_reg[SH4_GREG_CPSR];
+                  u32 old = ((u32)cin << 29) | 0x1000001Fu;
+                  if (!S) {
+                    if (got != old) {
+                      printf("FAIL adp op=%08X: CPSR changed w/o S %08X->%08X\n",
+                             opcode, old, got);
+                      fails++;
+                    }
+                    continue;
+                  }
+                  /* Masked contract: flags in fm2 must equal the ARM
+                   * architectural result (logical: NZ + shifter C, arith:
+                   * NZCV; preserved flags equal old); flags outside fm2 may
+                   * be old or the correctly-computed value (widening). */
+                  int arith = (aop >= 2 && aop <= 7) || aop == 0xA || aop == 0xB;
+                  u32 wN = (res >> 31) & 1, wZ = (res == 0);
+                  u32 wC = arith ? (cf & 1) : (carry & 1);
+                  u32 wV = arith ? (vf & 1) : ((old >> 28) & 1);
+                  u32 arch = (old & 0x0FFFFFFFu) |
+                             (wN << 31) | (wZ << 30) | (wC << 29) | (wV << 28);
+                  int bad = 0;
+                  for (int fb = 0; fb < 4; fb++) {
+                    u32 bit = 1u << (28 + fb);           /* V,C,Z,N */
+                    u32 m = (fm2 >> fb) & 1;             /* mask V=1,C=2,Z=4,N=8 */
+                    u32 gf = got & bit, af = arch & bit, of = old & bit;
+                    if (m) { if (gf != af) bad = 1; }
+                    else if (gf != of && gf != af) bad = 1;
+                  }
+                  if ((got & 0x0FFFFFFFu) != (old & 0x0FFFFFFFu)) bad = 1;
+                  if (bad) {
+                    printf("FAIL adp op=%08X a=%08X rm=%08X cin=%d fm=%X: CPSR=%08X arch %08X old %08X\n",
+                           opcode, a, vals2[wi], cin, fm2, got, arch, old);
+                    fails++;
+                  }
+                }
+  }
+
   /* ---- fastmem: real sites calling real routines over a modeled map ---- */
   {
     static u8 fm_buf[8192];
