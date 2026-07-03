@@ -36,7 +36,7 @@ extern int cgba_diff_stop_on_budget;
  * cached and the flush cycle stops. Collisions in the counter hash only
  * pre-heat a block — harmless. */
 #ifndef CGBA_SH4_HOT_THRESHOLD
-#define CGBA_SH4_HOT_THRESHOLD 0   /* cold gate OFF: bring-up incomplete */
+#define CGBA_SH4_HOT_THRESHOLD 64
 #endif
 u8  cgba_hot_count[16384];
 int cgba_cold_pending;
@@ -1198,7 +1198,7 @@ u32 cgba_sh4_bios_fallback(u32 cycles)
 u32 cgba_sh4_cold_interp(u32 cycles)
 {
   s32 budget = (s32)cycles;
-  s32 chunk = budget < 128 ? budget : 128;
+  s32 chunk = budget < 512 ? budget : 512;
   s32 sentinel = (s32)0x7FFFFFFF;
   s32 used;
 

@@ -2826,7 +2826,7 @@ inline static ramtag_type* get_ram_tag(u16 tagval) {
 
 #ifdef SH4_ARCH
 #ifndef CGBA_SH4_HOT_THRESHOLD
-#define CGBA_SH4_HOT_THRESHOLD 0   /* cold gate OFF: bring-up incomplete */
+#define CGBA_SH4_HOT_THRESHOLD 64
 #endif
 extern u8  cgba_hot_count[16384];
 extern int cgba_cold_pending;

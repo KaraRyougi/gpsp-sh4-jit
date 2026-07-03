@@ -1499,14 +1499,22 @@ int cgba_diff_stop_on_bios_exit;
  * without translating it (see cgba_sh4_cold_interp). */
 int cgba_diff_stop_on_budget;
 }
+/* Every early return MUST collapse the interpreter's local NZCV into
+ * reg[REG_CPSR]: the check sits between instructions (Thumb: after execute,
+ * before the loop-top collapse), so returning without collapsing loses the
+ * last instruction's flags — a chunk boundary between CMP and Bcc then takes
+ * the wrong arm (found as an eternal poll loop under the cold-code gate; the
+ * BIOS-exit mode had the same latent hazard for flags read after SWI). */
 #define CGBA_DIFF_STOP_CHECK()                                                \
   do { if(cgba_diff_stop_active) {                                            \
          if(cgba_diff_stop_on_budget) {                                       \
            if(cycles_remaining <= 0) {                                        \
+             collapse_flags();                                                \
              cgba_diff_stop_cycles_remaining = cycles_remaining; return;      \
            }                                                                  \
          } else if(cgba_diff_stop_on_bios_exit) {                             \
            if(reg[REG_PC] >= 0x00004000u) {                                   \
+             collapse_flags();                                                \
              cgba_diff_stop_cycles_remaining = cycles_remaining; return;      \
            }                                                                  \
          } else if(reg[REG_PC] == cgba_diff_stop_pc) {                        \
@@ -1514,6 +1522,7 @@ int cgba_diff_stop_on_budget;
              cgba_diff_stop_skip_initial = 0;                                  \
              break;                                                           \
            }                                                                  \
+           collapse_flags();                                                  \
            cgba_diff_stop_cycles_remaining = cycles_remaining; return;        \
          }                                                                    \
        } }                                                                    \
@@ -1558,6 +1567,7 @@ void execute_arm(u32 cycles)
           /* budget chunk (cold-code gate): hand halts back to the caller —
            * event processing belongs to the JIT's sleep loop, not to an
            * interpreted chunk (it would swallow the whole frame here). */
+          collapse_flags();
           cgba_diff_stop_cycles_remaining = cycles_remaining;
           return;
        }
