@@ -859,8 +859,12 @@ static uint32_t headless_buttons_for_frame(unsigned frame)
 		buttons |= FXCG100_GBA_BUTTON_A;
 #if CGBA_GPSP_HEADLESS_RUN_FRAME > 0
 	if(frame >= (unsigned)CGBA_GPSP_HEADLESS_RUN_FRAME) {
+#if CGBA_GPSP_HEADLESS_RUN_FLIP > 0
 		unsigned phase = (frame - (unsigned)CGBA_GPSP_HEADLESS_RUN_FRAME) /
 			(unsigned)CGBA_GPSP_HEADLESS_RUN_FLIP;
+#else
+		unsigned phase = 0;                     /* 0 = never flip */
+#endif
 		buttons |= (phase & 1) ? FXCG100_GBA_BUTTON_RIGHT
 			: FXCG100_GBA_BUTTON_LEFT;
 	}

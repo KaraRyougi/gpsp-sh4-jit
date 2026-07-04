@@ -41,6 +41,7 @@ extern int cgba_diff_stop_on_budget;
 u8  cgba_hot_count[16384];
 int cgba_cold_pending;
 int cgba_cold_gate_enable;
+int cgba_cold_gate_probe;   /* >0: gate checks don't heat (external-exit resolution) */
 #if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
 u32 cgba_dynarec_cold_interp_count;
 #ifdef CGBA_GPSP_HEADLESS_TEST
@@ -555,12 +556,22 @@ int cgba_sh4_thumb_block(u32 opcode, u32 pc)
     u32 rb = (opcode >> 8) & 7;
     u32 addr = reg[rb];
     u32 is_load = (opcode >> 11) & 1;
+    if (is_load) {
+      /* Writeback FIRST (exec_thumb_block_mem parity): with the base in the
+         rlist the LOADED value must win, not the incremented base. The
+         fastmem block routine already matches this; this slow path serves
+         the same emitted sites on guard failure and must agree. */
+      u32 end = addr;
+      for (i = 0; i < 8; i++)
+        if (rlist & (1 << i))
+          end += 4;
+      reg[rb] = end;
+      for (i = 0; i < 8; i++)
+        if (rlist & (1 << i)) { reg[i] = execute_load_u32(addr); addr += 4; }
+      return cgba_store_alert_break(pc + 2);
+    }
     for (i = 0; i < 8; i++)
-      if (rlist & (1 << i)) {
-        if (is_load) reg[i] = execute_load_u32(addr);
-        else         execute_store_u32(addr, reg[i]);
-        addr += 4;
-      }
+      if (rlist & (1 << i)) { execute_store_u32(addr, reg[i]); addr += 4; }
     reg[rb] = addr;
     return cgba_store_alert_break(pc + 2);
   }

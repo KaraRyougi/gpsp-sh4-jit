@@ -794,6 +794,7 @@ static void copy_mode3_vram_to_framebuffer(void)
 _Static_assert(GBA_STATE_MEM_SIZE <= ROM_TRANSLATION_CACHE_SIZE,
 	"savestate staging borrows the ROM translation cache");
 void flush_translation_cache_rom(void);
+void flush_translation_cache_ram(void);
 
 static u8 *cgba_state_buffer(void)
 {
@@ -845,6 +846,10 @@ int cgba_gpsp_state_load(unsigned slot)
 		gba_load_state(buf);            /* validates magic/version/size */
 #ifdef CGBA_DYNAREC
 	flush_translation_cache_rom();      /* clobbered even on a failed load */
+	/* gba_load_state only flushes when dynarec_enable is set; a state loaded
+	 * while interpreting (PROF core-switch hotkey) would otherwise leave the
+	 * RAM cache holding translations of the PREVIOUS state's RAM code. */
+	flush_translation_cache_ram();
 #endif
 	return ok;
 }

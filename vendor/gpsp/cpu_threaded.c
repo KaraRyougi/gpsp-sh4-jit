@@ -2832,15 +2832,22 @@ extern unsigned long cgba_em_blk_n, cgba_em_blk_bytes;
 #define CGBA_EM_BLK_STAT(nbytes) ((void)0)
 #endif
 
-#ifdef SH4_ARCH
 #ifndef CGBA_SH4_HOT_THRESHOLD
 #define CGBA_SH4_HOT_THRESHOLD 64
 #endif
+#if CGBA_SH4_HOT_THRESHOLD > 255
+#error "CGBA_SH4_HOT_THRESHOLD must fit the u8 hot counters (0..255; 0 = gate off)"
+#endif
+/* Declared unconditionally so the gate block parses on every arch; non-SH4
+   arms fold it away via cgba_cold_gate_enable == 0. */
 extern u8  cgba_hot_count[16384];
 extern int cgba_cold_pending;
+#ifdef SH4_ARCH
 extern int cgba_cold_gate_enable;
+extern int cgba_cold_gate_probe;
 #else
 #define cgba_cold_gate_enable 0
+#define cgba_cold_gate_probe 0
 #endif
 
 #define block_lookup_translate_builder(type)                                  \
@@ -2910,11 +2917,18 @@ u8 function_cc *block_lookup_translate_##type(u32 pc)                         \
          NULL + cgba_cold_pending to sh4_cold_interp_entry). Enabled only    \
          for the stub resolvers; translation gates and the single-block     \
          diff harness translate unconditionally. */                          \
-      if(cgba_cold_gate_enable && pcregion >= 0x8 &&                          \
+      if(CGBA_SH4_HOT_THRESHOLD > 0 &&                                        \
+         cgba_cold_gate_enable && pcregion >= 0x8 &&                          \
          !cgba_dynarec_single_block) {                                        \
         u32 hot_idx = (key * 2654435761U) >> 18;                              \
         if(cgba_hot_count[hot_idx] < CGBA_SH4_HOT_THRESHOLD) {                \
-          cgba_hot_count[hot_idx]++;                                          \
+          /* Heat only on real dispatch (resolver path). External-exit        \
+             resolution PROBES without heating: in flush-thrash scenes each   \
+             retranslation would otherwise bump every cold branch target,     \
+             so never-executed code crosses the threshold and fills the       \
+             cache — a compounding feedback loop. */                          \
+          if (!cgba_cold_gate_probe)                                          \
+            cgba_hot_count[hot_idx]++;                                        \
           cgba_cold_pending = 1;                                              \
           return NULL;                                                        \
         }                                                                     \
@@ -2931,10 +2945,8 @@ u8 function_cc *block_lookup_translate_##type(u32 pc)                         \
         blkptr = rom_translation_ptr + block_prologue_size;                   \
         result = translate_block_##type(pc, false);                           \
                                                                               \
-        if (result) {                                                         \
-          CGBA_EM_BLK_STAT(rom_translation_ptr - (u8 *)bhdr);                 \
+        if (result)                                                           \
           return blkptr;                                                      \
-        }                                                                     \
       }                                                                       \
       return NULL;                                                            \
     }                                                                         \
@@ -3129,6 +3141,18 @@ u8 function_cc *block_lookup_address_thumb(u32 pc)
 
 #define arm_opcode_unconditional_branch                                       \
   (condition == 0x0E)                                                         \
+
+/* SH4 gate elision: 1 only when the just-scanned exit point's EMITTED code
+ * provably ends with a terminal jump (both branch_exit legs jump, dispatch
+ * far-jumps, SWI ends in branch_exit). The arm_exit_point 0xA-0xE range also
+ * matches coprocessor space, and class-1 pc-writers are heterogeneous — those
+ * keep their end-of-block gate. Thumb exit points all emit terminals. */
+#define arm_scan_terminal_emitted                                             \
+  (arm_opcode_branch || arm_opcode_swi ||                                     \
+   ((opcode & 0x12FFF10) == 0x12FFF10) ||       /* BX */                      \
+   ((opcode & 0x8108000) == 0x8108000))         /* LDM {...,pc} */            \
+
+#define thumb_scan_terminal_emitted 1
 
 #define arm_load_opcode()                                                     \
   opcode = readaddress32(pc_address_block, (block_end_pc & 0x7FFF));          \
@@ -3461,8 +3485,8 @@ extern int cgba_dynarec_single_block;
         {                                                                     \
           /* Nothing branches to block_end_pc and the last instruction is an  \
              unconditional branch: the end-of-block translation gate would be \
-             unreachable (SH4: both branch_exit legs jump). */                \
-          ended_uncond = 1;                                                   \
+             unreachable — IF this opcode class emits a terminal jump. */     \
+          ended_uncond = type##_scan_terminal_emitted;                        \
           break;                                                              \
         }                                                                     \
       }                                                                       \
@@ -3725,8 +3749,14 @@ bool translate_block_arm(u32 pc, bool ram_region)
 #endif
   if (ram_region)
     ram_translation_ptr = translation_ptr;
-  else
+  else {
+    /* THIS block's own emission (cursor delta incl. its hashhdr) — measured
+       here, before external-exit resolution recursively translates other
+       blocks, so nested emission isn't double-counted into the stat. */
+    CGBA_EM_BLK_STAT((translation_ptr - rom_translation_ptr) +
+                     sizeof(hashhdr_type));
     rom_translation_ptr = translation_ptr;
+  }
 
 #ifdef SH4_ARCH
   /* Single-block diff mode: skip external-branch resolution to avoid gpSP's
@@ -3737,18 +3767,27 @@ bool translate_block_arm(u32 pc, bool ram_region)
   for(i = 0; i < external_block_exit_position; i++)
   {
     branch_target = external_block_exits[i].branch_target;
+#ifdef SH4_ARCH
+    /* All BIOS targets INCLUDING the SWI vector (0x8) keep dispatching via
+       block_lookup_address -> sh4_bios_fallback_entry. bios_swi_entrypoint
+       is NULL on SH4 (init_bios_hooks is only wired into the mips/x86/arm64
+       backends), so the old ==0x8 arm aborted resolution and left every
+       later exit of an SWI-bearing block unchained. */
+    if (branch_target < 0x00004000u)
+      continue;
+#endif
     if(branch_target == 0x00000008)
       translation_target = bios_swi_entrypoint;
     else {
 #ifdef SH4_ARCH
-      /* BIOS targets must keep dispatching through block_lookup_address so
-         they hit sh4_bios_fallback_entry — translating BIOS natively here
-         would bypass the fallback the port relies on. */
-      if (branch_target < 0x00004000u)
-        continue;
-#endif
+      cgba_cold_gate_probe++;          /* probe, don't heat (see the gate) */
+      translation_target = block_lookup_translate_arm(branch_target);
+      cgba_cold_gate_probe--;
+    }
+#else
       translation_target = block_lookup_translate_arm(branch_target);
     }
+#endif
 #ifdef SH4_ARCH
     if (translation_target == (u8 *)(~(uintptr_t)0)) {
       /* Untranslatable-address sentinel: dispatch traps it loudly via
@@ -3982,8 +4021,14 @@ bool translate_block_thumb(u32 pc, bool ram_region)
 #endif
   if (ram_region)
     ram_translation_ptr = translation_ptr;
-  else
+  else {
+    /* THIS block's own emission (cursor delta incl. its hashhdr) — measured
+       here, before external-exit resolution recursively translates other
+       blocks, so nested emission isn't double-counted into the stat. */
+    CGBA_EM_BLK_STAT((translation_ptr - rom_translation_ptr) +
+                     sizeof(hashhdr_type));
     rom_translation_ptr = translation_ptr;
+  }
 
 #ifdef SH4_ARCH
   /* See translate_block_arm: skip external-branch resolution in single-block
@@ -3993,17 +4038,21 @@ bool translate_block_thumb(u32 pc, bool ram_region)
   for(i = 0; i < external_block_exit_position; i++)
   {
     branch_target = external_block_exits[i].branch_target;
+#ifdef SH4_ARCH
+    /* See the ARM loop: BIOS targets incl. the SWI vector stay unpatched. */
+    if (branch_target < 0x00004000u)
+      continue;
+#endif
     if(branch_target == 0x00000008)
       translation_target = bios_swi_entrypoint;
     else {
 #ifdef SH4_ARCH
-      /* BIOS targets must keep dispatching through block_lookup_address so
-         they hit sh4_bios_fallback_entry — translating BIOS natively here
-         would bypass the fallback the port relies on. */
-      if (branch_target < 0x00004000u)
-        continue;
-#endif
+      cgba_cold_gate_probe++;          /* probe, don't heat (see the gate) */
       translation_target = block_lookup_translate_thumb(branch_target);
+      cgba_cold_gate_probe--;
+#else
+      translation_target = block_lookup_translate_thumb(branch_target);
+#endif
     }
 #ifdef SH4_ARCH
     if (translation_target == (u8 *)(~(uintptr_t)0)) {
