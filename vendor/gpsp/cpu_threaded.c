@@ -64,6 +64,11 @@ u32 rom_cache_watermark = INITIAL_ROM_WATERMARK;
 
 u8 *bios_swi_entrypoint = NULL;
 
+#ifdef SH4_ARCH
+u32 cgba_hle_bios_irq_entry(void);   /* sh4_interp_helpers.c */
+u32 cgba_hle_bios_irq_exit(void);
+#endif
+
 // Contains an offset table to rom_translation cache area
 // It features a chaining linked list for collisions
 // The rom area has a small header section that contains:
@@ -3033,6 +3038,27 @@ u8 function_cc *block_lookup_address_arm(u32 pc)
    * cgba_dynarec_single_block (the diff harness reads reg[REG_PC] as the block
    * end) and would mis-bank an IRQ taken right after the branch. */
   reg[REG_PC] = pc;
+  /* BIOS IRQ wrapper HLE (sh4_interp_helpers.c): dispatch the vector and the
+   * epilogue natively instead of two interpreter round-trips per IRQ. */
+  if(pc == 0x00000018u && reg[CPU_MODE] == MODE_IRQ &&
+     !cgba_dynarec_single_block) {
+    u32 handler = cgba_hle_bios_irq_entry();
+    if(handler != 0)
+      pc = handler;                /* resolve the game handler directly */
+  }
+  else if(pc == 0x00000030u && reg[CPU_MODE] == MODE_IRQ &&
+          !cgba_dynarec_single_block) {
+    u32 np = cgba_hle_bios_irq_exit();
+    if(np == 0x00000018u)          /* pending IRQ re-entry */
+      np = cgba_hle_bios_irq_entry();
+    if(np >= 0x00004000u) {
+      if(reg[REG_CPSR] & 0x20)     /* interrupted code was Thumb */
+        return block_lookup_address_thumb(np & ~1u);
+      pc = np;
+    } else {
+      pc = reg[REG_PC];            /* odd handler: interpreter path */
+    }
+  }
   if(pc < 0x00004000u)
     return (u8 *)sh4_bios_fallback_entry;
 #endif
