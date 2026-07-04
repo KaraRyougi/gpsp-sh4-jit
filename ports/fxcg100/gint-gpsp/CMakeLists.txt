@@ -57,8 +57,8 @@ option(CGBA_SH4_THUMB_BLOCK_NATIVE
   "Enable SH4 native Thumb RAM block-load fast path" ON)
 option(CGBA_SH4_ARM_DEAD_FLAGS
   "ARM dead-flag elimination (OFF forces all-flags-live; A/B diagnostic)" ON)
-set(CGBA_SH4_HOT_THRESHOLD "0" CACHE STRING
-  "Cold-code gate: translate ROM blocks after N dispatches (0 = off; bring-up)")
+set(CGBA_SH4_HOT_THRESHOLD "64" CACHE STRING
+  "Cold-code gate: translate ROM blocks after N dispatches (1-255; 0 = gate off)")
 option(CGBA_SH4_EXACT_CYCLE_BOUNDARIES
   "Headless/debug: check the SH4 dynarec cycle budget at each translated instruction boundary" OFF)
 option(CGBA_SH4_DIFF_DUMP_OPS
@@ -161,10 +161,10 @@ if(CGBA_DYNAREC)
   if(NOT CGBA_SH4_ARM_DEAD_FLAGS)
     target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_SH4_ARM_DEAD_FLAGS=0)
   endif()
-  if(NOT CGBA_SH4_HOT_THRESHOLD STREQUAL "0")
-    target_compile_definitions(cgba-gint-gpsp PRIVATE
-      CGBA_SH4_HOT_THRESHOLD=${CGBA_SH4_HOT_THRESHOLD})
-  endif()
+  # Always pass the threshold: the old NOT-"0" guard made 0 fall back to the
+  # in-code default of 64, so the gate could never actually be disabled.
+  target_compile_definitions(cgba-gint-gpsp PRIVATE
+    CGBA_SH4_HOT_THRESHOLD=${CGBA_SH4_HOT_THRESHOLD})
   # Re-sync the I-cache line for every INSTRUCTION patch (BT/BF/BRA rewrites).
   # All such patches are in not-yet-synced memory by construction, so this is
   # belt-and-suspenders — but it is translate-time-only (a few thousand patches

@@ -375,7 +375,10 @@ static inline int sh4g_thumb_block_native(u8 **tp, u32 opcode, u32 pc,
     }
     if (is_push) {
       sh4_emit_store_greg(&cg, SH4_REG_ARG1, base_reg);
-    } else {
+    } else if (!(is_load && (rlist & (1u << base_reg)))) {
+      /* LDMIA with the base in the rlist: the loaded value already landed in
+         base_reg during the loop and must win (interpreter/fastmem parity) —
+         skip the writeback. STMIA keeps it (stores saw the old base). */
       sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_T1);
       sh4_emit_add_imm(&cg, (int)(count * 4), SH4_REG_T1);
       sh4_emit_store_greg(&cg, SH4_REG_T1, base_reg);

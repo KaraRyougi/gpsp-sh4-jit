@@ -1162,10 +1162,19 @@ static inline int sh4g_arm_dp_native(u8 **tp, u32 opcode, u32 pc, u32 flag_statu
         sh4_emit_store_greg(&cg, SH4_REG_T0, rd);
       sh4g_close(tp, &cg); }
     if (fm) {                                    /* N/Z; V kept; C from shifter */
-      sh4g_set_nz_m(tp, SH4_REG_T0, fm);
-      if (fm & 0x2) {
-        if (shifted)           sh4g_set_c_reg(tp, SH4_REG_ARG2); /* runtime C */
-        else if (c_const >= 0) sh4g_set_c_const(tp, (unsigned)c_const);
+      int have_c = (fm & 0x2) && (shifted || c_const >= 0);
+      if (have_c) {
+        /* One merged NZC pack (V preserved) instead of an NZ pack plus a
+           second CPSR read-modify-write for C: 24-26B vs 32-40B. Plain-reg
+           op2 keeps the old C (shifter carry = C) and stays on the NZ path. */
+        if (!shifted) {
+          sh4_codegen cg = sh4g_open(tp);
+          sh4_emit_mov_imm(&cg, c_const, SH4_REG_ARG2);
+          sh4g_close(tp, &cg);
+        }
+        sh4g_set_flags(tp, SH4_REG_T0, SH4_REG_ARG2, SH4_REG_ARG2, 0xE);
+      } else {
+        sh4g_set_nz_m(tp, SH4_REG_T0, fm);
       }
     }
     return 1;

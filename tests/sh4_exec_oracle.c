@@ -301,6 +301,8 @@ static int run_at(u32 pc, u32 pc_end)
     else if ((op & 0xF0FF) == 0x4029) R[nn] >>= 16;
     else if ((op & 0xF0FF) == 0x4004) { T = (int)(R[nn] >> 31); R[nn] = (R[nn] << 1) | (u32)T; }
     else if ((op & 0xF0FF) == 0x4005) { T = (int)(R[nn] & 1); R[nn] = (R[nn] >> 1) | ((u32)T << 31); }
+    else if ((op & 0xF0FF) == 0x4025) { int ot = T; T = (int)(R[nn] & 1);
+                                        R[nn] = (R[nn] >> 1) | ((u32)ot << 31); }  /* ROTCR */
     else if ((op & 0xF0FF) == 0x4011) T = ((s32)R[nn] >= 0);
     else if ((op & 0xF0FF) == 0x4015) T = ((s32)R[nn] > 0);
     else if ((op & 0xF000) == 0xD000) {                             /* MOV.L @(d,PC) */
@@ -1252,18 +1254,20 @@ int main(void)
 
   /* ---- fastmem: block transfers through the runtime-rlist routines ---- */
   {
-    struct bf { u32 op; int is_arm; const char *nm; } bforms[] = {
-      { 0xE8B20039u, 1, "ldmia r2!,{r0,r3-r5}" },
-      { 0xE8920039u, 1, "ldmia r2,{r0,r3-r5}"  },
-      { 0xE8A200F0u, 1, "stmia r2!,{r4-r7}"    },
-      { 0xE92200F0u, 1, "stmdb r2!,{r4-r7}"    },
-      { 0xE9320039u, 1, "ldmdb r2!,{r0,r3-r5}" },
-      { 0x0000B407u, 0, "push {r0-r2}"         },
-      { 0x0000B507u, 0, "push {r0-r2,lr}"      },
-      { 0x0000BC07u, 0, "pop  {r0-r2}"         },
-      { 0x0000C11Cu, 0, "stmia r1!,{r2-r4}"    },
-      { 0x0000C91Cu, 0, "ldmia r1!,{r2-r4}"    },
-      { 0x0000C916u, 0, "ldmia r1!,{r1,r2,r4}" },
+    struct bf { u32 op; int is_arm; int inline_path; const char *nm; } bforms[] = {
+      { 0xE8B20039u, 1, 0, "ldmia r2!,{r0,r3-r5}" },
+      { 0xE8920039u, 1, 0, "ldmia r2,{r0,r3-r5}"  },
+      { 0xE8A200F0u, 1, 0, "stmia r2!,{r4-r7}"    },
+      { 0xE92200F0u, 1, 0, "stmdb r2!,{r4-r7}"    },
+      { 0xE9320039u, 1, 0, "ldmdb r2!,{r0,r3-r5}" },
+      { 0x0000B407u, 0, 0, "push {r0-r2}"         },
+      { 0x0000B507u, 0, 0, "push {r0-r2,lr}"      },
+      { 0x0000BC07u, 0, 0, "pop  {r0-r2}"         },
+      { 0x0000C11Cu, 0, 0, "stmia r1!,{r2-r4}"    },
+      { 0x0000C91Cu, 0, 0, "ldmia r1!,{r2-r4}"    },
+      { 0x0000C916u, 0, 0, "ldmia r1!,{r1,r2,r4}" },
+      { 0x0000C803u, 0, 1, "ldmia r0!,{r0,r1}"    },  /* count<3: inline path,
+                                                         base in rlist (wb skip) */
     };
     struct bt2 { u32 base; int slow_ld; int slow_st; const char *nm; } btgts[] = {
       { 0x03000200u, 0, 0, "iwram" },
@@ -1356,6 +1360,8 @@ int main(void)
         int slow = (!ran && orc_took_slow);
         int want_slow = is_load ? btgts[ti].slow_ld : btgts[ti].slow_st;
         if (regn == 6 && !is_load) want_slow = 0;    /* vram word stores ok */
+        if (bforms[fi].inline_path && regn != 2 && regn != 3)
+          want_slow = 1;         /* count<3 inline path is RAM-only */
         if (ti == 5)                                 /* unaligned: ARM masks */
           want_slow = !is_arm;
         if (ti == 6)                                 /* straddle: form-dependent */

@@ -397,11 +397,16 @@ static inline u32 sh4g_flags_round(u32 mask)
 }
 
 /* Write the flags selected by `eff` (a ROUNDED mask: 0/0x8/0xC/0xE/0xF) into
- * reg[REG_CPSR], preserving the rest. N/Z come from `result` (must be R1);
- * C/V come from 0/1 values in rc/rv, read only when their bit is set — pass
- * anything for unused ones. rc/rv must not be R0/R2/R3. Clobbers R0/R2/R3.
- * The eff==0xF/0xE/0xC orderings are byte-identical to the historical
- * sh4g_set_nzcv/set_nzc/set_nz, which the emission audits pin. */
+ * reg[REG_CPSR], preserving the rest. N/Z come from `result`; C/V come from
+ * 0/1 values in rc/rv, read (not clobbered) only when their bit is set — pass
+ * anything for unused ones. rc/rv must not be R0/R2/R3. Clobbers R0/R2/R3 and
+ * leaves T = N (callers treat T as scratch; sh4g_cond_to_T recomputes).
+ *
+ * ROTCR insertion: pre-shift CPSR left by the live-flag count (dropping the
+ * old bits), then rotate each new flag in through T from the LOWEST live bit
+ * up, so the last insert lands N at bit31 and the preserved bits return to
+ * place. 12/16/24/30 bytes for N/NZ/NZC/NZCV vs 18/28/40/48 for the old
+ * mask-build + OR-merge chains. */
 static inline void sh4g_set_flags(u8 **tp, unsigned result, unsigned rc,
                                   unsigned rv, u32 eff)
 {
@@ -412,47 +417,37 @@ static inline void sh4g_set_flags(u8 **tp, unsigned result, unsigned rc,
   if (!eff)
     return;
   cg = sh4g_open(tp);
-  sh4_emit_load_greg(&cg, SH4_GREG_CPSR, r_cpsr);
-  switch (eff) {                              /* clear the live bits */
+  sh4_emit_mov_reg(&cg, SH4_REG_CPSR, r_cpsr);   /* cached CPSR (R8) */
+  switch (eff) {                              /* drop the live top bits */
   case 0x8:
-    sh4_emit_shll(&cg, r_cpsr);  sh4_emit_shlr(&cg, r_cpsr);  break;
+    sh4_emit_shll(&cg, r_cpsr);  break;
   case 0xC:
-    sh4_emit_shll2(&cg, r_cpsr); sh4_emit_shlr2(&cg, r_cpsr); break;
+    sh4_emit_shll2(&cg, r_cpsr); break;
   case 0xE:
-    sh4_emit_shll2(&cg, r_cpsr); sh4_emit_shll(&cg, r_cpsr);
-    sh4_emit_shlr2(&cg, r_cpsr); sh4_emit_shlr(&cg, r_cpsr);  break;
+    sh4_emit_shll2(&cg, r_cpsr); sh4_emit_shll(&cg, r_cpsr); break;
   default:                                    /* 0xF */
-    sh4_emit_shll2(&cg, r_cpsr); sh4_emit_shll2(&cg, r_cpsr);
-    sh4_emit_shlr2(&cg, r_cpsr); sh4_emit_shlr2(&cg, r_cpsr); break;
+    sh4_emit_shll2(&cg, r_cpsr); sh4_emit_shll2(&cg, r_cpsr); break;
   }
 
-  if (eff & 0x8) {                            /* N = result & 0x80000000 */
-    sh4_emit_mov_reg(&cg, result, r_tmp);
-    sh4_emit_mov_imm(&cg, 1, SH4_REG_RET);
-    sh4_emit_rotr(&cg, SH4_REG_RET);          /* R0 = 0x80000000 */
-    sh4_emit_and(&cg, SH4_REG_RET, r_tmp);
-    sh4_emit_or(&cg, r_tmp, r_cpsr);
-  }
-  if (eff & 0x4) {                            /* Z = (result == 0) << 30 */
-    sh4_emit_tst(&cg, result, result);
-    sh4_emit_movt(&cg, r_tmp);
-    sh4_emit_mov_imm(&cg, 30, SH4_REG_RET);
-    sh4_emit_shld(&cg, SH4_REG_RET, r_tmp);
-    sh4_emit_or(&cg, r_tmp, r_cpsr);
-  }
-  if (eff & 0x2) {                            /* C = rc << 29 */
-    sh4_emit_mov_reg(&cg, rc, r_tmp);
-    sh4_emit_mov_imm(&cg, 29, SH4_REG_RET);
-    sh4_emit_shld(&cg, SH4_REG_RET, r_tmp);
-    sh4_emit_or(&cg, r_tmp, r_cpsr);
-  }
-  if (eff & 0x1) {                            /* V = rv << 28 */
+  if (eff & 0x1) {                            /* V in first (ends at bit28) */
     sh4_emit_mov_reg(&cg, rv, r_tmp);
-    sh4_emit_mov_imm(&cg, 28, SH4_REG_RET);
-    sh4_emit_shld(&cg, SH4_REG_RET, r_tmp);
-    sh4_emit_or(&cg, r_tmp, r_cpsr);
+    sh4_emit_shlr(&cg, r_tmp);                /* T = rv (0/1) */
+    sh4_emit_rotcr(&cg, r_cpsr);
   }
-  sh4_emit_store_greg(&cg, r_cpsr, SH4_GREG_CPSR);
+  if (eff & 0x2) {                            /* C */
+    sh4_emit_mov_reg(&cg, rc, r_tmp);
+    sh4_emit_shlr(&cg, r_tmp);                /* T = rc (0/1) */
+    sh4_emit_rotcr(&cg, r_cpsr);
+  }
+  if (eff & 0x4) {                            /* Z */
+    sh4_emit_tst(&cg, result, result);        /* T = (result == 0) */
+    sh4_emit_rotcr(&cg, r_cpsr);
+  }
+  /* N last: lands at bit31 */
+  sh4_emit_mov_reg(&cg, result, r_tmp);
+  sh4_emit_shll(&cg, r_tmp);                  /* T = result bit31 */
+  sh4_emit_rotcr(&cg, r_cpsr);
+  sh4_emit_mov_reg(&cg, r_cpsr, SH4_REG_CPSR);   /* commit cached CPSR */
   sh4g_close(tp, &cg);
 }
 
