@@ -966,8 +966,25 @@ int cgba_sh4_arm_block(u32 opcode, u32 pc)
 
 /* ===================== ARM data-processing ========================= */
 
+#ifdef CGBA_GPSP_HEADLESS_TEST
+/* dp fallback mix: [op nibble] and reason flags */
+u32 cgba_dp_fb_op[16];
+u32 cgba_dp_fb_pc, cgba_dp_fb_regshift, cgba_dp_fb_ror, cgba_dp_fb_s;
+#endif
+
 int cgba_sh4_arm_dp(u32 opcode, u32 pc)
 {
+#ifdef CGBA_GPSP_HEADLESS_TEST
+  cgba_dp_fb_op[(opcode >> 21) & 0xF]++;
+  if (((opcode >> 12) & 0xF) == 15 || ((opcode >> 16) & 0xF) == 15 ||
+      (!(opcode & 0x02000000) && (opcode & 0xF) == 15))
+    cgba_dp_fb_pc++;
+  else if (!(opcode & 0x02000000) && (opcode & 0x10))
+    cgba_dp_fb_regshift++;
+  else if (!(opcode & 0x02000000) && ((opcode >> 5) & 3) == 3 && (opcode & 0xFF0))
+    cgba_dp_fb_ror++;
+  if ((opcode >> 20) & 1) cgba_dp_fb_s++;
+#endif
   CGBA_SH4_HELPER_HIT(arm_dp);
   u32 op = (opcode >> 21) & 0xF;
   u32 set_flags = (opcode >> 20) & 1;
@@ -1172,8 +1189,124 @@ void sh4_swi_handler(void)
   reg[REG_PC] = 0x00000008u;                                /* SWI vector */
 }
 
+#ifdef CGBA_GPSP_HEADLESS_TEST
+u32 cgba_bios_entry_swi, cgba_bios_entry_irq, cgba_bios_entry_other;
+u32 cgba_bios_hle_irq_in, cgba_bios_hle_irq_out;
+#endif
+
+/* ---- BIOS IRQ wrapper HLE --------------------------------------------------
+ * Every raised IRQ used to make TWO interpreter round-trips: vector 0x18 runs
+ * the 5-instruction BIOS dispatch stub, and the game handler's return lands on
+ * the 2-instruction epilogue at 0x30 (AW fires ~119 IRQs/frame -> ~490k
+ * fallback entries in the first 2000 frames, ~10% of all cycles in setup/exit
+ * overhead alone). These two stubs of the shipped open BIOS are emulated here
+ * state-identically (same pushes, same registers, same SPSR restore) and the
+ * dispatcher never leaves native code. Anything unusual (non-IRQ mode, odd
+ * handler address) falls back to the interpreter path unchanged.
+ *
+ * open_gba_bios.bin wrapper (disassembled):
+ *   0x18: b 0x20
+ *   0x20: stmdb sp!,{r0-r3,r12,lr}
+ *   0x24: mov r0,#0x04000000
+ *   0x28: mov lr,pc              ; lr = 0x30
+ *   0x2c: ldr pc,[r0,#-4]        ; pc = [0x03007FFC]
+ *   0x30: ldmia sp!,{r0-r3,r12,lr}
+ *   0x34: subs pc,lr,#4          ; CPSR = SPSR_irq
+ *
+ * Timing: the handful of BIOS fetch cycles per stub are NOT debited (the
+ * budget register is not reachable from the resolver); the data accesses
+ * charge normally via execute_load/store. ~10 uncharged cycles per IRQ is
+ * within the port's accepted approximate-timing envelope. */
+u32 cgba_hle_bios_irq_entry(void)
+{
+  u32 handler = execute_load_u32(0x03007FFCu);
+  u32 sp;
+
+  if ((handler & 3) || handler < 0x02000000u || handler >= 0x0E000000u)
+    return 0;                      /* odd/garbage handler: interpreter path */
+
+  sp = reg[REG_SP] - 24;
+  execute_store_u32(sp +  0, reg[0]);
+  execute_store_u32(sp +  4, reg[1]);
+  execute_store_u32(sp +  8, reg[2]);
+  execute_store_u32(sp + 12, reg[3]);
+  execute_store_u32(sp + 16, reg[12]);
+  execute_store_u32(sp + 20, reg[REG_LR]);
+  if (cgba_store_alert) {          /* IRQ stack over tagged RAM code (rare) */
+    cpu_alert_type a = cgba_store_alert;
+    cgba_store_alert = CPU_ALERT_NONE;
+    if (a & CPU_ALERT_SMC)
+      flush_translation_cache_ram();
+  }
+  reg[REG_SP] = sp;
+  reg[REG_LR] = 0x00000030u;
+  reg[0] = 0x04000000u;
+  reg[REG_PC] = handler;
+#ifdef CGBA_GPSP_HEADLESS_TEST
+  cgba_bios_hle_irq_in++;
+#endif
+  return handler;
+}
+
+u32 cgba_hle_bios_irq_exit(void)
+{
+  u32 sp = reg[REG_SP];
+  u32 spsr_v, ret_pc;
+
+  reg[0]       = execute_load_u32(sp +  0);
+  reg[1]       = execute_load_u32(sp +  4);
+  reg[2]       = execute_load_u32(sp +  8);
+  reg[3]       = execute_load_u32(sp + 12);
+  reg[12]      = execute_load_u32(sp + 16);
+  reg[REG_LR]  = execute_load_u32(sp + 20);
+  reg[REG_SP]  = sp + 24;
+
+  ret_pc = reg[REG_LR] - 4;
+  spsr_v = REG_SPSR(MODE_IRQ);
+  reg[REG_CPSR] = spsr_v;
+  set_cpu_mode(cpu_modes[spsr_v & 0xF]);
+  reg[REG_PC] = ret_pc;
+
+  /* Pending-IRQ recheck, mirroring the interpreter's check_for_interrupts
+   * after an SPSR restore: re-enter the IRQ vector immediately. */
+  if ((read_ioreg(REG_IE) & read_ioreg(REG_IF)) && read_ioreg(REG_IME) &&
+      (reg[REG_CPSR] & 0x80) == 0) {
+    REG_MODE(MODE_IRQ)[6] = ret_pc + 4;
+    REG_SPSR(MODE_IRQ) = reg[REG_CPSR];
+    reg[REG_CPSR] = 0xD2;
+    reg[REG_PC] = 0x00000018u;
+    set_cpu_mode(MODE_IRQ);
+  }
+#ifdef CGBA_GPSP_HEADLESS_TEST
+  cgba_bios_hle_irq_out++;
+#endif
+  return reg[REG_PC];
+}
+
+extern int cgba_dynarec_single_block;
+
 u32 cgba_sh4_bios_fallback(u32 cycles)
 {
+#ifdef CGBA_GPSP_HEADLESS_TEST
+  u32 cgba_entry_pc_bios = reg[REG_PC];
+#endif
+  /* IRQ wrapper HLE: the asm dispatch stubs route every pc < 0x4000 here
+   * before the C resolver can see it, so the vector/epilogue fast paths hook
+   * the fallback itself. On success reg[REG_PC] is the game handler (or the
+   * interrupted code) and the stub's lookup_pc redispatches natively. */
+  if (!cgba_dynarec_single_block && reg[CPU_MODE] == MODE_IRQ) {
+    if (reg[REG_PC] == 0x00000018u) {
+      if (cgba_hle_bios_irq_entry() != 0)
+        return cycles;
+    } else if (reg[REG_PC] == 0x00000030u) {
+      u32 np = cgba_hle_bios_irq_exit();
+      if (np != 0x00000018u)
+        return cycles;
+      if (cgba_hle_bios_irq_entry() != 0)   /* immediate pending re-entry */
+        return cycles;
+      /* odd handler: fall through and interpret from the vector */
+    }
+  }
   /* Interpret ONLY while the PC is inside the BIOS (region-exit stop mode,
    * cpu.cc CGBA_DIFF_STOP_CHECK): the instant execution reaches game code
    * (PC >= 0x4000) control returns and the stub re-dispatches into the JIT.
@@ -1198,6 +1331,12 @@ u32 cgba_sh4_bios_fallback(u32 cycles)
     if (used > 0)
       cgba_sh4_bios_fallback_cycle_count += (u32)used;
   }
+#endif
+#ifdef CGBA_GPSP_HEADLESS_TEST
+  /* classify entries: SWI vector / IRQ vector / mid-BIOS resume */
+  if (cgba_entry_pc_bios == 0x08) cgba_bios_entry_swi++;
+  else if (cgba_entry_pc_bios == 0x18) cgba_bios_entry_irq++;
+  else cgba_bios_entry_other++;
 #endif
 
   if (reg[REG_PC] >= 0x00004000u) {      /* left the BIOS: back to the JIT */

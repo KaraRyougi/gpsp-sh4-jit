@@ -1174,6 +1174,29 @@ static int cgba_headless_test(uint16_t *framebuffer)
 		cgba_em_pj_n, cgba_em_pj_bytes,
 		cgba_em_fm_n, cgba_em_fm_bytes);
 	hputs_dbg(buf);
+	{
+		extern unsigned long cgba_em_blk_n;   /* anchor: same block */
+		extern u32 cgba_bios_entry_swi, cgba_bios_entry_irq, cgba_bios_entry_other;
+		snprintf(buf, sizeof buf, "jit bios entries swi=%lu irq=%lu other=%lu",
+			(unsigned long)cgba_bios_entry_swi,
+			(unsigned long)cgba_bios_entry_irq,
+			(unsigned long)cgba_bios_entry_other);
+		hputs_dbg(buf);
+	}
+	{
+		extern u32 cgba_dp_fb_op[16];
+		extern u32 cgba_dp_fb_pc, cgba_dp_fb_regshift, cgba_dp_fb_ror, cgba_dp_fb_s;
+		snprintf(buf, sizeof buf,
+			"jit dp-fb pc=%lu rs=%lu ror=%lu s=%lu op:0=%lu 1=%lu 2=%lu 4=%lu 8=%lu 9=%lu C=%lu D=%lu E=%lu",
+			(unsigned long)cgba_dp_fb_pc, (unsigned long)cgba_dp_fb_regshift,
+			(unsigned long)cgba_dp_fb_ror, (unsigned long)cgba_dp_fb_s,
+			(unsigned long)cgba_dp_fb_op[0], (unsigned long)cgba_dp_fb_op[1],
+			(unsigned long)cgba_dp_fb_op[2], (unsigned long)cgba_dp_fb_op[4],
+			(unsigned long)cgba_dp_fb_op[8], (unsigned long)cgba_dp_fb_op[9],
+			(unsigned long)cgba_dp_fb_op[12], (unsigned long)cgba_dp_fb_op[13],
+			(unsigned long)cgba_dp_fb_op[14]);
+		hputs_dbg(buf);
+	}
 	snprintf(buf, sizeof buf,
 		"jit helpers arm ldst=%lu blk=%lu dp=%lu mul=%lu psr=%lu swp=%lu",
 		(unsigned long)cgba_sh4_helper_arm_ldst_count,
@@ -1231,6 +1254,29 @@ static int cgba_headless_test(uint16_t *framebuffer)
 		cgba_em_pj_n, cgba_em_pj_bytes,
 		cgba_em_fm_n, cgba_em_fm_bytes);
 	hputs_dbg(buf);
+	{
+		extern unsigned long cgba_em_blk_n;   /* anchor: same block */
+		extern u32 cgba_bios_entry_swi, cgba_bios_entry_irq, cgba_bios_entry_other;
+		snprintf(buf, sizeof buf, "jit bios entries swi=%lu irq=%lu other=%lu",
+			(unsigned long)cgba_bios_entry_swi,
+			(unsigned long)cgba_bios_entry_irq,
+			(unsigned long)cgba_bios_entry_other);
+		hputs_dbg(buf);
+	}
+	{
+		extern u32 cgba_dp_fb_op[16];
+		extern u32 cgba_dp_fb_pc, cgba_dp_fb_regshift, cgba_dp_fb_ror, cgba_dp_fb_s;
+		snprintf(buf, sizeof buf,
+			"jit dp-fb pc=%lu rs=%lu ror=%lu s=%lu op:0=%lu 1=%lu 2=%lu 4=%lu 8=%lu 9=%lu C=%lu D=%lu E=%lu",
+			(unsigned long)cgba_dp_fb_pc, (unsigned long)cgba_dp_fb_regshift,
+			(unsigned long)cgba_dp_fb_ror, (unsigned long)cgba_dp_fb_s,
+			(unsigned long)cgba_dp_fb_op[0], (unsigned long)cgba_dp_fb_op[1],
+			(unsigned long)cgba_dp_fb_op[2], (unsigned long)cgba_dp_fb_op[4],
+			(unsigned long)cgba_dp_fb_op[8], (unsigned long)cgba_dp_fb_op[9],
+			(unsigned long)cgba_dp_fb_op[12], (unsigned long)cgba_dp_fb_op[13],
+			(unsigned long)cgba_dp_fb_op[14]);
+		hputs_dbg(buf);
+	}
 	snprintf(buf, sizeof buf,
 		"jit helpers arm ldst=%lu blk=%lu dp=%lu mul=%lu psr=%lu swp=%lu",
 		(unsigned long)cgba_sh4_helper_arm_ldst_count,

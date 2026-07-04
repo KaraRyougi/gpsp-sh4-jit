@@ -783,6 +783,8 @@ int main(void)
       0x00000244u,          /* r4, asr #4 */
       0x00000024u,          /* r4, lsr #32 */
       0x00000044u,          /* r4, asr #32 */
+      0x00000264u,          /* r4, ror #4 */
+      0x00000E64u,          /* r4, ror #28 */
     };
     static const u32 vals2[] = {
       0, 1, 0x80000000u, 0x7FFFFFFFu, 0xFFFFFFFFu, 0x12345678u, 0xA5A50000u
@@ -796,8 +798,11 @@ int main(void)
                 for (unsigned mi = 0; mi < sizeof masks / sizeof *masks; mi++) {
                   int is_test = (aop >= 8 && aop <= 0xB);
                   if (is_test && !S) continue;              /* not encodable */
+                  /* pass 2 of the vi loop doubles as a PC-operand pass:
+                     rn = PC on odd vi (the emitter folds pc+8 to a const) */
+                  u32 rn_field = (vi & 1) ? 15u : 2u;
                   u32 opcode = 0xE0000000u | (aop << 21) | ((u32)S << 20)
-                             | (2u << 16) | (3u << 12) | op2s[oi];
+                             | (rn_field << 16) | (3u << 12) | op2s[oi];
                   static u8 abuf[1024]; u8 *ap = abuf;
                   u32 fm2 = S ? masks[mi] : 0;
 
@@ -818,7 +823,7 @@ int main(void)
                   }
 
                   /* reference: mirror cgba_sh4_arm_dp + arm_shifter_operand */
-                  u32 a = vals2[vi];
+                  u32 a = (rn_field == 15) ? pc + 8 : vals2[vi];
                   u32 carry = (u32)cin, oldc = (u32)cin;
                   u32 b;
                   if (opcode & 0x02000000u) {
@@ -838,9 +843,13 @@ int main(void)
                       if (amount == 0) { carry = (val >> 31) & 1; b = 0; }
                       else { carry = (val >> (amount - 1)) & 1; b = val >> amount; }
                       break;
-                    default:
+                    case 2:
                       if (amount == 0) { carry = (val >> 31) & 1; b = (u32)((s32)val >> 31); }
                       else { carry = (val >> (amount - 1)) & 1; b = (u32)((s32)val >> amount); }
+                      break;
+                    default:            /* ROR #n (RRX never passes the emitter) */
+                      carry = (val >> (amount - 1)) & 1;
+                      b = (val >> amount) | (val << (32 - amount));
                       break;
                     }
                   }

@@ -1505,6 +1505,36 @@ int cgba_diff_stop_on_budget;
  * last instruction's flags — a chunk boundary between CMP and Bcc then takes
  * the wrong arm (found as an eternal poll loop under the cold-code gate; the
  * BIOS-exit mode had the same latent hazard for flags read after SWI). */
+/* Block-entry-accurate heating for the cold-code gate: while interpreting a
+ * budget chunk, every branch TARGET in ROM bumps the same hot table the
+ * dispatch gate uses (saturating AT the threshold so the u8 never wraps back
+ * to cold). Chunk-START sampling alone can never heat once-per-frame engine
+ * code whose entry pc varies — AW sat at ~50 interpreted chunks/frame forever
+ * (execute_arm = 45% of all executed instructions in the first 2000 frames).
+ * Detection: pc != the sequentially-expected next pc at the loop top. */
+extern "C" {
+extern u8 cgba_hot_count[16384];
+}
+#ifndef CGBA_SH4_HOT_THRESHOLD
+#define CGBA_SH4_HOT_THRESHOLD 64
+#endif
+#define CGBA_COLD_HEAT(isz, thumbbit)                                         \
+  do { if(cgba_diff_stop_active && cgba_diff_stop_on_budget) {                \
+         u32 _hp = reg[REG_PC];                                               \
+         if(_hp != cgba_heat_expect && (_hp >> 24) >= 0x8) {                  \
+           u32 _hi = ((_hp | (thumbbit)) * 2654435761U) >> 18;                \
+           /* +4: being SEEN in the interpreter is strong evidence — promote
+            * once-per-frame code in ~T/4 frames instead of T (the AW intro
+            * re-warms fresh code every scene; at +1 each new scene spent its
+            * first ~64 frames interpreted). Saturate AT threshold: the u8
+            * must never wrap back below it. */                               \
+           u8 _hc = cgba_hot_count[_hi];                                      \
+           cgba_hot_count[_hi] = (_hc < CGBA_SH4_HOT_THRESHOLD - 4)           \
+             ? (u8)(_hc + 4) : (u8)CGBA_SH4_HOT_THRESHOLD;                    \
+         }                                                                    \
+         cgba_heat_expect = _hp + (isz);                                      \
+       } } while(0)
+
 #define CGBA_DIFF_STOP_CHECK()                                                \
   do { if(cgba_diff_stop_active) {                                            \
          if(cgba_diff_stop_on_budget) {                                       \
@@ -1529,6 +1559,7 @@ int cgba_diff_stop_on_budget;
   while(0)
 #else
 #define CGBA_DIFF_STOP_CHECK() do {} while(0)
+#define CGBA_COLD_HEAT(isz, thumbbit) do {} while(0)
 #endif
 
 #ifdef CGBA_SH4_DIFF_DUMP_OPS
@@ -1550,6 +1581,9 @@ void execute_arm(u32 cycles)
   cpu_alert_type cpu_alert;
 #ifdef CGBA_FXCG100
   u32 cgba_detected_idle_pc;
+#endif
+#if defined(CGBA_DYNAREC)
+  u32 cgba_heat_expect = 0xFFFFFFFFu;   /* CGBA_COLD_HEAT sequential tracker */
 #endif
 
   if(!pc_address_block)
@@ -1603,6 +1637,7 @@ arm_loop:
        check_pc_region();
        reg[REG_PC] &= ~0x03;
        CGBA_DIFF_STOP_CHECK();
+       CGBA_COLD_HEAT(4, 0);
        opcode = readaddress32(pc_address_block, (reg[REG_PC] & 0x7FFF));
        condition = opcode >> 28;
 
@@ -3194,6 +3229,7 @@ thumb_loop:
        check_pc_region();
        reg[REG_PC] &= ~0x01;
        CGBA_DIFF_STOP_CHECK();
+       CGBA_COLD_HEAT(2, 1);
        opcode = readaddress16(pc_address_block, (reg[REG_PC] & 0x7FFF));
 
        #ifdef TRACE_INSTRUCTIONS
