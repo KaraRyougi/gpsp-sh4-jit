@@ -809,7 +809,121 @@ static u8 *cgba_state_buffer(void)
 }
 #endif
 
+/* ---- savestate compression (word-RLE) -------------------------------------
+ * GBA state images are dominated by zero/constant runs (EWRAM, VRAM, OAM),
+ * and BFile flash writes cost time proportional to bytes, so a trivial
+ * 32-bit-word RLE cuts save/load time ~3-5x. Stream format:
+ *   u32 CGBA_STATE_COMP_MAGIC, u32 raw_size, then tokens:
+ *     hdr with bit31 set  -> run:     (hdr & 0x7FFFFFFF) copies of next u32
+ *     hdr with bit31 clear-> literal: hdr words follow verbatim
+ * Raw-size files (== GBA_STATE_MEM_SIZE) are still written/accepted, so old
+ * saves and the emulator-harness CGBACHK.SAV workflow keep working. */
+#define CGBA_STATE_COMP_MAGIC 0x435A5331u              /* 'CZS1' */
+
+unsigned cgba_state_compress(const u8 *raw, unsigned rawsz, u8 *out,
+			     unsigned cap)
+{
+	const u32 *w = (const u32 *)(const void *)raw;
+	u32 *o = (u32 *)(void *)out;
+	unsigned n = rawsz / 4, i = 0, ow = 0, ocap = cap / 4;
+
+	if (ocap < 4)
+		return 0;
+	o[ow++] = CGBA_STATE_COMP_MAGIC;
+	o[ow++] = rawsz;
+	while (i < n) {
+		unsigned run = 1;
+		while (i + run < n && w[i + run] == w[i] && run < 0x7FFFFFFFu)
+			run++;
+		if (run >= 3) {
+			if (ow + 2 > ocap)
+				return 0;
+			o[ow++] = 0x80000000u | run;
+			o[ow++] = w[i];
+			i += run;
+		} else {
+			unsigned lit = i, litn = 0;
+			while (i < n) {           /* literals until the next run */
+				unsigned r = 1;
+				while (i + r < n && w[i + r] == w[i] && r < 3)
+					r++;
+				if (r >= 3 && i + r < n && w[i + r] == w[i])
+					break;
+				if (r >= 3)
+					break;
+				i += r; litn += r;
+			}
+			if (ow + 1 + litn > ocap)
+				return 0;
+			o[ow++] = litn;
+			while (litn--)
+				o[ow++] = w[lit++];
+		}
+	}
+	return ow * 4;
+}
+
+int cgba_state_decompress(const u8 *in, unsigned insz, u8 *raw, unsigned rawsz)
+{
+	const u32 *o = (const u32 *)(const void *)in;
+	u32 *w = (u32 *)(void *)raw;
+	unsigned iw = 0, icap = insz / 4, n = rawsz / 4, i = 0;
+
+	if (icap < 2 || o[0] != CGBA_STATE_COMP_MAGIC || o[1] != rawsz)
+		return 0;
+	iw = 2;
+	while (i < n && iw < icap) {
+		u32 hdr = o[iw++];
+		if (hdr & 0x80000000u) {
+			u32 run = hdr & 0x7FFFFFFFu, v;
+			if (iw >= icap || i + run > n)
+				return 0;
+			v = o[iw++];
+			while (run--)
+				w[i++] = v;
+		} else {
+			if (iw + hdr > icap || i + hdr > n)
+				return 0;
+			while (hdr--)
+				w[i++] = o[iw++];
+		}
+	}
+	return i == n;
+}
+
+/* Per-ROM savestate names: "<BASE><slot>.SVS" where BASE = up to 6 filtered
+ * chars of the loaded ROM's label, so different games keep separate slots.
+ * Legacy fixed-name CGBAST<slot>.SAV files are still tried on load. */
 static void cgba_state_path(uint16_t *path, unsigned slot)
+{
+	static const char prefix[] = "\\\\fls0\\";
+	const char *nm = cgba_gpsp_rom_name(cgba_loaded_rom_id);
+	char base[7];
+	unsigned i, b = 0;
+
+	for (i = 0; nm && nm[i] && nm[i] != '.' && b < 6; i++) {
+		char c = nm[i];
+		if (c >= 'a' && c <= 'z')
+			c = (char)(c - 'a' + 'A');
+		if ((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9'))
+			base[b++] = c;
+	}
+	if (b == 0) {
+		base[0] = 'C'; base[1] = 'G'; base[2] = 'B'; base[3] = 'A';
+		b = 4;
+	}
+	base[b] = 0;
+
+	for (i = 0; prefix[i]; i++)
+		path[i] = (uint16_t)prefix[i];
+	for (b = 0; base[b]; b++)
+		path[i++] = (uint16_t)base[b];
+	path[i++] = (uint16_t)('0' + (slot % 10));
+	path[i++] = '.'; path[i++] = 'S'; path[i++] = 'V'; path[i++] = 'S';
+	path[i] = 0;
+}
+
+static void cgba_state_path_legacy(uint16_t *path, unsigned slot)
 {
 	static const char tmpl[] = "\\\\fls0\\CGBAST0.SAV";
 	unsigned i;
@@ -820,6 +934,16 @@ static void cgba_state_path(uint16_t *path, unsigned slot)
 	path[13] = (uint16_t)('0' + (slot % 10));
 }
 
+#ifdef CGBA_DYNAREC
+/* Compressed staging lives in the upper half of the borrowed ROM cache. */
+#define CGBA_STATE_COMP_OFF 458752u
+_Static_assert(CGBA_STATE_COMP_OFF >= GBA_STATE_MEM_SIZE,
+	"comp area must not overlap the raw image");
+_Static_assert(CGBA_STATE_COMP_OFF + GBA_STATE_MEM_SIZE + 64 <=
+	       ROM_TRANSLATION_CACHE_SIZE,
+	"comp area must fit the worst case (all-literal) stream");
+#endif
+
 int cgba_gpsp_state_save(unsigned slot)
 {
 	u8 *buf = cgba_state_buffer();
@@ -828,22 +952,62 @@ int cgba_gpsp_state_save(unsigned slot)
 
 	cgba_state_path(path, slot);
 	gba_save_state(buf);
-	ok = fxcg100_storage_write_blob(path, buf, GBA_STATE_MEM_SIZE);
 #ifdef CGBA_DYNAREC
+	{
+		u8 *comp = buf + CGBA_STATE_COMP_OFF;
+		unsigned csz = cgba_state_compress(buf, GBA_STATE_MEM_SIZE,
+			comp, GBA_STATE_MEM_SIZE + 64);
+		if (csz && csz < GBA_STATE_MEM_SIZE) {
+			/* Round the FILE up to 64KB buckets: repeat saves of
+			 * similar size hit write_blob's fast overwrite path
+			 * instead of delete+create; the decoder stops at
+			 * raw_size so the slack tail is ignored. */
+			unsigned fsz = (csz + 0xFFFFu) & ~0xFFFFu;
+			memset(comp + csz, 0, fsz - csz);
+			ok = fxcg100_storage_write_blob(path, comp, fsz);
+		} else {
+			ok = fxcg100_storage_write_blob(path, buf,
+				GBA_STATE_MEM_SIZE);
+		}
+	}
 	flush_translation_cache_rom();      /* the buffer was the code cache */
+#else
+	ok = fxcg100_storage_write_blob(path, buf, GBA_STATE_MEM_SIZE);
 #endif
 	return ok;
 }
 
-int cgba_gpsp_state_load(unsigned slot)
+static int cgba_state_load_from(const uint16_t *path)
 {
 	u8 *buf = cgba_state_buffer();
+	int fsz = fxcg100_storage_blob_size(path);
+
+	if (fsz == (int)GBA_STATE_MEM_SIZE)     /* raw (legacy / harness) */
+		return fxcg100_storage_read_blob(path, buf,
+			GBA_STATE_MEM_SIZE) && gba_load_state(buf);
+#ifdef CGBA_DYNAREC
+	if (fsz > 8 && fsz <= (int)GBA_STATE_MEM_SIZE + 64) {
+		u8 *comp = buf + CGBA_STATE_COMP_OFF;
+		return fxcg100_storage_read_blob(path, comp, (unsigned)fsz) &&
+			cgba_state_decompress(comp, (unsigned)fsz, buf,
+					      GBA_STATE_MEM_SIZE) &&
+			gba_load_state(buf);
+	}
+#endif
+	return 0;
+}
+
+int cgba_gpsp_state_load(unsigned slot)
+{
 	uint16_t path[24];
 	int ok;
 
 	cgba_state_path(path, slot);
-	ok = fxcg100_storage_read_blob(path, buf, GBA_STATE_MEM_SIZE) &&
-		gba_load_state(buf);            /* validates magic/version/size */
+	ok = cgba_state_load_from(path);
+	if (!ok) {                              /* legacy fixed-name fallback */
+		cgba_state_path_legacy(path, slot);
+		ok = cgba_state_load_from(path);
+	}
 #ifdef CGBA_DYNAREC
 	flush_translation_cache_rom();      /* clobbered even on a failed load */
 	/* gba_load_state only flushes when dynarec_enable is set; a state loaded

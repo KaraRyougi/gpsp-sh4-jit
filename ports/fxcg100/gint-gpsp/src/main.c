@@ -326,6 +326,15 @@ static void show_diag_overlay(void)
 #ifndef CGBA_GPSP_HEADLESS_START_HOLD
 #define CGBA_GPSP_HEADLESS_START_HOLD 0u
 #endif
+/* START mashing (menu open/close stress): within [START_FRAME, START_FRAME +
+ * START_HOLD), press START for START_PRESS frames every START_PERIOD frames
+ * instead of holding it. 0 = plain hold (existing behavior). */
+#ifndef CGBA_GPSP_HEADLESS_START_PERIOD
+#define CGBA_GPSP_HEADLESS_START_PERIOD 0u
+#endif
+#ifndef CGBA_GPSP_HEADLESS_START_PRESS
+#define CGBA_GPSP_HEADLESS_START_PRESS 2u
+#endif
 
 #ifndef CGBA_GPSP_HEADLESS_A_FRAME
 #define CGBA_GPSP_HEADLESS_A_FRAME 0u
@@ -408,6 +417,9 @@ static void show_diag_overlay(void)
 
 #ifndef CGBA_GPSP_HEADLESS_SAVE_STATE_FRAME
 #define CGBA_GPSP_HEADLESS_SAVE_STATE_FRAME -1
+#endif
+#ifndef CGBA_GPSP_HEADLESS_SAVE_SLOT_FRAME
+#define CGBA_GPSP_HEADLESS_SAVE_SLOT_FRAME -1
 #endif
 
 #ifndef CGBA_GPSP_HEADLESS_LOAD_STATE
@@ -647,12 +659,52 @@ static int headless_save_checkpoint(unsigned frame)
 	return ok;
 }
 
+#ifdef CGBA_DYNAREC
+unsigned cgba_state_compress(const u8 *raw, unsigned rawsz, u8 *out, unsigned cap);
+int cgba_state_decompress(const u8 *in, unsigned insz, u8 *raw, unsigned rawsz);
+void flush_translation_cache_rom(void);
+#endif
+
+/* Accept a word-RLE compressed checkpoint too (a state saved on the
+ * calculator is compressed now; copying it in as CGBACHK.SAV still works). */
+static int headless_read_checkpoint(void *state, unsigned size)
+{
+	if(headless_read_blob_contents(headless_checkpoint_path, state, size))
+		return 1;                        /* raw image */
+#ifdef CGBA_DYNAREC
+	{
+		extern u8 rom_translation_cache[];
+		u8 *comp = rom_translation_cache;
+		int fd = headless_bfile_open(headless_checkpoint_path,
+			CGBA_HEADLESS_BFILE_READ_ONLY);
+		int fsz, rd;
+
+		if(fd < 0)
+			return 0;
+		fsz = headless_bfile_size(fd);
+		if(fsz <= 8 || fsz > (int)size + 64) {
+			headless_bfile_close(fd);
+			return 0;
+		}
+		rd = headless_bfile_read(fd, comp, fsz, 0);
+		headless_bfile_close(fd);
+		if(!headless_bfile_read_exact_ok(rd, fsz))
+			return 0;
+		if(!cgba_state_decompress(comp, (unsigned)fsz, state, size))
+			return 0;
+		flush_translation_cache_rom();   /* comp staging clobbered it */
+		return 1;
+	}
+#else
+	return 0;
+#endif
+}
+
 static int headless_load_checkpoint(void)
 {
 	void *state = cgba_sh4_checkpoint_buffer();
 	unsigned size = cgba_sh4_checkpoint_size();
-	int read_ok = headless_read_blob_contents(headless_checkpoint_path,
-		state, size);
+	int read_ok = headless_read_checkpoint(state, size);
 	int load_ok = read_ok ? cgba_sh4_checkpoint_restore() : 0;
 	char buf[128];
 
@@ -853,8 +905,15 @@ static uint32_t headless_buttons_for_frame(unsigned frame)
 	const unsigned hold = (unsigned)CGBA_GPSP_HEADLESS_START_HOLD;
 	uint32_t buttons = FXCG100_GBA_BUTTON_NONE;
 
-	if(hold != 0 && frame >= start && frame < start + hold)
+	if(hold != 0 && frame >= start && frame < start + hold) {
+#if CGBA_GPSP_HEADLESS_START_PERIOD > 0
+		if(((frame - start) % (unsigned)CGBA_GPSP_HEADLESS_START_PERIOD) <
+		   (unsigned)CGBA_GPSP_HEADLESS_START_PRESS)
+			buttons |= FXCG100_GBA_BUTTON_START;
+#else
 		buttons |= FXCG100_GBA_BUTTON_START;
+#endif
+	}
 	if(headless_a_down(frame))
 		buttons |= FXCG100_GBA_BUTTON_A;
 #if CGBA_GPSP_HEADLESS_RUN_FRAME > 0
@@ -1049,6 +1108,16 @@ static int cgba_headless_test(uint16_t *framebuffer)
 #if CGBA_GPSP_HEADLESS_SAVE_STATE_FRAME >= 0
 		if((int)frame == CGBA_GPSP_HEADLESS_SAVE_STATE_FRAME)
 			(void)headless_save_checkpoint(frame);
+#endif
+#if CGBA_GPSP_HEADLESS_SAVE_SLOT_FRAME >= 0
+		/* Exercise the REAL calculator savestate path (per-ROM name +
+		 * compression), unlike the raw checkpoint above. */
+		if((int)frame == CGBA_GPSP_HEADLESS_SAVE_SLOT_FRAME) {
+			int ok = cgba_gpsp_state_save(0);
+			snprintf(buf, sizeof buf,
+				"@@CGBA_SLOTSAVE frame=%u ok=%d", frame, ok);
+			hputs_dbg(buf);
+		}
 #endif
 #endif
 		headless_dump_framebuffer(frame, framebuffer);
