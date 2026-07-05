@@ -1333,6 +1333,126 @@ extern int cgba_dynarec_single_block;
  * fetches are uncharged (same accepted envelope as the IRQ-wrapper HLE).
  * Registers: the real routines are compiler-generated C behind a dispatcher
  * — games cannot rely on scratch regs; r0-r3 are left as the inputs. */
+/* ---- bulk copy fast path for CpuSet / CpuFastSet --------------------------
+ * The SWI HLEs copied per-word through the charging execute_load/store
+ * accessors (~40-80 host insns per guest word); AW stages tilemaps with
+ * these every frame (execute_store_u32 + read_memory32 ~6.5% of steady
+ * state). When source and destination ranges each sit linearly inside one
+ * always-mapped region, do a host memmove instead: guest RAM is stored as
+ * LE bytes in every host array, so bytewise copies need no swapping.
+ * Cycle charging replicates the per-word loop EXACTLY (count * per-region
+ * wait states under the same seq flag), so guest-visible timing is
+ * unchanged. SMC follows the store path's contract: any nonzero tag byte
+ * under the destination raises CPU_ALERT_SMC for the HLE tail to consume.
+ * Palette/OAM/IO destinations keep the per-word path (converted-palette
+ * and OAM_UPDATED side effects); ROM sources must sit in one mapped 32KB
+ * page. */
+static u8 *cgba_bulk_ram_host(u32 addr, u32 len, u8 **tags)
+{
+  u32 off;
+  switch (addr >> 24) {
+  case 2:
+    off = addr & 0x3FFFF;
+    if (off + len > 0x40000) return NULL;
+    if (tags) *tags = ewram + 0x40000 + off;
+    return ewram + off;
+  case 3:
+    off = addr & 0x7FFF;
+    if (off + len > 0x8000) return NULL;
+    if (tags) *tags = iwram + off;
+    return iwram + 0x8000 + off;
+  case 6:
+    off = addr & 0x1FFFF;
+    if (off + len > 0x18000) return NULL;
+    if (tags) *tags = NULL;                 /* VRAM: no tag mirror */
+    return vram + off;
+  default:
+    return NULL;
+  }
+}
+
+static const u8 *cgba_bulk_src_host(u32 addr, u32 len)
+{
+  if ((addr >> 24) >= 8 && (addr >> 24) <= 0xD) {   /* gamepak: one page */
+    u8 *page = memory_map_read[(addr & 0x0FFFFFFF) >> 15];
+    u32 off = addr & 0x7FFF;
+    if (!page || off + len > 0x8000) return NULL;
+    return page + off;
+  }
+  return cgba_bulk_ram_host(addr, len, NULL);
+}
+
+static int cgba_bulk_tags_smc(const u8 *tags, u32 len)
+{
+  u32 i = 0;
+  if (!tags) return 0;
+  for (; i + 4 <= len; i += 4)
+    if (*(const u32 *)(const void *)(tags + i)) return 1;
+  for (; i < len; i++)
+    if (tags[i]) return 1;
+  return 0;
+}
+
+/* Word/halfword copy or fill, bulk when both sides resolve. Returns 1 when
+ * handled (cycles charged, SMC alert accumulated), 0 to run the per-word
+ * loop. size_index/width: 1/4 for 32-bit ops, 0/2 for 16-bit. */
+static int cgba_bulk_cpuset(u32 source, u32 dest, u32 count, int fill,
+                            unsigned size_index, u32 openbus)
+{
+  u32 width = size_index ? 4 : 2;
+  u32 len = count * width;
+  u8 *tags = NULL;
+  u8 *d;
+  const u8 *sp = NULL;
+
+  if (!count || len > 0x200000u)
+    return 0;
+  if ((dest & (width - 1)) || (!fill && (source & (width - 1))))
+    return 0;                        /* misaligned: keep per-word semantics */
+  d = cgba_bulk_ram_host(dest, len, &tags);
+  if (!d)
+    return 0;
+  if (!fill) {
+    sp = cgba_bulk_src_host(source, len);
+    if (!sp)
+      return 0;
+  }
+
+  if (fill) {
+    u32 value = (source > 0x0EFFFFFF)
+      ? openbus
+      : (size_index ? execute_load_u32(source) : execute_load_u16(source));
+    u32 i;
+    if (size_index) {
+      u8 b[4] = { (u8)value, (u8)(value >> 8),
+                  (u8)(value >> 16), (u8)(value >> 24) };
+      for (i = 0; i < len; i += 4) memcpy(d + i, b, 4);
+    } else {
+      u8 b[2] = { (u8)value, (u8)(value >> 8) };
+      for (i = 0; i < len; i += 2) memcpy(d + i, b, 2);
+    }
+  } else {
+    memmove(d, sp, len);
+    /* charge the source side like count sequential loads */
+    if (source < 0x10000000u) {
+      u32 sr = source >> 24;
+      cgba_sh4_extra_cycles += (int)count *
+        (cgba_sh4_mem_cycle_seq ? ws_cyc_seq[sr][size_index]
+                                : ws_cyc_nseq[sr][size_index]);
+    }
+  }
+  /* charge the destination side like count stores */
+  {
+    u32 dr = dest >> 24;
+    cgba_sh4_extra_cycles += (int)count *
+      (cgba_sh4_mem_cycle_seq ? ws_cyc_seq[dr][size_index]
+                              : ws_cyc_nseq[dr][size_index]);
+  }
+  if (cgba_bulk_tags_smc(tags, len))
+    cgba_store_alert |= CPU_ALERT_SMC;
+  return 1;
+}
+
 static void cgba_swi_cpuset(u32 source, u32 dest, u32 cnt)
 {
   u32 count = cnt & 0x1FFFFF;
@@ -1341,6 +1461,8 @@ static void cgba_swi_cpuset(u32 source, u32 dest, u32 cnt)
     return;
   if ((cnt >> 26) & 1) {                          /* 32-bit */
     source &= 0xFFFFFFFC; dest &= 0xFFFFFFFC;
+    if (cgba_bulk_cpuset(source, dest, count, (cnt >> 24) & 1, 1, 0x1CAD1CADu))
+      return;
     if ((cnt >> 24) & 1) {
       u32 value = (source > 0x0EFFFFFF) ? 0x1CAD1CAD : execute_load_u32(source);
       while (count--) { execute_store_u32(dest, value); dest += 4; }
@@ -1352,6 +1474,8 @@ static void cgba_swi_cpuset(u32 source, u32 dest, u32 cnt)
       }
     }
   } else {                                        /* 16-bit */
+    if (cgba_bulk_cpuset(source, dest, count, (cnt >> 24) & 1, 0, 0x1CADu))
+      return;
     if ((cnt >> 24) & 1) {
       u32 value = (source > 0x0EFFFFFF) ? 0x1CAD : execute_load_u16(source);
       while (count--) { execute_store_u16(dest, value); dest += 2; }
@@ -1373,6 +1497,9 @@ static void cgba_swi_cpufastset(u32 source, u32 dest, u32 cnt)
     return;
   source &= 0xFFFFFFFC; dest &= 0xFFFFFFFC;
   count = (s32)(cnt & 0x1FFFFF);
+  if (cgba_bulk_cpuset(source, dest, ((u32)count + 7u) & ~7u,
+                       (cnt >> 24) & 1, 1, 0xBAFFFFFBu))
+    return;
   if ((cnt >> 24) & 1) {
     u32 value = (source > 0x0EFFFFFF) ? 0xBAFFFFFB : execute_load_u32(source);
     while (count > 0) {

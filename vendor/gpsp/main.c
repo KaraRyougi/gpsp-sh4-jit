@@ -210,9 +210,28 @@ u32 function_cc update_gba(int remaining_cycles)
 
     // Timers can trigger DMA (usually sound) and consume cycles
     dma_cycles = update_timers(&irq_raised, completed_cycles);
-    // Check for serial port IRQs as well.
-    if (update_serial(completed_cycles))
-      irq_raised |= IRQ_SERIAL;
+    // Check for serial port IRQs as well. Skip the call (once per event
+    // slice) when nothing is scheduled and no cycle-driven device is
+    // active: RFU/Pokemon-serial poll unconditionally; the AdvWars link
+    // only acts as a netplay CLIENT (master pretend-IRQs).
+    {
+      extern u32 serial_irq_cycles;
+      extern int serial_mode;
+      int serial_active = serial_irq_cycles != 0;
+      if (!serial_active)
+        switch (serial_mode) {
+        case SERIAL_MODE_RFU:
+        case SERIAL_MODE_SERIAL_POKE:
+          serial_active = 1; break;
+        case SERIAL_MODE_SERIAL_AW1:
+        case SERIAL_MODE_SERIAL_AW2:
+          serial_active = netplay_client_id != 0; break;
+        default:
+          break;
+        }
+      if (serial_active && update_serial(completed_cycles))
+        irq_raised |= IRQ_SERIAL;
+    }
 
     // Video count tracks the video cycles remaining until the next event
     video_count -= completed_cycles;
