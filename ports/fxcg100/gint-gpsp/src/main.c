@@ -1214,6 +1214,31 @@ static int cgba_headless_test(uint16_t *framebuffer)
 		hputs_dbg(buf);
 	}
 	{
+		extern u32 cgba_bios_hle_swi_count, cgba_bios_hle_irq_in, cgba_bios_hle_irq_out;
+		extern u32 cgba_bios_other_pc[8];
+		snprintf(buf, sizeof buf,
+			"jit hle swi=%lu irqin=%lu irqout=%lu opc=%lX %lX %lX %lX",
+			(unsigned long)cgba_bios_hle_swi_count,
+			(unsigned long)cgba_bios_hle_irq_in,
+			(unsigned long)cgba_bios_hle_irq_out,
+			(unsigned long)cgba_bios_other_pc[0], (unsigned long)cgba_bios_other_pc[1],
+			(unsigned long)cgba_bios_other_pc[2], (unsigned long)cgba_bios_other_pc[3]);
+		hputs_dbg(buf);
+	}
+	{
+		extern u32 cgba_swi_miss[48];
+		unsigned mi; int mn = 0;
+		char *bp = buf;
+		bp += snprintf(bp, sizeof buf, "jit swi-miss");
+		for (mi = 0; mi < 48 && mn < 8; mi++)
+			if (cgba_swi_miss[mi]) {
+				bp += snprintf(bp, (size_t)(buf + sizeof buf - bp),
+					" %02X=%lu", mi, (unsigned long)cgba_swi_miss[mi]);
+				mn++;
+			}
+		hputs_dbg(buf);
+	}
+	{
 		extern u32 cgba_dp_fb_op[16];
 		extern u32 cgba_dp_fb_pc, cgba_dp_fb_regshift, cgba_dp_fb_ror, cgba_dp_fb_s;
 		snprintf(buf, sizeof buf,
@@ -1299,6 +1324,31 @@ static int cgba_headless_test(uint16_t *framebuffer)
 			(unsigned long)cgba_interp_instr_bios,
 			(unsigned long)cgba_interp_instr_rom,
 			(unsigned long)cgba_interp_instr_ram);
+		hputs_dbg(buf);
+	}
+	{
+		extern u32 cgba_bios_hle_swi_count, cgba_bios_hle_irq_in, cgba_bios_hle_irq_out;
+		extern u32 cgba_bios_other_pc[8];
+		snprintf(buf, sizeof buf,
+			"jit hle swi=%lu irqin=%lu irqout=%lu opc=%lX %lX %lX %lX",
+			(unsigned long)cgba_bios_hle_swi_count,
+			(unsigned long)cgba_bios_hle_irq_in,
+			(unsigned long)cgba_bios_hle_irq_out,
+			(unsigned long)cgba_bios_other_pc[0], (unsigned long)cgba_bios_other_pc[1],
+			(unsigned long)cgba_bios_other_pc[2], (unsigned long)cgba_bios_other_pc[3]);
+		hputs_dbg(buf);
+	}
+	{
+		extern u32 cgba_swi_miss[48];
+		unsigned mi; int mn = 0;
+		char *bp = buf;
+		bp += snprintf(bp, sizeof buf, "jit swi-miss");
+		for (mi = 0; mi < 48 && mn < 8; mi++)
+			if (cgba_swi_miss[mi]) {
+				bp += snprintf(bp, (size_t)(buf + sizeof buf - bp),
+					" %02X=%lu", mi, (unsigned long)cgba_swi_miss[mi]);
+				mn++;
+			}
 		hputs_dbg(buf);
 	}
 	{

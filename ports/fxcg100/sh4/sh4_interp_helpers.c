@@ -1506,6 +1506,87 @@ static void cgba_swi_rl_vram(u32 source, u32 dest)
 
 #ifdef CGBA_GPSP_HEADLESS_TEST
 u32 cgba_bios_hle_swi_count;
+u32 cgba_swi_miss[48];
+u32 cgba_bios_other_pc[8];
+#endif
+
+/* ---- IntrWait / VBlankIntrWait HLE ----------------------------------------
+ * The BIOS wait loop `do { halt; CheckInterrupts } while (!flags)` re-enters
+ * the interpreter on EVERY delivered IRQ (Zelda: HBlank IRQs -> ~160
+ * wake/check round-trips per waited frame, 8-16%% of the whole frame). The
+ * loop is a state machine here instead: the guest parks at magic BIOS pc 4
+ * in SVC mode between wakes, checks run in C through the IO-side-effecting
+ * accessors, and halts hand control to update_gba exactly like the
+ * interpreter's halt branch. State 2 = must halt before the first check
+ * (matches the do-while shape); state 1 = check-then-halt. */
+/* DISABLED pending debug: on Zelda the wait wedges — the game keeps calling
+ * IntrWait (parks fire) but ~30%% of waits complete on stale flags without
+ * an IRQ delivery, the screen freezes, and frames complete inside the halt
+ * loop. Needs a lockstep trace of BIOS_IF/IME/CPSR around the park protocol
+ * vs the interpreted loop before it can ship. 0 = off. */
+#ifndef CGBA_SH4_INTRWAIT_HLE
+#define CGBA_SH4_INTRWAIT_HLE 0
+#endif
+#if CGBA_SH4_INTRWAIT_HLE
+static u32 cgba_intrwait_mask;
+static int cgba_intrwait_state;          /* 0 off / 1 check / 2 halt-first */
+
+static u32 cgba_bios_if_check(u32 mask)  /* CheckInterrupts(waitFlags) */
+{
+  u32 intflags, flags;
+  execute_store_u16(0x04000208u, 0);     /* REG_IME = 0 */
+  intflags = execute_load_u16(0x03FFFFF8u);
+  flags = intflags & mask;
+  if (flags)
+    execute_store_u16(0x03FFFFF8u, flags ^ intflags);
+  execute_store_u16(0x04000208u, 1);     /* REG_IME = 1 */
+  return flags;
+}
+
+static u32 cgba_intrwait_halt_wait(u32 cycles)
+{
+  s32 remaining = (s32)cycles;
+  reg[CPU_HALT_STATE] = CPU_HALT;
+  while (reg[CPU_HALT_STATE] != CPU_ACTIVE) {
+    u32 ret;
+#ifdef CGBA_GPSP_HEADLESS_TEST
+    {
+      static u32 dbg_n;
+      if ((++dbg_n & 0x3FFFF) == 0) {
+        static const char h[] = "0123456789ABCDEF";
+        volatile unsigned char *port = (volatile unsigned char *)0xb7000000u;
+        u32 vals[5] = { read_ioreg(REG_IE), read_ioreg(REG_IF),
+                        read_ioreg(REG_IME), reg[REG_CPSR], reg[REG_PC] };
+        int vi, bi;
+        *port='I';*port='W';*port=':';
+        for (vi = 0; vi < 5; vi++) {
+          for (bi = 7; bi >= 0; bi--) *port = h[(vals[vi]>>(bi*4))&0xF];
+          *port=' ';
+        }
+        *port='\n';
+      }
+    }
+#endif
+    ret = update_gba((u32)remaining);
+    if (completed_frame(ret))
+      return ret;                        /* tagged: frame done while parked */
+    remaining = (s32)cycles_to_run(ret);
+  }
+  (void)check_and_raise_interrupts();    /* vector a wake immediately */
+  return (u32)(remaining > 0 ? remaining : 1);
+}
+
+#endif /* CGBA_SH4_INTRWAIT_HLE */
+
+/* Return-from-SWI shared by the SWI HLEs (movs pc,lr from SVC). */
+#if CGBA_SH4_INTRWAIT_HLE
+static void cgba_swi_return(void)
+{
+  u32 spsr_v = REG_SPSR(MODE_SUPERVISOR);
+  reg[REG_PC] = reg[REG_LR];
+  reg[REG_CPSR] = spsr_v;
+  set_cpu_mode(cpu_modes[spsr_v & 0xF]);
+}
 #endif
 
 /* At the SWI vector in SVC mode: run the handled routines natively and
@@ -1523,13 +1604,37 @@ static int cgba_hle_bios_swi(void)
     num = (execute_load_u32(lr - 4) >> 16) & 0xFF;
 
   switch (num) {
+#if CGBA_SH4_INTRWAIT_HLE
+  case 0x04: case 0x05: {                /* IntrWait / VBlankIntrWait */
+    u32 mask = (num == 5) ? 1u : reg[1];
+    u32 discard = (num == 5) ? 1u : reg[0];
+    cgba_intrwait_mask = mask;
+    cgba_intrwait_state = 2;             /* halt before the first check */
+    reg[REG_PC] = 0x00000004u;           /* park (stays in SVC mode) */
+    reg[REG_CPSR] &= ~0x80u;             /* the BIOS body runs with IRQs
+                                            enabled — without this the wait
+                                            can never vector and the game
+                                            freezes while frames complete */
+    if (discard)
+      (void)cgba_bios_if_check(mask);
+    (void)check_and_raise_interrupts();  /* IME=1 with pending -> vector now */
+#ifdef CGBA_GPSP_HEADLESS_TEST
+    cgba_bios_hle_swi_count++;
+#endif
+    return 2;                            /* handled, but NOT a swi-return */
+  }
+#endif
   case 0x0B: cgba_swi_cpuset(reg[0], reg[1], reg[2]); break;
   case 0x0C: cgba_swi_cpufastset(reg[0], reg[1], reg[2]); break;
   case 0x11: cgba_swi_lz77_wram(reg[0], reg[1]); break;
   case 0x12: cgba_swi_lz77_vram(reg[0], reg[1]); break;
   case 0x14: cgba_swi_rl_wram(reg[0], reg[1]); break;
   case 0x15: cgba_swi_rl_vram(reg[0], reg[1]); break;
-  default: return 0;
+  default:
+#ifdef CGBA_GPSP_HEADLESS_TEST
+    if (num < 48) cgba_swi_miss[num]++;
+#endif
+    return 0;
   }
 
   if (cgba_store_alert) {
@@ -1547,6 +1652,30 @@ static int cgba_hle_bios_swi(void)
   return 1;
 }
 
+/* Parked IntrWait re-entry (pc 4, SVC): check, complete, or halt again.
+ * Returns the fallback's budget/tagged contract value. */
+#if CGBA_SH4_INTRWAIT_HLE
+static u32 cgba_hle_intrwait_step(u32 cycles)
+{
+  u32 flags;
+
+  if (cgba_intrwait_state == 2) {
+    cgba_intrwait_state = 1;
+    return cgba_intrwait_halt_wait(cycles);   /* do { HALT; ... } shape */
+  }
+  flags = cgba_bios_if_check(cgba_intrwait_mask);
+  (void)check_and_raise_interrupts();
+  if (reg[REG_PC] != 0x00000004u)
+    return cycles;                       /* IRQ preempted at IME=1: vector */
+  if (flags) {
+    cgba_intrwait_state = 0;
+    cgba_swi_return();
+    return cycles;
+  }
+  return cgba_intrwait_halt_wait(cycles);
+}
+#endif /* CGBA_SH4_INTRWAIT_HLE */
+
 u32 cgba_sh4_bios_fallback(u32 cycles)
 {
 #ifdef CGBA_GPSP_HEADLESS_TEST
@@ -1556,6 +1685,11 @@ u32 cgba_sh4_bios_fallback(u32 cycles)
    * before the C resolver can see it, so the vector/epilogue fast paths hook
    * the fallback itself. On success reg[REG_PC] is the game handler (or the
    * interrupted code) and the stub's lookup_pc redispatches natively. */
+#if CGBA_SH4_INTRWAIT_HLE
+  if (!cgba_dynarec_single_block && cgba_intrwait_state &&
+      reg[REG_PC] == 0x00000004u && reg[CPU_MODE] == MODE_SUPERVISOR)
+    return cgba_hle_intrwait_step(cycles);
+#endif
   if (!cgba_dynarec_single_block && reg[REG_PC] == 0x00000008u &&
       reg[CPU_MODE] == MODE_SUPERVISOR) {
     if (cgba_hle_bios_swi())
@@ -1603,7 +1737,14 @@ u32 cgba_sh4_bios_fallback(u32 cycles)
   /* classify entries: SWI vector / IRQ vector / mid-BIOS resume */
   if (cgba_entry_pc_bios == 0x08) cgba_bios_entry_swi++;
   else if (cgba_entry_pc_bios == 0x18) cgba_bios_entry_irq++;
-  else cgba_bios_entry_other++;
+  else {
+    unsigned oi;
+    cgba_bios_entry_other++;
+    for (oi = 0; oi < 8; oi++) {
+      if (cgba_bios_other_pc[oi] == cgba_entry_pc_bios) break;
+      if (cgba_bios_other_pc[oi] == 0) { cgba_bios_other_pc[oi] = cgba_entry_pc_bios; break; }
+    }
+  }
 #endif
 
   if (reg[REG_PC] >= 0x00004000u) {      /* left the BIOS: back to the JIT */
