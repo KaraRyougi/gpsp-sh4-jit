@@ -1519,17 +1519,55 @@ u32 cgba_bios_other_pc[8];
  * accessors, and halts hand control to update_gba exactly like the
  * interpreter's halt branch. State 2 = must halt before the first check
  * (matches the do-while shape); state 1 = check-then-halt. */
-/* DISABLED pending debug: on Zelda the wait wedges — the game keeps calling
- * IntrWait (parks fire) but ~30%% of waits complete on stale flags without
- * an IRQ delivery, the screen freezes, and frames complete inside the halt
- * loop. Needs a lockstep trace of BIOS_IF/IME/CPSR around the park protocol
- * vs the interpreted loop before it can ship. 0 = off. */
+/* DISABLED pending debug. Progress so far: (1) park must run with IRQs
+ * enabled (CPSR.I clear) or nothing can vector; (2) park must run in SYSTEM
+ * mode with the return state saved OUTSIDE the banked SVC regs — Zelda's
+ * VBlank ISR calls further SWIs (LZ77 VRAM streaming) which re-bank SVC and
+ * clobber lr/SPSR; this fixed boot up to the title screen (f300 parity).
+ * REMAINING wedge: the title screen's first VBlankIntrWait parks with
+ * DISPSTAT.3=1, IE.0=1, IME=1, I=0 — yet REG_IF never flags VBLANK across
+ * dozens of frames while frames complete inside the halt loop (single E,
+ * zero R in a 600-frame trace). Next step: instrument update_gba's VBlank
+ * edge (irq_raised / flag_interrupt) during the park to see why the event
+ * doesn't flag. Traces: cgba_iw_trace E/R/N lines via 0xb7000000. */
 #ifndef CGBA_SH4_INTRWAIT_HLE
 #define CGBA_SH4_INTRWAIT_HLE 0
 #endif
 #if CGBA_SH4_INTRWAIT_HLE
 static u32 cgba_intrwait_mask;
 static int cgba_intrwait_state;          /* 0 off / 1 check / 2 halt-first */
+static u32 cgba_intrwait_ret_pc;         /* saved lr_svc: nested SWIs from the
+                                            VBlank ISR (Zelda streams VRAM via
+                                            LZ77 in its handler) re-bank SVC
+                                            and clobber lr/SPSR — the real
+                                            BIOS runs this body in SYSTEM
+                                            mode for exactly this reason */
+static u32 cgba_intrwait_ret_cpsr;
+
+#ifdef CGBA_GPSP_HEADLESS_TEST
+static void cgba_iw_trace(char tag, u32 a, u32 b)
+{
+  static u32 n;
+  static const char h[] = "0123456789ABCDEF";
+  volatile unsigned char *port = (volatile unsigned char *)0xb7000000u;
+  u32 vals[8]; int vi, bi;
+  if (n >= 2500) return;
+  n++;
+  vals[0] = a; vals[1] = b;
+  vals[2] = read_memory16(0x03FFFFF8u);           /* BIOS_IF (no charge) */
+  vals[3] = read_ioreg(REG_IE); vals[4] = read_ioreg(REG_IF);
+  vals[5] = read_ioreg(REG_IME); vals[6] = reg[REG_CPSR];
+  vals[7] = read_ioreg(REG_DISPSTAT);
+  *port='I';*port='W';*port=tag;*port=':';
+  for (vi = 0; vi < 8; vi++) {
+    for (bi = 7; bi >= 0; bi--) *port = h[(vals[vi]>>(bi*4))&0xF];
+    *port=' ';
+  }
+  *port='\n';
+}
+#else
+#define cgba_iw_trace(t,a,b) ((void)0)
+#endif
 
 static u32 cgba_bios_if_check(u32 mask)  /* CheckInterrupts(waitFlags) */
 {
@@ -1608,13 +1646,20 @@ static int cgba_hle_bios_swi(void)
   case 0x04: case 0x05: {                /* IntrWait / VBlankIntrWait */
     u32 mask = (num == 5) ? 1u : reg[1];
     u32 discard = (num == 5) ? 1u : reg[0];
+    if (cgba_intrwait_state) {
+      cgba_iw_trace('N', num, reg[REG_LR]);
+      return 0;                          /* nested IntrWait: interpreter */
+    }
+    cgba_iw_trace('E', num, reg[REG_LR]);
     cgba_intrwait_mask = mask;
     cgba_intrwait_state = 2;             /* halt before the first check */
-    reg[REG_PC] = 0x00000004u;           /* park (stays in SVC mode) */
-    reg[REG_CPSR] &= ~0x80u;             /* the BIOS body runs with IRQs
-                                            enabled — without this the wait
-                                            can never vector and the game
-                                            freezes while frames complete */
+    cgba_intrwait_ret_pc = reg[REG_LR];  /* save OUTSIDE banked SVC regs */
+    cgba_intrwait_ret_cpsr = REG_SPSR(MODE_SUPERVISOR);
+    /* Park in SYSTEM mode with IRQs enabled, like the real BIOS body: the
+       ISR may invoke further SWIs, which re-enter SVC. */
+    reg[REG_PC] = 0x00000004u;
+    reg[REG_CPSR] = (reg[REG_CPSR] & 0xF0000000u) | 0x1Fu;
+    set_cpu_mode(MODE_SYSTEM);
     if (discard)
       (void)cgba_bios_if_check(mask);
     (void)check_and_raise_interrupts();  /* IME=1 with pending -> vector now */
@@ -1659,6 +1704,7 @@ static u32 cgba_hle_intrwait_step(u32 cycles)
 {
   u32 flags;
 
+  /* S-trace disabled: too chatty for the long trace */
   if (cgba_intrwait_state == 2) {
     cgba_intrwait_state = 1;
     return cgba_intrwait_halt_wait(cycles);   /* do { HALT; ... } shape */
@@ -1669,7 +1715,10 @@ static u32 cgba_hle_intrwait_step(u32 cycles)
     return cycles;                       /* IRQ preempted at IME=1: vector */
   if (flags) {
     cgba_intrwait_state = 0;
-    cgba_swi_return();
+    reg[REG_PC] = cgba_intrwait_ret_pc;
+    reg[REG_CPSR] = cgba_intrwait_ret_cpsr;
+    set_cpu_mode(cpu_modes[cgba_intrwait_ret_cpsr & 0xF]);
+    cgba_iw_trace('R', reg[REG_PC], reg[REG_CPSR]);
     return cycles;
   }
   return cgba_intrwait_halt_wait(cycles);
@@ -1687,7 +1736,7 @@ u32 cgba_sh4_bios_fallback(u32 cycles)
    * interrupted code) and the stub's lookup_pc redispatches natively. */
 #if CGBA_SH4_INTRWAIT_HLE
   if (!cgba_dynarec_single_block && cgba_intrwait_state &&
-      reg[REG_PC] == 0x00000004u && reg[CPU_MODE] == MODE_SUPERVISOR)
+      reg[REG_PC] == 0x00000004u && reg[CPU_MODE] == MODE_SYSTEM)
     return cgba_hle_intrwait_step(cycles);
 #endif
   if (!cgba_dynarec_single_block && reg[REG_PC] == 0x00000008u &&
