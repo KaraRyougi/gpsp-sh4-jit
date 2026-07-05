@@ -4177,6 +4177,18 @@ void flush_translation_cache_ram(void)
 
 void flush_translation_cache_rom(void)
 {
+#ifdef SH4_ARCH
+  /* Decay the cold-gate hot table: dispatch-hot blocks re-heat instantly on
+     their next lookups, but interpreter-heated once-per-frame code cannot
+     reach the threshold between flushes in thrash regimes — keeping the
+     tail interpreted instead of joining the flush churn (see CGBA_COLD_HEAT
+     in cpu.cc). No-flush games never pay this. */
+  {
+    unsigned hi;
+    for (hi = 0; hi < sizeof(cgba_hot_count); hi++)
+      cgba_hot_count[hi] >>= 1;
+  }
+#endif
   /* We flush the generated code except for everything below the watermark. */
 #if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
   cgba_dynarec_rom_flush_count++;

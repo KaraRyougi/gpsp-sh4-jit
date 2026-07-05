@@ -1518,19 +1518,25 @@ extern u8 cgba_hot_count[16384];
 #ifndef CGBA_SH4_HOT_THRESHOLD
 #define CGBA_SH4_HOT_THRESHOLD 64
 #endif
+/* Heat +1 per interpreted branch target, saturating AT the threshold (the
+ * u8 must never wrap back below it). Paired with the halve-on-flush decay in
+ * flush_translation_cache_rom this is regime-safe: in flush-thrash scenes
+ * (working set >> cache, flush epoch ~15-20 frames) +1/visit cannot reach
+ * the threshold between halvings, so the once-per-frame tail stays on the
+ * interpreter — while games whose set fits the cache (AW: 2 flushes in 2000
+ * frames) never decay and promote within a few frames. A +4 variant without
+ * decay re-thrashed Metroid room traversal: rom_flush 177 -> 625, +55%. */
+#ifndef CGBA_SH4_INTERP_HEAT
+#define CGBA_SH4_INTERP_HEAT 1
+#endif
 #define CGBA_COLD_HEAT(isz, thumbbit)                                         \
-  do { if(cgba_diff_stop_active && cgba_diff_stop_on_budget) {                \
+  do { if(CGBA_SH4_INTERP_HEAT &&                                             \
+          cgba_diff_stop_active && cgba_diff_stop_on_budget) {                \
          u32 _hp = reg[REG_PC];                                               \
          if(_hp != cgba_heat_expect && (_hp >> 24) >= 0x8) {                  \
            u32 _hi = ((_hp | (thumbbit)) * 2654435761U) >> 18;                \
-           /* +4: being SEEN in the interpreter is strong evidence — promote
-            * once-per-frame code in ~T/4 frames instead of T (the AW intro
-            * re-warms fresh code every scene; at +1 each new scene spent its
-            * first ~64 frames interpreted). Saturate AT threshold: the u8
-            * must never wrap back below it. */                               \
-           u8 _hc = cgba_hot_count[_hi];                                      \
-           cgba_hot_count[_hi] = (_hc < CGBA_SH4_HOT_THRESHOLD - 4)           \
-             ? (u8)(_hc + 4) : (u8)CGBA_SH4_HOT_THRESHOLD;                    \
+           if(cgba_hot_count[_hi] < CGBA_SH4_HOT_THRESHOLD)                   \
+             cgba_hot_count[_hi]++;                                           \
          }                                                                    \
          cgba_heat_expect = _hp + (isz);                                      \
        } } while(0)
