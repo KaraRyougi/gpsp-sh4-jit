@@ -1515,6 +1515,7 @@ int cgba_diff_stop_on_budget;
 extern "C" {
 extern u8 cgba_hot_count[16384];
 extern u32 cgba_last_rom_flush_frame;   /* cpu_threaded.c, set on rom flush */
+extern int cgba_intrwait_state;         /* sh4_interp_helpers.c IntrWait park */
 }
 #ifndef CGBA_SH4_HOT_THRESHOLD
 #define CGBA_SH4_HOT_THRESHOLD 64
@@ -1572,7 +1573,11 @@ extern u32 cgba_interp_instr_bios, cgba_interp_instr_rom, cgba_interp_instr_ram;
              cgba_diff_stop_cycles_remaining = cycles_remaining; return;      \
            }                                                                  \
          } else if(cgba_diff_stop_on_bios_exit) {                             \
-           if(reg[REG_PC] >= 0x00004000u) {                                   \
+           /* Also stop at the IntrWait park (BIOS pc 4): an interpreted    \
+              IRQ epilogue's subs pc lands there, and executing the real    \
+              vector instruction would run off into the undef handler. */   \
+           if(reg[REG_PC] >= 0x00004000u ||                                   \
+              (reg[REG_PC] == 0x00000004u && cgba_intrwait_state)) {          \
              collapse_flags();                                                \
              cgba_diff_stop_cycles_remaining = cycles_remaining; return;      \
            }                                                                  \
