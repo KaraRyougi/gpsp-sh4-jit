@@ -45,6 +45,9 @@ int cgba_cold_gate_probe;   /* >0: gate checks don't heat (external-exit resolut
 #if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
 u32 cgba_dynarec_cold_interp_count;
 #ifdef CGBA_GPSP_HEADLESS_TEST
+u32 cgba_interp_instr_bios, cgba_interp_instr_rom, cgba_interp_instr_ram;
+#endif
+#ifdef CGBA_GPSP_HEADLESS_TEST
 /* Emission-mix counters (see sh4_emit_glue.h). */
 unsigned long cgba_em_const_small, cgba_em_const_large, cgba_em_const_bytes;
 unsigned long cgba_em_fcall_n, cgba_em_fcall_bytes;
@@ -1285,6 +1288,265 @@ u32 cgba_hle_bios_irq_exit(void)
 
 extern int cgba_dynarec_single_block;
 
+/* ---- BIOS SWI HLE ----------------------------------------------------------
+ * The copy/decompress SWI family dominates interpreter residency in games
+ * that stream graphics (SMA2: 20.6M interpreted BIOS instructions in the
+ * first 2000 frames — 10k/frame — nearly all LZ77/CpuSet loops). These are
+ * faithful ports of the vendored open-BIOS C sources
+ * (vendor/gpsp/bios/source/softwareinterrupts.c), run through the charging
+ * execute_load/store accessors so data-access cycles and SMC alerts behave
+ * exactly like the interpreted loops; only the BIOS's own instruction
+ * fetches are uncharged (same accepted envelope as the IRQ-wrapper HLE).
+ * Registers: the real routines are compiler-generated C behind a dispatcher
+ * — games cannot rely on scratch regs; r0-r3 are left as the inputs. */
+static void cgba_swi_cpuset(u32 source, u32 dest, u32 cnt)
+{
+  u32 count = cnt & 0x1FFFFF;
+  if (((source & 0xe000000) == 0) ||
+      ((source + (((cnt << 11) >> 9) & 0x1fffff)) & 0xe000000) == 0)
+    return;
+  if ((cnt >> 26) & 1) {                          /* 32-bit */
+    source &= 0xFFFFFFFC; dest &= 0xFFFFFFFC;
+    if ((cnt >> 24) & 1) {
+      u32 value = (source > 0x0EFFFFFF) ? 0x1CAD1CAD : execute_load_u32(source);
+      while (count--) { execute_store_u32(dest, value); dest += 4; }
+    } else {
+      while (count--) {
+        execute_store_u32(dest, (source > 0x0EFFFFFF) ? 0x1CAD1CAD
+                                                      : execute_load_u32(source));
+        dest += 4; source += 4;
+      }
+    }
+  } else {                                        /* 16-bit */
+    if ((cnt >> 24) & 1) {
+      u32 value = (source > 0x0EFFFFFF) ? 0x1CAD : execute_load_u16(source);
+      while (count--) { execute_store_u16(dest, value); dest += 2; }
+    } else {
+      while (count--) {
+        execute_store_u16(dest, (source > 0x0EFFFFFF) ? 0x1CAD
+                                                      : execute_load_u16(source));
+        dest += 2; source += 2;
+      }
+    }
+  }
+}
+
+static void cgba_swi_cpufastset(u32 source, u32 dest, u32 cnt)
+{
+  s32 count;
+  if (((source & 0xe000000) == 0) ||
+      ((source + (((cnt << 11) >> 9) & 0x1fffff)) & 0xe000000) == 0)
+    return;
+  source &= 0xFFFFFFFC; dest &= 0xFFFFFFFC;
+  count = (s32)(cnt & 0x1FFFFF);
+  if ((cnt >> 24) & 1) {
+    u32 value = (source > 0x0EFFFFFF) ? 0xBAFFFFFB : execute_load_u32(source);
+    while (count > 0) {
+      int i;
+      for (i = 0; i < 8; i++) { execute_store_u32(dest, value); dest += 4; }
+      count -= 8;
+    }
+  } else {
+    while (count > 0) {
+      int i;
+      for (i = 0; i < 8; i++) {
+        execute_store_u32(dest, (source > 0x0EFFFFFF) ? 0xBAFFFFFB
+                                                      : execute_load_u32(source));
+        source += 4; dest += 4;
+      }
+      count -= 8;
+    }
+  }
+}
+
+static void cgba_swi_lz77_wram(u32 source, u32 dest)
+{
+  u32 header = execute_load_u32(source);
+  s32 len = (s32)(header >> 8);
+  source += 4;
+  if (((source & 0xe000000) == 0) ||
+      ((source + ((header >> 8) & 0x1fffff)) & 0xe000000) == 0)
+    return;
+  while (len > 0) {
+    u8 d = (u8)execute_load_u8(source++);
+    int i;
+    if (d) {
+      for (i = 0; i < 8; i++) {
+        if (d & 0x80) {
+          u16 data = (u16)(execute_load_u8(source++) << 8);
+          int length, i2; u32 windowOffset;
+          data |= (u16)execute_load_u8(source++);
+          length = (data >> 12) + 3;
+          windowOffset = dest - (data & 0x0FFF) - 1;
+          for (i2 = 0; i2 < length; i2++) {
+            execute_store_u8(dest++, execute_load_u8(windowOffset++));
+            if (--len == 0) return;
+          }
+        } else {
+          execute_store_u8(dest++, execute_load_u8(source++));
+          if (--len == 0) return;
+        }
+        d <<= 1;
+      }
+    } else {
+      for (i = 0; i < 8; i++) {
+        execute_store_u8(dest++, execute_load_u8(source++));
+        if (--len == 0) return;
+      }
+    }
+  }
+}
+
+static void cgba_swi_lz77_vram(u32 source, u32 dest)
+{
+  u32 header = execute_load_u32(source);
+  s32 len = (s32)(header >> 8);
+  int byteCount = 0, byteShift = 0;
+  u32 writeValue = 0;
+  source += 4;
+  if (((source & 0xe000000) == 0) ||
+      ((source + ((header >> 8) & 0x1fffff)) & 0xe000000) == 0)
+    return;
+#define CGBA_LZV_PUSH(b)                                                      \
+  do { writeValue |= ((u32)(b) << byteShift); byteShift += 8;                 \
+       if (++byteCount == 2) {                                                \
+         execute_store_u16(dest, writeValue); dest += 2;                      \
+         byteCount = 0; byteShift = 0; writeValue = 0;                        \
+       }                                                                      \
+       if (--len == 0) return;                                                \
+  } while (0)
+  while (len > 0) {
+    u8 d = (u8)execute_load_u8(source++);
+    int i;
+    if (d) {
+      for (i = 0; i < 8; i++) {
+        if (d & 0x80) {
+          u16 data = (u16)(execute_load_u8(source++) << 8);
+          int length, i2; u32 windowOffset;
+          data |= (u16)execute_load_u8(source++);
+          length = (data >> 12) + 3;
+          windowOffset = dest + (u32)byteCount - (data & 0x0FFF) - 1;
+          for (i2 = 0; i2 < length; i2++)
+            CGBA_LZV_PUSH(execute_load_u8(windowOffset++));
+        } else {
+          CGBA_LZV_PUSH(execute_load_u8(source++));
+        }
+        d <<= 1;
+      }
+    } else {
+      for (i = 0; i < 8; i++)
+        CGBA_LZV_PUSH(execute_load_u8(source++));
+    }
+  }
+#undef CGBA_LZV_PUSH
+}
+
+static void cgba_swi_rl_wram(u32 source, u32 dest)
+{
+  u32 header = execute_load_u32(source);
+  s32 len = (s32)(header >> 8);
+  source += 4;
+  if (((source & 0xe000000) == 0) ||
+      ((source + ((header >> 8) & 0x1fffff)) & 0xe000000) == 0)
+    return;
+  while (len > 0) {
+    u8 d = (u8)execute_load_u8(source++);
+    int l = d & 0x7F, i;
+    if (d & 0x80) {
+      u8 data = (u8)execute_load_u8(source++);
+      l += 3;
+      for (i = 0; i < l; i++) {
+        execute_store_u8(dest++, data);
+        if (--len == 0) return;
+      }
+    } else {
+      l++;
+      for (i = 0; i < l; i++) {
+        execute_store_u8(dest++, execute_load_u8(source++));
+        if (--len == 0) return;
+      }
+    }
+  }
+}
+
+static void cgba_swi_rl_vram(u32 source, u32 dest)
+{
+  u32 header = execute_load_u32(source & 0xFFFFFFFC);
+  s32 len = (s32)(header >> 8);
+  int byteCount = 0, byteShift = 0;
+  u32 writeValue = 0;
+  source += 4;
+  if (((source & 0xe000000) == 0) ||
+      ((source + ((header >> 8) & 0x1fffff)) & 0xe000000) == 0)
+    return;
+#define CGBA_RLV_PUSH(b)                                                      \
+  do { writeValue |= ((u32)(b) << byteShift); byteShift += 8;                 \
+       if (++byteCount == 2) {                                                \
+         execute_store_u16(dest, writeValue); dest += 2;                      \
+         byteCount = 0; byteShift = 0; writeValue = 0;                        \
+       }                                                                      \
+       if (--len == 0) return;                                                \
+  } while (0)
+  while (len > 0) {
+    u8 d = (u8)execute_load_u8(source++);
+    int l = d & 0x7F, i;
+    if (d & 0x80) {
+      u8 data = (u8)execute_load_u8(source++);
+      l += 3;
+      for (i = 0; i < l; i++)
+        CGBA_RLV_PUSH(data);
+    } else {
+      l++;
+      for (i = 0; i < l; i++)
+        CGBA_RLV_PUSH(execute_load_u8(source++));
+    }
+  }
+#undef CGBA_RLV_PUSH
+}
+
+#ifdef CGBA_GPSP_HEADLESS_TEST
+u32 cgba_bios_hle_swi_count;
+#endif
+
+/* At the SWI vector in SVC mode: run the handled routines natively and
+ * return-from-SWI (movs pc,lr: pc = lr_svc, CPSR = SPSR_svc). Returns 0 for
+ * anything else — the interpreter path is unchanged for those. */
+static int cgba_hle_bios_swi(void)
+{
+  u32 spsr_v = REG_SPSR(MODE_SUPERVISOR);
+  u32 lr = reg[REG_LR];
+  u32 num;
+
+  if (spsr_v & 0x20)
+    num = execute_load_u16(lr - 2) & 0xFF;
+  else
+    num = (execute_load_u32(lr - 4) >> 16) & 0xFF;
+
+  switch (num) {
+  case 0x0B: cgba_swi_cpuset(reg[0], reg[1], reg[2]); break;
+  case 0x0C: cgba_swi_cpufastset(reg[0], reg[1], reg[2]); break;
+  case 0x11: cgba_swi_lz77_wram(reg[0], reg[1]); break;
+  case 0x12: cgba_swi_lz77_vram(reg[0], reg[1]); break;
+  case 0x14: cgba_swi_rl_wram(reg[0], reg[1]); break;
+  case 0x15: cgba_swi_rl_vram(reg[0], reg[1]); break;
+  default: return 0;
+  }
+
+  if (cgba_store_alert) {
+    cpu_alert_type a = cgba_store_alert;
+    cgba_store_alert = CPU_ALERT_NONE;
+    if (a & CPU_ALERT_SMC)
+      flush_translation_cache_ram();
+  }
+  reg[REG_PC] = lr;
+  reg[REG_CPSR] = spsr_v;
+  set_cpu_mode(cpu_modes[spsr_v & 0xF]);
+#ifdef CGBA_GPSP_HEADLESS_TEST
+  cgba_bios_hle_swi_count++;
+#endif
+  return 1;
+}
+
 u32 cgba_sh4_bios_fallback(u32 cycles)
 {
 #ifdef CGBA_GPSP_HEADLESS_TEST
@@ -1294,6 +1556,11 @@ u32 cgba_sh4_bios_fallback(u32 cycles)
    * before the C resolver can see it, so the vector/epilogue fast paths hook
    * the fallback itself. On success reg[REG_PC] is the game handler (or the
    * interrupted code) and the stub's lookup_pc redispatches natively. */
+  if (!cgba_dynarec_single_block && reg[REG_PC] == 0x00000008u &&
+      reg[CPU_MODE] == MODE_SUPERVISOR) {
+    if (cgba_hle_bios_swi())
+      return cycles;                 /* PC/mode restored; stub redispatches */
+  }
   if (!cgba_dynarec_single_block && reg[CPU_MODE] == MODE_IRQ) {
     if (reg[REG_PC] == 0x00000018u) {
       if (cgba_hle_bios_irq_entry() != 0)
