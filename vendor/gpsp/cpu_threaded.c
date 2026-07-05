@@ -4175,6 +4175,10 @@ void flush_translation_cache_ram(void)
   memset(cgba_dynarec_dual_hot_ptr, 0, sizeof(cgba_dynarec_dual_hot_ptr));
 }
 
+#ifdef SH4_ARCH
+u32 cgba_last_rom_flush_frame;   /* CGBA_COLD_HEAT's adaptive-increment clock */
+#endif
+
 void flush_translation_cache_rom(void)
 {
 #ifdef SH4_ARCH
@@ -4188,6 +4192,7 @@ void flush_translation_cache_rom(void)
     for (hi = 0; hi < sizeof(cgba_hot_count); hi++)
       cgba_hot_count[hi] >>= 1;
   }
+  cgba_last_rom_flush_frame = frame_counter;
 #endif
   /* We flush the generated code except for everything below the watermark. */
 #if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)

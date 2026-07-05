@@ -418,6 +418,18 @@ static void show_diag_overlay(void)
 #ifndef CGBA_GPSP_HEADLESS_SAVE_STATE_FRAME
 #define CGBA_GPSP_HEADLESS_SAVE_STATE_FRAME -1
 #endif
+/* Alternating input: from ALT_FRAME on, tap A at the start of even 60-frame
+ * windows and START at the start of odd ones (window length = ALT_PERIOD,
+ * tap length = ALT_PRESS). 0 = off. */
+#ifndef CGBA_GPSP_HEADLESS_ALT_PERIOD
+#define CGBA_GPSP_HEADLESS_ALT_PERIOD 0u
+#endif
+#ifndef CGBA_GPSP_HEADLESS_ALT_PRESS
+#define CGBA_GPSP_HEADLESS_ALT_PRESS 2u
+#endif
+#ifndef CGBA_GPSP_HEADLESS_ALT_FRAME
+#define CGBA_GPSP_HEADLESS_ALT_FRAME 60u
+#endif
 #ifndef CGBA_GPSP_HEADLESS_SAVE_SLOT_FRAME
 #define CGBA_GPSP_HEADLESS_SAVE_SLOT_FRAME -1
 #endif
@@ -916,6 +928,16 @@ static uint32_t headless_buttons_for_frame(unsigned frame)
 	}
 	if(headless_a_down(frame))
 		buttons |= FXCG100_GBA_BUTTON_A;
+#if CGBA_GPSP_HEADLESS_ALT_PERIOD > 0
+	if(frame >= (unsigned)CGBA_GPSP_HEADLESS_ALT_FRAME) {
+		unsigned rel = frame - (unsigned)CGBA_GPSP_HEADLESS_ALT_FRAME;
+		unsigned win = rel / (unsigned)CGBA_GPSP_HEADLESS_ALT_PERIOD;
+		if((rel % (unsigned)CGBA_GPSP_HEADLESS_ALT_PERIOD) <
+		   (unsigned)CGBA_GPSP_HEADLESS_ALT_PRESS)
+			buttons |= (win & 1) ? FXCG100_GBA_BUTTON_START
+				: FXCG100_GBA_BUTTON_A;
+	}
+#endif
 #if CGBA_GPSP_HEADLESS_RUN_FRAME > 0
 	if(frame >= (unsigned)CGBA_GPSP_HEADLESS_RUN_FRAME) {
 #if CGBA_GPSP_HEADLESS_RUN_FLIP > 0
@@ -1184,6 +1206,14 @@ static int cgba_headless_test(uint16_t *framebuffer)
 		hputs_dbg(buf);
 	}
 	{
+		extern u32 cgba_interp_instr_bios, cgba_interp_instr_rom, cgba_interp_instr_ram;
+		snprintf(buf, sizeof buf, "jit interp-instr bios=%lu rom=%lu ram=%lu",
+			(unsigned long)cgba_interp_instr_bios,
+			(unsigned long)cgba_interp_instr_rom,
+			(unsigned long)cgba_interp_instr_ram);
+		hputs_dbg(buf);
+	}
+	{
 		extern u32 cgba_dp_fb_op[16];
 		extern u32 cgba_dp_fb_pc, cgba_dp_fb_regshift, cgba_dp_fb_ror, cgba_dp_fb_s;
 		snprintf(buf, sizeof buf,
@@ -1261,6 +1291,14 @@ static int cgba_headless_test(uint16_t *framebuffer)
 			(unsigned long)cgba_bios_entry_swi,
 			(unsigned long)cgba_bios_entry_irq,
 			(unsigned long)cgba_bios_entry_other);
+		hputs_dbg(buf);
+	}
+	{
+		extern u32 cgba_interp_instr_bios, cgba_interp_instr_rom, cgba_interp_instr_ram;
+		snprintf(buf, sizeof buf, "jit interp-instr bios=%lu rom=%lu ram=%lu",
+			(unsigned long)cgba_interp_instr_bios,
+			(unsigned long)cgba_interp_instr_rom,
+			(unsigned long)cgba_interp_instr_ram);
 		hputs_dbg(buf);
 	}
 	{

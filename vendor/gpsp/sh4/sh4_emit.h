@@ -610,11 +610,23 @@ static inline void sh4g_prof_block_entry(u8 **tp, u32 pc, int thumb)
        sh4_thumb_const_clear_all();                                           \
        sh4g_thumb_bx_dispatch(&translation_ptr); } while(0)
 
+/* Conditional Thumb branch. A registered idle loop is usually exactly this
+ * shape — `ldrh/and/cmp; beq back` with idle_loop_target_pc AT the branch
+ * (SMA2: 0x8000534 d0fb) — and the interpreter fast-forwards it at the loop
+ * top, so the taken leg must idle-eliminate here too or the JIT spins the
+ * poll at full speed (SMA2 burned 2.5x Zelda's instructions per frame). */
 #define thumb_conditional_branch(condition)                                   \
-  do { generate_condition_##condition();                                      \
-       generate_branch_taken(0,                                               \
-         block_exits[block_exit_position].branch_source,                      \
-         block_exits[block_exit_position].branch_target);                     \
+  do { u32 _cb_target = block_exits[block_exit_position].branch_target;       \
+       generate_condition_##condition();                                      \
+       if(SH4_IDLE_BRANCH(_cb_target)) {                                      \
+         sh4g_cycle_debit(&translation_ptr, (int)cycle_count +                \
+           (int)ws_cyc_nseq[(_cb_target >> 24) & 0x0F][0]);                   \
+         generate_branch_idle_eliminate(                                      \
+           block_exits[block_exit_position].branch_source, _cb_target);       \
+       } else {                                                               \
+         generate_branch_taken(0,                                             \
+           block_exits[block_exit_position].branch_source, _cb_target);       \
+       }                                                                      \
        generate_branch_patch_conditional(backpatch_address, translation_ptr); \
        cycle_count += ws_cyc_nseq[((u32)(pc + 2) >> 24) & 0x0F][0];          \
        block_exit_position++; } while(0)

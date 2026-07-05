@@ -1514,6 +1514,7 @@ int cgba_diff_stop_on_budget;
  * Detection: pc != the sequentially-expected next pc at the loop top. */
 extern "C" {
 extern u8 cgba_hot_count[16384];
+extern u32 cgba_last_rom_flush_frame;   /* cpu_threaded.c, set on rom flush */
 }
 #ifndef CGBA_SH4_HOT_THRESHOLD
 #define CGBA_SH4_HOT_THRESHOLD 64
@@ -1529,14 +1530,36 @@ extern u8 cgba_hot_count[16384];
 #ifndef CGBA_SH4_INTERP_HEAT
 #define CGBA_SH4_INTERP_HEAT 1
 #endif
+/* Per-instruction region counters: diagnostics only — they cost ~4.5% in
+ * interp-heavy scenes, so they need their own opt-in on top of headless. */
+#if defined(CGBA_GPSP_HEADLESS_TEST) && defined(CGBA_SH4_INTERP_STATS)
+extern "C" {
+extern u32 cgba_interp_instr_bios, cgba_interp_instr_rom, cgba_interp_instr_ram;
+}
+#define CGBA_INTERP_COUNT()                                                   \
+  do { u32 _cr = reg[REG_PC] >> 24;                                           \
+       if(_cr >= 0x8) cgba_interp_instr_rom++;                                \
+       else if(_cr == 0) cgba_interp_instr_bios++;                            \
+       else cgba_interp_instr_ram++;                                          \
+  } while(0)
+#else
+#define CGBA_INTERP_COUNT() do {} while(0)
+#endif
+
 #define CGBA_COLD_HEAT(isz, thumbbit)                                         \
   do { if(CGBA_SH4_INTERP_HEAT &&                                             \
           cgba_diff_stop_active && cgba_diff_stop_on_budget) {                \
          u32 _hp = reg[REG_PC];                                               \
          if(_hp != cgba_heat_expect && (_hp >> 24) >= 0x8) {                  \
            u32 _hi = ((_hp | (thumbbit)) * 2654435761U) >> 18;                \
-           if(cgba_hot_count[_hi] < CGBA_SH4_HOT_THRESHOLD)                   \
-             cgba_hot_count[_hi]++;                                           \
+           /* Adaptive increment: +4 while the ROM cache is quiet (working
+            * set fits — promote scene-cycling once-per-frame code fast),
+            * +1 within 180 frames of a wholesale flush (thrash regime: the
+            * halve-on-flush decay must outpace accumulation). */             \
+           u32 _inc = (frame_counter - cgba_last_rom_flush_frame > 180) ? 4 : 1; \
+           u8 _hc = cgba_hot_count[_hi];                                      \
+           cgba_hot_count[_hi] = (_hc < CGBA_SH4_HOT_THRESHOLD - _inc)        \
+             ? (u8)(_hc + _inc) : (u8)CGBA_SH4_HOT_THRESHOLD;                 \
          }                                                                    \
          cgba_heat_expect = _hp + (isz);                                      \
        } } while(0)
@@ -1644,6 +1667,7 @@ arm_loop:
        reg[REG_PC] &= ~0x03;
        CGBA_DIFF_STOP_CHECK();
        CGBA_COLD_HEAT(4, 0);
+       CGBA_INTERP_COUNT();
        opcode = readaddress32(pc_address_block, (reg[REG_PC] & 0x7FFF));
        condition = opcode >> 28;
 
@@ -3236,6 +3260,7 @@ thumb_loop:
        reg[REG_PC] &= ~0x01;
        CGBA_DIFF_STOP_CHECK();
        CGBA_COLD_HEAT(2, 1);
+       CGBA_INTERP_COUNT();
        opcode = readaddress16(pc_address_block, (reg[REG_PC] & 0x7FFF));
 
        #ifdef TRACE_INSTRUCTIONS
