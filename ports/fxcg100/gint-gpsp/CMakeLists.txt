@@ -55,6 +55,8 @@ option(CGBA_SH4_THUMB_LDST_NATIVE
   "Enable SH4 native Thumb RAM load fast path" ON)
 option(CGBA_SH4_THUMB_BLOCK_NATIVE
   "Enable SH4 native Thumb RAM block-load fast path" ON)
+option(CGBA_SH4_INTERP_STATS
+  "Count interpreted guest instructions by region (diag; ~4.5% overhead)" OFF)
 option(CGBA_SH4_ARM_DEAD_FLAGS
   "ARM dead-flag elimination (OFF forces all-flags-live; A/B diagnostic)" ON)
 set(CGBA_SH4_HOT_THRESHOLD "64" CACHE STRING
@@ -157,6 +159,9 @@ if(CGBA_DYNAREC)
   endif()
   if(CGBA_SH4_THUMB_BLOCK_NATIVE)
     target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_SH4_THUMB_BLOCK_NATIVE=1)
+  endif()
+  if(CGBA_SH4_INTERP_STATS)
+    target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_SH4_INTERP_STATS=1)
   endif()
   if(NOT CGBA_SH4_ARM_DEAD_FLAGS)
     target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_SH4_ARM_DEAD_FLAGS=0)

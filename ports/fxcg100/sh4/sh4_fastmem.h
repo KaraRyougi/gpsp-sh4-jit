@@ -76,6 +76,7 @@ enum {
 };
 
 extern u8 *memory_map_read[];
+extern u16 io_registers[512];          /* eswap16'd (LE-layout) halfwords */
 void sh4_op2_pc_mem_tramp(void);
 
 static inline int cgba_fm_is_load(int fm)
@@ -103,6 +104,7 @@ static inline u8 *sh4g_fastmem_emit_routine(u8 **tp, int fm)
   int align_mask = cgba_fm_align_mask(fm);
   int wb = fm >= CGBA_FM_WB;
   u8 *guards[8]; int ng = 0;
+  u8 *io_check = NULL, *store_tail = NULL;
   int i;
 
   /* params -> R5 early (R5 is untouched by everything below). */
@@ -147,7 +149,10 @@ static inline u8 *sh4g_fastmem_emit_routine(u8 **tp, int fm)
       sh4g_close(tp, &cg); }
     guards[ng++] = sh4g_emit_bt_placeholder(tp);
   } else {
-    /* stores: RAM (SMC-tagged) or VRAM word/half (byte stores stay on C) */
+    /* stores: RAM (SMC-tagged) or VRAM word/half (byte stores stay on C).
+       Halfword non-RAM stores detour through the interrupt-register fast
+       path below (AW's per-scanline ISR acks REG_IF / rewrites REG_IE
+       ~550K times per 2000 frames) before giving up to C. */
     u8 *vram_ok = NULL;
     { sh4_codegen cg = sh4g_open(tp);
       sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
@@ -164,7 +169,10 @@ static inline u8 *sh4g_fastmem_emit_routine(u8 **tp, int fm)
       sh4_emit_shlr(&cg, SH4_REG_RET);               /* R0 = addr >> 25 */
       sh4_emit_cmpeq_imm(&cg, 1);                    /* regions 2 or 3 */
       sh4g_close(tp, &cg); }
-    guards[ng++] = sh4g_emit_bf_placeholder(tp);
+    if (kind == CGBA_FM_STORE_UH)
+      io_check = sh4g_emit_bf_placeholder(tp);
+    else
+      guards[ng++] = sh4g_emit_bf_placeholder(tp);
     if (vram_ok)
       sh4g_patch_cond(vram_ok, *tp);
   }
@@ -292,6 +300,7 @@ static inline u8 *sh4g_fastmem_emit_routine(u8 **tp, int fm)
   /* wb variants: commit reg[rn] = R6 AFTER the transfer (rd==rn loads are
    * translate-time bailed) — and after every guard, so the C fallback always
    * re-executes from the original base. */
+  store_tail = *tp;
   if (wb) {
     sh4_codegen cg = sh4g_open(tp);
     sh4_emit_mov_reg(&cg, SH4_REG_ARG1, SH4_REG_RET);
@@ -306,6 +315,87 @@ static inline u8 *sh4g_fastmem_emit_routine(u8 **tp, int fm)
                       /*is_word=*/(kind == CGBA_FM_LOAD_W || kind == CGBA_FM_STORE_W), 1);
   sh4g_u16(tp, 0x000B);                              /* RTS */
   sh4g_u16(tp, 0x0009);                              /* delay NOP */
+
+  /* Halfword-store interrupt-register fast path. Mirrors gpSP's
+   * write_io_register16 exactly for the two hot ISR registers:
+   *   REG_IF (0x202): IF &= ~value — pure, no alert possible.
+   *   REG_IE (0x200): IE = value, then check_interrupt() — the write is
+   *     committed natively and, when it would unmask a pending IRQ
+   *     (IE & IF, IME on, CPSR I clear), falls through to the C tramp,
+   *     which redoes the (idempotent) write and raises the IRQ.
+   * io_registers holds eswap16'd (LE-layout) halfwords; the AND-NOT is a
+   * per-byte operation, so it is done directly on the swapped forms. */
+  if (io_check) {
+    u8 *not_if, *fail_ie;
+    sh4g_patch_cond(io_check, *tp);
+    sh4g_const(tp, 0x04000202u, SH4_REG_T1);
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_cmpeq(&cg, SH4_REG_T1, SH4_REG_T0);   /* T = REG_IF */
+      sh4g_close(tp, &cg); }
+    not_if = sh4g_emit_bf_placeholder(tp);
+
+    { sh4_codegen cg = sh4g_open(tp);                /* value = reg[rd] */
+      sh4_emit_mov_reg(&cg, SH4_REG_ARG1, SH4_REG_RET);
+      sh4_emit_and_imm(&cg, 0xFF);
+      sh4_emit_mov_l_load_r0(&cg, SH4_REG_BASE, SH4_REG_T1);
+      sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);  /* LE layout */
+      sh4_emit_not(&cg, SH4_REG_T1, SH4_REG_T1);
+      sh4g_close(tp, &cg); }
+    sh4g_const(tp, (u32)(uintptr_t)((u8 *)io_registers + 0x202), SH4_REG_T2);
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_w_load(&cg, SH4_REG_T2, SH4_REG_ARG0);
+      sh4_emit_and(&cg, SH4_REG_T1, SH4_REG_ARG0);   /* IF &= ~value */
+      sh4_emit_mov_w_store(&cg, SH4_REG_ARG0, SH4_REG_T2);
+      sh4g_close(tp, &cg); }
+    { u8 *b = sh4g_emit_bra_placeholder(tp);
+      sh4g_patch_bra(b, store_tail); }
+
+    sh4g_patch_cond(not_if, *tp);
+    sh4g_const(tp, 0x04000200u, SH4_REG_T1);
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_cmpeq(&cg, SH4_REG_T1, SH4_REG_T0);   /* T = REG_IE */
+      sh4g_close(tp, &cg); }
+    guards[ng++] = sh4g_emit_bf_placeholder(tp);     /* other IO -> C */
+
+    { sh4_codegen cg = sh4g_open(tp);                /* IE = value */
+      sh4_emit_mov_reg(&cg, SH4_REG_ARG1, SH4_REG_RET);
+      sh4_emit_and_imm(&cg, 0xFF);
+      sh4_emit_mov_l_load_r0(&cg, SH4_REG_BASE, SH4_REG_T1);
+      sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);  /* LE layout */
+      sh4g_close(tp, &cg); }
+    sh4g_const(tp, (u32)(uintptr_t)((u8 *)io_registers + 0x200), SH4_REG_T2);
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_w_store(&cg, SH4_REG_T1, SH4_REG_T2);
+      sh4_emit_add_imm(&cg, 2, SH4_REG_T2);
+      sh4_emit_mov_w_load(&cg, SH4_REG_T2, SH4_REG_ARG0); /* IF (LE) */
+      sh4_emit_tst(&cg, SH4_REG_T1, SH4_REG_ARG0);   /* T=1: none pending */
+      sh4g_close(tp, &cg); }
+    /* T=1 -> tail. BT disp8 reach (+-256B) cannot span back over the charge
+       block, so each early-out is BF-skip over a BRA (disp12). */
+    { u8 *sk = sh4g_emit_bf_placeholder(tp);
+      u8 *b = sh4g_emit_bra_placeholder(tp);
+      sh4g_patch_bra(b, store_tail);
+      sh4g_patch_cond(sk, *tp); }
+    { sh4_codegen cg = sh4g_open(tp);                /* IME (swap: true order) */
+      sh4_emit_add_imm(&cg, 6, SH4_REG_T2);
+      sh4_emit_mov_w_load(&cg, SH4_REG_T2, SH4_REG_RET);
+      sh4_emit_swap_b(&cg, SH4_REG_RET, SH4_REG_RET);
+      sh4_emit_tst_imm(&cg, 1);                      /* T=1: IME off */
+      sh4g_close(tp, &cg); }
+    { u8 *sk = sh4g_emit_bf_placeholder(tp);
+      u8 *b = sh4g_emit_bra_placeholder(tp);
+      sh4g_patch_bra(b, store_tail);
+      sh4g_patch_cond(sk, *tp); }
+    { sh4_codegen cg = sh4g_open(tp);                /* CPSR I (cached in R8) */
+      sh4_emit_mov_reg(&cg, SH4_REG_CPSR, SH4_REG_RET);
+      sh4_emit_tst_imm(&cg, 0x80);                   /* T=1: IRQs enabled */
+      sh4g_close(tp, &cg); }
+    fail_ie = sh4g_emit_bt_placeholder(tp);          /* would raise -> C */
+    { u8 *b = sh4g_emit_bra_placeholder(tp);
+      sh4g_patch_bra(b, store_tail); }
+    sh4g_patch_cond(fail_ie, *tp);
+    /* falls into the guard-failure tramp below */
+  }
 
   /* guard failure: straight into the compact C-helper trampoline. PR still
    * points at the site's BRA, so the tramp reads fn/opcode/pc/cycles from
@@ -617,8 +707,119 @@ static inline u8 *sh4g_fastmem_emit_block_routine(u8 **tp, int fm)
   return entry;
 }
 
+/* ---- shared PSR mode-change (set_cpu_mode) routine ----------------------
+ * Called (JSR) from MSR-cpsr control-byte sites whose merged value changes
+ * the CPSR mode nibble; keeping the ~110-byte re-bank OUT of translated
+ * blocks matters more than its instruction count — inlining it grew the hot
+ * IRQ-dispatcher block and cost +59% I-cache misses on AW. In: R1 = merged
+ * CPSR (preserved; the site stores it into the cached CPSR R8 after
+ * return). Mirrors gpSP's set_cpu_mode exactly: retire r13/r14 into
+ * reg_mode[old & 0xF][5..6] (r8..r14 into [0..6] when entering FIQ), load
+ * them back from the new row (7 registers when leaving FIQ), update
+ * reg[CPU_MODE]. Same-row transitions (USER<->SYSTEM, INVALID<->INVALID)
+ * retire-then-reload the same slots, exactly like the C code. Leaf; only
+ * uses caller-scratch (R0, R2, R3, R5, R6, R7). */
+extern u32 reg_mode[7][7];
+extern const u32 cpu_modes[16];
+
+static inline u8 *sh4g_psr_emit_rebank_routine(u8 **tp)
+{
+  u8 *entry = *tp;
+  u8 *to_save7, *save_done, *to_load7, *load_done;
+  int i;
+
+  /* R7 = new gpSP mode = cpu_modes[R1 & 0xF] */
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
+    sh4_emit_and_imm(&cg, 0xF);
+    sh4_emit_shll2(&cg, SH4_REG_RET);
+    sh4g_close(tp, &cg); }
+  sh4g_const(tp, (u32)(uintptr_t)cpu_modes, SH4_REG_T1);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_l_load_r0(&cg, SH4_REG_T1, SH4_REG_ARG3);
+    sh4g_close(tp, &cg); }
+  /* R5 = old gpSP mode */
+  sh4g_load_greg(tp, SH4_GREG_CPU_MODE, SH4_REG_ARG1);
+
+  /* R6 = &reg_mode[old & 0xF], R3 = &reg_mode[new & 0xF] (28-byte rows) */
+  sh4g_const(tp, (u32)(uintptr_t)reg_mode, SH4_REG_T2);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_reg(&cg, SH4_REG_ARG1, SH4_REG_RET);
+    sh4_emit_and_imm(&cg, 0xF);
+    sh4_emit_shll2(&cg, SH4_REG_RET);                /* 4*old  */
+    sh4_emit_mov_reg(&cg, SH4_REG_RET, SH4_REG_T1);
+    sh4_emit_shll2(&cg, SH4_REG_RET);                /* 16*old */
+    sh4_emit_add_reg(&cg, SH4_REG_T1, SH4_REG_RET);
+    sh4_emit_add_reg(&cg, SH4_REG_T1, SH4_REG_RET);
+    sh4_emit_add_reg(&cg, SH4_REG_T1, SH4_REG_RET);  /* 28*old */
+    sh4_emit_mov_reg(&cg, SH4_REG_T2, SH4_REG_ARG2);
+    sh4_emit_add_reg(&cg, SH4_REG_RET, SH4_REG_ARG2);
+    sh4_emit_mov_reg(&cg, SH4_REG_ARG3, SH4_REG_RET);
+    sh4_emit_and_imm(&cg, 0xF);
+    sh4_emit_shll2(&cg, SH4_REG_RET);
+    sh4_emit_mov_reg(&cg, SH4_REG_RET, SH4_REG_T1);
+    sh4_emit_shll2(&cg, SH4_REG_RET);
+    sh4_emit_add_reg(&cg, SH4_REG_T1, SH4_REG_RET);
+    sh4_emit_add_reg(&cg, SH4_REG_T1, SH4_REG_RET);
+    sh4_emit_add_reg(&cg, SH4_REG_T1, SH4_REG_RET);  /* 28*new */
+    sh4_emit_add_reg(&cg, SH4_REG_RET, SH4_REG_T2);  /* R3 = new row */
+    sh4_emit_mov_reg(&cg, SH4_REG_ARG3, SH4_REG_RET);
+    sh4_emit_cmpeq_imm(&cg, 0x12);                   /* entering FIQ? */
+    sh4g_close(tp, &cg); }
+  to_save7 = sh4g_emit_bt_placeholder(tp);
+
+  { sh4_codegen cg = sh4g_open(tp);                  /* retire r13/r14 */
+    sh4_emit_load_greg(&cg, SH4_GREG_SP, SH4_REG_T1);
+    sh4_emit_mov_l_store_disp(&cg, SH4_REG_T1, SH4_REG_ARG2, 5);
+    sh4_emit_load_greg(&cg, SH4_GREG_LR, SH4_REG_T1);
+    sh4_emit_mov_l_store_disp(&cg, SH4_REG_T1, SH4_REG_ARG2, 6);
+    sh4g_close(tp, &cg); }
+  save_done = sh4g_emit_bra_placeholder(tp);
+
+  sh4g_patch_cond(to_save7, *tp);
+  { sh4_codegen cg = sh4g_open(tp);                  /* retire r8..r14 */
+    for (i = 0; i < 7; i++) {
+      sh4_emit_load_greg(&cg, 8 + (unsigned)i, SH4_REG_T1);
+      sh4_emit_mov_l_store_disp(&cg, SH4_REG_T1, SH4_REG_ARG2, (unsigned)i);
+    }
+    sh4g_close(tp, &cg); }
+
+  sh4g_patch_bra(save_done, *tp);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_reg(&cg, SH4_REG_ARG1, SH4_REG_RET);
+    sh4_emit_cmpeq_imm(&cg, 0x12);                   /* leaving FIQ? */
+    sh4g_close(tp, &cg); }
+  to_load7 = sh4g_emit_bt_placeholder(tp);
+
+  { sh4_codegen cg = sh4g_open(tp);                  /* load r13/r14 */
+    sh4_emit_mov_l_load_disp(&cg, SH4_REG_T2, SH4_REG_T1, 5);
+    sh4_emit_store_greg(&cg, SH4_REG_T1, SH4_GREG_SP);
+    sh4_emit_mov_l_load_disp(&cg, SH4_REG_T2, SH4_REG_T1, 6);
+    sh4_emit_store_greg(&cg, SH4_REG_T1, SH4_GREG_LR);
+    sh4g_close(tp, &cg); }
+  load_done = sh4g_emit_bra_placeholder(tp);
+
+  sh4g_patch_cond(to_load7, *tp);
+  { sh4_codegen cg = sh4g_open(tp);                  /* load r8..r14 */
+    for (i = 0; i < 7; i++) {
+      sh4_emit_mov_l_load_disp(&cg, SH4_REG_T2, SH4_REG_T1, (unsigned)i);
+      sh4_emit_store_greg(&cg, SH4_REG_T1, 8 + (unsigned)i);
+    }
+    sh4g_close(tp, &cg); }
+
+  sh4g_patch_bra(load_done, *tp);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_store_greg(&cg, SH4_REG_ARG3, SH4_GREG_CPU_MODE);
+    sh4_emit_rts(&cg);
+    sh4_emit_nop(&cg);
+    sh4g_close(tp, &cg); }
+
+  return entry;
+}
+
 /* Routine table, filled by cgba_sh4_fastmem_init() (sh4_fastmem.c). */
 extern u8 *cgba_sh4_fastmem_routine[CGBA_FM_TOTAL];
+extern u8 *cgba_sh4_psr_rebank_routine;
 void cgba_sh4_fastmem_init(void);
 
 #endif /* CGBA_SH4_FASTMEM_H */

@@ -1214,6 +1214,48 @@ static int cgba_headless_test(uint16_t *framebuffer)
 		hputs_dbg(buf);
 	}
 	{
+		extern u32 cgba_cap_src[8];
+		snprintf(buf, sizeof buf,
+			"jit cap vid=%lu ser=%lu t0=%lu t1=%lu t2=%lu t3=%lu cyc=%lu small=%lu",
+			(unsigned long)cgba_cap_src[0], (unsigned long)cgba_cap_src[1],
+			(unsigned long)cgba_cap_src[2], (unsigned long)cgba_cap_src[3],
+			(unsigned long)cgba_cap_src[4], (unsigned long)cgba_cap_src[5],
+			(unsigned long)cgba_cap_src[6], (unsigned long)cgba_cap_src[7]);
+		hputs_dbg(buf);
+	}
+	{
+		extern u32 cgba_update_gba_calls, cgba_update_gba_slices;
+		extern u32 cgba_psr_fb[8];
+		snprintf(buf, sizeof buf,
+			"jit ev calls=%lu slices=%lu psr: mrs=%lu mi=%lu mc=%lu mf=%lu mcf=%lu sp=%lu o=%lu",
+			(unsigned long)cgba_update_gba_calls, (unsigned long)cgba_update_gba_slices,
+			(unsigned long)cgba_psr_fb[0], (unsigned long)cgba_psr_fb[1],
+			(unsigned long)cgba_psr_fb[2], (unsigned long)cgba_psr_fb[3],
+			(unsigned long)cgba_psr_fb[4], (unsigned long)cgba_psr_fb[5],
+			(unsigned long)cgba_psr_fb[6]);
+		hputs_dbg(buf);
+	}
+	{
+		extern u32 cgba_update_gba_halt_calls;
+		extern u32 cgba_armldst_fb_pc[16], cgba_armldst_fb_op[16], cgba_armldst_fb_n[16];
+		int k;
+		snprintf(buf, sizeof buf, "jit ev halt-calls=%lu",
+			(unsigned long)cgba_update_gba_halt_calls);
+		hputs_dbg(buf);
+		for(k = 0; k < 16; k++)
+			if(cgba_armldst_fb_n[k] >= 1000) {
+				snprintf(buf, sizeof buf, "jit armfb pc=%08lX op=%08lX n=%lu",
+					(unsigned long)cgba_armldst_fb_pc[k],
+					(unsigned long)cgba_armldst_fb_op[k],
+					(unsigned long)cgba_armldst_fb_n[k]);
+				hputs_dbg(buf);
+			}
+	}
+	{
+		extern void cgba_sh4_dump_rom_blockmap(void);
+		cgba_sh4_dump_rom_blockmap();
+	}
+	{
 		extern u32 cgba_bios_hle_swi_count, cgba_bios_hle_irq_in, cgba_bios_hle_irq_out;
 		extern u32 cgba_bios_other_pc[8];
 		snprintf(buf, sizeof buf,
@@ -1325,6 +1367,48 @@ static int cgba_headless_test(uint16_t *framebuffer)
 			(unsigned long)cgba_interp_instr_rom,
 			(unsigned long)cgba_interp_instr_ram);
 		hputs_dbg(buf);
+	}
+	{
+		extern u32 cgba_cap_src[8];
+		snprintf(buf, sizeof buf,
+			"jit cap vid=%lu ser=%lu t0=%lu t1=%lu t2=%lu t3=%lu cyc=%lu small=%lu",
+			(unsigned long)cgba_cap_src[0], (unsigned long)cgba_cap_src[1],
+			(unsigned long)cgba_cap_src[2], (unsigned long)cgba_cap_src[3],
+			(unsigned long)cgba_cap_src[4], (unsigned long)cgba_cap_src[5],
+			(unsigned long)cgba_cap_src[6], (unsigned long)cgba_cap_src[7]);
+		hputs_dbg(buf);
+	}
+	{
+		extern u32 cgba_update_gba_calls, cgba_update_gba_slices;
+		extern u32 cgba_psr_fb[8];
+		snprintf(buf, sizeof buf,
+			"jit ev calls=%lu slices=%lu psr: mrs=%lu mi=%lu mc=%lu mf=%lu mcf=%lu sp=%lu o=%lu",
+			(unsigned long)cgba_update_gba_calls, (unsigned long)cgba_update_gba_slices,
+			(unsigned long)cgba_psr_fb[0], (unsigned long)cgba_psr_fb[1],
+			(unsigned long)cgba_psr_fb[2], (unsigned long)cgba_psr_fb[3],
+			(unsigned long)cgba_psr_fb[4], (unsigned long)cgba_psr_fb[5],
+			(unsigned long)cgba_psr_fb[6]);
+		hputs_dbg(buf);
+	}
+	{
+		extern u32 cgba_update_gba_halt_calls;
+		extern u32 cgba_armldst_fb_pc[16], cgba_armldst_fb_op[16], cgba_armldst_fb_n[16];
+		int k;
+		snprintf(buf, sizeof buf, "jit ev halt-calls=%lu",
+			(unsigned long)cgba_update_gba_halt_calls);
+		hputs_dbg(buf);
+		for(k = 0; k < 16; k++)
+			if(cgba_armldst_fb_n[k] >= 1000) {
+				snprintf(buf, sizeof buf, "jit armfb pc=%08lX op=%08lX n=%lu",
+					(unsigned long)cgba_armldst_fb_pc[k],
+					(unsigned long)cgba_armldst_fb_op[k],
+					(unsigned long)cgba_armldst_fb_n[k]);
+				hputs_dbg(buf);
+			}
+	}
+	{
+		extern void cgba_sh4_dump_rom_blockmap(void);
+		cgba_sh4_dump_rom_blockmap();
 	}
 	{
 		extern u32 cgba_bios_hle_swi_count, cgba_bios_hle_irq_in, cgba_bios_hle_irq_out;

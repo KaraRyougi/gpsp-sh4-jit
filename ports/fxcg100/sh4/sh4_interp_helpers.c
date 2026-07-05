@@ -785,8 +785,24 @@ static u32 arm_shifter_operand(u32 opcode, u32 pc, u32 *carry_out)
   }
 }
 
+#ifdef CGBA_GPSP_HEADLESS_TEST
+/* Which guest instructions still reach the C single-transfer helper (emit
+ * bail or fastmem guard failure)? Small direct-mapped pc-keyed table. */
+u32 cgba_armldst_fb_pc[16], cgba_armldst_fb_op[16], cgba_armldst_fb_n[16];
+#endif
+
 int cgba_sh4_arm_ldst(u32 opcode, u32 pc)
 {
+#ifdef CGBA_GPSP_HEADLESS_TEST
+  {
+    u32 slot = (pc * 2654435761u) >> 28;
+    if (cgba_armldst_fb_n[slot] == 0 || cgba_armldst_fb_pc[slot] == pc) {
+      cgba_armldst_fb_pc[slot] = pc;
+      cgba_armldst_fb_op[slot] = opcode;
+      cgba_armldst_fb_n[slot]++;
+    }
+  }
+#endif
   CGBA_SH4_HELPER_HIT(arm_ldst);
   u32 rn = (opcode >> 16) & 0xF;
   u32 rd = (opcode >> 12) & 0xF;
@@ -1091,6 +1107,24 @@ void cgba_sh4_arm_multiply_long(u32 opcode, u32 pc)
 
 int cgba_sh4_arm_psr(u32 opcode, u32 pc)
 {
+#ifdef CGBA_GPSP_HEADLESS_TEST
+  {
+    extern u32 cgba_psr_fb[8];
+    /* [0]=mrs [1]=msr-imm [2]=msr-reg-c [3]=msr-reg-f [4]=msr-reg-cf
+       [5]=msr-spsr [6]=other */
+    u32 is_msr = (opcode >> 21) & 1;
+    u32 spsr_sel = (opcode >> 22) & 1;
+    u32 fields = (opcode >> 16) & 0xF;
+    if (!is_msr) cgba_psr_fb[0]++;
+    else if (spsr_sel) cgba_psr_fb[5]++;
+    else if (opcode & 0x02000000) cgba_psr_fb[1]++;
+    else if (fields == 1) cgba_psr_fb[2]++;
+    else if (fields == 8) cgba_psr_fb[3]++;
+    else if (fields == 9) cgba_psr_fb[4]++;
+    else cgba_psr_fb[6]++;
+  }
+#endif
+
   CGBA_SH4_HELPER_HIT(arm_psr);
   u32 is_msr   = (opcode >> 21) & 1;   /* 0 = MRS (read), 1 = MSR (write) */
   u32 use_spsr = (opcode >> 22) & 1;   /* 0 = CPSR, 1 = SPSR of cur mode  */
@@ -1507,6 +1541,8 @@ static void cgba_swi_rl_vram(u32 source, u32 dest)
 #ifdef CGBA_GPSP_HEADLESS_TEST
 u32 cgba_bios_hle_swi_count;
 u32 cgba_swi_miss[48];
+u32 cgba_psr_fb[8];
+u32 cgba_cap_src[8];
 u32 cgba_bios_other_pc[8];
 #endif
 
