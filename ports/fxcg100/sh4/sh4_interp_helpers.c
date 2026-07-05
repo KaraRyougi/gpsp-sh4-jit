@@ -1533,9 +1533,12 @@ u32 cgba_bios_other_pc[8];
 #ifndef CGBA_SH4_INTRWAIT_HLE
 #define CGBA_SH4_INTRWAIT_HLE 0
 #endif
+#if !CGBA_SH4_INTRWAIT_HLE
+int cgba_intrwait_state;              /* referenced by diag traces */
+#endif
 #if CGBA_SH4_INTRWAIT_HLE
 static u32 cgba_intrwait_mask;
-static int cgba_intrwait_state;          /* 0 off / 1 check / 2 halt-first */
+int cgba_intrwait_state;          /* 0 off / 1 check / 2 halt-first */
 static u32 cgba_intrwait_ret_pc;         /* saved lr_svc: nested SWIs from the
                                             VBlank ISR (Zelda streams VRAM via
                                             LZ77 in its handler) re-bank SVC
@@ -1554,7 +1557,11 @@ static void cgba_iw_trace(char tag, u32 a, u32 b)
   if (n >= 2500) return;
   n++;
   vals[0] = a; vals[1] = b;
-  vals[2] = read_memory16(0x03FFFFF8u);           /* BIOS_IF (no charge) */
+  {
+    extern u8 iwram[];
+    vals[2] = ((u32)iwram[0x7FF8] | ((u32)iwram[0x7FF9] << 8)) |
+              (((u32)iwram[0x8000+0x7FF8] | ((u32)iwram[0x8000+0x7FF9] << 8)) << 16);
+  }                                                /* low half | high half */
   vals[3] = read_ioreg(REG_IE); vals[4] = read_ioreg(REG_IF);
   vals[5] = read_ioreg(REG_IME); vals[6] = reg[REG_CPSR];
   vals[7] = read_ioreg(REG_DISPSTAT);
@@ -1711,6 +1718,7 @@ static u32 cgba_hle_intrwait_step(u32 cycles)
   }
   flags = cgba_bios_if_check(cgba_intrwait_mask);
   (void)check_and_raise_interrupts();
+  cgba_iw_trace('C', flags, reg[REG_PC]);
   if (reg[REG_PC] != 0x00000004u)
     return cycles;                       /* IRQ preempted at IME=1: vector */
   if (flags) {
@@ -1796,7 +1804,10 @@ u32 cgba_sh4_bios_fallback(u32 cycles)
   }
 #endif
 
-  if (reg[REG_PC] >= 0x00004000u) {      /* left the BIOS: back to the JIT */
+  if (reg[REG_PC] >= 0x00004000u ||
+      (reg[REG_PC] == 0x00000004u && cgba_intrwait_state)) {
+    /* Left the BIOS — or returned to the IntrWait park, which must
+       re-dispatch so the park hook runs instead of the real vector code. */
     s32 remaining = cgba_diff_stop_cycles_remaining;
     if (remaining <= 0) {
       u32 ret = update_gba(remaining);

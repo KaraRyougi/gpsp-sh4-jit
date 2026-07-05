@@ -250,6 +250,27 @@ u32 function_cc update_gba(int remaining_cycles)
           // Trigger VBlank interrupt if enabled
           if (dispstat & 0x8)
             irq_raised |= IRQ_VBLANK;
+#if defined(CGBA_GPSP_HEADLESS_TEST) && defined(CGBA_SH4_VBEDGE_TRACE)
+          {
+            extern int cgba_intrwait_state;
+            static u32 vbn;
+            if (cgba_intrwait_state && vbn < 24) {
+              static const char h[] = "0123456789ABCDEF";
+              volatile unsigned char *port = (volatile unsigned char *)0xb7000000u;
+              u32 vals[6] = { dispstat, (u32)irq_raised, read_ioreg(REG_IE),
+                              read_ioreg(REG_IF), read_ioreg(REG_IME),
+                              reg[REG_CPSR] };
+              int vi, bi;
+              vbn++;
+              *port='V';*port='B';*port=':';
+              for (vi = 0; vi < 6; vi++) {
+                for (bi = 7; bi >= 0; bi--) *port = h[(vals[vi]>>(bi*4))&0xF];
+                *port=' ';
+              }
+              *port='\n';
+            }
+          }
+#endif
 
           // Trigger the VBlank DMAs if enabled
           for (i = 0; i < 4; i++)
