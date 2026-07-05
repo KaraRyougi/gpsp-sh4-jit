@@ -29,6 +29,7 @@
 
 extern u8 *memory_map_read[];
 extern u16 io_registers[512];
+extern u32 spsr[6];
 int cgba_sh4_thumb_ldst(u32 opcode, u32 pc);
 int cgba_sh4_arm_psr(u32 opcode, u32 pc);
 void sh4_block_exit(u32 pc);
@@ -320,27 +321,49 @@ static inline int sh4g_thumb_dp_native(u8 **tp, u32 opcode, u32 pc, u32 flag_sta
   return 0;
 }
 
-/* Native MRS/MSR (CPSR forms). MRS is a plain register copy: reg[REG_CPSR]
- * carries the full canonical flag set in this port (set_nzcv / the helpers
- * write CPSR bits directly), so no flag collapse pass is needed. MSR merges
- * under gpSP's privileged field mask with three runtime guards to the C
- * helper: USER mode (different mask + restricted control byte), a mode or
- * Thumb bit change (needs set_cpu_mode re-banking), and an IRQ-enabled
- * result with an interrupt actually pending (needs the vector + redispatch).
- * The hot MP2K bracket — MSR cpsr_c toggling only the I bit with no IRQ due —
- * stays fully native. SPSR forms and MSR with a PC operand stay on C. */
+/* R0 = (reg[CPU_MODE] & 0xF) * 4 and base_rn = &spsr[0], ready for the
+ * @(R0,Rn) indexed forms. REG_SPSR/REG_MODE discard the privilege bit the
+ * same way. */
+static inline void sh4g_psr_spsr_index(u8 **tp, unsigned base_rn)
+{
+  sh4g_load_greg(tp, SH4_GREG_CPU_MODE, SH4_REG_RET);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_and_imm(&cg, 0xF);
+    sh4_emit_shll2(&cg, SH4_REG_RET);
+    sh4g_close(tp, &cg); }
+  sh4g_const(tp, (u32)(uintptr_t)spsr, base_rn);
+}
+
+/* Native MRS/MSR. MRS cpsr is a plain register copy: reg[REG_CPSR] carries
+ * the full canonical flag set in this port (set_nzcv / the helpers write
+ * CPSR bits directly), so no flag collapse pass is needed. SPSR forms are
+ * plain spsr[mode & 0xF] array reads/masked merges — no banking or IRQ
+ * side effects. MSR cpsr merges under gpSP's privileged field mask with
+ * three runtime guards to the C helper: USER mode (restricted mask), a
+ * Thumb bit change, and an IRQ-enabled result with an interrupt actually
+ * pending (needs the vector + redispatch). Mode changes JSR the resident
+ * set_cpu_mode routine (sh4g_psr_emit_rebank_routine, sh4_fastmem.c
+ * buffer) — full FIQ semantics, no block-byte or I-cache cost at the
+ * site. The hot IRQ-dispatcher bracket — mrs spsr, two mode-switching
+ * msr cpsr_cf, msr spsr — stays fully native. MSR with a PC operand
+ * stays on C. */
 static inline int sh4g_arm_psr_native(u8 **tp, u32 opcode, u32 pc, int cycles)
 {
   u32 is_msr   = (opcode >> 21) & 1;
   u32 use_spsr = (opcode >> 22) & 1;
-  if (use_spsr)
-    return 0;
 
-  if (!is_msr) {                                         /* MRS rd, cpsr */
+  if (!is_msr) {                                         /* MRS rd, psr */
     u32 rd = (opcode >> 12) & 0xF;
     if (rd == 15)
       return 0;
-    sh4g_load_greg(tp, SH4_GREG_CPSR, SH4_REG_T0);
+    if (use_spsr) {                                      /* rd = spsr[mode] */
+      sh4g_psr_spsr_index(tp, SH4_REG_T1);
+      { sh4_codegen cg = sh4g_open(tp);
+        sh4_emit_mov_l_load_r0(&cg, SH4_REG_T1, SH4_REG_T0);
+        sh4g_close(tp, &cg); }
+    } else {
+      sh4g_load_greg(tp, SH4_GREG_CPSR, SH4_REG_T0);
+    }
     sh4g_store_greg(tp, SH4_REG_T0, rd);
     return 1;
   }
@@ -359,6 +382,36 @@ static inline int sh4g_arm_psr_native(u8 **tp, u32 opcode, u32 pc, int cycles)
     }
     if (pfield == 0)
       return 0;
+
+    if (use_spsr) {                    /* MSR spsr_<f>: masked array merge
+                                        * (gpSP spsr_masks — bit4 of the
+                                        * control byte is architecturally
+                                        * fixed and excluded). */
+      u32 mask = (pfield == 3) ? 0xF00000EFu
+               : (pfield == 2) ? 0xF0000000u : 0x000000EFu;
+      sh4g_psr_spsr_index(tp, SH4_REG_T2);
+      { sh4_codegen cg = sh4g_open(tp);
+        sh4_emit_mov_l_load_r0(&cg, SH4_REG_T2, SH4_REG_T0);
+        sh4g_close(tp, &cg); }
+      sh4g_const(tp, ~mask, SH4_REG_T1);
+      { sh4_codegen cg = sh4g_open(tp);
+        sh4_emit_and(&cg, SH4_REG_T1, SH4_REG_T0);
+        sh4g_close(tp, &cg); }
+      if (is_imm)
+        sh4g_const(tp, val & mask, SH4_REG_T1);
+      else {
+        sh4g_load_greg(tp, rm, SH4_REG_T1);
+        sh4g_const(tp, mask, SH4_REG_ARG1);
+        { sh4_codegen cg = sh4g_open(tp);
+          sh4_emit_and(&cg, SH4_REG_ARG1, SH4_REG_T1);
+          sh4g_close(tp, &cg); }
+      }
+      { sh4_codegen cg = sh4g_open(tp);
+        sh4_emit_or(&cg, SH4_REG_T1, SH4_REG_T0);
+        sh4_emit_mov_l_store_r0(&cg, SH4_REG_T0, SH4_REG_T2);
+        sh4g_close(tp, &cg); }
+      return 1;
+    }
 
     if (pfield == 2) {                 /* flags only: mask is 0xF0000000 in
                                         * BOTH privilege levels -> no guards */
@@ -385,8 +438,11 @@ static inline int sh4g_arm_psr_native(u8 **tp, u32 opcode, u32 pc, int cycles)
 
     {                                  /* control byte written (pfield 1 / 3) */
       u32 mask = (pfield == 3) ? 0xF00000EFu : 0x000000EFu;
-      u8 *to_slow[2], *to_store[3], *done;
+      u8 *to_slow[2], *to_store[3], *done, *skip_bank;
       int ns = 0, nst = 0, i;
+
+      if (!cgba_sh4_psr_rebank_routine)  /* dynarec init not run yet */
+        return 0;
 
       if (is_imm) sh4g_const(tp, val, SH4_REG_ARG3);     /* R7 = value */
       else        sh4g_load_greg(tp, rm, SH4_REG_ARG3);
@@ -414,11 +470,11 @@ static inline int sh4g_arm_psr_native(u8 **tp, u32 opcode, u32 pc, int cycles)
         sh4g_close(tp, &cg); }
       to_slow[ns++] = sh4g_emit_bt_placeholder(tp);
 
-      /* mode or Thumb bit changes -> C (set_cpu_mode re-banking) */
+      /* Thumb bit change -> C (execution-state switch mid-block) */
       { sh4_codegen cg = sh4g_open(tp);
         sh4_emit_mov_reg(&cg, SH4_REG_ARG1, SH4_REG_RET);
         sh4_emit_xor(&cg, SH4_REG_T0, SH4_REG_RET);
-        sh4_emit_and_imm(&cg, 0x3F);
+        sh4_emit_and_imm(&cg, 0x20);
         sh4_emit_tst(&cg, SH4_REG_RET, SH4_REG_RET);     /* T=1: unchanged */
         sh4g_close(tp, &cg); }
       to_slow[ns++] = sh4g_emit_bf_placeholder(tp);
@@ -465,6 +521,29 @@ static inline int sh4g_arm_psr_native(u8 **tp, u32 opcode, u32 pc, int cycles)
 
       for (i = 0; i < nst; i++)
         sh4g_patch_cond(to_store[i], *tp);
+
+      /* Committed — no more bails. Same CPSR mode nibble (same gpSP mode by
+       * construction): plain CPSR store, keeping the hot I-bit-toggle
+       * bracket inline. Nibble changed: JSR the resident set_cpu_mode
+       * routine (sh4_fastmem.c buffer — outside the translation caches, so
+       * the ~110-byte re-bank body costs no block bytes or I-cache reach;
+       * inlining it here measured +59% imiss on AW). The routine handles
+       * FIQ's 7-register bank and preserves R1 = merged CPSR. */
+      { sh4_codegen cg = sh4g_open(tp);
+        sh4_emit_mov_reg(&cg, SH4_REG_ARG1, SH4_REG_RET);
+        sh4_emit_xor(&cg, SH4_REG_T0, SH4_REG_RET);
+        sh4_emit_and_imm(&cg, 0xF);
+        sh4_emit_tst(&cg, SH4_REG_RET, SH4_REG_RET);     /* T=1: same mode */
+        sh4g_close(tp, &cg); }
+      skip_bank = sh4g_emit_bt_placeholder(tp);
+
+      sh4g_const(tp, (u32)(uintptr_t)cgba_sh4_psr_rebank_routine, SH4_REG_RET);
+      { sh4_codegen cg = sh4g_open(tp);
+        sh4_emit_jsr(&cg, SH4_REG_RET);
+        sh4_emit_nop(&cg);
+        sh4g_close(tp, &cg); }
+
+      sh4g_patch_cond(skip_bank, *tp);
       sh4g_store_greg(tp, SH4_REG_T0, SH4_GREG_CPSR);
       sh4g_patch_bra(done, *tp);
       return 1;

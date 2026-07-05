@@ -54,7 +54,14 @@ static inline int sh4g_arm_ldst_native(u8 **tp, u32 opcode, u32 pc,
   int kind, align_mask;
   int effective_wb = writeback || !pre;
 
-  if (rd == 15 || rn == 15) return 0;   /* PC operand (incl. STR pc) -> C */
+  if (rd == 15) return 0;               /* PC destination -> C */
+  /* rn==15 literal-pool loads (LDR rd,[pc,#imm] — 2 per IRQ in AW's ISR)
+   * have a COMPILE-TIME address: pc+8 +/- imm. Immediate, no-writeback
+   * loads go through the normal fastmem site with the address synthesized
+   * as a constant; everything else PC-based stays on C. (A post-indexed
+   * form implies writeback and is rejected below via effective_wb.) */
+  if (rn == 15 && (!is_load || writeback || !pre || (opcode & 0x02000000)))
+    return 0;
   /* Stores are native for plain EWRAM/IWRAM: the emitted path is RAM-only
    * (region guard), SMC-checked (width-sized tag-mirror probe, falling back
    * BEFORE any write), and byteswapped — the same discipline as the proven
@@ -91,6 +98,13 @@ static inline int sh4g_arm_ldst_native(u8 **tp, u32 opcode, u32 pc,
     else                     { kind = LDK_W; align_mask = 3; }    /* LDR  */
   }
   if ((reg_offset || shift_offset) && rm == 15) return 0;  /* PC offset register -> C */
+  if (rn == 15 && (reg_offset || shift_offset)) return 0;  /* pc + reg -> C */
+
+  if (rn == 15) {                       /* literal pool: constant address */
+    u32 caddr = (pc + 8) + (up ? offset : (u32)-(int32_t)offset);
+    sh4g_const(tp, caddr, SH4_REG_T0);
+    goto have_address;
+  }
 
   /* addr = transfer address in R1; for post-indexed forms keep the old base in
    * R1 and precompute writeback into R6 before the fast path clobbers R2. */
@@ -126,6 +140,7 @@ static inline int sh4g_arm_ldst_native(u8 **tp, u32 opcode, u32 pc,
     sh4g_close(tp, &cg);
   }
 
+have_address:
   /* Out-of-line fast path: the shared fastmem routine performs guards,
    * transfer, SMC tags, writeback and the cycle charge; guard failures jump
    * into sh4_op2_pc_mem_tramp, which re-reads this site's tuple and runs

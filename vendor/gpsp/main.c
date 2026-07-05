@@ -42,6 +42,7 @@ int cgba_sh4_trace_update_tag;
 int cgba_sh4_trace_update_count;
 int cgba_sh4_trace_update_limit;
 
+#if defined(CGBA_SH4_UPDATE_TRACE)
 static void cgba_trace_putc(char c)
 {
   *(volatile unsigned char *)0xb7000000u = (unsigned char)c;
@@ -83,6 +84,9 @@ static void cgba_trace_update_gba(int remaining_cycles)
 #else
 #define cgba_trace_update_gba(x) ((void)0)
 #endif
+#else
+#define cgba_trace_update_gba(x) ((void)0)
+#endif
 
 // Generate 16 random bits.
 u16 rand_gen() {
@@ -111,29 +115,34 @@ static unsigned update_timers(irq_type *irq_raised, unsigned completed_cycles)
          write_ioreg(REG_TMXD(i), -(timer[i].count >> timer[i].prescale));
       }
 
-      if(timer[i].count > 0)
-         continue;
-
-      /* irq_raised value range: IRQ_TIMER0, IRQ_TIMER1, IRQ_TIMER2, IRQ_TIMER3 */
-      if(timer[i].irq)
-         *irq_raised |= (IRQ_TIMER0 << i);
-
-      if((i != 3) && (timer[i + 1].status == TIMER_CASCADE))
+      /* Process EVERY overflow the elapsed cycles covered: IRQ-less sound
+         timers no longer cap the event slice (AW: the ~38kHz sample timer
+         forced ~650 update_gba round-trips per frame), so a slice may span
+         several periods. Timers that raise IRQs (or feed a cascade) still
+         cap the slice and take one overflow per call, keeping IRQ timing. */
+      while(timer[i].count <= 0)
       {
-         timer[i + 1].count--;
-         write_ioreg(REG_TMXD(i + 1), -timer[i+1].count);
+         /* irq_raised range: IRQ_TIMER0, IRQ_TIMER1, IRQ_TIMER2, IRQ_TIMER3 */
+         if(timer[i].irq)
+            *irq_raised |= (IRQ_TIMER0 << i);
+
+         if((i != 3) && (timer[i + 1].status == TIMER_CASCADE))
+         {
+            timer[i + 1].count--;
+            write_ioreg(REG_TMXD(i + 1), -timer[i+1].count);
+         }
+
+         if(i < 2)
+         {
+            if(timer[i].direct_sound_channels & 0x01)
+               ret += sound_timer(timer[i].frequency_step, 0);
+
+            if(timer[i].direct_sound_channels & 0x02)
+               ret += sound_timer(timer[i].frequency_step, 1);
+         }
+
+         timer[i].count += (timer[i].reload << timer[i].prescale);
       }
-
-      if(i < 2)
-      {
-         if(timer[i].direct_sound_channels & 0x01)
-            ret += sound_timer(timer[i].frequency_step, 0);
-
-         if(timer[i].direct_sound_channels & 0x02)
-            ret += sound_timer(timer[i].frequency_step, 1);
-      }
-
-      timer[i].count += (timer[i].reload << timer[i].prescale);
    }
    return ret;
 }
@@ -165,6 +174,11 @@ void init_main(void)
 #endif
 }
 
+#ifdef CGBA_GPSP_HEADLESS_TEST
+u32 cgba_update_gba_calls, cgba_update_gba_slices;
+u32 cgba_update_gba_halt_calls;   /* entries with the CPU halted */
+#endif
+
 u32 function_cc update_gba(int remaining_cycles)
 {
   u32 changed_pc = 0;
@@ -176,9 +190,17 @@ u32 function_cc update_gba(int remaining_cycles)
 
   remaining_cycles = MAX(remaining_cycles, -64);
 
+#ifdef CGBA_GPSP_HEADLESS_TEST
+  cgba_update_gba_calls++;
+  if (reg[CPU_HALT_STATE] != CPU_ACTIVE)
+    cgba_update_gba_halt_calls++;
+#endif
   do
   {
     unsigned i;
+#ifdef CGBA_GPSP_HEADLESS_TEST
+    cgba_update_gba_slices++;
+#endif
     // Number of cycles we ask to run - cycles that we did not execute
     // (remaining_cycles can be negative and should be close to zero)
     unsigned completed_cycles = execute_cycles - remaining_cycles;
@@ -333,8 +355,14 @@ u32 function_cc update_gba(int remaining_cycles)
     // Figure out when we need to stop CPU execution. The next event is
     // a video event or a timer event, whatever happens first.
     execute_cycles = MAX(video_count, 0);
+#ifdef CGBA_GPSP_HEADLESS_TEST
+    { extern u32 cgba_cap_src[8]; cgba_cap_src[0]++; }   /* default: video */
+#endif
     {
       u32 cc = serial_next_event();
+#ifdef CGBA_GPSP_HEADLESS_TEST
+      if (cc < execute_cycles) { extern u32 cgba_cap_src[8]; cgba_cap_src[1]++; }
+#endif
       execute_cycles = MIN(execute_cycles, cc);
     }
 
@@ -356,10 +384,22 @@ u32 function_cc update_gba(int remaining_cycles)
 
     for (i = 0; i < 4; i++)
     {
+       /* Only IRQ or cascade-feeding timers must break the slice at their
+          overflow; sound-clock timers batch (update_timers loops). */
        if (timer[i].status == TIMER_PRESCALE &&
-           timer[i].count < execute_cycles)
+           (timer[i].irq ||
+            (i != 3 && timer[i + 1].status == TIMER_CASCADE)) &&
+           timer[i].count < execute_cycles) {
           execute_cycles = timer[i].count;
+#ifdef CGBA_GPSP_HEADLESS_TEST
+          { extern u32 cgba_cap_src[8]; cgba_cap_src[2 + i]++; }
+#endif
+       }
     }
+#ifdef CGBA_GPSP_HEADLESS_TEST
+    { extern u32 cgba_cap_src[8]; cgba_cap_src[6] += execute_cycles;
+      if (execute_cycles < 192) cgba_cap_src[7]++; }
+#endif
   } while(reg[CPU_HALT_STATE] != CPU_ACTIVE && !frame_complete);
 
   // We voluntarily limit this. It is not accurate but it would be much harder.

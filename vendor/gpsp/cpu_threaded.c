@@ -4179,6 +4179,43 @@ void flush_translation_cache_ram(void)
 u32 cgba_last_rom_flush_frame;   /* CGBA_COLD_HEAT's adaptive-increment clock */
 #endif
 
+#ifdef CGBA_GPSP_HEADLESS_TEST
+/* Dump the ROM-cache block map (guest key -> arena offset of the hashhdr)
+ * over the debug port, so a JIT-arena PC histogram (casio-emu HLE_PROFILE)
+ * can be joined back to guest blocks offline. Emission is sequential, so a
+ * block's extent ends at the next-higher header offset. Only the final
+ * cache generation is described; runs with many ROM flushes will mix
+ * generations (AW steady state has ~0 after warmup). */
+void cgba_sh4_dump_rom_blockmap(void)
+{
+  volatile unsigned char *dbg = (volatile unsigned char *)0xb7000000u;
+  static const char hexd[] = "0123456789ABCDEF";
+  u32 i;
+#define CGBA_DBG_PUTS(str)   do { const char *p_ = (str); while (*p_) *dbg = (unsigned char)*p_++; } while (0)
+#define CGBA_DBG_HEX8(val)   do { u32 v_ = (val); int k_;        for (k_ = 7; k_ >= 0; k_--) *dbg = (unsigned char)hexd[(v_ >> (k_ * 4)) & 0xF]; } while (0)
+  CGBA_DBG_PUTS("jit blkmap base=");
+  CGBA_DBG_HEX8((u32)(uintptr_t)rom_translation_cache);
+  CGBA_DBG_PUTS(" end=");
+  CGBA_DBG_HEX8((u32)(uintptr_t)rom_translation_ptr);
+  *dbg = '\n';
+  for (i = 0; i < ROM_BRANCH_HASH_SIZE; i++) {
+    u32 off = rom_branch_hash[i];
+    while (off) {
+      hashhdr_type *bhdr = (hashhdr_type *)&rom_translation_cache[off];
+      CGBA_DBG_PUTS("jit blk ");
+      CGBA_DBG_HEX8(bhdr->pc_value);
+      *dbg = ' ';
+      CGBA_DBG_HEX8(off);
+      *dbg = '\n';
+      off = bhdr->next_entry;
+    }
+  }
+  CGBA_DBG_PUTS("jit blkmap done\n");
+#undef CGBA_DBG_PUTS
+#undef CGBA_DBG_HEX8
+}
+#endif
+
 void flush_translation_cache_rom(void)
 {
 #ifdef SH4_ARCH

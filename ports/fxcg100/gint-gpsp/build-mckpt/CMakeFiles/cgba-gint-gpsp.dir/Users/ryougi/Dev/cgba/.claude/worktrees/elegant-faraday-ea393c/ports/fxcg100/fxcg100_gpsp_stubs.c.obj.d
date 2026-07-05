@@ -1,0 +1,35 @@
+CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_gpsp_stubs.c.obj: \
+ /Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_gpsp_stubs.c \
+ /Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/gint-gpsp/../../../vendor/gpsp/common.h \
+ /Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/include/unistd.h \
+ /Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/include/stdio.h \
+ /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/include/stddef.h \
+ /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/include/stdarg.h \
+ /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/include/stdint.h \
+ /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/include/stdint-gcc.h \
+ /Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/include/sys/types.h \
+ /Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/include/bits/confname.h \
+ /Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/include/time.h \
+ /Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/include/stdlib.h \
+ /Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/include/bits/exit.h \
+ /Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/include/string.h \
+ /Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/gint-gpsp/../../../vendor/gpsp/cpu.h \
+ /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/include/stdbool.h \
+ /Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/gint-gpsp/../../../vendor/gpsp/gpsp_config.h \
+ /Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/gint-gpsp/../../../vendor/gpsp/gba_memory.h \
+ /Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/gint-gpsp/../../../ports/fxcg100/libretro.h \
+ /Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/gint-gpsp/../../../vendor/gpsp/savestate.h \
+ /Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/gint-gpsp/../../../vendor/gpsp/video.h \
+ /Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/gint-gpsp/../../../vendor/gpsp/input.h \
+ /Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/gint-gpsp/../../../vendor/gpsp/sound.h \
+ /Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/gint-gpsp/../../../vendor/gpsp/main.h \
+ /Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/gint-gpsp/../../../vendor/gpsp/cheats.h \
+ /Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/gint-gpsp/../../../vendor/gpsp/serial.h \
+ /Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/gint-gpsp/../../../vendor/gpsp/libretro/libretro-common/include/streams/file_stream.h \
+ /Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/gint-gpsp/../../../vendor/gpsp/libretro/libretro-common/include/retro_common_api.h \
+ /Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/include/inttypes.h \
+ /Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/gint-gpsp/../../../vendor/gpsp/retro_inline.h \
+ /Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/gint-gpsp/../../../vendor/gpsp/libretro/libretro-common/include/boolean.h \
+ /Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/gint-gpsp/../../../vendor/gpsp/libretro/libretro-common/include/vfs/vfs_implementation.h \
+ /Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/gint-gpsp/../../../vendor/gpsp/libretro/libretro-common/include/retro_environment.h \
+ /Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/gint-gpsp/../../../vendor/gpsp/libretro/libretro-common/include/vfs/vfs.h

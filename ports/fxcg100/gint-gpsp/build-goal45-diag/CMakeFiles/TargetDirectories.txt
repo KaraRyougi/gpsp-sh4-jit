@@ -1,0 +1,3 @@
+/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/gint-gpsp/build-goal45-diag/CMakeFiles/cgba-gint-gpsp.dir
+/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/gint-gpsp/build-goal45-diag/CMakeFiles/edit_cache.dir
+/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/gint-gpsp/build-goal45-diag/CMakeFiles/rebuild_cache.dir

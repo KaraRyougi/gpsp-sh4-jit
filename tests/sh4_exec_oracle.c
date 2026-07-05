@@ -36,6 +36,25 @@ typedef uint64_t u64;
 /* ---- stubs the emit headers reference ---- */
 u32 reg[64];
 u16 io_registers[512];
+u32 reg_mode[7][7];
+u32 spsr[6];
+/* Emitted code reads these u32 arrays through the orc windows, which model
+ * the SH4's big-endian byte order over host (LE) buffers — so the harness
+ * copies hold byte-swapped values (see the io_registers eswap16 note in the
+ * PSR section). The logical table feeds the reference model. */
+static const u32 cpu_modes_logical[16] =
+{
+  0x00, 0x12, 0x11, 0x13, 0x16, 0x16, 0x16, 0x14,
+  0x16, 0x16, 0x16, 0x15, 0x16, 0x16, 0x16, 0x10
+};
+#define ORC_BSWAP32(x) __builtin_bswap32(x)
+const u32 cpu_modes[16] =
+{
+  ORC_BSWAP32(0x00), ORC_BSWAP32(0x12), ORC_BSWAP32(0x11), ORC_BSWAP32(0x13),
+  ORC_BSWAP32(0x16), ORC_BSWAP32(0x16), ORC_BSWAP32(0x16), ORC_BSWAP32(0x14),
+  ORC_BSWAP32(0x16), ORC_BSWAP32(0x16), ORC_BSWAP32(0x16), ORC_BSWAP32(0x15),
+  ORC_BSWAP32(0x16), ORC_BSWAP32(0x16), ORC_BSWAP32(0x16), ORC_BSWAP32(0x10)
+};
 u8 *memory_map_read[8192];
 u8 iwram[0x10000];                 /* gpSP global (push_iwram fast path) */
 u8 ws_cyc_seq[16][2], ws_cyc_nseq[16][2];
@@ -86,6 +105,8 @@ u32 cgba_sh4_native_thumb_push_iwram_count2;
 #include "ports/fxcg100/sh4/sh4_thumb_block_emit.h"
 
 u8 *cgba_sh4_fastmem_routine[CGBA_FM_TOTAL];
+u8 *cgba_sh4_psr_rebank_routine;
+static u8 psr_rebank_buf[512];
 
 static void orc_vec_init(void)
 {
@@ -370,6 +391,18 @@ static int run_at(u32 pc, u32 pc_end)
       R[nn] = orc_read(R[mm], 2, &okf);
       if (!okf) { snprintf(unmodeled, sizeof unmodeled, "mov.l @%08X", R[mm]); return 0; }
     }
+    else if ((op & 0xF00F) == 0x2001) {                             /* MOV.W Rm,@Rn */
+      orc_write(R[nn], R[mm], 1, &okf);
+      if (!okf) { snprintf(unmodeled, sizeof unmodeled, "mov.w st @%08X", R[nn]); return 0; }
+    }
+    else if ((op & 0xF00F) == 0x2000) {                             /* MOV.B Rm,@Rn */
+      orc_write(R[nn], R[mm], 0, &okf);
+      if (!okf) { snprintf(unmodeled, sizeof unmodeled, "mov.b st @%08X", R[nn]); return 0; }
+    }
+    else if ((op & 0xF00F) == 0x2002) {                             /* MOV.L Rm,@Rn */
+      orc_write(R[nn], R[mm], 2, &okf);
+      if (!okf) { snprintf(unmodeled, sizeof unmodeled, "mov.l st @%08X", R[nn]); return 0; }
+    }
     else if ((op & 0xFF00) == 0x8900) {
       if (T) next = pc + 4 + (u32)((s32)(s8)(op & 0xFF) * 2);
     }
@@ -401,6 +434,10 @@ static int run_sh4x(const u8 *code, size_t n)
   orc_add_window(orc_vec_table, sizeof orc_vec_table, 0);
   orc_add_window(ws_cyc_seq, sizeof ws_cyc_seq, 0);
   orc_add_window(ws_cyc_nseq, sizeof ws_cyc_nseq, 0);
+  orc_add_window(reg_mode, sizeof reg_mode, 0);
+  orc_add_window(spsr, sizeof spsr, 0);
+  orc_add_window(cpu_modes, sizeof cpu_modes, 0);
+  orc_add_window(psr_rebank_buf, sizeof psr_rebank_buf, 0);
   orc_slow_target = (u32)(uintptr_t)sh4_op2_pc_mem_tramp;
   orc_slow_target2 = (u32)(uintptr_t)sh4_op2_pc_tramp;
   return run_at((u32)(uintptr_t)code, (u32)(uintptr_t)code + (u32)n);
@@ -674,6 +711,15 @@ int main(void)
 
   /* ---- native MSR/MRS: guard chain + masked merge + IO pending check ---- */
   {
+    {   /* resident set_cpu_mode routine, baked into MSR sites as a literal */
+      u8 *rtp = psr_rebank_buf;
+      cgba_sh4_psr_rebank_routine = sh4g_psr_emit_rebank_routine(&rtp);
+      if ((size_t)(rtp - psr_rebank_buf) > sizeof psr_rebank_buf) {
+        printf("FAIL psr rebank routine overflows buffer (%zu)\n",
+               (size_t)(rtp - psr_rebank_buf));
+        fails++;
+      }
+    }
     static const u32 psr_ops[] = {
       0xE10F3000u,            /* MRS r3, cpsr */
       0xE328F20Fu,            /* MSR cpsr_f, #0xF0000000 */
@@ -686,10 +732,13 @@ int main(void)
       0xE329F002u,            /* MSR cpsr_fc, r2 */
     };
     static const u32 old_cpsrs[] = {
-      0x0000001Fu, 0x0000009Fu, 0x60000012u, 0xF000009Fu, 0x2000001Fu
+      0x0000001Fu, 0x0000009Fu, 0x60000012u, 0xF000009Fu, 0x2000001Fu,
+      0x00000011u                                   /* FIQ: old-mode bail */
     };
     static const u32 rvals[] = {
-      0x0000001Fu, 0x0000009Fu, 0x9000001Fu, 0xF0000012u, 0x00000010u
+      0x0000001Fu, 0x0000009Fu, 0x9000001Fu, 0xF0000012u, 0x00000010u,
+      0x0000003Fu,                                  /* Thumb bit: bail    */
+      0x00000011u                                   /* FIQ: new-mode bail */
     };
     struct iostate { u16 ie, iff, ime; } ios[] = {
       { 0x0001, 0x0000, 1 },  /* nothing pending */
@@ -723,7 +772,12 @@ int main(void)
               for (int i = 0; i < 16; i++) g_reg[i] = 0xFACE0000u + (u32)i;
               g_reg[2] = rvals[ri];
               g_reg[SH4_GREG_CPSR] = oldc;
-              g_reg[SH4_GREG_CPU_MODE] = user ? 0x00 : 0x10;
+              g_reg[SH4_GREG_CPU_MODE] =
+                user ? 0x00 : cpu_modes_logical[oldc & 0xF];
+              for (int r = 0; r < 7; r++)
+                for (int c = 0; c < 7; c++)
+                  reg_mode[r][c] =
+                    ORC_BSWAP32(0xB0000000u + (u32)r * 0x100u + (u32)c);
 
               int ran = run_sh4x(pbuf, (size_t)(pp - pbuf));
               int slow = (!ran && strstr(unmodeled, "slow path"));
@@ -749,10 +803,12 @@ int main(void)
               u32 mask = (pfield == 2) ? 0xF0000000u
                        : (pfield == 3) ? 0xF00000EFu : 0x000000EFu;
               u32 merged = (val & mask) | (oldc & ~mask);
+              u32 old_mode = user ? 0x00u : cpu_modes_logical[oldc & 0xF];
+              u32 new_mode = cpu_modes_logical[merged & 0xF];
               int want_slow = 0;
               if (pfield != 2) {
                 if (user) want_slow = 1;
-                else if ((oldc ^ merged) & 0x3F) want_slow = 1;
+                else if ((oldc ^ merged) & 0x20) want_slow = 1;
                 else if (!(merged & 0x80) &&
                          (ios[si].ie & ios[si].iff) && (ios[si].ime & 1))
                   want_slow = 1;
@@ -762,12 +818,131 @@ int main(void)
                        "slow=%d want %d\n", opcode, oldc, val, user, si, slow, want_slow);
                 fails++; continue;
               }
-              if (!slow && g_reg[SH4_GREG_CPSR] != merged) {
+              if (slow)
+                continue;
+              if (g_reg[SH4_GREG_CPSR] != merged) {
                 printf("FAIL msr op=%08X old=%08X val=%08X: CPSR=%08X want %08X\n",
                        opcode, oldc, val, g_reg[SH4_GREG_CPSR], merged);
+                fails++; continue;
+              }
+              if (pfield == 2)
+                continue;                       /* flags-only: no banking */
+              if (g_reg[SH4_GREG_CPU_MODE] != new_mode) {
+                printf("FAIL msr op=%08X: CPU_MODE=%08X want %08X\n",
+                       opcode, g_reg[SH4_GREG_CPU_MODE], new_mode);
+                fails++; continue;
+              }
+              if (old_mode != new_mode) {
+                /* Model set_cpu_mode over logical values: retire into the
+                 * old row (7 registers when ENTERING FIQ, else r13/r14),
+                 * then load from the new row (7 when LEAVING FIQ). Shared
+                 * rows (USER<->SYSTEM, INVALID<->INVALID) retire-then-load
+                 * the just-written slots, exactly like the C code. */
+                u32 or_ = old_mode & 0xF, nr = new_mode & 0xF;
+                u32 rm_m[7][7], regs_m[16];
+                int bad = 0;
+                for (int r = 0; r < 7; r++)
+                  for (int c = 0; c < 7; c++)
+                    rm_m[r][c] = 0xB0000000u + (u32)r * 0x100u + (u32)c;
+                for (int r = 0; r < 16; r++) regs_m[r] = 0xFACE0000u + (u32)r;
+                regs_m[2] = rvals[ri];
+                if (new_mode == 0x12)
+                  for (int r = 0; r < 7; r++) rm_m[or_][r] = regs_m[8 + r];
+                else {
+                  rm_m[or_][5] = regs_m[13];
+                  rm_m[or_][6] = regs_m[14];
+                }
+                if (old_mode == 0x12)
+                  for (int r = 0; r < 7; r++) regs_m[8 + r] = rm_m[nr][r];
+                else {
+                  regs_m[13] = rm_m[nr][5];
+                  regs_m[14] = rm_m[nr][6];
+                }
+                for (int r = 8; r < 15 && !bad; r++)
+                  if (g_reg[r] != regs_m[r]) bad = 1;
+                for (int c = 0; c < 7 && !bad; c++)
+                  if (ORC_BSWAP32(reg_mode[or_][c]) != rm_m[or_][c]) bad = 1;
+                if (bad) {
+                  printf("FAIL msr rebank op=%08X old=%08X val=%08X "
+                         "modes %02X->%02X: r13=%08X r14=%08X r8=%08X\n",
+                         opcode, oldc, val, old_mode, new_mode,
+                         g_reg[13], g_reg[14], g_reg[8]);
+                  fails++;
+                }
+              } else if (g_reg[13] != 0xFACE000Du || g_reg[14] != 0xFACE000Eu) {
+                printf("FAIL msr op=%08X: r13/r14 moved without mode change\n",
+                       opcode);
                 fails++;
               }
             }
+  }
+
+  /* ---- native SPSR forms: spsr[mode & 0xF] array read / masked merge ---- */
+  {
+    static const u32 spsr_ops[] = {
+      0xE14F3000u,            /* MRS r3, spsr */
+      0xE169F002u,            /* MSR spsr_fc, r2 */
+      0xE168F002u,            /* MSR spsr_f, r2 */
+      0xE161F002u,            /* MSR spsr_c, r2 */
+      0xE369F0A5u,            /* MSR spsr_fc, #0xA5 */
+    };
+    static const u32 smodes[] = { 0x00, 0x10, 0x11, 0x13, 0x15 };
+    static const u32 srvals[] = {
+      0x00000000u, 0xFFFFFFFFu, 0xF00000D3u, 0x0000001Fu, 0x600000B2u
+    };
+    for (unsigned oi = 0; oi < sizeof spsr_ops / sizeof *spsr_ops; oi++)
+      for (unsigned mi = 0; mi < sizeof smodes / sizeof *smodes; mi++)
+        for (unsigned ri = 0; ri < sizeof srvals / sizeof *srvals; ri++) {
+          u32 opcode = spsr_ops[oi];
+          u32 idx = smodes[mi] & 0xF;
+          u32 sinit = 0xA5000000u + idx * 0x111u;
+          static u8 pbuf[4096]; u8 *pp = pbuf;
+
+          if (!sh4g_arm_psr_native(&pp, opcode, pc, 0)) {
+            printf("FAIL spsr op=%08X: no native emission\n", opcode);
+            fails++; continue;
+          }
+          cases++;
+
+          memset(g_reg, 0, sizeof g_reg);
+          for (int i = 0; i < 16; i++) g_reg[i] = 0xFACE0000u + (u32)i;
+          g_reg[2] = srvals[ri];
+          g_reg[SH4_GREG_CPSR] = 0x6000001Fu;
+          g_reg[SH4_GREG_CPU_MODE] = smodes[mi];
+          for (int i = 0; i < 6; i++)
+            spsr[i] = ORC_BSWAP32(0xA5000000u + (u32)i * 0x111u);
+
+          if (!run_sh4x(pbuf, (size_t)(pp - pbuf))) {
+            printf("FAIL spsr op=%08X: interpreter: %s\n", opcode, unmodeled);
+            fails++; continue;
+          }
+
+          if (!((opcode >> 21) & 1)) {          /* MRS r3, spsr */
+            if (g_reg[3] != sinit) {
+              printf("FAIL mrs-spsr mode=%02X: r3=%08X want %08X\n",
+                     smodes[mi], g_reg[3], sinit);
+              fails++;
+            }
+            continue;
+          }
+          u32 pfield = ((opcode >> 16) & 1) | ((opcode >> 18) & 2);
+          u32 mask = (pfield == 3) ? 0xF00000EFu
+                   : (pfield == 2) ? 0xF0000000u : 0x000000EFu;
+          u32 val = (opcode & 0x02000000u) ? 0xA5u : srvals[ri];
+          u32 want = (val & mask) | (sinit & ~mask);
+          int bad = (ORC_BSWAP32(spsr[idx]) != want) ||
+                    (g_reg[SH4_GREG_CPSR] != 0x6000001Fu) ||
+                    (g_reg[SH4_GREG_CPU_MODE] != smodes[mi]);
+          for (u32 i = 0; i < 6 && !bad; i++)
+            if (i != idx &&
+                ORC_BSWAP32(spsr[i]) != 0xA5000000u + i * 0x111u) bad = 1;
+          if (bad) {
+            printf("FAIL msr-spsr op=%08X mode=%02X val=%08X: "
+                   "spsr[%u]=%08X want %08X\n",
+                   opcode, smodes[mi], val, idx, ORC_BSWAP32(spsr[idx]), want);
+            fails++;
+          }
+        }
   }
 
   /* ---- ARM data-processing native: the interrupt-dispatcher workload ---- */
@@ -1148,6 +1323,175 @@ int main(void)
             memcpy((void *)(page + poff), mem_before, 4);
           }
         }
+
+    /* rn==15 literal-pool loads: address is a compile-time constant
+     * (pc+8 +/- imm) synthesized into the site; lands in the rom page. */
+    {
+      static const struct { u32 op; int kind; const char *nm; } pcf[] = {
+        { 0xE59F3010u, LDK_W,  "ldr  r3,[pc,#0x10]"  },
+        { 0xE51F3010u, LDK_W,  "ldr  r3,[pc,-#0x10]" },
+        { 0xE5DF3010u, LDK_B,  "ldrb r3,[pc,#0x10]"  },
+        { 0xE1DF31B0u, LDK_UH, "ldrh r3,[pc,#0x10]"  },
+        { 0xE1DF31F0u, LDK_SH, "ldrsh r3,[pc,#0x10]" },
+        { 0xE15F31B0u, LDK_UH, "ldrh r3,[pc,-#0x10]" },
+      };
+      for (unsigned fi = 0; fi < sizeof pcf / sizeof *pcf; fi++) {
+        static u8 sbuf[512];
+        u8 *sp = sbuf;
+        u32 op = pcf[fi].op;
+        int up = (op >> 23) & 1;
+        u32 eff = (pc + 8) + (up ? 0x10u : (u32)-0x10);
+        const u8 *rp = rom + (eff & 0x7FFF);
+        u32 lev = rp[0] | ((u32)rp[1] << 8) | ((u32)rp[2] << 16) |
+                  ((u32)rp[3] << 24);
+        u32 want;
+
+        if (!sh4g_arm_ldst_native(&sp, op, pc, 0)) {
+          printf("FAIL pcldr emit reject %s\n", pcf[fi].nm);
+          fails++; continue;
+        }
+        cases++;
+        memset(g_reg, 0, sizeof g_reg);
+        for (int i = 0; i < 16; i++) g_reg[i] = 0x51AB0000u + (u32)i;
+        g_reg[SH4_GREG_CPSR] = 0x2000001Fu;
+        g_reg[3] = 0xDEAD0001u;
+
+        orc_reset_windows();
+        orc_add_window(sbuf, sizeof sbuf, 0);
+        orc_add_window(fm_buf, sizeof fm_buf, 0);
+        orc_add_window(io_registers, sizeof io_registers, 0);
+        orc_add_window(memory_map_read, 8192 * 4, 1);
+        orc_add_window(giwram, sizeof giwram, 0);
+        orc_add_window(ewram, sizeof ewram, 0);
+        orc_add_window(vram, sizeof vram, 0);
+        orc_add_window(rom, sizeof rom, 0);
+        orc_add_window(ws_cyc_seq, sizeof ws_cyc_seq, 0);
+        orc_add_window(ws_cyc_nseq, sizeof ws_cyc_nseq, 0);
+        orc_add_window(orc_vec_table, sizeof orc_vec_table, 0);
+        orc_slow_target = (u32)(uintptr_t)sh4_op2_pc_mem_tramp;
+        orc_slow_target2 = (u32)(uintptr_t)sh4_op2_pc_tramp;
+
+        if (!run_at((u32)(uintptr_t)sbuf, (u32)(uintptr_t)sbuf + (u32)(sp - sbuf))) {
+          printf("FAIL pcldr %s: %s%s\n", pcf[fi].nm,
+                 orc_took_slow ? "took slow path: " : "interpreter: ", unmodeled);
+          fails++; continue;
+        }
+        switch (pcf[fi].kind) {
+        case LDK_W:  want = lev; break;
+        case LDK_B:  want = lev & 0xFF; break;
+        case LDK_UH: want = lev & 0xFFFF; break;
+        case LDK_SH: want = (u32)(s32)(int16_t)(lev & 0xFFFF); break;
+        default:     want = (u32)(s32)(s8)(lev & 0xFF); break;
+        }
+        if (g_reg[3] != want) {
+          printf("FAIL pcldr %s: rd=%08X want %08X (eff=%08X)\n",
+                 pcf[fi].nm, g_reg[3], want, eff);
+          fails++;
+        }
+      }
+      /* STRH to REG_IF / REG_IE: native interrupt-register fast path in
+       * the halfword-store routine. IF ack is pure; IE writes natively
+       * unless they would unmask a pending IRQ (IME on, CPSR I clear). */
+      {
+        struct iocase {
+          u32 addr; u32 rd_val; u16 ie0, if0, ime0; u32 cpsr;
+          int want_slow; u16 want_ie, want_if; const char *nm;
+        } iocs[] = {
+          { 0x04000202u, 0x0005u, 0x00FFu, 0x0007u, 1, 0x0000001Fu,
+            0, 0x00FF, 0x0002, "if-ack" },
+          { 0x04000202u, 0xFFFFu, 0x00FFu, 0x0007u, 1, 0x0000001Fu,
+            0, 0x00FF, 0x0000, "if-ack-all" },
+          { 0x04000200u, 0x0008u, 0x0001u, 0x0002u, 1, 0x0000001Fu,
+            0, 0x0008, 0x0002, "ie-no-overlap" },
+          { 0x04000200u, 0x0002u, 0x0001u, 0x0002u, 1, 0x0000001Fu,
+            1, 0x0002, 0x0002, "ie-pending-raise" },
+          { 0x04000200u, 0x0002u, 0x0001u, 0x0002u, 0, 0x0000001Fu,
+            0, 0x0002, 0x0002, "ie-pending-ime-off" },
+          { 0x04000200u, 0x0002u, 0x0001u, 0x0002u, 1, 0x0000009Fu,
+            0, 0x0002, 0x0002, "ie-pending-i-set" },
+          { 0x04000204u, 0x1234u, 0x0001u, 0x0002u, 1, 0x0000001Fu,
+            1, 0x0001, 0x0002, "other-io-slow" },
+        };
+        for (unsigned ci = 0; ci < sizeof iocs / sizeof *iocs; ci++) {
+          static u8 sbuf[512];
+          u8 *sp = sbuf;
+          u32 op = 0xE1C230B0u;               /* strh r3, [r2] */
+          u8 *bp;
+
+          if (!sh4g_arm_ldst_native(&sp, op, pc, 0)) {
+            printf("FAIL ioreg emit reject\n"); fails++; continue;
+          }
+          cases++;
+          memset(g_reg, 0, sizeof g_reg);
+          for (int i = 0; i < 16; i++) g_reg[i] = 0x51AB0000u + (u32)i;
+          g_reg[SH4_GREG_CPSR] = iocs[ci].cpsr;
+          g_reg[2] = iocs[ci].addr;
+          g_reg[3] = iocs[ci].rd_val;
+          bp = (u8 *)&io_registers[0x200 >> 1];
+          bp[0] = (u8)iocs[ci].ie0;  bp[1] = (u8)(iocs[ci].ie0 >> 8);
+          bp = (u8 *)&io_registers[0x202 >> 1];
+          bp[0] = (u8)iocs[ci].if0;  bp[1] = (u8)(iocs[ci].if0 >> 8);
+          bp = (u8 *)&io_registers[0x208 >> 1];
+          bp[0] = (u8)iocs[ci].ime0; bp[1] = (u8)(iocs[ci].ime0 >> 8);
+
+          orc_reset_windows();
+          orc_add_window(sbuf, sizeof sbuf, 0);
+          orc_add_window(fm_buf, sizeof fm_buf, 0);
+          orc_add_window(io_registers, sizeof io_registers, 0);
+          orc_add_window(memory_map_read, 8192 * 4, 1);
+          orc_add_window(giwram, sizeof giwram, 0);
+          orc_add_window(ewram, sizeof ewram, 0);
+          orc_add_window(ws_cyc_seq, sizeof ws_cyc_seq, 0);
+          orc_add_window(ws_cyc_nseq, sizeof ws_cyc_nseq, 0);
+          orc_add_window(orc_vec_table, sizeof orc_vec_table, 0);
+          orc_slow_target = (u32)(uintptr_t)sh4_op2_pc_mem_tramp;
+          orc_slow_target2 = (u32)(uintptr_t)sh4_op2_pc_tramp;
+
+          int ran = run_at((u32)(uintptr_t)sbuf,
+                           (u32)(uintptr_t)sbuf + (u32)(sp - sbuf));
+          int slow = (!ran && orc_took_slow);
+          if (!ran && !slow) {
+            printf("FAIL ioreg %s: interpreter: %s\n", iocs[ci].nm, unmodeled);
+            fails++; continue;
+          }
+          if (slow != iocs[ci].want_slow) {
+            printf("FAIL ioreg %s: slow=%d want %d\n",
+                   iocs[ci].nm, slow, iocs[ci].want_slow);
+            fails++; continue;
+          }
+          if (slow)
+            continue;                          /* C helper owns the effects */
+          {
+            const u8 *ie = (const u8 *)&io_registers[0x200 >> 1];
+            const u8 *ifp = (const u8 *)&io_registers[0x202 >> 1];
+            u16 g_ie = (u16)(ie[0] | (ie[1] << 8));
+            u16 g_if = (u16)(ifp[0] | (ifp[1] << 8));
+            if (g_ie != iocs[ci].want_ie || g_if != iocs[ci].want_if) {
+              printf("FAIL ioreg %s: IE=%04X IF=%04X want %04X/%04X\n",
+                     iocs[ci].nm, g_ie, g_if, iocs[ci].want_ie, iocs[ci].want_if);
+              fails++;
+            }
+          }
+        }
+      }
+
+      /* PC-relative STORES / writeback forms must still reject */
+      {
+        static const u32 rej[] = { 0xE58F3010u,   /* str  r3,[pc,#0x10]  */
+                                   0xE1CF31B0u,   /* strh r3,[pc,#0x10]  */
+                                   0xE5BF3010u,   /* ldr  r3,[pc,#0x10]! */
+                                   0xE79F3004u }; /* ldr  r3,[pc,r4]     */
+        for (unsigned ri = 0; ri < sizeof rej / sizeof *rej; ri++) {
+          static u8 sbuf2[256];
+          u8 *sp2 = sbuf2;
+          if (sh4g_arm_ldst_native(&sp2, rej[ri], pc, 0)) {
+            printf("FAIL pcldr: %08X should stay on C\n", rej[ri]);
+            fails++;
+          } else
+            cases++;
+        }
+      }
+    }
 
   /* ---- fastmem: Thumb sites (same routines; checks the kind mapping) ---- */
   {
