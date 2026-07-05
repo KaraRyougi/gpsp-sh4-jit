@@ -857,11 +857,18 @@ static inline u8 *sh4g_branch_exit(u8 **tp, uint32_t new_pc,
  * otherwise it comes back with a fresh budget and falls through to the normal
  * patchable chain jump, so exactly one loop iteration runs per event slice
  * instead of thousands of spins. Returns the patch site. */
+extern u32 cgba_idle_wait;   /* main.c: one-shot idle event batching */
+
 static inline u8 *sh4g_branch_exit_idle(u8 **tp, uint32_t new_pc,
                                         const void *block_exit_fn)
 {
   u8 *site;
   sh4g_const(tp, new_pc, SH4_REG_ARG0);              /* R4 = target PC */
+  sh4g_const(tp, (u32)(uintptr_t)&cgba_idle_wait, SH4_REG_T1);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_imm(&cg, 1, SH4_REG_T2);
+    sh4_emit_mov_l_store(&cg, SH4_REG_T2, SH4_REG_T1);
+    sh4g_close(tp, &cg); }
   { sh4_codegen cg = sh4g_open(tp);
     sh4_emit_cmppl(&cg, SH4_REG_CYCLES);             /* T = (budget > 0) */
     sh4g_close(tp, &cg); }

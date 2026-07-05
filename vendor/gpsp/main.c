@@ -179,12 +179,23 @@ u32 cgba_update_gba_calls, cgba_update_gba_slices;
 u32 cgba_update_gba_halt_calls;   /* entries with the CPU halted */
 #endif
 
+/* One-shot request from the dynarec's idle-loop-eliminated exits: process
+ * event slices INTERNALLY (like halt) until an IRQ is flagged or taken, or
+ * the frame completes. Guest-visible IF changes end the pass, so an
+ * IRQ-flag poll re-executes exactly when it could observe progress; games
+ * in the idle database whose poll is IRQ-driven (all current entries) are
+ * unaffected semantically and save one C round-trip per event slice. */
+u32 cgba_idle_wait;
+
 u32 function_cc update_gba(int remaining_cycles)
 {
   u32 changed_pc = 0;
   u32 frame_complete = 0;
   irq_type irq_raised = IRQ_NONE;
   int dma_cycles;
+  u32 idle_pass = cgba_idle_wait;
+  u32 idle_if_entry = idle_pass ? read_ioreg(REG_IF) : 0;
+  cgba_idle_wait = 0;
   trace_update_gba(remaining_cycles);
   cgba_trace_update_gba(remaining_cycles);
 
@@ -419,7 +430,9 @@ u32 function_cc update_gba(int remaining_cycles)
     { extern u32 cgba_cap_src[8]; cgba_cap_src[6] += execute_cycles;
       if (execute_cycles < 192) cgba_cap_src[7]++; }
 #endif
-  } while(reg[CPU_HALT_STATE] != CPU_ACTIVE && !frame_complete);
+  } while((reg[CPU_HALT_STATE] != CPU_ACTIVE ||
+           (idle_pass && !changed_pc && read_ioreg(REG_IF) == idle_if_entry))
+          && !frame_complete);
 
   // We voluntarily limit this. It is not accurate but it would be much harder.
   dma_cycles = MIN(64, dma_cycles);

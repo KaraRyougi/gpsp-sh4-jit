@@ -295,6 +295,18 @@ u32 function_cc execute_load_u32(u32 address) { cgba_sh4_charge_mem(address, 1);
 u32 function_cc execute_load_s8(u32 address)  { cgba_sh4_charge_mem(address, 0); return read_memory8s(address); }
 u32 function_cc execute_load_s16(u32 address) { cgba_sh4_charge_mem(address, 0); return read_memory16s(address); }
 
+static u8 *cgba_bulk_ram_host(u32 addr, u32 len, u8 **tags);
+static int cgba_bulk_tags_smc(const u8 *tags, u32 len);
+
+static inline u32 cgba_le32_read(const u8 *p)
+{
+  return (u32)p[0] | ((u32)p[1] << 8) | ((u32)p[2] << 16) | ((u32)p[3] << 24);
+}
+static inline void cgba_le32_write(u8 *p, u32 v)
+{
+  p[0] = (u8)v; p[1] = (u8)(v >> 8); p[2] = (u8)(v >> 16); p[3] = (u8)(v >> 24);
+}
+
 static u32 cgba_sh4_align_store_address(u32 address, unsigned bytes)
 {
   return address & ~(u32)(bytes - 1);
@@ -1263,17 +1275,39 @@ u32 cgba_hle_bios_irq_entry(void)
     return 0;                      /* odd/garbage handler: interpreter path */
 
   sp = reg[REG_SP] - 24;
-  execute_store_u32(sp +  0, reg[0]);
-  execute_store_u32(sp +  4, reg[1]);
-  execute_store_u32(sp +  8, reg[2]);
-  execute_store_u32(sp + 12, reg[3]);
-  execute_store_u32(sp + 16, reg[12]);
-  execute_store_u32(sp + 20, reg[REG_LR]);
-  if (cgba_store_alert) {          /* IRQ stack over tagged RAM code (rare) */
-    cpu_alert_type a = cgba_store_alert;
-    cgba_store_alert = CPU_ALERT_NONE;
-    if (a & CPU_ALERT_SMC)
-      flush_translation_cache_ram();
+  {
+    /* The IRQ stack is linear RAM (0x03007Fxx by BIOS convention): push the
+     * six registers with direct host stores and one bulk charge instead of
+     * six charged accessor calls — 138 IRQs/frame in AW. Semantics match
+     * the per-word path exactly (same total charge, same SMC contract). */
+    u8 *tags = NULL;
+    u8 *h = ((sp & 3) == 0) ? cgba_bulk_ram_host(sp, 24, &tags) : NULL;
+    if (h) {
+      cgba_le32_write(h +  0, reg[0]);
+      cgba_le32_write(h +  4, reg[1]);
+      cgba_le32_write(h +  8, reg[2]);
+      cgba_le32_write(h + 12, reg[3]);
+      cgba_le32_write(h + 16, reg[12]);
+      cgba_le32_write(h + 20, reg[REG_LR]);
+      cgba_sh4_extra_cycles += 6 *
+        (cgba_sh4_mem_cycle_seq ? ws_cyc_seq[sp >> 24][1]
+                                : ws_cyc_nseq[sp >> 24][1]);
+      if (cgba_bulk_tags_smc(tags, 24))
+        flush_translation_cache_ram();
+    } else {
+      execute_store_u32(sp +  0, reg[0]);
+      execute_store_u32(sp +  4, reg[1]);
+      execute_store_u32(sp +  8, reg[2]);
+      execute_store_u32(sp + 12, reg[3]);
+      execute_store_u32(sp + 16, reg[12]);
+      execute_store_u32(sp + 20, reg[REG_LR]);
+      if (cgba_store_alert) {      /* IRQ stack over tagged RAM code (rare) */
+        cpu_alert_type a = cgba_store_alert;
+        cgba_store_alert = CPU_ALERT_NONE;
+        if (a & CPU_ALERT_SMC)
+          flush_translation_cache_ram();
+      }
+    }
   }
   reg[REG_SP] = sp;
   reg[REG_LR] = 0x00000030u;
@@ -1290,12 +1324,27 @@ u32 cgba_hle_bios_irq_exit(void)
   u32 sp = reg[REG_SP];
   u32 spsr_v, ret_pc;
 
-  reg[0]       = execute_load_u32(sp +  0);
-  reg[1]       = execute_load_u32(sp +  4);
-  reg[2]       = execute_load_u32(sp +  8);
-  reg[3]       = execute_load_u32(sp + 12);
-  reg[12]      = execute_load_u32(sp + 16);
-  reg[REG_LR]  = execute_load_u32(sp + 20);
+  {
+    const u8 *h = ((sp & 3) == 0) ? cgba_bulk_ram_host(sp, 24, NULL) : NULL;
+    if (h) {
+      reg[0]      = cgba_le32_read(h +  0);
+      reg[1]      = cgba_le32_read(h +  4);
+      reg[2]      = cgba_le32_read(h +  8);
+      reg[3]      = cgba_le32_read(h + 12);
+      reg[12]     = cgba_le32_read(h + 16);
+      reg[REG_LR] = cgba_le32_read(h + 20);
+      cgba_sh4_extra_cycles += 6 *
+        (cgba_sh4_mem_cycle_seq ? ws_cyc_seq[sp >> 24][1]
+                                : ws_cyc_nseq[sp >> 24][1]);
+    } else {
+      reg[0]       = execute_load_u32(sp +  0);
+      reg[1]       = execute_load_u32(sp +  4);
+      reg[2]       = execute_load_u32(sp +  8);
+      reg[3]       = execute_load_u32(sp + 12);
+      reg[12]      = execute_load_u32(sp + 16);
+      reg[REG_LR]  = execute_load_u32(sp + 20);
+    }
+  }
   reg[REG_SP]  = sp + 24;
 
   ret_pc = reg[REG_LR] - 4;

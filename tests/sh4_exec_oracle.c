@@ -106,6 +106,7 @@ u32 cgba_sh4_native_thumb_push_iwram_count2;
 
 u8 *cgba_sh4_fastmem_routine[CGBA_FM_TOTAL];
 u8 *cgba_sh4_psr_rebank_routine;
+u32 cgba_idle_wait;
 static u8 psr_rebank_buf[512];
 
 static void orc_vec_init(void)
