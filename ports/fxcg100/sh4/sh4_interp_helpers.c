@@ -1442,6 +1442,14 @@ static int cgba_bulk_tags_smc(const u8 *tags, u32 len)
 {
   u32 i = 0;
   if (!tags) return 0;
+  /* SH-4 raises an address error (EXC 0x0E0) on misaligned longword loads,
+   * and the tag pointer inherits the guest destination's alignment — a
+   * halfword-aligned CpuSet dest (AW unit-select copies to 0x03001FF2)
+   * made the u32 scan read at +2 and hard-crashed on hardware. calcemu
+   * never caught it: host CPUs tolerate misaligned loads. Align the head
+   * byte-wise before the longword scan. */
+  for (; i < len && (((uintptr_t)tags + i) & 3); i++)
+    if (tags[i]) return 1;
   for (; i + 4 <= len; i += 4)
     if (*(const u32 *)(const void *)(tags + i)) return 1;
   for (; i < len; i++)
