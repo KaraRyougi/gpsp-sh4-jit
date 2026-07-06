@@ -1,4 +1,5 @@
 #include "fxcg100_platform.h"
+#include "../../fxcg100_scale.h"
 
 #include <gint/dma.h>
 #include <gint/display.h>
@@ -33,6 +34,10 @@ _Static_assert(STRIP_LINES * GBA_W * 2 <= 0x2000,
 	"GBA strip must fit one 8KB on-chip XY-RAM bank");
 _Static_assert(STRIP_LINES % 4 == 0,
 	"strip height must stay 4-row aligned for the R61524 DMA window");
+_Static_assert(12 * 320 * 2 <= 0x2000,
+	"4:3 12-row strip must fit one XY-RAM bank");
+_Static_assert(8 * 384 * 2 <= 0x2000,
+	"fullscreen 8-row strip must fit one XY-RAM bank");
 
 static int lcd_dma_pending;
 /* The gameplay blit narrows the R61524 GRAM window to the GBA rectangle via
@@ -209,6 +214,128 @@ static void start_strip_dma(const uint16_t *strip, int x, int y,
 		display[0] = strip[i];
 }
 
+/* ---- Scaled presentation --------------------------------------------------
+ * Modes (menu DISPLAY SCALING, fxcg100_lcd_set_scale):
+ *   0  1:1 centered 240x160 (below)
+ *   1  4:3 smooth: 320x212, exact 3->4 groups both axes, blended taps
+ *   2  fullscreen: 384x216, 5->8 horizontal taps, 27/20 vertical map
+ * Scaled rows are composed directly into the XY-RAM strip banks while the
+ * previous strip's DMA is in flight, so the blend cost hides under the LCD
+ * transfer. Strip heights stay multiples of 4 (R61524 DMA window). */
+
+static uint32_t lcd_scale_mode;
+
+void fxcg100_lcd_set_scale(uint32_t mode)
+{
+	lcd_scale_mode = (mode <= 2) ? mode : 0;
+}
+
+/* One 320px scratch row (4:3 middle row) + two cached hscaled rows with
+ * their source indices (fullscreen). Regular RAM: reads/writes stay cached. */
+static uint16_t scale_scratch[LCD_W] __attribute__((aligned(4)));
+static uint16_t scale_hrow[2][LCD_W] __attribute__((aligned(4)));
+static int scale_hrow_idx[2];
+
+/* 4:3 smooth: 53 groups of 3 source rows -> 4 output rows {A, avg(A,B),
+ * avg(B,C), C}; 320px wide, centered (ox=32), top-aligned (oy=0 keeps the
+ * window 4-row aligned; enter_gameplay_display() cleared the borders). */
+static void blit_gba_scaled_43(const uint16_t *pixels)
+{
+	uint16_t *const strips[2] = {
+		(uint16_t *)STRIP_BUF0,
+		(uint16_t *)STRIP_BUF1,
+	};
+	int ox = (DWIDTH - 320) / 2;
+	int oy = ((DHEIGHT - 212) / 2) & ~3;    /* 4-aligned DMA window */
+	int group = 0, y = 0, bi = 0;
+
+	wait_lcd_dma();
+	while (y < 212) {
+		int rows = (212 - y >= 12) ? 12 : 8;   /* 3 or 2 groups */
+		uint16_t *sp = strips[bi];
+		int g;
+
+		for (g = 0; g < rows / 4; g++, group++) {
+			const uint16_t *A = pixels + (group * 3 + 0) * GBA_W;
+			const uint16_t *B = pixels + (group * 3 + 1) * GBA_W;
+			const uint16_t *C = pixels + (group * 3 + 2) * GBA_W;
+			uint16_t *r0 = sp + (g * 4 + 0) * 320;
+			uint16_t *r1 = sp + (g * 4 + 1) * 320;
+			uint16_t *r2 = sp + (g * 4 + 2) * 320;
+			uint16_t *r3 = sp + (g * 4 + 3) * 320;
+
+			cgba_scale_row_240_320(A, r0);
+			cgba_scale_row_240_320(B, scale_scratch);
+			cgba_scale_row_240_320(C, r3);
+			cgba_scale_row_avg(r0, scale_scratch, r1, 320);
+			cgba_scale_row_avg(scale_scratch, r3, r2, 320);
+		}
+		if (y > 0)
+			wait_lcd_dma();
+		start_strip_dma(strips[bi], ox, oy + y, 320, rows);
+		bi ^= 1;
+		y += rows;
+	}
+	lcd_window_partial = 1;
+}
+
+/* Fullscreen: hscaled source rows are cached in two slots keyed by
+ * (source row & 1), so a blend pair (s, s+1) never collides. */
+static const uint16_t *fs_hrow(const uint16_t *pixels, unsigned s)
+{
+	unsigned slot = s & 1;
+
+	if (scale_hrow_idx[slot] != (int)s) {
+		cgba_scale_row_240_384(pixels + s * GBA_W, scale_hrow[slot]);
+		scale_hrow_idx[slot] = (int)s;
+	}
+	return scale_hrow[slot];
+}
+
+static void blit_gba_scaled_full(const uint16_t *pixels)
+{
+	static uint16_t vmap[216];
+	static int vmap_ready;
+	uint16_t *const strips[2] = {
+		(uint16_t *)STRIP_BUF0,
+		(uint16_t *)STRIP_BUF1,
+	};
+	int ox = (DWIDTH - LCD_W) / 2;
+	int oy = ((DHEIGHT - LCD_H) / 2) & ~3;  /* 4-aligned DMA window */
+	int y = 0, bi = 0;
+
+	if (!vmap_ready) {
+		cgba_scale_build_vmap216(vmap);
+		vmap_ready = 1;
+	}
+	scale_hrow_idx[0] = scale_hrow_idx[1] = -1;   /* new frame contents */
+
+	wait_lcd_dma();
+	while (y < LCD_H) {
+		uint16_t *sp = strips[bi];
+		int r;
+
+		for (r = 0; r < 8; r++) {
+			uint16_t v = vmap[y + r];
+			unsigned src = v & CGBA_SCALE_VROW;
+			uint16_t *out = sp + r * LCD_W;
+
+			if (v & CGBA_SCALE_VBLEND)
+				cgba_scale_row_avg(fs_hrow(pixels, src),
+					fs_hrow(pixels, src + 1), out, LCD_W);
+			else
+				memcpy(out, fs_hrow(pixels, src),
+					LCD_W * sizeof(uint16_t));
+		}
+		if (y > 0)
+			wait_lcd_dma();
+		start_strip_dma(strips[bi], ox, oy + y, LCD_W, 8);
+		bi ^= 1;
+		y += 8;
+	}
+	lcd_window_partial = 1;
+}
+
 void fxcg100_lcd_blit_gba(const uint16_t *pixels)
 {
 	int ox = (DWIDTH - GBA_W) / 2;   /* 78 */
@@ -222,6 +349,14 @@ void fxcg100_lcd_blit_gba(const uint16_t *pixels)
 
 	if(!pixels)
 		return;
+	if(lcd_scale_mode == 1) {
+		blit_gba_scaled_43(pixels);
+		return;
+	}
+	if(lcd_scale_mode == 2) {
+		blit_gba_scaled_full(pixels);
+		return;
+	}
 
 	/*
 	 * Present the frame as 12-row strips DMA'd out of on-chip XY-RAM (see the

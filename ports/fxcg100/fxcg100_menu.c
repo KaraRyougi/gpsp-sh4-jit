@@ -80,10 +80,9 @@ typedef struct menu_item {
 static const fxcg100_debug_info *menu_debug_info;
 
 static const char * const scale_options[] = {
-  "UNSCALED 3:2",
-  "SCALED BLEND TODO",
-  "FULL BLEND TODO",
-  "SCALED FAST TODO"
+  "UNSCALED 1:1",
+  "4:3 SMOOTH",
+  "FULLSCREEN"
 };
 
 static const char * const rom_options[] = {
@@ -159,7 +158,7 @@ static const menu_item main_items[] = {
 
 static const menu_item graphics_items[] = {
   { "DISPLAY SCALING", MENU_ITEM_CHOICE, MENU_ACTION_NONE,
-    MENU_PAGE_GRAPHICS, MENU_VALUE_SCALE, scale_options, 4, NULL },
+    MENU_PAGE_GRAPHICS, MENU_VALUE_SCALE, scale_options, 3, NULL },
   { "FRAMESKIP TYPE", MENU_ITEM_CHOICE, MENU_ACTION_NONE,
     MENU_PAGE_GRAPHICS, MENU_VALUE_FRAMESKIP_TYPE, frameskip_options, 3, NULL },
   { "FRAMESKIP VALUE", MENU_ITEM_NUMBER, MENU_ACTION_NONE,

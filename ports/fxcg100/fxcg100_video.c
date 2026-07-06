@@ -187,6 +187,11 @@ void fxcg100_lcd_status(const char *text)
   fxcg100_lcd_draw_text(4, 4, text, fg, bg);
 }
 
+void fxcg100_lcd_set_scale(uint32_t mode)
+{
+  (void)mode;                     /* PIO presenter: 1:1 only */
+}
+
 void fxcg100_lcd_blit_gba(const uint16_t *pixels)
 {
   unsigned x = (LCD_VISIBLE_WIDTH - GBA_WIDTH) / 2;
