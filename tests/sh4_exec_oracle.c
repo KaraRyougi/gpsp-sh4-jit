@@ -710,6 +710,88 @@ int main(void)
             check("dp", dp_ops[oi], masks[mi], init, cpsr, 0, pc);
           }
 
+  /* ---- thumb immediate shifts (sh4g_shift_imm): exact N/Z/C ---- */
+  {
+    static const struct { int kind; unsigned imm5; } sf[] = {
+      {0,19},{0,1},{0,31},{0,8},{1,1},{1,19},{1,31},{2,1},{2,19},{2,31},
+      {1,0},{2,0},   /* LSR/ASR #0 = #32 specials */
+    };
+    static const u32 svals[] = {
+      0xE0u, 0x00000000u, 0xFFFFFFFFu, 0x80000000u, 0x00002000u, 0x12345678u
+    };
+    static const u32 smasks[] = { 0xF, 0xE, 0xC, 0x2, 0x6, 0x8 };
+    for (unsigned fi = 0; fi < sizeof sf / sizeof *sf; fi++)
+      for (unsigned vi = 0; vi < sizeof svals / sizeof *svals; vi++)
+        for (int cin = 0; cin <= 1; cin++)
+          for (unsigned mi = 0; mi < sizeof smasks / sizeof *smasks; mi++) {
+            static u8 pbuf[1024]; u8 *pp = pbuf;
+            u32 v = svals[vi], want, wc = (u32)cin, wrote_c = 0;
+            u32 mask = smasks[mi];
+            u32 cpsr_in = ((u32)cin << 29) | 0x1000001Fu;   /* V set: must stay */
+
+            sh4g_shift_imm(&pp, sf[fi].kind, 0, 1, sf[fi].imm5, mask);
+            cases++;
+            memset(g_reg, 0, sizeof g_reg);
+            for (int i = 0; i < 16; i++) g_reg[i] = 0x77000000u + (u32)i;
+            g_reg[1] = v;
+            g_reg[SH4_GREG_CPSR] = cpsr_in;
+            if (!run_sh4x(pbuf, (size_t)(pp - pbuf))) {
+              printf("FAIL shimm k%d i%u: interpreter: %s\n",
+                     sf[fi].kind, sf[fi].imm5, unmodeled);
+              fails++; continue;
+            }
+            /* ARM reference */
+            {
+              unsigned n = sf[fi].imm5;
+              switch (sf[fi].kind) {
+              case 0:  /* LSL */
+                if (n == 0) { want = v; }
+                else { want = v << n; wc = (v >> (32 - n)) & 1; wrote_c = 1; }
+                break;
+              case 1:  /* LSR (0 -> 32) */
+                if (n == 0) { want = 0; wc = v >> 31; }
+                else { want = v >> n; wc = (v >> (n - 1)) & 1; }
+                wrote_c = 1;
+                break;
+              default: /* ASR (0 -> 32) */
+                if (n == 0) { want = (u32)((s32)v >> 31); wc = v >> 31; }
+                else { want = (u32)((s32)v >> n); wc = (v >> (n - 1)) & 1; }
+                wrote_c = 1;
+                break;
+              }
+            }
+            if (g_reg[0] != want) {
+              printf("FAIL shimm k%d i%u v=%08X m=%X: rd=%08X want %08X\n",
+                     sf[fi].kind, sf[fi].imm5, v, mask, g_reg[0], want);
+              fails++; continue;
+            }
+            {
+              u32 got = g_reg[SH4_GREG_CPSR];
+              u32 vbit = got & 0x10000000u;
+              u32 low  = got & 0x0FFFFFFFu & ~0x10000000u;
+              u32 gotc = (got >> 29) & 1;
+              u32 gotn = got >> 31, gotz = (got >> 30) & 1;
+              u32 wn = want >> 31, wz = (want == 0);
+              int bad = 0;
+              if (vbit != 0x10000000u) bad = 1;              /* V clobbered */
+              if ((low & 0xFFFFFFF) != 0x1F && (got & 0xFFFFFFF) != 0x1F) bad = 1;
+              if (mask & 0x2) {                              /* C live */
+                u32 expc = wrote_c ? wc : (u32)cin;
+                if (gotc != expc) bad = 1;
+              }
+              if ((mask & 0x8) && gotn != wn) bad = 1;
+              if ((mask & 0x4) && gotz != wz) bad = 1;
+              if (bad) {
+                printf("FAIL shimm k%d i%u v=%08X cin=%d m=%X: CPSR=%08X "
+                       "(want n%u z%u c%u v1)\n",
+                       sf[fi].kind, sf[fi].imm5, v, cin, mask, got,
+                       wn, wz, wrote_c ? wc : (u32)cin);
+                fails++;
+              }
+            }
+          }
+  }
+
   /* ---- native MSR/MRS: guard chain + masked merge + IO pending check ---- */
   {
     {   /* resident set_cpu_mode routine, baked into MSR sites as a literal */

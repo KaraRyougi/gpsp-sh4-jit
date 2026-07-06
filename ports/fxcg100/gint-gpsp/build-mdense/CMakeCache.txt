@@ -133,7 +133,7 @@ CGBA_GPSP_HEADLESS_STATE_EVERY:STRING=0
 CGBA_GPSP_HEADLESS_STATE_START:STRING=0
 
 //Headless debug: log framebuffer stats every N frames; 0 disables
-CGBA_GPSP_HEADLESS_STAT_EVERY:STRING=100
+CGBA_GPSP_HEADLESS_STAT_EVERY:STRING=20
 
 //Headless auto-boot + stdout diag (emulator)
 CGBA_GPSP_HEADLESS_TEST:BOOL=ON
@@ -188,6 +188,16 @@ CGBA_SH4_DIFF_DUMP_OPS:BOOL=OFF
 //Headless/debug: check the SH4 dynarec cycle budget at each translated
 // instruction boundary
 CGBA_SH4_EXACT_CYCLE_BOUNDARIES:BOOL=OFF
+
+//Cold-gate hot-table decay subtracted per ROM flush (leaky bucket)
+CGBA_SH4_HEAT_FLUSH_LEAK:STRING=16
+
+//Cold-gate: frames after a ROM flush before heating switches to
+// the fast increment
+CGBA_SH4_HEAT_QUIET_FRAMES:STRING=180
+
+//Cold-gate heat increment within the post-flush window
+CGBA_SH4_HEAT_SLOW:STRING=1
 
 //Cold-code gate: translate ROM blocks after N dispatches (1-255;
 // 0 = gate off)

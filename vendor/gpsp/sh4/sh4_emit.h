@@ -457,6 +457,14 @@ static inline void sh4g_prof_block_entry(u8 **tp, u32 pc, int thumb)
 
 #define SH4_THUMB_SHIFT_imm(decode_type, op_type)                             \
   do { u32 _sh_op = ((u32)opcode >> 11) & 3;                                  \
+       if (pc == 0x80998FCu) {                       /* TEMP diag */          \
+         volatile unsigned char *_d = (volatile unsigned char *)0xb7000000u;  \
+         static const char _h[] = "0123456789ABCDEF";                         \
+         *_d='F';*_d='S';*_d='@';*_d='L';*_d='S';*_d='L';*_d='=';             \
+         *_d=_h[((u32)flag_status>>8)&0xF];                                   \
+         *_d=_h[((u32)flag_status>>4)&0xF];                                   \
+         *_d=_h[(u32)flag_status&0xF];*_d='\n';                              \
+       }                                                                      \
        if (_sh_op <= 2)                                                        \
          sh4g_shift_imm(&translation_ptr, (int)_sh_op,                         \
                         (unsigned)((u32)opcode & 7),                           \
