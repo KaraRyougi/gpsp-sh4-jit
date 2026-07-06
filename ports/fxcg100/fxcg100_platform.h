@@ -90,6 +90,7 @@ typedef struct fxcg100_menu_state {
   uint32_t quick_save_slot;
   uint32_t backup_update;
   uint32_t show_fps;
+  uint32_t input_record;
   uint16_t keymap[FXCG100_GBA_KEY_COUNT];
   uint16_t hotkey_map[FXCG100_HOTKEY_COUNT];
   uint32_t cheat_active[10];

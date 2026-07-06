@@ -1,0 +1,174 @@
+# Testing & Measurement Harness
+
+Three layers: an on-target headless harness compiled into the add-in, host
+unit tests in `tests/`, and emulator-side facilities in casio-emu
+("calcemu"). The combination gives bit-exact regression checks, per-cycle
+performance measurement, and replayable gameplay assets — all runnable
+without touching hardware, with hardware round-trip when it matters.
+
+## 1. On-target headless harness
+
+`CGBA_GPSP_HEADLESS_TEST=ON` makes `main()` short-circuit into
+`cgba_headless_test()` (ports/fxcg100/gint-gpsp/src/main.c): auto-boot the
+first storage ROM, drive a synthetic/scripted/fuzzed input stream for
+`CGBA_GPSP_HEADLESS_FRAMES` frames, stream text diagnostics to the
+emulator's debug-putchar port (0xb7000000). Machine-parseable lines are
+prefixed `@@CGBA_*`; a run ends with the `jit ...` counter block and
+`=== done ===` (then an idle loop — the host kills it on timeout).
+
+Configuration is ~40 CMake cache variables that become compile-time
+defines. The important ones:
+
+| Knob (CGBA_GPSP_HEADLESS_…) | Default | Meaning |
+|---|---|---|
+| `FRAMES` / `FRAME_BASE` | 48 / 0 | run frames [base, base+N) |
+| `LOG_EVERY` | 1 | `frame %u before/after` interval |
+| `STAT_EVERY` | 0 | FBSTAT hash interval (stat frames always render) |
+| `FRAMESKIP` | 3 | render 1 in N+1 frames |
+| `DYNAREC` | −1 | −1 = runner default, 0/1 force interpreter/JIT |
+| `LOAD_STATE` | 0 | restore `CGBACHK.SAV` before the loop |
+| `SAVE_STATE_FRAME` | −1 | write the checkpoint after that frame |
+| `SAVE_SLOT_FRAME` | −1 | exercise the *real* per-ROM slot-save path |
+| `START_*`, `A_*`, `ALT_*`, `RUN_*` | — | fixed input generators (below) |
+| `FUZZ_SEED` | 0 | seeded input monkey (below) |
+| `SCALE` | 0 | force a display scale mode |
+| `DIFF_FRAME`/`DIFF_BLOCKS`, `WINDOW_DIFF_FRAME` | −1/0/−1 | live block diff / one-window interp-vs-JIT diff |
+| `STATE_EVERY/START/END` | 0/0/max | `@@CGBA_STATE/IO/HASH/TIMER/DMA` dumps |
+| `BENCH_FRAMES`, `TRACE_*`, `PHASE_*`, `DUMP_EVERY` | 0/off | micro-bench, targeted traces, loop breadcrumbs, raw frame dumps |
+
+SH-4 diagnostics knobs (same CMakeLists): `CGBA_SH4_INTERP_STATS`
+(~4.5% overhead — per-region interpreted-instruction counters),
+`CGBA_SH4_DIAG_COUNTERS` (~0.5% — slice/helper/SWI-census counters),
+`CGBA_SH4_SWI_HLE_VERIFY` (predict-vs-interpret SWI comparison),
+`CGBA_SH4_ARM_DEAD_FLAGS=OFF` (A/B), `CGBA_SH4_HOT_THRESHOLD=0`
+(cold gate off).
+
+### Input generators
+
+Fixed generators, all compile-time: START hold/mash
+(`START_FRAME/HOLD/PERIOD/PRESS`), A-tap trains (`A_FRAME/HOLD/PERIOD/PRESS`
+— the "pulsed A" menu-advancer), alternating A/START windows (`ALT_*` —
+the standard boot-to-gameplay recipe), and hold-LEFT-flip-RIGHT movement
+(`RUN_FRAME/RUN_FLIP` — the Metroid movement soak). The fuzz monkey
+(`FUZZ_SEED > 0`, xorshift32) replaces them all: hold one direction 12–43
+frames, re-roll a tap every 6–21 frames (A 25%, B 12.5%, START ~3%).
+A loaded `.INP` script overrides *everything*.
+
+### Framebuffer statistics — the parity primitive
+
+`@@CGBA_FBSTAT frame=%u black=%u/38400 hash=%08lX p00=%04X p11=%04X pc=%04X`
+— FNV-1a over the 240×160 RGB565 framebuffer (2 bytes/pixel, high byte
+first), plus black-pixel count and three probe pixels. Byte-identical
+FBSTAT streams between two runs are the parity criterion. `@@CGBA_HASH`
+lines extend this to IWRAM/EWRAM/VRAM/palette/converted-palette/OAM/IO
+hashes for narrowing a divergence to a memory domain.
+
+### Input recording / replay
+
+Format: `\\fls0\<BASE>.INP`, text, one `<frame> <hexmask>` line per
+*change* (KEYINPUT bit order, mask & 0x3FF; an event holds until the next
+event; max 6144 events, leading silence skipped). `<BASE>` = up to 6
+uppercased alphanumerics of the ROM name — the same naming as savestates,
+so a recording pairs with the state saved in the same session.
+
+- **On device**: gated by the RECORD INPUT LOG menu option (misc options
+  page, default OFF, persisted in `CGBA.CFG`); when enabled, the `.INP` is
+  written as a side effect of saving a state. Any play session becomes a
+  replayable regression asset.
+- **Headless**: recording is always on (captures whatever the generators
+  or fuzz produced); written at run end via the raw BFile trampolines
+  (`@@CGBA_INPSAVE ok=%d bytes=%u`) unless a script was replaying.
+- **Replay**: a present `.INP` is loaded at boot (`input script: N events`)
+  and drives the run verbatim.
+
+Validated round trip: a 1500-frame fuzz run recorded 129 events; replaying
+the produced `.INP` reproduced all 150 in-run FBSTAT hashes identically
+(the final frame differs — the known presentation-phase artifact class).
+
+### Persistence between calculator and emulator
+
+The headless harness calls Casio BFile syscalls by absolute address (open
+0x803338d0, size 0x80333b04, read 0x80333dc2, create 0x80333ef0, write
+0x80333f9e, remove 0x80334212, close 0x80333a4e); calcemu HLEs exactly that
+table onto a host directory (`HLE_FLS0=dir`). `CGBACHK.SAV` is the
+416 KiB checkpoint blob (raw `gba_save_state` image; the loader also
+accepts the word-RLE compressed `.SVS` format, so a state saved on the
+calculator can be copied in and used as the deep-gameplay checkpoint). The
+`.SVS` slot saves, `.INP` recordings and `CGBACHK.SAV` all round-trip
+between device and emulator.
+
+## 2. Host unit tests (`tests/`)
+
+- **`sh4_exec_oracle.c`** — the JIT's semantic oracle, 142,875 cases at
+  HEAD. It emits *real* native code through the production emitter headers
+  and executes it in a built-in mini SH-4 interpreter (big-endian memory
+  windows, JSR/RTS/delay slots, PC-relative literals, trampoline
+  detection), comparing the full register file, the CPSR flag-liveness
+  contract, memory effects, and fast-vs-slow routing against C reference
+  semantics. Coverage: Thumb shifts (register and immediate), Thumb DP
+  formats 2/3/4/5, all 16 ARM DP opcodes × operand2 forms × S-bit,
+  MRS/MSR/SPSR with mode rebanking, PC-literal loads, IF/IE stores, and
+  the fastmem single/block routines and sites. Sound is stubbed in the
+  port, so MP2K audio ALU bugs never show in frame hashes — the oracle is
+  the layer that catches them.
+- **`sh4_codegen_audit.c`** — every encoder byte-for-byte against
+  `sh-elf-as` output.
+- **`scale_test.c`** — the RGB565 upscaling cores against a per-channel
+  reference (packed-pair avg trick, 240→320 and 240→384 row kernels,
+  160→216 vertical map coverage/monotonicity, strip-geometry invariants).
+
+## 3. Emulator-side facilities (casio-emu)
+
+Env-gated; all combine freely with the headless builds:
+
+- `HLE_TURBO=1` — uncap wall-clock pacing.
+- `HLE_CACHESIM=1` — SH7305-like cache model (32 KiB, 4-way, 32 B lines,
+  I+operand), penalties `imiss=25 dmiss=25 wb=10 memop=1`; P2 and
+  on-chip/P4 segments are uncached (memop-only — XY-RAM writes cost 1).
+  `HLE_CACHESIM_EVERY=N` prints a cumulative
+  `[CACHESIM] tick: ... cycles=...` line every N frames.
+- `HLE_PROFILE=file` — instruction-PC profiler with *dual windows*: P0/U0
+  PCs → add-in .text histogram, P1/P2 → physical arena histogram. (The
+  single-window version aliased JIT-arena PCs onto .text and contaminated
+  a whole diagnosis — profiles from before 2026-07-05 can't attribute
+  .text.) `HLE_PROFILE_AFTER=N` opens the capture window at frame N.
+- `HLE_FBALL=prefix` (+`HLE_FORCE_R61524=1`) — dump every presented panel
+  frame as PPM; the way the scale modes' output geometry was verified.
+- `HLE_FLS0=dir` — host directory backing the BFile HLE (read/write).
+
+## 4. Standing protocols
+
+- **Dense parity battery** (the correctness anchor): Metroid, 2600 frames
+  from boot, `STAT_EVERY` FBSTAT stream, JIT build vs `HEADLESS_DYNAREC=0`
+  interpreter build. Must be byte-identical except the known
+  presentation-phase artifacts (fade frames 760/820/2580 and final frame
+  2599). Anchor hashes: f1000=71282ED4, f1800=D7DF4354, f2400=197E2B00.
+- **Movement soak**: 3000 frames from the deep-gameplay checkpoint
+  (`LOAD_STATE=1` + CGBACHK.SAV), hold-LEFT with flips — the cold-gate /
+  translation-churn stress. Metric: modeled fps (below).
+- **AW measure**: 2000 frames from boot, pulsed-A harness
+  (`A_PERIOD=12 A_PRESS=2`), CACHESIM fine ticks (`EVERY=10`).
+- **fps model**: `fps = 118e6 / (window_cycles / frames)`, where the run
+  window is the CACHESIM cycle delta between the first tick after
+  `running N frames` and the last tick before `=== done`. Use fine ticks:
+  coarse bracketing once overstated a baseline as 31.9 fps that was really
+  27.52. Emulation is fully deterministic per binary — identical cycle
+  counts on re-runs; two different numbers means two different binaries
+  (which is also how stale-build mistakes get caught).
+- **AW JIT-vs-interpreter caveat**: AW's FBSTAT streams have a
+  pre-existing ~51/81-frame divergence from boot (present with all SWI
+  HLEs off; under investigation). Metroid dense is the bit-exactness
+  anchor; AW parity comparisons must be engine-vs-baseline, not
+  JIT-vs-interp.
+
+## 5. Reading the counters
+
+End-of-run `jit ...` lines (each gated by its knob): `jit stats`
+(rom/ram flushes, arm/thumb translations, `bios_n/bios_kc` fallback entries
+and *entry-overhead* kilocycles, `cold_n` cold chunks), `jit interp-instr
+bios/rom/ram` (interpreted guest instructions by region — the *real* BIOS
+residency; `bios_kc` is only per-call overhead, a distinction that once
+mis-sized a whole optimization), `jit swi-census NN n=… words=…`
+(per-SWI interpreter fallbacks + payload words), `jit swiv checked/bad`
+(verify mode), `jit cap …` (event-slice cap sources), `jit bios entries
+swi/irq/other`.

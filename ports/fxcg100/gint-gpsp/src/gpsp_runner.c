@@ -965,6 +965,15 @@ static unsigned cgba_inp_count;
 static unsigned cgba_inp_cursor;
 static u16 cgba_inp_last_mask;
 static int cgba_inp_script_loaded;
+/* Recording gate. Defaults ON so the headless harness always captures its
+ * generated input; the interactive build sets it from the RECORD INPUT LOG
+ * menu option (default OFF) after every menu pass. */
+static int cgba_inp_enabled = 1;
+
+void cgba_gpsp_input_record_set_enabled(int enabled)
+{
+	cgba_inp_enabled = enabled;
+}
 
 static void cgba_inp_path(uint16_t *path)
 {
@@ -996,6 +1005,8 @@ static void cgba_inp_path(uint16_t *path)
 /* Record the held mask for this frame (no-op unless it changed). */
 void cgba_gpsp_input_record_frame(unsigned frame, unsigned mask)
 {
+	if (!cgba_inp_enabled)
+		return;
 	if (cgba_inp_count == 0 && mask == 0)
 		return;                          /* skip leading silence */
 	if (cgba_inp_count > 0 && (u16)mask == cgba_inp_last_mask)
@@ -1171,7 +1182,8 @@ int cgba_gpsp_state_save(unsigned slot)
 #endif
 	/* Pair the input recording with the state it produced (see the input
 	 * recording block above): the .INP replays the path to this state. */
-	cgba_gpsp_input_record_save();
+	if (cgba_inp_enabled)
+		cgba_gpsp_input_record_save();
 	return ok;
 }
 
