@@ -1666,6 +1666,7 @@ int main(void)
 
 	menu_result = fxcg100_menu_run(&menu_state, 0, 0, NULL);
 	fxcg100_lcd_set_scale(menu_state.screen_scale);
+	cgba_gpsp_input_record_set_enabled((int)menu_state.input_record);
 	if(menu_result == FXCG100_MENU_QUIT)
 		return exit_to_os(1);
 	wait_for_keys_released();
@@ -1714,6 +1715,8 @@ int main(void)
 			fxcg100_menu_result result =
 				fxcg100_menu_run(&menu_state, frame, last_hash, &debug_info);
 			fxcg100_lcd_set_scale(menu_state.screen_scale);
+			cgba_gpsp_input_record_set_enabled(
+				(int)menu_state.input_record);
 
 			wait_for_keys_released();
 			previous_app_keys = fxcg100_poll_app_keys();

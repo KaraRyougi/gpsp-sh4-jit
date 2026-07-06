@@ -38,6 +38,7 @@ int cgba_gpsp_state_save(unsigned slot);
 /* Input recording / playback scripts (<BASE>.INP; see gpsp_runner.c). */
 void cgba_gpsp_input_record_frame(unsigned frame, unsigned mask);
 int cgba_gpsp_input_record_save(void);
+void cgba_gpsp_input_record_set_enabled(int enabled);
 unsigned cgba_gpsp_input_record_render(unsigned char *buf, unsigned cap);
 void cgba_gpsp_input_path(unsigned short *path);
 int cgba_gpsp_input_script_load(void);

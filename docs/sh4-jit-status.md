@@ -1,5 +1,12 @@
 # SH4 JIT & Phase 0 — Implementation Status
 
+> **Historical.** This tracked the original bring-up. The as-built system is
+> documented in [sh4-jit-architecture.md](sh4-jit-architecture.md) (JIT
+> internals), [bios-swi-hle.md](bios-swi-hle.md) (BIOS/SWI HLE),
+> [testing-harness.md](testing-harness.md) (harness + protocols), and
+> [performance-history.md](performance-history.md) (methodology, chronology,
+> future directions).
+
 Tracks execution of [docs/sh4-jit-optimization-plan.md](sh4-jit-optimization-plan.md).
 Overclock is out of scope (set externally on the calculator).
 
