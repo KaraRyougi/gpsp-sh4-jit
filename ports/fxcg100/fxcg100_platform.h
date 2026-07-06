@@ -141,6 +141,9 @@ void fxcg100_lcd_draw_text(unsigned x, unsigned y, const char *text,
 void fxcg100_lcd_update(void);
 void fxcg100_lcd_status(const char *text);
 void fxcg100_lcd_blit_gba(const uint16_t *pixels);
+/* Display scaling for the gameplay blit (menu DISPLAY SCALING):
+ * 0 = 1:1 centered, 1 = 4:3 smooth 320x212, 2 = fullscreen 384x216. */
+void fxcg100_lcd_set_scale(uint32_t mode);
 uint32_t fxcg100_frame_hash(const uint16_t *pixels);
 
 /* Draw an FPS metrics overlay into the top-left of a 240x160 GBA frame buffer

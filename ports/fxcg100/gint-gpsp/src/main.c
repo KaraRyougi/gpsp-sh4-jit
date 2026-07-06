@@ -92,7 +92,9 @@ extern uint32_t cgba_sh4_native_thumb_push_iwram_count;
 extern char cgba_highbss_start[];
 extern char cgba_highbss_end[];
 
-static uint16_t cgba_framebuffer[CGBA_GBA_BUFFER_PIXELS] CGBA_HIGH_BSS;
+/* 4-byte aligned: the scaled presenters read rows as packed u32 pairs. */
+static uint16_t cgba_framebuffer[CGBA_GBA_BUFFER_PIXELS] CGBA_HIGH_BSS
+	__attribute__((aligned(4)));
 
 /* FPS metrics meter (emulated + drawn frame rate), shown when the menu's
  * "SHOW FPS" option is on. Reset on each gameplay entry. */
@@ -1127,6 +1129,12 @@ static int cgba_headless_test(uint16_t *framebuffer)
 	snprintf(buf, sizeof buf, "loaded OK; running %u frames [%u,%u)",
 		(unsigned)CGBA_GPSP_HEADLESS_FRAMES, frame_base, frame_end);
 	hputs_dbg(buf);
+#if (CGBA_GPSP_HEADLESS_SCALE + 0) > 0
+	fxcg100_lcd_set_scale(CGBA_GPSP_HEADLESS_SCALE);
+	snprintf(buf, sizeof buf, "display scale mode %u",
+		(unsigned)CGBA_GPSP_HEADLESS_SCALE);
+	hputs_dbg(buf);
+#endif
 	cgba_fps_init(&cgba_fps);
 	for(i = 0; i < CGBA_GPSP_HEADLESS_FRAMES; i++) {
 		unsigned frame = frame_base + i;
@@ -1657,6 +1665,7 @@ int main(void)
 		menu_state.rom_source = CGBA_GPSP_ROM_BUILTIN_COUNT;
 
 	menu_result = fxcg100_menu_run(&menu_state, 0, 0, NULL);
+	fxcg100_lcd_set_scale(menu_state.screen_scale);
 	if(menu_result == FXCG100_MENU_QUIT)
 		return exit_to_os(1);
 	wait_for_keys_released();
@@ -1704,6 +1713,7 @@ int main(void)
 				read_stack_pointer());
 			fxcg100_menu_result result =
 				fxcg100_menu_run(&menu_state, frame, last_hash, &debug_info);
+			fxcg100_lcd_set_scale(menu_state.screen_scale);
 
 			wait_for_keys_released();
 			previous_app_keys = fxcg100_poll_app_keys();
