@@ -63,6 +63,8 @@ set(CGBA_SH4_HEAT_QUIET_FRAMES "180" CACHE STRING
   "Cold-gate: frames after a ROM flush before heating switches to the fast increment")
 set(CGBA_SH4_HEAT_SLOW "1" CACHE STRING
   "Cold-gate heat increment within the post-flush window")
+set(CGBA_SH4_HEAT_FLUSH_LEAK "16" CACHE STRING
+  "Cold-gate hot-table decay subtracted per ROM flush (leaky bucket)")
 option(CGBA_SH4_ARM_DEAD_FLAGS
   "ARM dead-flag elimination (OFF forces all-flags-live; A/B diagnostic)" ON)
 set(CGBA_SH4_HOT_THRESHOLD "64" CACHE STRING
@@ -174,7 +176,8 @@ if(CGBA_DYNAREC)
   endif()
   target_compile_definitions(cgba-gint-gpsp PRIVATE
     CGBA_SH4_HEAT_QUIET_FRAMES=${CGBA_SH4_HEAT_QUIET_FRAMES}
-    CGBA_SH4_HEAT_SLOW=${CGBA_SH4_HEAT_SLOW})
+    CGBA_SH4_HEAT_SLOW=${CGBA_SH4_HEAT_SLOW}
+    CGBA_SH4_HEAT_FLUSH_LEAK=${CGBA_SH4_HEAT_FLUSH_LEAK})
   if(NOT CGBA_SH4_ARM_DEAD_FLAGS)
     target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_SH4_ARM_DEAD_FLAGS=0)
   endif()

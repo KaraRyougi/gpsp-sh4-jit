@@ -1907,7 +1907,13 @@ void translate_icache_sync() {
  * requires and demote must to may (a failed condition leaves flags untouched).
  * Stores pass liveness through (flag_data 0) exactly like the upstream Thumb
  * scan: a mid-block store-alert exit may observe a skipped dead flag, the same
- * documented trade the x86/ARM backends ship. */
+ * documented trade the x86/ARM backends ship. Investigated 2026-07-05: the
+ * skipped flags are regenerated before any in-block use and block ends are
+ * all-live, so the guest can only observe them if an ISR inspects SPSR NZCV
+ * mid-block — accepted (making every store a liveness barrier measured -10%
+ * on the Metroid movement soak via block growth -> cache pressure). The
+ * single-block lockstep can flag this as a false CPSR mismatch at a store
+ * alert exit; verify against a memory/window diff before chasing it. */
 #define arm_flag_status()                                                     \
 {                                                                             \
   static const u16 arm_cond_requires[16] = {                                  \
@@ -2846,6 +2852,10 @@ extern unsigned long cgba_em_blk_n, cgba_em_blk_bytes;
 /* Declared unconditionally so the gate block parses on every arch; non-SH4
    arms fold it away via cgba_cold_gate_enable == 0. */
 extern u8  cgba_hot_count[16384];
+
+#ifndef CGBA_SH4_HEAT_FLUSH_LEAK
+#define CGBA_SH4_HEAT_FLUSH_LEAK 16   /* per-flush hot-table decay */
+#endif
 extern int cgba_cold_pending;
 #ifdef SH4_ARCH
 extern int cgba_cold_gate_enable;
@@ -4219,15 +4229,23 @@ void cgba_sh4_dump_rom_blockmap(void)
 void flush_translation_cache_rom(void)
 {
 #ifdef SH4_ARCH
-  /* Decay the cold-gate hot table: dispatch-hot blocks re-heat instantly on
-     their next lookups, but interpreter-heated once-per-frame code cannot
-     reach the threshold between flushes in thrash regimes — keeping the
-     tail interpreted instead of joining the flush churn (see CGBA_COLD_HEAT
-     in cpu.cc). No-flush games never pay this. */
+  /* Decay the cold-gate hot table. Leaky bucket (subtract a constant),
+     NOT halving: with capacity flushes every ~57 frames, halving gives the
+     fixed point h* = N (executions per epoch), so any block executed fewer
+     than THRESHOLD times per epoch stays interpreted FOREVER — Metroid
+     movement measured 54% of ALL time inside execute_arm on exactly that
+     mid-warm population. Subtracting D instead translates every block
+     executed more than D times per epoch eventually, while never-executed
+     heat still decays to zero across a few flushes (same anti-feedback
+     property that stopped the flush-thrash spiral). No-flush games never
+     pay this. */
   {
     unsigned hi;
-    for (hi = 0; hi < sizeof(cgba_hot_count); hi++)
-      cgba_hot_count[hi] >>= 1;
+    for (hi = 0; hi < sizeof(cgba_hot_count); hi++) {
+      u8 h = cgba_hot_count[hi];
+      cgba_hot_count[hi] = (h > CGBA_SH4_HEAT_FLUSH_LEAK)
+        ? (u8)(h - CGBA_SH4_HEAT_FLUSH_LEAK) : 0;
+    }
   }
   cgba_last_rom_flush_frame = frame_counter;
 #endif

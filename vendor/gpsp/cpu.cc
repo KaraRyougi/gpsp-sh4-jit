@@ -1582,6 +1582,18 @@ extern u32 cgba_interp_instr_bios, cgba_interp_instr_rom, cgba_interp_instr_ram;
            u8 _hc = cgba_hot_count[_hi];                                      \
            cgba_hot_count[_hi] = (_hc < CGBA_SH4_HOT_THRESHOLD - _inc)        \
              ? (u8)(_hc + _inc) : (u8)CGBA_SH4_HOT_THRESHOLD;                 \
+           if (cgba_hot_count[_hi] >= CGBA_SH4_HOT_THRESHOLD) {               \
+             /* The branch target is (or just became) dispatch-hot: end the
+              * cold chunk so dispatch runs/creates the TRANSLATION instead
+              * of interpreting straight through hot code for the rest of
+              * the 512-cycle budget — Metroid movement measured 54% of all
+              * time inside execute_arm on exactly that overshoot. Guest-
+              * invisible: the chunk returns its unused budget and the stub
+              * re-dispatches at this pc. */                                  \
+             collapse_flags();                                                \
+             cgba_diff_stop_cycles_remaining = cycles_remaining;              \
+             return;                                                          \
+           }                                                                  \
          }                                                                    \
          cgba_heat_expect = _hp + (isz);                                      \
        } } while(0)

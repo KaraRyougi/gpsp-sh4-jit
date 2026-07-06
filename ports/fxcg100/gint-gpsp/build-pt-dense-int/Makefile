@@ -57,10 +57,10 @@ RM = /opt/homebrew/bin/cmake -E rm -f
 EQUALS = =
 
 # The top-level source directory on which CMake was run.
-CMAKE_SOURCE_DIR = /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp
+CMAKE_SOURCE_DIR = /Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/gint-gpsp
 
 # The top-level build directory on which CMake was run.
-CMAKE_BINARY_DIR = /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/build-pt-dense-int
+CMAKE_BINARY_DIR = /Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/gint-gpsp/build-pt-dense-int
 
 #=============================================================================
 # Targets provided globally by CMake.
@@ -87,9 +87,9 @@ rebuild_cache/fast: rebuild_cache
 
 # The main all target
 all: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/build-pt-dense-int/CMakeFiles /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/build-pt-dense-int//CMakeFiles/progress.marks
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/gint-gpsp/build-pt-dense-int/CMakeFiles /Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/gint-gpsp/build-pt-dense-int//CMakeFiles/progress.marks
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 all
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/gint-gpsp/build-pt-dense-int/CMakeFiles 0
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/gint-gpsp/build-pt-dense-int/CMakeFiles 0
 .PHONY : all
 
 # The main clean target
@@ -129,525 +129,573 @@ cgba-gint-gpsp/fast:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/build
 .PHONY : cgba-gint-gpsp/fast
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_config.obj: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_config.c.obj
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_config.obj
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_config.obj: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_config.c.obj
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_config.obj
 
 # target to build an object file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_config.c.obj:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_config.c.obj
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_config.c.obj
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_config.c.obj:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_config.c.obj
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_config.c.obj
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_config.i: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_config.c.i
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_config.i
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_config.i: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_config.c.i
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_config.i
 
 # target to preprocess a source file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_config.c.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_config.c.i
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_config.c.i
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_config.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_config.c.i
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_config.c.i
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_config.s: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_config.c.s
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_config.s
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_config.s: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_config.c.s
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_config.s
 
 # target to generate assembly for a file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_config.c.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_config.c.s
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_config.c.s
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_config.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_config.c.s
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_config.c.s
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_gpsp_stubs.obj: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_gpsp_stubs.c.obj
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_gpsp_stubs.obj
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_gpsp_stubs.obj: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_gpsp_stubs.c.obj
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_gpsp_stubs.obj
 
 # target to build an object file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_gpsp_stubs.c.obj:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_gpsp_stubs.c.obj
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_gpsp_stubs.c.obj
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_gpsp_stubs.c.obj:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_gpsp_stubs.c.obj
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_gpsp_stubs.c.obj
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_gpsp_stubs.i: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_gpsp_stubs.c.i
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_gpsp_stubs.i
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_gpsp_stubs.i: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_gpsp_stubs.c.i
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_gpsp_stubs.i
 
 # target to preprocess a source file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_gpsp_stubs.c.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_gpsp_stubs.c.i
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_gpsp_stubs.c.i
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_gpsp_stubs.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_gpsp_stubs.c.i
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_gpsp_stubs.c.i
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_gpsp_stubs.s: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_gpsp_stubs.c.s
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_gpsp_stubs.s
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_gpsp_stubs.s: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_gpsp_stubs.c.s
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_gpsp_stubs.s
 
 # target to generate assembly for a file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_gpsp_stubs.c.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_gpsp_stubs.c.s
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_gpsp_stubs.c.s
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_gpsp_stubs.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_gpsp_stubs.c.s
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_gpsp_stubs.c.s
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_keys.obj: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_keys.c.obj
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_keys.obj
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_keys.obj: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_keys.c.obj
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_keys.obj
 
 # target to build an object file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_keys.c.obj:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_keys.c.obj
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_keys.c.obj
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_keys.c.obj:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_keys.c.obj
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_keys.c.obj
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_keys.i: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_keys.c.i
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_keys.i
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_keys.i: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_keys.c.i
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_keys.i
 
 # target to preprocess a source file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_keys.c.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_keys.c.i
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_keys.c.i
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_keys.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_keys.c.i
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_keys.c.i
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_keys.s: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_keys.c.s
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_keys.s
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_keys.s: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_keys.c.s
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_keys.s
 
 # target to generate assembly for a file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_keys.c.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_keys.c.s
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_keys.c.s
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_keys.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_keys.c.s
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_keys.c.s
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_menu.obj: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_menu.c.obj
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_menu.obj
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_menu.obj: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_menu.c.obj
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_menu.obj
 
 # target to build an object file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_menu.c.obj:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_menu.c.obj
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_menu.c.obj
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_menu.c.obj:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_menu.c.obj
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_menu.c.obj
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_menu.i: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_menu.c.i
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_menu.i
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_menu.i: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_menu.c.i
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_menu.i
 
 # target to preprocess a source file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_menu.c.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_menu.c.i
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_menu.c.i
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_menu.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_menu.c.i
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_menu.c.i
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_menu.s: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_menu.c.s
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_menu.s
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_menu.s: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_menu.c.s
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_menu.s
 
 # target to generate assembly for a file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_menu.c.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_menu.c.s
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_menu.c.s
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_menu.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_menu.c.s
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_menu.c.s
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_sound_stub.obj: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_sound_stub.c.obj
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_sound_stub.obj
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_sound_stub.obj: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_sound_stub.c.obj
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_sound_stub.obj
 
 # target to build an object file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_sound_stub.c.obj:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_sound_stub.c.obj
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_sound_stub.c.obj
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_sound_stub.c.obj:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_sound_stub.c.obj
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_sound_stub.c.obj
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_sound_stub.i: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_sound_stub.c.i
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_sound_stub.i
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_sound_stub.i: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_sound_stub.c.i
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_sound_stub.i
 
 # target to preprocess a source file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_sound_stub.c.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_sound_stub.c.i
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_sound_stub.c.i
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_sound_stub.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_sound_stub.c.i
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_sound_stub.c.i
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_sound_stub.s: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_sound_stub.c.s
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_sound_stub.s
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_sound_stub.s: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_sound_stub.c.s
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_sound_stub.s
 
 # target to generate assembly for a file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_sound_stub.c.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_sound_stub.c.s
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_sound_stub.c.s
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_sound_stub.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_sound_stub.c.s
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_sound_stub.c.s
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_diff_harness.obj: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_diff_harness.c.obj
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_diff_harness.obj
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_diff_harness.obj: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_diff_harness.c.obj
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_diff_harness.obj
 
 # target to build an object file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_diff_harness.c.obj:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_diff_harness.c.obj
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_diff_harness.c.obj
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_diff_harness.c.obj:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_diff_harness.c.obj
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_diff_harness.c.obj
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_diff_harness.i: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_diff_harness.c.i
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_diff_harness.i
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_diff_harness.i: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_diff_harness.c.i
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_diff_harness.i
 
 # target to preprocess a source file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_diff_harness.c.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_diff_harness.c.i
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_diff_harness.c.i
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_diff_harness.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_diff_harness.c.i
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_diff_harness.c.i
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_diff_harness.s: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_diff_harness.c.s
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_diff_harness.s
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_diff_harness.s: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_diff_harness.c.s
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_diff_harness.s
 
 # target to generate assembly for a file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_diff_harness.c.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_diff_harness.c.s
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_diff_harness.c.s
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_diff_harness.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_diff_harness.c.s
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_diff_harness.c.s
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_dynarec_state.obj: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_dynarec_state.c.obj
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_dynarec_state.obj
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_dynarec_state.obj: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_dynarec_state.c.obj
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_dynarec_state.obj
 
 # target to build an object file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_dynarec_state.c.obj:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_dynarec_state.c.obj
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_dynarec_state.c.obj
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_dynarec_state.c.obj:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_dynarec_state.c.obj
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_dynarec_state.c.obj
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_dynarec_state.i: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_dynarec_state.c.i
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_dynarec_state.i
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_dynarec_state.i: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_dynarec_state.c.i
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_dynarec_state.i
 
 # target to preprocess a source file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_dynarec_state.c.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_dynarec_state.c.i
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_dynarec_state.c.i
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_dynarec_state.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_dynarec_state.c.i
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_dynarec_state.c.i
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_dynarec_state.s: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_dynarec_state.c.s
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_dynarec_state.s
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_dynarec_state.s: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_dynarec_state.c.s
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_dynarec_state.s
 
 # target to generate assembly for a file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_dynarec_state.c.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_dynarec_state.c.s
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_dynarec_state.c.s
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_dynarec_state.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_dynarec_state.c.s
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_dynarec_state.c.s
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_interp_helpers.obj: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_interp_helpers.c.obj
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_interp_helpers.obj
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_fastmem.obj: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_fastmem.c.obj
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_fastmem.obj
 
 # target to build an object file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_interp_helpers.c.obj:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_interp_helpers.c.obj
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_interp_helpers.c.obj
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_fastmem.c.obj:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_fastmem.c.obj
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_fastmem.c.obj
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_interp_helpers.i: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_interp_helpers.c.i
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_interp_helpers.i
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_fastmem.i: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_fastmem.c.i
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_fastmem.i
 
 # target to preprocess a source file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_interp_helpers.c.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_interp_helpers.c.i
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_interp_helpers.c.i
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_fastmem.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_fastmem.c.i
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_fastmem.c.i
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_interp_helpers.s: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_interp_helpers.c.s
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_interp_helpers.s
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_fastmem.s: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_fastmem.c.s
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_fastmem.s
 
 # target to generate assembly for a file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_interp_helpers.c.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_interp_helpers.c.s
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_interp_helpers.c.s
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_fastmem.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_fastmem.c.s
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_fastmem.c.s
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/bios_data.obj: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/bios_data.S.obj
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/bios_data.obj
-
-# target to build an object file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/bios_data.S.obj:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/bios_data.S.obj
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/bios_data.S.obj
-
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cheats.obj: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cheats.c.obj
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cheats.obj
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_interp_helpers.obj: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_interp_helpers.c.obj
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_interp_helpers.obj
 
 # target to build an object file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cheats.c.obj:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cheats.c.obj
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cheats.c.obj
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_interp_helpers.c.obj:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_interp_helpers.c.obj
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_interp_helpers.c.obj
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cheats.i: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cheats.c.i
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cheats.i
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_interp_helpers.i: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_interp_helpers.c.i
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_interp_helpers.i
 
 # target to preprocess a source file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cheats.c.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cheats.c.i
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cheats.c.i
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_interp_helpers.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_interp_helpers.c.i
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_interp_helpers.c.i
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cheats.s: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cheats.c.s
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cheats.s
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_interp_helpers.s: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_interp_helpers.c.s
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_interp_helpers.s
 
 # target to generate assembly for a file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cheats.c.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cheats.c.s
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cheats.c.s
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_interp_helpers.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_interp_helpers.c.s
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_interp_helpers.c.s
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cpu.obj: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cpu.cc.obj
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cpu.obj
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/bios_data.obj: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/bios_data.S.obj
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/bios_data.obj
 
 # target to build an object file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cpu.cc.obj:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cpu.cc.obj
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cpu.cc.obj
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/bios_data.S.obj:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/bios_data.S.obj
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/bios_data.S.obj
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cpu.i: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cpu.cc.i
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cpu.i
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cheats.obj: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cheats.c.obj
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cheats.obj
+
+# target to build an object file
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cheats.c.obj:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cheats.c.obj
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cheats.c.obj
+
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cheats.i: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cheats.c.i
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cheats.i
 
 # target to preprocess a source file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cpu.cc.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cpu.cc.i
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cpu.cc.i
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cheats.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cheats.c.i
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cheats.c.i
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cpu.s: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cpu.cc.s
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cpu.s
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cheats.s: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cheats.c.s
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cheats.s
 
 # target to generate assembly for a file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cpu.cc.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cpu.cc.s
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cpu.cc.s
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cheats.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cheats.c.s
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cheats.c.s
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cpu_threaded.obj: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cpu_threaded.c.obj
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cpu_threaded.obj
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cpu.obj: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cpu.cc.obj
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cpu.obj
 
 # target to build an object file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cpu_threaded.c.obj:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cpu_threaded.c.obj
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cpu_threaded.c.obj
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cpu.cc.obj:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cpu.cc.obj
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cpu.cc.obj
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cpu_threaded.i: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cpu_threaded.c.i
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cpu_threaded.i
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cpu.i: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cpu.cc.i
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cpu.i
 
 # target to preprocess a source file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cpu_threaded.c.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cpu_threaded.c.i
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cpu_threaded.c.i
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cpu.cc.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cpu.cc.i
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cpu.cc.i
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cpu_threaded.s: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cpu_threaded.c.s
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cpu_threaded.s
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cpu.s: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cpu.cc.s
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cpu.s
 
 # target to generate assembly for a file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cpu_threaded.c.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cpu_threaded.c.s
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cpu_threaded.c.s
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cpu.cc.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cpu.cc.s
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cpu.cc.s
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/gba_memory.obj: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/gba_memory.c.obj
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/gba_memory.obj
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cpu_threaded.obj: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cpu_threaded.c.obj
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cpu_threaded.obj
 
 # target to build an object file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/gba_memory.c.obj:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/gba_memory.c.obj
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/gba_memory.c.obj
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cpu_threaded.c.obj:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cpu_threaded.c.obj
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cpu_threaded.c.obj
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/gba_memory.i: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/gba_memory.c.i
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/gba_memory.i
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cpu_threaded.i: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cpu_threaded.c.i
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cpu_threaded.i
 
 # target to preprocess a source file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/gba_memory.c.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/gba_memory.c.i
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/gba_memory.c.i
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cpu_threaded.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cpu_threaded.c.i
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cpu_threaded.c.i
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/gba_memory.s: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/gba_memory.c.s
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/gba_memory.s
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cpu_threaded.s: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cpu_threaded.c.s
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cpu_threaded.s
 
 # target to generate assembly for a file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/gba_memory.c.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/gba_memory.c.s
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/gba_memory.c.s
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cpu_threaded.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cpu_threaded.c.s
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cpu_threaded.c.s
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/gbp.obj: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/gbp.c.obj
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/gbp.obj
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/gba_memory.obj: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/gba_memory.c.obj
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/gba_memory.obj
 
 # target to build an object file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/gbp.c.obj:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/gbp.c.obj
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/gbp.c.obj
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/gba_memory.c.obj:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/gba_memory.c.obj
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/gba_memory.c.obj
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/gbp.i: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/gbp.c.i
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/gbp.i
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/gba_memory.i: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/gba_memory.c.i
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/gba_memory.i
 
 # target to preprocess a source file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/gbp.c.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/gbp.c.i
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/gbp.c.i
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/gba_memory.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/gba_memory.c.i
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/gba_memory.c.i
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/gbp.s: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/gbp.c.s
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/gbp.s
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/gba_memory.s: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/gba_memory.c.s
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/gba_memory.s
 
 # target to generate assembly for a file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/gbp.c.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/gbp.c.s
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/gbp.c.s
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/gba_memory.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/gba_memory.c.s
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/gba_memory.c.s
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/input.obj: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/input.c.obj
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/input.obj
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/gbp.obj: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/gbp.c.obj
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/gbp.obj
 
 # target to build an object file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/input.c.obj:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/input.c.obj
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/input.c.obj
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/gbp.c.obj:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/gbp.c.obj
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/gbp.c.obj
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/input.i: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/input.c.i
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/input.i
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/gbp.i: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/gbp.c.i
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/gbp.i
 
 # target to preprocess a source file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/input.c.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/input.c.i
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/input.c.i
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/gbp.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/gbp.c.i
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/gbp.c.i
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/input.s: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/input.c.s
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/input.s
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/gbp.s: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/gbp.c.s
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/gbp.s
 
 # target to generate assembly for a file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/input.c.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/input.c.s
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/input.c.s
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/gbp.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/gbp.c.s
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/gbp.c.s
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/main.obj: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/main.c.obj
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/main.obj
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/input.obj: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/input.c.obj
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/input.obj
 
 # target to build an object file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/main.c.obj:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/main.c.obj
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/main.c.obj
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/input.c.obj:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/input.c.obj
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/input.c.obj
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/main.i: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/main.c.i
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/main.i
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/input.i: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/input.c.i
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/input.i
 
 # target to preprocess a source file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/main.c.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/main.c.i
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/main.c.i
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/input.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/input.c.i
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/input.c.i
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/main.s: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/main.c.s
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/main.s
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/input.s: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/input.c.s
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/input.s
 
 # target to generate assembly for a file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/main.c.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/main.c.s
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/main.c.s
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/input.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/input.c.s
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/input.c.s
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/memmap.obj: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/memmap.c.obj
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/memmap.obj
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/main.obj: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/main.c.obj
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/main.obj
 
 # target to build an object file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/memmap.c.obj:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/memmap.c.obj
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/memmap.c.obj
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/main.c.obj:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/main.c.obj
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/main.c.obj
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/memmap.i: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/memmap.c.i
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/memmap.i
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/main.i: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/main.c.i
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/main.i
 
 # target to preprocess a source file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/memmap.c.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/memmap.c.i
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/memmap.c.i
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/main.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/main.c.i
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/main.c.i
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/memmap.s: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/memmap.c.s
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/memmap.s
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/main.s: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/main.c.s
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/main.s
 
 # target to generate assembly for a file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/memmap.c.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/memmap.c.s
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/memmap.c.s
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/main.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/main.c.s
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/main.c.s
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/rfu.obj: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/rfu.c.obj
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/rfu.obj
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/memmap.obj: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/memmap.c.obj
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/memmap.obj
 
 # target to build an object file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/rfu.c.obj:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/rfu.c.obj
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/rfu.c.obj
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/memmap.c.obj:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/memmap.c.obj
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/memmap.c.obj
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/rfu.i: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/rfu.c.i
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/rfu.i
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/memmap.i: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/memmap.c.i
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/memmap.i
 
 # target to preprocess a source file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/rfu.c.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/rfu.c.i
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/rfu.c.i
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/memmap.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/memmap.c.i
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/memmap.c.i
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/rfu.s: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/rfu.c.s
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/rfu.s
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/memmap.s: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/memmap.c.s
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/memmap.s
 
 # target to generate assembly for a file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/rfu.c.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/rfu.c.s
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/rfu.c.s
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/memmap.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/memmap.c.s
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/memmap.c.s
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/savestate.obj: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/savestate.c.obj
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/savestate.obj
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/rfu.obj: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/rfu.c.obj
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/rfu.obj
 
 # target to build an object file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/savestate.c.obj:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/savestate.c.obj
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/savestate.c.obj
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/rfu.c.obj:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/rfu.c.obj
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/rfu.c.obj
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/savestate.i: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/savestate.c.i
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/savestate.i
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/rfu.i: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/rfu.c.i
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/rfu.i
 
 # target to preprocess a source file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/savestate.c.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/savestate.c.i
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/savestate.c.i
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/rfu.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/rfu.c.i
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/rfu.c.i
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/savestate.s: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/savestate.c.s
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/savestate.s
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/rfu.s: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/rfu.c.s
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/rfu.s
 
 # target to generate assembly for a file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/savestate.c.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/savestate.c.s
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/savestate.c.s
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/rfu.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/rfu.c.s
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/rfu.c.s
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/serial.obj: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/serial.c.obj
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/serial.obj
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/savestate.obj: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/savestate.c.obj
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/savestate.obj
 
 # target to build an object file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/serial.c.obj:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/serial.c.obj
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/serial.c.obj
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/savestate.c.obj:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/savestate.c.obj
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/savestate.c.obj
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/serial.i: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/serial.c.i
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/serial.i
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/savestate.i: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/savestate.c.i
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/savestate.i
 
 # target to preprocess a source file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/serial.c.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/serial.c.i
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/serial.c.i
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/savestate.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/savestate.c.i
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/savestate.c.i
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/serial.s: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/serial.c.s
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/serial.s
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/savestate.s: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/savestate.c.s
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/savestate.s
 
 # target to generate assembly for a file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/serial.c.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/serial.c.s
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/serial.c.s
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/savestate.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/savestate.c.s
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/savestate.c.s
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/serial_proto.obj: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/serial_proto.c.obj
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/serial_proto.obj
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/serial.obj: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/serial.c.obj
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/serial.obj
 
 # target to build an object file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/serial_proto.c.obj:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/serial_proto.c.obj
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/serial_proto.c.obj
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/serial.c.obj:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/serial.c.obj
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/serial.c.obj
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/serial_proto.i: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/serial_proto.c.i
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/serial_proto.i
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/serial.i: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/serial.c.i
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/serial.i
 
 # target to preprocess a source file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/serial_proto.c.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/serial_proto.c.i
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/serial_proto.c.i
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/serial.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/serial.c.i
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/serial.c.i
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/serial_proto.s: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/serial_proto.c.s
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/serial_proto.s
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/serial.s: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/serial.c.s
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/serial.s
 
 # target to generate assembly for a file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/serial_proto.c.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/serial_proto.c.s
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/serial_proto.c.s
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/serial.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/serial.c.s
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/serial.c.s
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/sh4/sh4_stub.obj: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/sh4/sh4_stub.S.obj
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/sh4/sh4_stub.obj
-
-# target to build an object file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/sh4/sh4_stub.S.obj:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/sh4/sh4_stub.S.obj
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/sh4/sh4_stub.S.obj
-
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/video.obj: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/video.cc.obj
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/video.obj
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/serial_proto.obj: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/serial_proto.c.obj
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/serial_proto.obj
 
 # target to build an object file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/video.cc.obj:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/video.cc.obj
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/video.cc.obj
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/serial_proto.c.obj:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/serial_proto.c.obj
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/serial_proto.c.obj
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/video.i: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/video.cc.i
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/video.i
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/serial_proto.i: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/serial_proto.c.i
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/serial_proto.i
 
 # target to preprocess a source file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/video.cc.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/video.cc.i
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/video.cc.i
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/serial_proto.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/serial_proto.c.i
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/serial_proto.c.i
 
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/video.s: Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/video.cc.s
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/video.s
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/serial_proto.s: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/serial_proto.c.s
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/serial_proto.s
 
 # target to generate assembly for a file
-Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/video.cc.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/video.cc.s
-.PHONY : Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/video.cc.s
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/serial_proto.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/serial_proto.c.s
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/serial_proto.c.s
+
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/sh4/sh4_stub.obj: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/sh4/sh4_stub.S.obj
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/sh4/sh4_stub.obj
+
+# target to build an object file
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/sh4/sh4_stub.S.obj:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/sh4/sh4_stub.S.obj
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/sh4/sh4_stub.S.obj
+
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/video.obj: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/video.cc.obj
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/video.obj
+
+# target to build an object file
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/video.cc.obj:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/video.cc.obj
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/video.cc.obj
+
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/video.i: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/video.cc.i
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/video.i
+
+# target to preprocess a source file
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/video.cc.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/video.cc.i
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/video.cc.i
+
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/video.s: Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/video.cc.s
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/video.s
+
+# target to generate assembly for a file
+Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/video.cc.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/video.cc.s
+.PHONY : Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/video.cc.s
+
+src/crash_panic.obj: src/crash_panic.c.obj
+.PHONY : src/crash_panic.obj
+
+# target to build an object file
+src/crash_panic.c.obj:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/src/crash_panic.c.obj
+.PHONY : src/crash_panic.c.obj
+
+src/crash_panic.i: src/crash_panic.c.i
+.PHONY : src/crash_panic.i
+
+# target to preprocess a source file
+src/crash_panic.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/src/crash_panic.c.i
+.PHONY : src/crash_panic.c.i
+
+src/crash_panic.s: src/crash_panic.c.s
+.PHONY : src/crash_panic.s
+
+# target to generate assembly for a file
+src/crash_panic.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/cgba-gint-gpsp.dir/build.make CMakeFiles/cgba-gint-gpsp.dir/src/crash_panic.c.s
+.PHONY : src/crash_panic.c.s
 
 src/frame_pacing.obj: src/frame_pacing.c.obj
 .PHONY : src/frame_pacing.obj
@@ -826,71 +874,77 @@ help:
 	@echo "... edit_cache"
 	@echo "... rebuild_cache"
 	@echo "... cgba-gint-gpsp"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_config.obj"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_config.i"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_config.s"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_gpsp_stubs.obj"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_gpsp_stubs.i"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_gpsp_stubs.s"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_keys.obj"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_keys.i"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_keys.s"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_menu.obj"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_menu.i"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_menu.s"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_sound_stub.obj"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_sound_stub.i"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/fxcg100_sound_stub.s"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_diff_harness.obj"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_diff_harness.i"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_diff_harness.s"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_dynarec_state.obj"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_dynarec_state.i"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_dynarec_state.s"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_interp_helpers.obj"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_interp_helpers.i"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/ports/fxcg100/sh4/sh4_interp_helpers.s"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/bios_data.obj"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cheats.obj"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cheats.i"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cheats.s"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cpu.obj"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cpu.i"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cpu.s"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cpu_threaded.obj"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cpu_threaded.i"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/cpu_threaded.s"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/gba_memory.obj"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/gba_memory.i"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/gba_memory.s"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/gbp.obj"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/gbp.i"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/gbp.s"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/input.obj"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/input.i"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/input.s"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/main.obj"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/main.i"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/main.s"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/memmap.obj"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/memmap.i"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/memmap.s"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/rfu.obj"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/rfu.i"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/rfu.s"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/savestate.obj"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/savestate.i"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/savestate.s"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/serial.obj"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/serial.i"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/serial.s"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/serial_proto.obj"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/serial_proto.i"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/serial_proto.s"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/sh4/sh4_stub.obj"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/video.obj"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/video.i"
-	@echo "... Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/video.s"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_config.obj"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_config.i"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_config.s"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_gpsp_stubs.obj"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_gpsp_stubs.i"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_gpsp_stubs.s"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_keys.obj"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_keys.i"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_keys.s"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_menu.obj"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_menu.i"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_menu.s"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_sound_stub.obj"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_sound_stub.i"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/fxcg100_sound_stub.s"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_diff_harness.obj"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_diff_harness.i"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_diff_harness.s"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_dynarec_state.obj"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_dynarec_state.i"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_dynarec_state.s"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_fastmem.obj"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_fastmem.i"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_fastmem.s"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_interp_helpers.obj"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_interp_helpers.i"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/sh4/sh4_interp_helpers.s"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/bios_data.obj"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cheats.obj"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cheats.i"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cheats.s"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cpu.obj"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cpu.i"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cpu.s"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cpu_threaded.obj"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cpu_threaded.i"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/cpu_threaded.s"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/gba_memory.obj"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/gba_memory.i"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/gba_memory.s"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/gbp.obj"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/gbp.i"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/gbp.s"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/input.obj"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/input.i"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/input.s"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/main.obj"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/main.i"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/main.s"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/memmap.obj"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/memmap.i"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/memmap.s"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/rfu.obj"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/rfu.i"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/rfu.s"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/savestate.obj"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/savestate.i"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/savestate.s"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/serial.obj"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/serial.i"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/serial.s"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/serial_proto.obj"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/serial_proto.i"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/serial_proto.s"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/sh4/sh4_stub.obj"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/video.obj"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/video.i"
+	@echo "... Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/video.s"
+	@echo "... src/crash_panic.obj"
+	@echo "... src/crash_panic.i"
+	@echo "... src/crash_panic.s"
 	@echo "... src/frame_pacing.obj"
 	@echo "... src/frame_pacing.i"
 	@echo "... src/frame_pacing.s"

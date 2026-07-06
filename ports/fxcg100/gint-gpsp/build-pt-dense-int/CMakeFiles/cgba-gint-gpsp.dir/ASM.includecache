@@ -6,11 +6,11 @@
 
 #IncludeRegexTransform: 
 
-/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/bios_data.S
+/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/bios_data.S
 
-/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/gpsp_config.h
+/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/gpsp_config.h
 
-/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/sh4/sh4_stub.S
+/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/sh4/sh4_stub.S
 ../gpsp_config.h
-/Users/ryougi/Documents/cgba/.claude/worktrees/keen-swartz-eb3b22/vendor/gpsp/gpsp_config.h
+/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/vendor/gpsp/gpsp_config.h
 

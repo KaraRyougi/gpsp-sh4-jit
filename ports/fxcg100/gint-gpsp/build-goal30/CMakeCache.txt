@@ -189,6 +189,9 @@ CGBA_SH4_DIFF_DUMP_OPS:BOOL=OFF
 // instruction boundary
 CGBA_SH4_EXACT_CYCLE_BOUNDARIES:BOOL=OFF
 
+//Cold-gate hot-table decay subtracted per ROM flush (leaky bucket)
+CGBA_SH4_HEAT_FLUSH_LEAK:STRING=16
+
 //Cold-gate: frames after a ROM flush before heating switches to
 // the fast increment
 CGBA_SH4_HEAT_QUIET_FRAMES:STRING=180

@@ -91,7 +91,7 @@ endif()
 
 
 
-set(CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES "/Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/include/c++/14.1.0;/Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/include/c++/14.1.0/sh3eb-elf/m4-nofpu;/Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/include/c++/14.1.0/backward;/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/include;/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/include-fixed;/Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/include")
+set(CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES "/usr/local/include;/Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/include/c++/14.1.0;/Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/include/c++/14.1.0/sh3eb-elf/m4-nofpu;/Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/include/c++/14.1.0/backward;/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/include;/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/include-fixed;/Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/include")
 set(CMAKE_CXX_IMPLICIT_LINK_LIBRARIES "gcc")
 set(CMAKE_CXX_IMPLICIT_LINK_DIRECTORIES "/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0;/Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/lib")
 set(CMAKE_CXX_IMPLICIT_LINK_FRAMEWORK_DIRECTORIES "")

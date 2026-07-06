@@ -79,7 +79,7 @@ endif()
 
 
 
-set(CMAKE_C_IMPLICIT_INCLUDE_DIRECTORIES "/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/include;/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/include-fixed;/Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/include")
+set(CMAKE_C_IMPLICIT_INCLUDE_DIRECTORIES "/usr/local/include;/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/include;/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/include-fixed;/Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/include")
 set(CMAKE_C_IMPLICIT_LINK_LIBRARIES "gcc")
 set(CMAKE_C_IMPLICIT_LINK_DIRECTORIES "/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0;/Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/lib")
 set(CMAKE_C_IMPLICIT_LINK_FRAMEWORK_DIRECTORIES "")

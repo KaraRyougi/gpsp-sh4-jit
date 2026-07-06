@@ -24,6 +24,9 @@ u32 execute_arm_translate_internal(u32 cycles, void *reg_base);  /* sh4_stub.S *
 #ifndef CGBA_SH4_INTERP_SWI_HLE
 #define CGBA_SH4_INTERP_SWI_HLE 0   /* see cgba_sh4_interp_swi_hle */
 #endif
+#ifndef CGBA_SH4_SWI_MEM_HLE
+#define CGBA_SH4_SWI_MEM_HLE 0      /* see the demoted cases in cgba_hle_bios_swi */
+#endif
 
 extern u32 cgba_diff_stop_pc;
 extern int cgba_diff_stop_active;
@@ -1469,6 +1472,13 @@ static int cgba_bulk_cpuset(u32 source, u32 dest, u32 count, int fill,
     sp = cgba_bulk_src_host(source, len);
     if (!sp)
       return 0;
+    /* Overlapping ranges: the BIOS copies FORWARD word-by-word, so a
+       destination inside the source re-reads freshly written words (the
+       classic GBA pattern-fill idiom); memmove would preserve the original
+       source bytes instead. Compare HOST pointers (mirrors alias) and keep
+       any overlap on the exact per-word path. */
+    if ((sp < d + len) && (d < sp + len))
+      return 0;
   }
 
   if (fill) {
@@ -1892,12 +1902,25 @@ static int cgba_hle_bios_swi(void)
     return 2;                            /* handled, but NOT a swi-return */
   }
 #endif
+#if CGBA_SH4_SWI_MEM_HLE
+  /* DEMOTED (default off): these HLEs reproduce the copy/decompress MEMORY
+   * effects but not the open BIOS routines' post-SWI scratch registers
+   * (CpuSet leaves r1 = dst-src, r2/r3 = cursor ends, r12 = last datum...)
+   * nor their instruction-fetch cycle cost. Once the cold gate started
+   * promoting SWI call sites (stop-on-hot), the JIT run serviced these via
+   * the HLE while the interpreter ran the real BIOS — Metroid's dense
+   * bit-exact soak diverged from frame ~420 on exactly that asymmetry.
+   * Interpreting the real BIOS is symmetric for both cores by construction.
+   * Re-enable only with register- AND cycle-faithful implementations
+   * (post-state formulas derivable from the blob: see the session notes /
+   * open_gba_bios.bin disassembly around 0x614/0x720). */
   case 0x0B: cgba_swi_cpuset(reg[0], reg[1], reg[2]); break;
   case 0x0C: cgba_swi_cpufastset(reg[0], reg[1], reg[2]); break;
   case 0x11: cgba_swi_lz77_wram(reg[0], reg[1]); break;
   case 0x12: cgba_swi_lz77_vram(reg[0], reg[1]); break;
   case 0x14: cgba_swi_rl_wram(reg[0], reg[1]); break;
   case 0x15: cgba_swi_rl_vram(reg[0], reg[1]); break;
+#endif
   default:
 #ifdef CGBA_GPSP_HEADLESS_TEST
     if (num < 48) cgba_swi_miss[num]++;
