@@ -21,6 +21,7 @@
 #include <ctype.h>
 
 timer_type timer[4];
+void cgba_recompute_timer_cap_mask(void);
 
 u32 frame_counter = 0;
 u32 cpu_ticks = 0;
@@ -162,6 +163,7 @@ void init_main(void)
 
   timer[0].direct_sound_channels = TIMER_DS_CHANNEL_BOTH;
   timer[1].direct_sound_channels = TIMER_DS_CHANNEL_NONE;
+  cgba_recompute_timer_cap_mask();
 
   frame_counter = 0;
   cpu_ticks = 0;
@@ -187,6 +189,24 @@ u32 cgba_update_gba_halt_calls;   /* entries with the CPU halted */
  * unaffected semantically and save one C round-trip per event slice. */
 u32 cgba_idle_wait;
 
+/* Bitmask of timers that must cap the event slice at their next overflow
+ * (IRQ-raising or cascade-feeding PRESCALE timers — see update_timers).
+ * Recomputed on any timer start/stop and after savestate loads; zero for
+ * pure sound-clock configurations (AW), skipping the per-slice scan. */
+u32 cgba_timer_cap_mask;
+
+void cgba_recompute_timer_cap_mask(void)
+{
+  unsigned i;
+  u32 m = 0;
+  for (i = 0; i < 4; i++)
+    if (timer[i].status == TIMER_PRESCALE &&
+        (timer[i].irq ||
+         (i != 3 && timer[i + 1].status == TIMER_CASCADE)))
+      m |= 1u << i;
+  cgba_timer_cap_mask = m;
+}
+
 u32 function_cc update_gba(int remaining_cycles)
 {
   u32 changed_pc = 0;
@@ -201,7 +221,7 @@ u32 function_cc update_gba(int remaining_cycles)
 
   remaining_cycles = MAX(remaining_cycles, -64);
 
-#ifdef CGBA_GPSP_HEADLESS_TEST
+#if defined(CGBA_GPSP_HEADLESS_TEST) && defined(CGBA_SH4_DIAG_COUNTERS)
   cgba_update_gba_calls++;
   if (reg[CPU_HALT_STATE] != CPU_ACTIVE)
     cgba_update_gba_halt_calls++;
@@ -209,7 +229,7 @@ u32 function_cc update_gba(int remaining_cycles)
   do
   {
     unsigned i;
-#ifdef CGBA_GPSP_HEADLESS_TEST
+#if defined(CGBA_GPSP_HEADLESS_TEST) && defined(CGBA_SH4_DIAG_COUNTERS)
     cgba_update_gba_slices++;
 #endif
     // Number of cycles we ask to run - cycles that we did not execute
@@ -385,12 +405,12 @@ u32 function_cc update_gba(int remaining_cycles)
     // Figure out when we need to stop CPU execution. The next event is
     // a video event or a timer event, whatever happens first.
     execute_cycles = MAX(video_count, 0);
-#ifdef CGBA_GPSP_HEADLESS_TEST
+#if defined(CGBA_GPSP_HEADLESS_TEST) && defined(CGBA_SH4_DIAG_COUNTERS)
     { extern u32 cgba_cap_src[8]; cgba_cap_src[0]++; }   /* default: video */
 #endif
     {
       u32 cc = serial_next_event();
-#ifdef CGBA_GPSP_HEADLESS_TEST
+#if defined(CGBA_GPSP_HEADLESS_TEST) && defined(CGBA_SH4_DIAG_COUNTERS)
       if (cc < execute_cycles) { extern u32 cgba_cap_src[8]; cgba_cap_src[1]++; }
 #endif
       execute_cycles = MIN(execute_cycles, cc);
@@ -412,21 +432,20 @@ u32 function_cc update_gba(int remaining_cycles)
         execute_cycles = MIN(execute_cycles, dma_cyc);  // Continue sleeping.
     }
 
-    for (i = 0; i < 4; i++)
-    {
-       /* Only IRQ or cascade-feeding timers must break the slice at their
-          overflow; sound-clock timers batch (update_timers loops). */
-       if (timer[i].status == TIMER_PRESCALE &&
-           (timer[i].irq ||
-            (i != 3 && timer[i + 1].status == TIMER_CASCADE)) &&
-           timer[i].count < execute_cycles) {
-          execute_cycles = timer[i].count;
-#ifdef CGBA_GPSP_HEADLESS_TEST
-          { extern u32 cgba_cap_src[8]; cgba_cap_src[2 + i]++; }
+    /* Only IRQ or cascade-feeding timers must break the slice at their
+       overflow; sound-clock timers batch (update_timers loops). */
+    if (cgba_timer_cap_mask)
+      for (i = 0; i < 4; i++)
+      {
+         if ((cgba_timer_cap_mask & (1u << i)) &&
+             timer[i].count < execute_cycles) {
+            execute_cycles = timer[i].count;
+#if defined(CGBA_GPSP_HEADLESS_TEST) && defined(CGBA_SH4_DIAG_COUNTERS)
+            { extern u32 cgba_cap_src[8]; cgba_cap_src[2 + i]++; }
 #endif
-       }
-    }
-#ifdef CGBA_GPSP_HEADLESS_TEST
+         }
+      }
+#if defined(CGBA_GPSP_HEADLESS_TEST) && defined(CGBA_SH4_DIAG_COUNTERS)
     { extern u32 cgba_cap_src[8]; cgba_cap_src[6] += execute_cycles;
       if (execute_cycles < 192) cgba_cap_src[7]++; }
 #endif

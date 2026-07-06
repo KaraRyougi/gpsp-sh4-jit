@@ -1,0 +1,2396 @@
+
+---
+events:
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineSystem.cmake:12 (find_program)"
+      - "CMakeLists.txt:2 (project)"
+    mode: "program"
+    variable: "CMAKE_UNAME"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: true
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "uname"
+    candidate_directories:
+      - "/Users/ryougi/.bun/bin/"
+      - "/Users/ryougi/.local/bin/"
+      - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin/"
+      - "/usr/local/bin/"
+      - "/System/Cryptexes/App/usr/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/"
+      - "/opt/X11/bin/"
+      - "/usr/local/go/bin/"
+      - "/opt/homebrew/bin/"
+      - "/Users/ryougi/.cargo/bin/"
+      - "/Users/ryougi/Library/pnpm/"
+      - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin/"
+    searched_directories:
+      - "/Users/ryougi/.bun/bin/uname"
+      - "/Users/ryougi/.local/bin/uname"
+      - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin/uname"
+      - "/usr/local/bin/uname"
+      - "/System/Cryptexes/App/usr/bin/uname"
+    found: "/usr/bin/uname"
+    search_context:
+      ENV{PATH}:
+        - "/Users/ryougi/.bun/bin"
+        - "/Users/ryougi/.local/bin"
+        - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin"
+        - "/usr/local/bin"
+        - "/System/Cryptexes/App/usr/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/X11/bin"
+        - "/usr/local/go/bin"
+        - "/opt/homebrew/bin"
+        - "/Users/ryougi/.cargo/bin"
+        - "/Users/ryougi/Library/pnpm"
+        - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin"
+  -
+    kind: "message-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineSystem.cmake:207 (message)"
+      - "CMakeLists.txt:2 (project)"
+    message: |
+      The target system is: Generic - 1 - sh
+      The host system is: Darwin - 24.6.0 - arm64
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeUnixFindMake.cmake:5 (find_program)"
+      - "CMakeLists.txt:2 (project)"
+    mode: "program"
+    variable: "CMAKE_MAKE_PROGRAM"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: true
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "gmake"
+      - "make"
+      - "smake"
+    candidate_directories:
+      - "/Users/ryougi/.bun/bin/"
+      - "/Users/ryougi/.local/bin/"
+      - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin/"
+      - "/usr/local/bin/"
+      - "/System/Cryptexes/App/usr/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/"
+      - "/opt/X11/bin/"
+      - "/usr/local/go/bin/"
+      - "/opt/homebrew/bin/"
+      - "/Users/ryougi/.cargo/bin/"
+      - "/Users/ryougi/Library/pnpm/"
+      - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin/"
+    searched_directories:
+      - "/Users/ryougi/.bun/bin/gmake"
+      - "/Users/ryougi/.local/bin/gmake"
+      - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin/gmake"
+      - "/usr/local/bin/gmake"
+      - "/System/Cryptexes/App/usr/bin/gmake"
+      - "/usr/bin/gmake"
+      - "/bin/gmake"
+      - "/usr/sbin/gmake"
+      - "/sbin/gmake"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/gmake"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/gmake"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/gmake"
+      - "/opt/X11/bin/gmake"
+      - "/usr/local/go/bin/gmake"
+      - "/opt/homebrew/bin/gmake"
+      - "/Users/ryougi/.cargo/bin/gmake"
+      - "/Users/ryougi/Library/pnpm/gmake"
+      - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin/gmake"
+      - "/Users/ryougi/.bun/bin/make"
+      - "/Users/ryougi/.local/bin/make"
+      - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin/make"
+      - "/usr/local/bin/make"
+      - "/System/Cryptexes/App/usr/bin/make"
+    found: "/usr/bin/make"
+    search_context:
+      ENV{PATH}:
+        - "/Users/ryougi/.bun/bin"
+        - "/Users/ryougi/.local/bin"
+        - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin"
+        - "/usr/local/bin"
+        - "/System/Cryptexes/App/usr/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/X11/bin"
+        - "/usr/local/go/bin"
+        - "/opt/homebrew/bin"
+        - "/Users/ryougi/.cargo/bin"
+        - "/Users/ryougi/Library/pnpm"
+        - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompiler.cmake:115 (find_program)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCCompiler.cmake:67 (_cmake_find_compiler_path)"
+      - "CMakeLists.txt:2 (project)"
+    mode: "program"
+    variable: "CMAKE_C_COMPILER_WITH_PATH"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: true
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "sh-elf-gcc"
+    candidate_directories:
+      - "/Users/ryougi/.bun/bin/"
+      - "/Users/ryougi/.local/bin/"
+      - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin/"
+      - "/usr/local/bin/"
+      - "/System/Cryptexes/App/usr/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/"
+      - "/opt/X11/bin/"
+      - "/usr/local/go/bin/"
+      - "/opt/homebrew/bin/"
+      - "/Users/ryougi/.cargo/bin/"
+      - "/Users/ryougi/Library/pnpm/"
+      - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin/"
+    searched_directories:
+      - "/Users/ryougi/.bun/bin/sh-elf-gcc"
+    found: "/Users/ryougi/.local/bin/sh-elf-gcc"
+    search_context:
+      ENV{PATH}:
+        - "/Users/ryougi/.bun/bin"
+        - "/Users/ryougi/.local/bin"
+        - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin"
+        - "/usr/local/bin"
+        - "/System/Cryptexes/App/usr/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/X11/bin"
+        - "/usr/local/go/bin"
+        - "/opt/homebrew/bin"
+        - "/Users/ryougi/.cargo/bin"
+        - "/Users/ryougi/Library/pnpm"
+        - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerId.cmake:468 (find_file)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerId.cmake:506 (CMAKE_DETERMINE_COMPILER_ID_WRITE)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerId.cmake:8 (CMAKE_DETERMINE_COMPILER_ID_BUILD)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCCompiler.cmake:122 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "CMakeLists.txt:2 (project)"
+    mode: "file"
+    variable: "src_in"
+    description: "Path to a file."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: true
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "CMakeCCompilerId.c.in"
+    candidate_directories:
+      - "/opt/homebrew/share/cmake/Modules/"
+      - "/Users/ryougi/.local/lib/cmake/fxsdk/"
+    found: "/opt/homebrew/share/cmake/Modules/CMakeCCompilerId.c.in"
+    search_context:
+      ENV{PATH}:
+        - "/Users/ryougi/.bun/bin"
+        - "/Users/ryougi/.local/bin"
+        - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin"
+        - "/usr/local/bin"
+        - "/System/Cryptexes/App/usr/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/X11/bin"
+        - "/usr/local/go/bin"
+        - "/opt/homebrew/bin"
+        - "/Users/ryougi/.cargo/bin"
+        - "/Users/ryougi/Library/pnpm"
+        - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin"
+  -
+    kind: "message-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerId.cmake:17 (message)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCCompiler.cmake:122 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "CMakeLists.txt:2 (project)"
+    message: |
+      Compiling the C compiler identification source file "CMakeCCompilerId.c" failed.
+      Compiler: /Users/ryougi/.local/bin/sh-elf-gcc 
+      Build flags: 
+      Id flags:  
+      
+      The output was:
+      1
+      /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/bin/ld: dso.c.obj (symbol from plugin): in function `___cxa_atexit':
+      (.text+0x0): multiple definition of `___dso_handle'; /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/crtbegin.o:(.data+0x0): first defined here
+      /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/bin/ld: /var/folders/p_/62vqyc5j0vbb0vcv8xjtc3tw0000gn/T//cczEgW2F.ltrans0.ltrans.o: in function `_exit':
+      <artificial>:(.text+0xb8): undefined reference to `__Exit'
+      /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/bin/ld: /var/folders/p_/62vqyc5j0vbb0vcv8xjtc3tw0000gn/T//cczEgW2F.ltrans0.ltrans.o: in function `_alloc_dtors':
+      <artificial>:(.text.startup+0x18): undefined reference to `_fxlibc_hal_malloc'
+      /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/bin/ld: /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/bin/ld: DWARF error: mangled line number section (bad file number)
+      /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/crt1.o: in function `main_k':
+      (.text+0x5c): undefined reference to `___setup_argv_and_call_main'
+      collect2: error: ld returned 1 exit status
+      
+      
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerId.cmake:468 (find_file)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerId.cmake:506 (CMAKE_DETERMINE_COMPILER_ID_WRITE)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerId.cmake:8 (CMAKE_DETERMINE_COMPILER_ID_BUILD)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCCompiler.cmake:122 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "CMakeLists.txt:2 (project)"
+    mode: "file"
+    variable: "src_in"
+    description: "Path to a file."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: true
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "CMakeCCompilerId.c.in"
+    candidate_directories:
+      - "/opt/homebrew/share/cmake/Modules/"
+      - "/Users/ryougi/.local/lib/cmake/fxsdk/"
+    found: "/opt/homebrew/share/cmake/Modules/CMakeCCompilerId.c.in"
+    search_context:
+      ENV{PATH}:
+        - "/Users/ryougi/.bun/bin"
+        - "/Users/ryougi/.local/bin"
+        - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin"
+        - "/usr/local/bin"
+        - "/System/Cryptexes/App/usr/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/X11/bin"
+        - "/usr/local/go/bin"
+        - "/opt/homebrew/bin"
+        - "/Users/ryougi/.cargo/bin"
+        - "/Users/ryougi/Library/pnpm"
+        - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin"
+  -
+    kind: "message-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerId.cmake:17 (message)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCCompiler.cmake:122 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "CMakeLists.txt:2 (project)"
+    message: |
+      Compiling the C compiler identification source file "CMakeCCompilerId.c" succeeded.
+      Compiler: /Users/ryougi/.local/bin/sh-elf-gcc 
+      Build flags: 
+      Id flags: -c 
+      
+      The output was:
+      0
+      
+      
+      Compilation of the C compiler identification source "CMakeCCompilerId.c" produced "CMakeCCompilerId.o"
+      
+      The C compiler identification is GNU, found in:
+        /Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/gint-gpsp/build-mv-slow2/CMakeFiles/4.3.4/CompilerIdC/CMakeCCompilerId.o
+      
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
+      - "CMakeLists.txt:2 (project)"
+    mode: "program"
+    variable: "CMAKE_AR"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "sh-elf-ar"
+      - "ar"
+    candidate_directories:
+      - "/Users/ryougi/.local/bin/"
+      - "/Users/ryougi/.bun/bin/"
+      - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin/"
+      - "/usr/local/bin/"
+      - "/System/Cryptexes/App/usr/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/"
+      - "/opt/X11/bin/"
+      - "/usr/local/go/bin/"
+      - "/opt/homebrew/bin/"
+      - "/Users/ryougi/.cargo/bin/"
+      - "/Users/ryougi/Library/pnpm/"
+      - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin/"
+    found: "/Users/ryougi/.local/bin/sh-elf-ar"
+    search_context:
+      ENV{PATH}:
+        - "/Users/ryougi/.bun/bin"
+        - "/Users/ryougi/.local/bin"
+        - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin"
+        - "/usr/local/bin"
+        - "/System/Cryptexes/App/usr/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/X11/bin"
+        - "/usr/local/go/bin"
+        - "/opt/homebrew/bin"
+        - "/Users/ryougi/.cargo/bin"
+        - "/Users/ryougi/Library/pnpm"
+        - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
+      - "CMakeLists.txt:2 (project)"
+    mode: "program"
+    variable: "CMAKE_RANLIB"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "sh-elf-ranlib"
+      - "ranlib"
+    candidate_directories:
+      - "/Users/ryougi/.local/bin/"
+      - "/Users/ryougi/.bun/bin/"
+      - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin/"
+      - "/usr/local/bin/"
+      - "/System/Cryptexes/App/usr/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/"
+      - "/opt/X11/bin/"
+      - "/usr/local/go/bin/"
+      - "/opt/homebrew/bin/"
+      - "/Users/ryougi/.cargo/bin/"
+      - "/Users/ryougi/Library/pnpm/"
+      - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin/"
+    found: "/Users/ryougi/.local/bin/sh-elf-ranlib"
+    search_context:
+      ENV{PATH}:
+        - "/Users/ryougi/.bun/bin"
+        - "/Users/ryougi/.local/bin"
+        - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin"
+        - "/usr/local/bin"
+        - "/System/Cryptexes/App/usr/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/X11/bin"
+        - "/usr/local/go/bin"
+        - "/opt/homebrew/bin"
+        - "/Users/ryougi/.cargo/bin"
+        - "/Users/ryougi/Library/pnpm"
+        - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
+      - "CMakeLists.txt:2 (project)"
+    mode: "program"
+    variable: "CMAKE_STRIP"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "sh-elf-strip"
+      - "strip"
+    candidate_directories:
+      - "/Users/ryougi/.local/bin/"
+      - "/Users/ryougi/.bun/bin/"
+      - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin/"
+      - "/usr/local/bin/"
+      - "/System/Cryptexes/App/usr/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/"
+      - "/opt/X11/bin/"
+      - "/usr/local/go/bin/"
+      - "/opt/homebrew/bin/"
+      - "/Users/ryougi/.cargo/bin/"
+      - "/Users/ryougi/Library/pnpm/"
+      - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin/"
+    found: "/Users/ryougi/.local/bin/sh-elf-strip"
+    search_context:
+      ENV{PATH}:
+        - "/Users/ryougi/.bun/bin"
+        - "/Users/ryougi/.local/bin"
+        - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin"
+        - "/usr/local/bin"
+        - "/System/Cryptexes/App/usr/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/X11/bin"
+        - "/usr/local/go/bin"
+        - "/opt/homebrew/bin"
+        - "/Users/ryougi/.cargo/bin"
+        - "/Users/ryougi/Library/pnpm"
+        - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
+      - "CMakeLists.txt:2 (project)"
+    mode: "program"
+    variable: "CMAKE_LINKER"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "sh-elf-ld"
+      - "ld"
+    candidate_directories:
+      - "/Users/ryougi/.local/bin/"
+      - "/Users/ryougi/.bun/bin/"
+      - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin/"
+      - "/usr/local/bin/"
+      - "/System/Cryptexes/App/usr/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/"
+      - "/opt/X11/bin/"
+      - "/usr/local/go/bin/"
+      - "/opt/homebrew/bin/"
+      - "/Users/ryougi/.cargo/bin/"
+      - "/Users/ryougi/Library/pnpm/"
+      - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin/"
+    found: "/Users/ryougi/.local/bin/sh-elf-ld"
+    search_context:
+      ENV{PATH}:
+        - "/Users/ryougi/.bun/bin"
+        - "/Users/ryougi/.local/bin"
+        - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin"
+        - "/usr/local/bin"
+        - "/System/Cryptexes/App/usr/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/X11/bin"
+        - "/usr/local/go/bin"
+        - "/opt/homebrew/bin"
+        - "/Users/ryougi/.cargo/bin"
+        - "/Users/ryougi/Library/pnpm"
+        - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
+      - "CMakeLists.txt:2 (project)"
+    mode: "program"
+    variable: "CMAKE_NM"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "sh-elf-nm"
+      - "nm"
+    candidate_directories:
+      - "/Users/ryougi/.local/bin/"
+      - "/Users/ryougi/.bun/bin/"
+      - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin/"
+      - "/usr/local/bin/"
+      - "/System/Cryptexes/App/usr/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/"
+      - "/opt/X11/bin/"
+      - "/usr/local/go/bin/"
+      - "/opt/homebrew/bin/"
+      - "/Users/ryougi/.cargo/bin/"
+      - "/Users/ryougi/Library/pnpm/"
+      - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin/"
+    found: "/Users/ryougi/.local/bin/sh-elf-nm"
+    search_context:
+      ENV{PATH}:
+        - "/Users/ryougi/.bun/bin"
+        - "/Users/ryougi/.local/bin"
+        - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin"
+        - "/usr/local/bin"
+        - "/System/Cryptexes/App/usr/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/X11/bin"
+        - "/usr/local/go/bin"
+        - "/opt/homebrew/bin"
+        - "/Users/ryougi/.cargo/bin"
+        - "/Users/ryougi/Library/pnpm"
+        - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
+      - "CMakeLists.txt:2 (project)"
+    mode: "program"
+    variable: "CMAKE_OBJDUMP"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "sh-elf-objdump"
+      - "objdump"
+    candidate_directories:
+      - "/Users/ryougi/.local/bin/"
+      - "/Users/ryougi/.bun/bin/"
+      - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin/"
+      - "/usr/local/bin/"
+      - "/System/Cryptexes/App/usr/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/"
+      - "/opt/X11/bin/"
+      - "/usr/local/go/bin/"
+      - "/opt/homebrew/bin/"
+      - "/Users/ryougi/.cargo/bin/"
+      - "/Users/ryougi/Library/pnpm/"
+      - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin/"
+    found: "/Users/ryougi/.local/bin/sh-elf-objdump"
+    search_context:
+      ENV{PATH}:
+        - "/Users/ryougi/.bun/bin"
+        - "/Users/ryougi/.local/bin"
+        - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin"
+        - "/usr/local/bin"
+        - "/System/Cryptexes/App/usr/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/X11/bin"
+        - "/usr/local/go/bin"
+        - "/opt/homebrew/bin"
+        - "/Users/ryougi/.cargo/bin"
+        - "/Users/ryougi/Library/pnpm"
+        - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
+      - "CMakeLists.txt:2 (project)"
+    mode: "program"
+    variable: "CMAKE_OBJCOPY"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "sh-elf-objcopy"
+      - "objcopy"
+    candidate_directories:
+      - "/Users/ryougi/.local/bin/"
+      - "/Users/ryougi/.bun/bin/"
+      - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin/"
+      - "/usr/local/bin/"
+      - "/System/Cryptexes/App/usr/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/"
+      - "/opt/X11/bin/"
+      - "/usr/local/go/bin/"
+      - "/opt/homebrew/bin/"
+      - "/Users/ryougi/.cargo/bin/"
+      - "/Users/ryougi/Library/pnpm/"
+      - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin/"
+    found: "/Users/ryougi/.local/bin/sh-elf-objcopy"
+    search_context:
+      ENV{PATH}:
+        - "/Users/ryougi/.bun/bin"
+        - "/Users/ryougi/.local/bin"
+        - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin"
+        - "/usr/local/bin"
+        - "/System/Cryptexes/App/usr/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/X11/bin"
+        - "/usr/local/go/bin"
+        - "/opt/homebrew/bin"
+        - "/Users/ryougi/.cargo/bin"
+        - "/Users/ryougi/Library/pnpm"
+        - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
+      - "CMakeLists.txt:2 (project)"
+    mode: "program"
+    variable: "CMAKE_READELF"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "sh-elf-readelf"
+      - "readelf"
+    candidate_directories:
+      - "/Users/ryougi/.local/bin/"
+      - "/Users/ryougi/.bun/bin/"
+      - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin/"
+      - "/usr/local/bin/"
+      - "/System/Cryptexes/App/usr/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/"
+      - "/opt/X11/bin/"
+      - "/usr/local/go/bin/"
+      - "/opt/homebrew/bin/"
+      - "/Users/ryougi/.cargo/bin/"
+      - "/Users/ryougi/Library/pnpm/"
+      - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin/"
+    found: "/Users/ryougi/.local/bin/sh-elf-readelf"
+    search_context:
+      ENV{PATH}:
+        - "/Users/ryougi/.bun/bin"
+        - "/Users/ryougi/.local/bin"
+        - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin"
+        - "/usr/local/bin"
+        - "/System/Cryptexes/App/usr/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/X11/bin"
+        - "/usr/local/go/bin"
+        - "/opt/homebrew/bin"
+        - "/Users/ryougi/.cargo/bin"
+        - "/Users/ryougi/Library/pnpm"
+        - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
+      - "CMakeLists.txt:2 (project)"
+    mode: "program"
+    variable: "CMAKE_DLLTOOL"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "sh-elf-dlltool"
+      - "dlltool"
+    candidate_directories:
+      - "/Users/ryougi/.local/bin/"
+      - "/Users/ryougi/.bun/bin/"
+      - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin/"
+      - "/usr/local/bin/"
+      - "/System/Cryptexes/App/usr/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/"
+      - "/opt/X11/bin/"
+      - "/usr/local/go/bin/"
+      - "/opt/homebrew/bin/"
+      - "/Users/ryougi/.cargo/bin/"
+      - "/Users/ryougi/Library/pnpm/"
+      - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin/"
+    searched_directories:
+      - "/Users/ryougi/.local/bin/sh-elf-dlltool"
+      - "/Users/ryougi/.bun/bin/sh-elf-dlltool"
+      - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin/sh-elf-dlltool"
+      - "/usr/local/bin/sh-elf-dlltool"
+      - "/System/Cryptexes/App/usr/bin/sh-elf-dlltool"
+      - "/usr/bin/sh-elf-dlltool"
+      - "/bin/sh-elf-dlltool"
+      - "/usr/sbin/sh-elf-dlltool"
+      - "/sbin/sh-elf-dlltool"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/sh-elf-dlltool"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/sh-elf-dlltool"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/sh-elf-dlltool"
+      - "/opt/X11/bin/sh-elf-dlltool"
+      - "/usr/local/go/bin/sh-elf-dlltool"
+      - "/opt/homebrew/bin/sh-elf-dlltool"
+      - "/Users/ryougi/.cargo/bin/sh-elf-dlltool"
+      - "/Users/ryougi/Library/pnpm/sh-elf-dlltool"
+      - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin/sh-elf-dlltool"
+      - "/Users/ryougi/.local/bin/dlltool"
+      - "/Users/ryougi/.bun/bin/dlltool"
+      - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin/dlltool"
+      - "/usr/local/bin/dlltool"
+      - "/System/Cryptexes/App/usr/bin/dlltool"
+      - "/usr/bin/dlltool"
+      - "/bin/dlltool"
+      - "/usr/sbin/dlltool"
+      - "/sbin/dlltool"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/dlltool"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/dlltool"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/dlltool"
+      - "/opt/X11/bin/dlltool"
+      - "/usr/local/go/bin/dlltool"
+      - "/opt/homebrew/bin/dlltool"
+      - "/Users/ryougi/.cargo/bin/dlltool"
+      - "/Users/ryougi/Library/pnpm/dlltool"
+      - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin/dlltool"
+    found: false
+    search_context:
+      ENV{PATH}:
+        - "/Users/ryougi/.bun/bin"
+        - "/Users/ryougi/.local/bin"
+        - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin"
+        - "/usr/local/bin"
+        - "/System/Cryptexes/App/usr/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/X11/bin"
+        - "/usr/local/go/bin"
+        - "/opt/homebrew/bin"
+        - "/Users/ryougi/.cargo/bin"
+        - "/Users/ryougi/Library/pnpm"
+        - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
+      - "CMakeLists.txt:2 (project)"
+    mode: "program"
+    variable: "CMAKE_ADDR2LINE"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "sh-elf-addr2line"
+      - "addr2line"
+    candidate_directories:
+      - "/Users/ryougi/.local/bin/"
+      - "/Users/ryougi/.bun/bin/"
+      - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin/"
+      - "/usr/local/bin/"
+      - "/System/Cryptexes/App/usr/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/"
+      - "/opt/X11/bin/"
+      - "/usr/local/go/bin/"
+      - "/opt/homebrew/bin/"
+      - "/Users/ryougi/.cargo/bin/"
+      - "/Users/ryougi/Library/pnpm/"
+      - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin/"
+    found: "/Users/ryougi/.local/bin/sh-elf-addr2line"
+    search_context:
+      ENV{PATH}:
+        - "/Users/ryougi/.bun/bin"
+        - "/Users/ryougi/.local/bin"
+        - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin"
+        - "/usr/local/bin"
+        - "/System/Cryptexes/App/usr/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/X11/bin"
+        - "/usr/local/go/bin"
+        - "/opt/homebrew/bin"
+        - "/Users/ryougi/.cargo/bin"
+        - "/Users/ryougi/Library/pnpm"
+        - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
+      - "CMakeLists.txt:2 (project)"
+    mode: "program"
+    variable: "CMAKE_TAPI"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "sh-elf-tapi"
+      - "tapi"
+    candidate_directories:
+      - "/Users/ryougi/.local/bin/"
+      - "/Users/ryougi/.bun/bin/"
+      - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin/"
+      - "/usr/local/bin/"
+      - "/System/Cryptexes/App/usr/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/"
+      - "/opt/X11/bin/"
+      - "/usr/local/go/bin/"
+      - "/opt/homebrew/bin/"
+      - "/Users/ryougi/.cargo/bin/"
+      - "/Users/ryougi/Library/pnpm/"
+      - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin/"
+    searched_directories:
+      - "/Users/ryougi/.local/bin/sh-elf-tapi"
+      - "/Users/ryougi/.bun/bin/sh-elf-tapi"
+      - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin/sh-elf-tapi"
+      - "/usr/local/bin/sh-elf-tapi"
+      - "/System/Cryptexes/App/usr/bin/sh-elf-tapi"
+      - "/usr/bin/sh-elf-tapi"
+      - "/bin/sh-elf-tapi"
+      - "/usr/sbin/sh-elf-tapi"
+      - "/sbin/sh-elf-tapi"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/sh-elf-tapi"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/sh-elf-tapi"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/sh-elf-tapi"
+      - "/opt/X11/bin/sh-elf-tapi"
+      - "/usr/local/go/bin/sh-elf-tapi"
+      - "/opt/homebrew/bin/sh-elf-tapi"
+      - "/Users/ryougi/.cargo/bin/sh-elf-tapi"
+      - "/Users/ryougi/Library/pnpm/sh-elf-tapi"
+      - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin/sh-elf-tapi"
+      - "/Users/ryougi/.local/bin/tapi"
+      - "/Users/ryougi/.bun/bin/tapi"
+      - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin/tapi"
+      - "/usr/local/bin/tapi"
+      - "/System/Cryptexes/App/usr/bin/tapi"
+      - "/usr/bin/tapi"
+      - "/bin/tapi"
+      - "/usr/sbin/tapi"
+      - "/sbin/tapi"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/tapi"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/tapi"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/tapi"
+      - "/opt/X11/bin/tapi"
+      - "/usr/local/go/bin/tapi"
+      - "/opt/homebrew/bin/tapi"
+      - "/Users/ryougi/.cargo/bin/tapi"
+      - "/Users/ryougi/Library/pnpm/tapi"
+      - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin/tapi"
+    found: false
+    search_context:
+      ENV{PATH}:
+        - "/Users/ryougi/.bun/bin"
+        - "/Users/ryougi/.local/bin"
+        - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin"
+        - "/usr/local/bin"
+        - "/System/Cryptexes/App/usr/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/X11/bin"
+        - "/usr/local/go/bin"
+        - "/opt/homebrew/bin"
+        - "/Users/ryougi/.cargo/bin"
+        - "/Users/ryougi/Library/pnpm"
+        - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/Compiler/GNU-FindBinUtils.cmake:18 (find_program)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCCompiler.cmake:201 (include)"
+      - "CMakeLists.txt:2 (project)"
+    mode: "program"
+    variable: "CMAKE_C_COMPILER_AR"
+    description: "A wrapper around 'ar' adding the appropriate '--plugin' option for the GCC compiler"
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "sh-elf-gcc-ar-14.1"
+      - "sh-elf-gcc-ar-14"
+      - "sh-elf-gcc-ar14"
+      - "sh-elf-gcc-ar"
+    candidate_directories:
+      - "/Users/ryougi/.local/bin/"
+      - "/Users/ryougi/.bun/bin/"
+      - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin/"
+      - "/usr/local/bin/"
+      - "/System/Cryptexes/App/usr/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/"
+      - "/opt/X11/bin/"
+      - "/usr/local/go/bin/"
+      - "/opt/homebrew/bin/"
+      - "/Users/ryougi/.cargo/bin/"
+      - "/Users/ryougi/Library/pnpm/"
+      - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin/"
+    searched_directories:
+      - "/Users/ryougi/.local/bin/sh-elf-gcc-ar-14.1"
+      - "/Users/ryougi/.bun/bin/sh-elf-gcc-ar-14.1"
+      - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin/sh-elf-gcc-ar-14.1"
+      - "/usr/local/bin/sh-elf-gcc-ar-14.1"
+      - "/System/Cryptexes/App/usr/bin/sh-elf-gcc-ar-14.1"
+      - "/usr/bin/sh-elf-gcc-ar-14.1"
+      - "/bin/sh-elf-gcc-ar-14.1"
+      - "/usr/sbin/sh-elf-gcc-ar-14.1"
+      - "/sbin/sh-elf-gcc-ar-14.1"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/sh-elf-gcc-ar-14.1"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/sh-elf-gcc-ar-14.1"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/sh-elf-gcc-ar-14.1"
+      - "/opt/X11/bin/sh-elf-gcc-ar-14.1"
+      - "/usr/local/go/bin/sh-elf-gcc-ar-14.1"
+      - "/opt/homebrew/bin/sh-elf-gcc-ar-14.1"
+      - "/Users/ryougi/.cargo/bin/sh-elf-gcc-ar-14.1"
+      - "/Users/ryougi/Library/pnpm/sh-elf-gcc-ar-14.1"
+      - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin/sh-elf-gcc-ar-14.1"
+      - "/Users/ryougi/.local/bin/sh-elf-gcc-ar-14"
+      - "/Users/ryougi/.bun/bin/sh-elf-gcc-ar-14"
+      - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin/sh-elf-gcc-ar-14"
+      - "/usr/local/bin/sh-elf-gcc-ar-14"
+      - "/System/Cryptexes/App/usr/bin/sh-elf-gcc-ar-14"
+      - "/usr/bin/sh-elf-gcc-ar-14"
+      - "/bin/sh-elf-gcc-ar-14"
+      - "/usr/sbin/sh-elf-gcc-ar-14"
+      - "/sbin/sh-elf-gcc-ar-14"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/sh-elf-gcc-ar-14"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/sh-elf-gcc-ar-14"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/sh-elf-gcc-ar-14"
+      - "/opt/X11/bin/sh-elf-gcc-ar-14"
+      - "/usr/local/go/bin/sh-elf-gcc-ar-14"
+      - "/opt/homebrew/bin/sh-elf-gcc-ar-14"
+      - "/Users/ryougi/.cargo/bin/sh-elf-gcc-ar-14"
+      - "/Users/ryougi/Library/pnpm/sh-elf-gcc-ar-14"
+      - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin/sh-elf-gcc-ar-14"
+      - "/Users/ryougi/.local/bin/sh-elf-gcc-ar14"
+      - "/Users/ryougi/.bun/bin/sh-elf-gcc-ar14"
+      - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin/sh-elf-gcc-ar14"
+      - "/usr/local/bin/sh-elf-gcc-ar14"
+      - "/System/Cryptexes/App/usr/bin/sh-elf-gcc-ar14"
+      - "/usr/bin/sh-elf-gcc-ar14"
+      - "/bin/sh-elf-gcc-ar14"
+      - "/usr/sbin/sh-elf-gcc-ar14"
+      - "/sbin/sh-elf-gcc-ar14"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/sh-elf-gcc-ar14"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/sh-elf-gcc-ar14"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/sh-elf-gcc-ar14"
+      - "/opt/X11/bin/sh-elf-gcc-ar14"
+      - "/usr/local/go/bin/sh-elf-gcc-ar14"
+      - "/opt/homebrew/bin/sh-elf-gcc-ar14"
+      - "/Users/ryougi/.cargo/bin/sh-elf-gcc-ar14"
+      - "/Users/ryougi/Library/pnpm/sh-elf-gcc-ar14"
+      - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin/sh-elf-gcc-ar14"
+    found: "/Users/ryougi/.local/bin/sh-elf-gcc-ar"
+    search_context:
+      ENV{PATH}:
+        - "/Users/ryougi/.bun/bin"
+        - "/Users/ryougi/.local/bin"
+        - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin"
+        - "/usr/local/bin"
+        - "/System/Cryptexes/App/usr/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/X11/bin"
+        - "/usr/local/go/bin"
+        - "/opt/homebrew/bin"
+        - "/Users/ryougi/.cargo/bin"
+        - "/Users/ryougi/Library/pnpm"
+        - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/Compiler/GNU-FindBinUtils.cmake:30 (find_program)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCCompiler.cmake:201 (include)"
+      - "CMakeLists.txt:2 (project)"
+    mode: "program"
+    variable: "CMAKE_C_COMPILER_RANLIB"
+    description: "A wrapper around 'ranlib' adding the appropriate '--plugin' option for the GCC compiler"
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "sh-elf-gcc-ranlib-14.1"
+      - "sh-elf-gcc-ranlib-14"
+      - "sh-elf-gcc-ranlib14"
+      - "sh-elf-gcc-ranlib"
+    candidate_directories:
+      - "/Users/ryougi/.local/bin/"
+      - "/Users/ryougi/.bun/bin/"
+      - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin/"
+      - "/usr/local/bin/"
+      - "/System/Cryptexes/App/usr/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/"
+      - "/opt/X11/bin/"
+      - "/usr/local/go/bin/"
+      - "/opt/homebrew/bin/"
+      - "/Users/ryougi/.cargo/bin/"
+      - "/Users/ryougi/Library/pnpm/"
+      - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin/"
+    searched_directories:
+      - "/Users/ryougi/.local/bin/sh-elf-gcc-ranlib-14.1"
+      - "/Users/ryougi/.bun/bin/sh-elf-gcc-ranlib-14.1"
+      - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin/sh-elf-gcc-ranlib-14.1"
+      - "/usr/local/bin/sh-elf-gcc-ranlib-14.1"
+      - "/System/Cryptexes/App/usr/bin/sh-elf-gcc-ranlib-14.1"
+      - "/usr/bin/sh-elf-gcc-ranlib-14.1"
+      - "/bin/sh-elf-gcc-ranlib-14.1"
+      - "/usr/sbin/sh-elf-gcc-ranlib-14.1"
+      - "/sbin/sh-elf-gcc-ranlib-14.1"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/sh-elf-gcc-ranlib-14.1"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/sh-elf-gcc-ranlib-14.1"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/sh-elf-gcc-ranlib-14.1"
+      - "/opt/X11/bin/sh-elf-gcc-ranlib-14.1"
+      - "/usr/local/go/bin/sh-elf-gcc-ranlib-14.1"
+      - "/opt/homebrew/bin/sh-elf-gcc-ranlib-14.1"
+      - "/Users/ryougi/.cargo/bin/sh-elf-gcc-ranlib-14.1"
+      - "/Users/ryougi/Library/pnpm/sh-elf-gcc-ranlib-14.1"
+      - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin/sh-elf-gcc-ranlib-14.1"
+      - "/Users/ryougi/.local/bin/sh-elf-gcc-ranlib-14"
+      - "/Users/ryougi/.bun/bin/sh-elf-gcc-ranlib-14"
+      - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin/sh-elf-gcc-ranlib-14"
+      - "/usr/local/bin/sh-elf-gcc-ranlib-14"
+      - "/System/Cryptexes/App/usr/bin/sh-elf-gcc-ranlib-14"
+      - "/usr/bin/sh-elf-gcc-ranlib-14"
+      - "/bin/sh-elf-gcc-ranlib-14"
+      - "/usr/sbin/sh-elf-gcc-ranlib-14"
+      - "/sbin/sh-elf-gcc-ranlib-14"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/sh-elf-gcc-ranlib-14"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/sh-elf-gcc-ranlib-14"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/sh-elf-gcc-ranlib-14"
+      - "/opt/X11/bin/sh-elf-gcc-ranlib-14"
+      - "/usr/local/go/bin/sh-elf-gcc-ranlib-14"
+      - "/opt/homebrew/bin/sh-elf-gcc-ranlib-14"
+      - "/Users/ryougi/.cargo/bin/sh-elf-gcc-ranlib-14"
+      - "/Users/ryougi/Library/pnpm/sh-elf-gcc-ranlib-14"
+      - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin/sh-elf-gcc-ranlib-14"
+      - "/Users/ryougi/.local/bin/sh-elf-gcc-ranlib14"
+      - "/Users/ryougi/.bun/bin/sh-elf-gcc-ranlib14"
+      - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin/sh-elf-gcc-ranlib14"
+      - "/usr/local/bin/sh-elf-gcc-ranlib14"
+      - "/System/Cryptexes/App/usr/bin/sh-elf-gcc-ranlib14"
+      - "/usr/bin/sh-elf-gcc-ranlib14"
+      - "/bin/sh-elf-gcc-ranlib14"
+      - "/usr/sbin/sh-elf-gcc-ranlib14"
+      - "/sbin/sh-elf-gcc-ranlib14"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/sh-elf-gcc-ranlib14"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/sh-elf-gcc-ranlib14"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/sh-elf-gcc-ranlib14"
+      - "/opt/X11/bin/sh-elf-gcc-ranlib14"
+      - "/usr/local/go/bin/sh-elf-gcc-ranlib14"
+      - "/opt/homebrew/bin/sh-elf-gcc-ranlib14"
+      - "/Users/ryougi/.cargo/bin/sh-elf-gcc-ranlib14"
+      - "/Users/ryougi/Library/pnpm/sh-elf-gcc-ranlib14"
+      - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin/sh-elf-gcc-ranlib14"
+    found: "/Users/ryougi/.local/bin/sh-elf-gcc-ranlib"
+    search_context:
+      ENV{PATH}:
+        - "/Users/ryougi/.bun/bin"
+        - "/Users/ryougi/.local/bin"
+        - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin"
+        - "/usr/local/bin"
+        - "/System/Cryptexes/App/usr/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/X11/bin"
+        - "/usr/local/go/bin"
+        - "/opt/homebrew/bin"
+        - "/Users/ryougi/.cargo/bin"
+        - "/Users/ryougi/Library/pnpm"
+        - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompiler.cmake:115 (find_program)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCXXCompiler.cmake:71 (_cmake_find_compiler_path)"
+      - "CMakeLists.txt:2 (project)"
+    mode: "program"
+    variable: "CMAKE_CXX_COMPILER_WITH_PATH"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: true
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "sh-elf-g++"
+    candidate_directories:
+      - "/Users/ryougi/.bun/bin/"
+      - "/Users/ryougi/.local/bin/"
+      - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin/"
+      - "/usr/local/bin/"
+      - "/System/Cryptexes/App/usr/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/"
+      - "/opt/X11/bin/"
+      - "/usr/local/go/bin/"
+      - "/opt/homebrew/bin/"
+      - "/Users/ryougi/.cargo/bin/"
+      - "/Users/ryougi/Library/pnpm/"
+      - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin/"
+    searched_directories:
+      - "/Users/ryougi/.bun/bin/sh-elf-g++"
+    found: "/Users/ryougi/.local/bin/sh-elf-g++"
+    search_context:
+      ENV{PATH}:
+        - "/Users/ryougi/.bun/bin"
+        - "/Users/ryougi/.local/bin"
+        - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin"
+        - "/usr/local/bin"
+        - "/System/Cryptexes/App/usr/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/X11/bin"
+        - "/usr/local/go/bin"
+        - "/opt/homebrew/bin"
+        - "/Users/ryougi/.cargo/bin"
+        - "/Users/ryougi/Library/pnpm"
+        - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerId.cmake:468 (find_file)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerId.cmake:506 (CMAKE_DETERMINE_COMPILER_ID_WRITE)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerId.cmake:8 (CMAKE_DETERMINE_COMPILER_ID_BUILD)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCXXCompiler.cmake:125 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "CMakeLists.txt:2 (project)"
+    mode: "file"
+    variable: "src_in"
+    description: "Path to a file."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: true
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "CMakeCXXCompilerId.cpp.in"
+    candidate_directories:
+      - "/opt/homebrew/share/cmake/Modules/"
+      - "/Users/ryougi/.local/lib/cmake/fxsdk/"
+    found: "/opt/homebrew/share/cmake/Modules/CMakeCXXCompilerId.cpp.in"
+    search_context:
+      ENV{PATH}:
+        - "/Users/ryougi/.bun/bin"
+        - "/Users/ryougi/.local/bin"
+        - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin"
+        - "/usr/local/bin"
+        - "/System/Cryptexes/App/usr/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/X11/bin"
+        - "/usr/local/go/bin"
+        - "/opt/homebrew/bin"
+        - "/Users/ryougi/.cargo/bin"
+        - "/Users/ryougi/Library/pnpm"
+        - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin"
+  -
+    kind: "message-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerId.cmake:17 (message)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCXXCompiler.cmake:125 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "CMakeLists.txt:2 (project)"
+    message: |
+      Compiling the CXX compiler identification source file "CMakeCXXCompilerId.cpp" failed.
+      Compiler: /Users/ryougi/.local/bin/sh-elf-g++ 
+      Build flags: 
+      Id flags:  
+      
+      The output was:
+      1
+      /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/bin/ld: dso.c.obj (symbol from plugin): in function `___cxa_atexit':
+      (.text+0x0): multiple definition of `___dso_handle'; /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/crtbegin.o:(.data+0x0): first defined here
+      /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/bin/ld: /var/folders/p_/62vqyc5j0vbb0vcv8xjtc3tw0000gn/T//ccEjqk0A.ltrans0.ltrans.o: in function `_exit':
+      <artificial>:(.text+0xb8): undefined reference to `__Exit'
+      /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/bin/ld: /var/folders/p_/62vqyc5j0vbb0vcv8xjtc3tw0000gn/T//ccEjqk0A.ltrans0.ltrans.o: in function `_alloc_dtors':
+      <artificial>:(.text.startup+0x18): undefined reference to `_fxlibc_hal_malloc'
+      /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/bin/ld: /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/bin/ld: DWARF error: mangled line number section (bad file number)
+      /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/crt1.o: in function `main_k':
+      (.text+0x5c): undefined reference to `___setup_argv_and_call_main'
+      collect2: error: ld returned 1 exit status
+      
+      
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerId.cmake:468 (find_file)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerId.cmake:506 (CMAKE_DETERMINE_COMPILER_ID_WRITE)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerId.cmake:8 (CMAKE_DETERMINE_COMPILER_ID_BUILD)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCXXCompiler.cmake:125 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "CMakeLists.txt:2 (project)"
+    mode: "file"
+    variable: "src_in"
+    description: "Path to a file."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: true
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "CMakeCXXCompilerId.cpp.in"
+    candidate_directories:
+      - "/opt/homebrew/share/cmake/Modules/"
+      - "/Users/ryougi/.local/lib/cmake/fxsdk/"
+    found: "/opt/homebrew/share/cmake/Modules/CMakeCXXCompilerId.cpp.in"
+    search_context:
+      ENV{PATH}:
+        - "/Users/ryougi/.bun/bin"
+        - "/Users/ryougi/.local/bin"
+        - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin"
+        - "/usr/local/bin"
+        - "/System/Cryptexes/App/usr/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/X11/bin"
+        - "/usr/local/go/bin"
+        - "/opt/homebrew/bin"
+        - "/Users/ryougi/.cargo/bin"
+        - "/Users/ryougi/Library/pnpm"
+        - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin"
+  -
+    kind: "message-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerId.cmake:17 (message)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCXXCompiler.cmake:125 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "CMakeLists.txt:2 (project)"
+    message: |
+      Compiling the CXX compiler identification source file "CMakeCXXCompilerId.cpp" succeeded.
+      Compiler: /Users/ryougi/.local/bin/sh-elf-g++ 
+      Build flags: 
+      Id flags: -c 
+      
+      The output was:
+      0
+      
+      
+      Compilation of the CXX compiler identification source "CMakeCXXCompilerId.cpp" produced "CMakeCXXCompilerId.o"
+      
+      The CXX compiler identification is GNU, found in:
+        /Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/gint-gpsp/build-mv-slow2/CMakeFiles/4.3.4/CompilerIdCXX/CMakeCXXCompilerId.o
+      
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/Compiler/GNU-FindBinUtils.cmake:18 (find_program)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCXXCompiler.cmake:207 (include)"
+      - "CMakeLists.txt:2 (project)"
+    mode: "program"
+    variable: "CMAKE_CXX_COMPILER_AR"
+    description: "A wrapper around 'ar' adding the appropriate '--plugin' option for the GCC compiler"
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "sh-elf-gcc-ar-14.1"
+      - "sh-elf-gcc-ar-14"
+      - "sh-elf-gcc-ar14"
+      - "sh-elf-gcc-ar"
+    candidate_directories:
+      - "/Users/ryougi/.local/bin/"
+      - "/Users/ryougi/.bun/bin/"
+      - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin/"
+      - "/usr/local/bin/"
+      - "/System/Cryptexes/App/usr/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/"
+      - "/opt/X11/bin/"
+      - "/usr/local/go/bin/"
+      - "/opt/homebrew/bin/"
+      - "/Users/ryougi/.cargo/bin/"
+      - "/Users/ryougi/Library/pnpm/"
+      - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin/"
+    searched_directories:
+      - "/Users/ryougi/.local/bin/sh-elf-gcc-ar-14.1"
+      - "/Users/ryougi/.bun/bin/sh-elf-gcc-ar-14.1"
+      - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin/sh-elf-gcc-ar-14.1"
+      - "/usr/local/bin/sh-elf-gcc-ar-14.1"
+      - "/System/Cryptexes/App/usr/bin/sh-elf-gcc-ar-14.1"
+      - "/usr/bin/sh-elf-gcc-ar-14.1"
+      - "/bin/sh-elf-gcc-ar-14.1"
+      - "/usr/sbin/sh-elf-gcc-ar-14.1"
+      - "/sbin/sh-elf-gcc-ar-14.1"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/sh-elf-gcc-ar-14.1"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/sh-elf-gcc-ar-14.1"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/sh-elf-gcc-ar-14.1"
+      - "/opt/X11/bin/sh-elf-gcc-ar-14.1"
+      - "/usr/local/go/bin/sh-elf-gcc-ar-14.1"
+      - "/opt/homebrew/bin/sh-elf-gcc-ar-14.1"
+      - "/Users/ryougi/.cargo/bin/sh-elf-gcc-ar-14.1"
+      - "/Users/ryougi/Library/pnpm/sh-elf-gcc-ar-14.1"
+      - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin/sh-elf-gcc-ar-14.1"
+      - "/Users/ryougi/.local/bin/sh-elf-gcc-ar-14"
+      - "/Users/ryougi/.bun/bin/sh-elf-gcc-ar-14"
+      - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin/sh-elf-gcc-ar-14"
+      - "/usr/local/bin/sh-elf-gcc-ar-14"
+      - "/System/Cryptexes/App/usr/bin/sh-elf-gcc-ar-14"
+      - "/usr/bin/sh-elf-gcc-ar-14"
+      - "/bin/sh-elf-gcc-ar-14"
+      - "/usr/sbin/sh-elf-gcc-ar-14"
+      - "/sbin/sh-elf-gcc-ar-14"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/sh-elf-gcc-ar-14"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/sh-elf-gcc-ar-14"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/sh-elf-gcc-ar-14"
+      - "/opt/X11/bin/sh-elf-gcc-ar-14"
+      - "/usr/local/go/bin/sh-elf-gcc-ar-14"
+      - "/opt/homebrew/bin/sh-elf-gcc-ar-14"
+      - "/Users/ryougi/.cargo/bin/sh-elf-gcc-ar-14"
+      - "/Users/ryougi/Library/pnpm/sh-elf-gcc-ar-14"
+      - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin/sh-elf-gcc-ar-14"
+      - "/Users/ryougi/.local/bin/sh-elf-gcc-ar14"
+      - "/Users/ryougi/.bun/bin/sh-elf-gcc-ar14"
+      - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin/sh-elf-gcc-ar14"
+      - "/usr/local/bin/sh-elf-gcc-ar14"
+      - "/System/Cryptexes/App/usr/bin/sh-elf-gcc-ar14"
+      - "/usr/bin/sh-elf-gcc-ar14"
+      - "/bin/sh-elf-gcc-ar14"
+      - "/usr/sbin/sh-elf-gcc-ar14"
+      - "/sbin/sh-elf-gcc-ar14"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/sh-elf-gcc-ar14"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/sh-elf-gcc-ar14"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/sh-elf-gcc-ar14"
+      - "/opt/X11/bin/sh-elf-gcc-ar14"
+      - "/usr/local/go/bin/sh-elf-gcc-ar14"
+      - "/opt/homebrew/bin/sh-elf-gcc-ar14"
+      - "/Users/ryougi/.cargo/bin/sh-elf-gcc-ar14"
+      - "/Users/ryougi/Library/pnpm/sh-elf-gcc-ar14"
+      - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin/sh-elf-gcc-ar14"
+    found: "/Users/ryougi/.local/bin/sh-elf-gcc-ar"
+    search_context:
+      ENV{PATH}:
+        - "/Users/ryougi/.bun/bin"
+        - "/Users/ryougi/.local/bin"
+        - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin"
+        - "/usr/local/bin"
+        - "/System/Cryptexes/App/usr/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/X11/bin"
+        - "/usr/local/go/bin"
+        - "/opt/homebrew/bin"
+        - "/Users/ryougi/.cargo/bin"
+        - "/Users/ryougi/Library/pnpm"
+        - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/Compiler/GNU-FindBinUtils.cmake:30 (find_program)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCXXCompiler.cmake:207 (include)"
+      - "CMakeLists.txt:2 (project)"
+    mode: "program"
+    variable: "CMAKE_CXX_COMPILER_RANLIB"
+    description: "A wrapper around 'ranlib' adding the appropriate '--plugin' option for the GCC compiler"
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "sh-elf-gcc-ranlib-14.1"
+      - "sh-elf-gcc-ranlib-14"
+      - "sh-elf-gcc-ranlib14"
+      - "sh-elf-gcc-ranlib"
+    candidate_directories:
+      - "/Users/ryougi/.local/bin/"
+      - "/Users/ryougi/.bun/bin/"
+      - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin/"
+      - "/usr/local/bin/"
+      - "/System/Cryptexes/App/usr/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/"
+      - "/opt/X11/bin/"
+      - "/usr/local/go/bin/"
+      - "/opt/homebrew/bin/"
+      - "/Users/ryougi/.cargo/bin/"
+      - "/Users/ryougi/Library/pnpm/"
+      - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin/"
+    searched_directories:
+      - "/Users/ryougi/.local/bin/sh-elf-gcc-ranlib-14.1"
+      - "/Users/ryougi/.bun/bin/sh-elf-gcc-ranlib-14.1"
+      - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin/sh-elf-gcc-ranlib-14.1"
+      - "/usr/local/bin/sh-elf-gcc-ranlib-14.1"
+      - "/System/Cryptexes/App/usr/bin/sh-elf-gcc-ranlib-14.1"
+      - "/usr/bin/sh-elf-gcc-ranlib-14.1"
+      - "/bin/sh-elf-gcc-ranlib-14.1"
+      - "/usr/sbin/sh-elf-gcc-ranlib-14.1"
+      - "/sbin/sh-elf-gcc-ranlib-14.1"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/sh-elf-gcc-ranlib-14.1"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/sh-elf-gcc-ranlib-14.1"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/sh-elf-gcc-ranlib-14.1"
+      - "/opt/X11/bin/sh-elf-gcc-ranlib-14.1"
+      - "/usr/local/go/bin/sh-elf-gcc-ranlib-14.1"
+      - "/opt/homebrew/bin/sh-elf-gcc-ranlib-14.1"
+      - "/Users/ryougi/.cargo/bin/sh-elf-gcc-ranlib-14.1"
+      - "/Users/ryougi/Library/pnpm/sh-elf-gcc-ranlib-14.1"
+      - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin/sh-elf-gcc-ranlib-14.1"
+      - "/Users/ryougi/.local/bin/sh-elf-gcc-ranlib-14"
+      - "/Users/ryougi/.bun/bin/sh-elf-gcc-ranlib-14"
+      - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin/sh-elf-gcc-ranlib-14"
+      - "/usr/local/bin/sh-elf-gcc-ranlib-14"
+      - "/System/Cryptexes/App/usr/bin/sh-elf-gcc-ranlib-14"
+      - "/usr/bin/sh-elf-gcc-ranlib-14"
+      - "/bin/sh-elf-gcc-ranlib-14"
+      - "/usr/sbin/sh-elf-gcc-ranlib-14"
+      - "/sbin/sh-elf-gcc-ranlib-14"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/sh-elf-gcc-ranlib-14"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/sh-elf-gcc-ranlib-14"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/sh-elf-gcc-ranlib-14"
+      - "/opt/X11/bin/sh-elf-gcc-ranlib-14"
+      - "/usr/local/go/bin/sh-elf-gcc-ranlib-14"
+      - "/opt/homebrew/bin/sh-elf-gcc-ranlib-14"
+      - "/Users/ryougi/.cargo/bin/sh-elf-gcc-ranlib-14"
+      - "/Users/ryougi/Library/pnpm/sh-elf-gcc-ranlib-14"
+      - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin/sh-elf-gcc-ranlib-14"
+      - "/Users/ryougi/.local/bin/sh-elf-gcc-ranlib14"
+      - "/Users/ryougi/.bun/bin/sh-elf-gcc-ranlib14"
+      - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin/sh-elf-gcc-ranlib14"
+      - "/usr/local/bin/sh-elf-gcc-ranlib14"
+      - "/System/Cryptexes/App/usr/bin/sh-elf-gcc-ranlib14"
+      - "/usr/bin/sh-elf-gcc-ranlib14"
+      - "/bin/sh-elf-gcc-ranlib14"
+      - "/usr/sbin/sh-elf-gcc-ranlib14"
+      - "/sbin/sh-elf-gcc-ranlib14"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/sh-elf-gcc-ranlib14"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/sh-elf-gcc-ranlib14"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/sh-elf-gcc-ranlib14"
+      - "/opt/X11/bin/sh-elf-gcc-ranlib14"
+      - "/usr/local/go/bin/sh-elf-gcc-ranlib14"
+      - "/opt/homebrew/bin/sh-elf-gcc-ranlib14"
+      - "/Users/ryougi/.cargo/bin/sh-elf-gcc-ranlib14"
+      - "/Users/ryougi/Library/pnpm/sh-elf-gcc-ranlib14"
+      - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin/sh-elf-gcc-ranlib14"
+    found: "/Users/ryougi/.local/bin/sh-elf-gcc-ranlib"
+    search_context:
+      ENV{PATH}:
+        - "/Users/ryougi/.bun/bin"
+        - "/Users/ryougi/.local/bin"
+        - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin"
+        - "/usr/local/bin"
+        - "/System/Cryptexes/App/usr/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/X11/bin"
+        - "/usr/local/go/bin"
+        - "/opt/homebrew/bin"
+        - "/Users/ryougi/.cargo/bin"
+        - "/Users/ryougi/Library/pnpm"
+        - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompiler.cmake:54 (find_program)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineASMCompiler.cmake:61 (_cmake_find_compiler)"
+      - "CMakeLists.txt:2 (project)"
+    mode: "program"
+    variable: "CMAKE_ASM_COMPILER"
+    description: "ASM compiler"
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: true
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "/Users/ryougi/.local/bin/sh-elf-gcc"
+    candidate_directories:
+      - "/Users/ryougi/.local/bin/"
+    found: "/Users/ryougi/.local/bin/sh-elf-gcc"
+    search_context:
+      ENV{PATH}:
+        - "/Users/ryougi/.bun/bin"
+        - "/Users/ryougi/.local/bin"
+        - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin"
+        - "/usr/local/bin"
+        - "/System/Cryptexes/App/usr/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/X11/bin"
+        - "/usr/local/go/bin"
+        - "/opt/homebrew/bin"
+        - "/Users/ryougi/.cargo/bin"
+        - "/Users/ryougi/Library/pnpm"
+        - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin"
+  -
+    kind: "message-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerId.cmake:1296 (message)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineASMCompiler.cmake:170 (CMAKE_DETERMINE_COMPILER_ID_VENDOR)"
+      - "CMakeLists.txt:2 (project)"
+    message: |
+      Checking whether the ASM compiler is GNU using "--version" matched "(GNU assembler)|(GCC)|(Free Software Foundation)":
+      sh-elf-gcc (GCC) 14.1.0
+      Copyright (C) 2024 Free Software Foundation, Inc.
+      This is free software; see the source for copying conditions.  There is NO
+      warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+      
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/Compiler/GNU-FindBinUtils.cmake:18 (find_program)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineASMCompiler.cmake:268 (include)"
+      - "CMakeLists.txt:2 (project)"
+    mode: "program"
+    variable: "CMAKE_ASM_COMPILER_AR"
+    description: "A wrapper around 'ar' adding the appropriate '--plugin' option for the GCC compiler"
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "sh-elf-gcc-ar-"
+      - "sh-elf-gcc-ar-"
+      - "sh-elf-gcc-ar"
+      - "sh-elf-gcc-ar"
+    candidate_directories:
+      - "/Users/ryougi/.local/bin/"
+      - "/Users/ryougi/.bun/bin/"
+      - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin/"
+      - "/usr/local/bin/"
+      - "/System/Cryptexes/App/usr/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/"
+      - "/opt/X11/bin/"
+      - "/usr/local/go/bin/"
+      - "/opt/homebrew/bin/"
+      - "/Users/ryougi/.cargo/bin/"
+      - "/Users/ryougi/Library/pnpm/"
+      - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin/"
+    searched_directories:
+      - "/Users/ryougi/.local/bin/sh-elf-gcc-ar-"
+      - "/Users/ryougi/.bun/bin/sh-elf-gcc-ar-"
+      - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin/sh-elf-gcc-ar-"
+      - "/usr/local/bin/sh-elf-gcc-ar-"
+      - "/System/Cryptexes/App/usr/bin/sh-elf-gcc-ar-"
+      - "/usr/bin/sh-elf-gcc-ar-"
+      - "/bin/sh-elf-gcc-ar-"
+      - "/usr/sbin/sh-elf-gcc-ar-"
+      - "/sbin/sh-elf-gcc-ar-"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/sh-elf-gcc-ar-"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/sh-elf-gcc-ar-"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/sh-elf-gcc-ar-"
+      - "/opt/X11/bin/sh-elf-gcc-ar-"
+      - "/usr/local/go/bin/sh-elf-gcc-ar-"
+      - "/opt/homebrew/bin/sh-elf-gcc-ar-"
+      - "/Users/ryougi/.cargo/bin/sh-elf-gcc-ar-"
+      - "/Users/ryougi/Library/pnpm/sh-elf-gcc-ar-"
+      - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin/sh-elf-gcc-ar-"
+      - "/Users/ryougi/.local/bin/sh-elf-gcc-ar-"
+      - "/Users/ryougi/.bun/bin/sh-elf-gcc-ar-"
+      - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin/sh-elf-gcc-ar-"
+      - "/usr/local/bin/sh-elf-gcc-ar-"
+      - "/System/Cryptexes/App/usr/bin/sh-elf-gcc-ar-"
+      - "/usr/bin/sh-elf-gcc-ar-"
+      - "/bin/sh-elf-gcc-ar-"
+      - "/usr/sbin/sh-elf-gcc-ar-"
+      - "/sbin/sh-elf-gcc-ar-"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/sh-elf-gcc-ar-"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/sh-elf-gcc-ar-"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/sh-elf-gcc-ar-"
+      - "/opt/X11/bin/sh-elf-gcc-ar-"
+      - "/usr/local/go/bin/sh-elf-gcc-ar-"
+      - "/opt/homebrew/bin/sh-elf-gcc-ar-"
+      - "/Users/ryougi/.cargo/bin/sh-elf-gcc-ar-"
+      - "/Users/ryougi/Library/pnpm/sh-elf-gcc-ar-"
+      - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin/sh-elf-gcc-ar-"
+    found: "/Users/ryougi/.local/bin/sh-elf-gcc-ar"
+    search_context:
+      ENV{PATH}:
+        - "/Users/ryougi/.bun/bin"
+        - "/Users/ryougi/.local/bin"
+        - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin"
+        - "/usr/local/bin"
+        - "/System/Cryptexes/App/usr/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/X11/bin"
+        - "/usr/local/go/bin"
+        - "/opt/homebrew/bin"
+        - "/Users/ryougi/.cargo/bin"
+        - "/Users/ryougi/Library/pnpm"
+        - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin"
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/Compiler/GNU-FindBinUtils.cmake:30 (find_program)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineASMCompiler.cmake:268 (include)"
+      - "CMakeLists.txt:2 (project)"
+    mode: "program"
+    variable: "CMAKE_ASM_COMPILER_RANLIB"
+    description: "A wrapper around 'ranlib' adding the appropriate '--plugin' option for the GCC compiler"
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "sh-elf-gcc-ranlib-"
+      - "sh-elf-gcc-ranlib-"
+      - "sh-elf-gcc-ranlib"
+      - "sh-elf-gcc-ranlib"
+    candidate_directories:
+      - "/Users/ryougi/.local/bin/"
+      - "/Users/ryougi/.bun/bin/"
+      - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin/"
+      - "/usr/local/bin/"
+      - "/System/Cryptexes/App/usr/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/"
+      - "/opt/X11/bin/"
+      - "/usr/local/go/bin/"
+      - "/opt/homebrew/bin/"
+      - "/Users/ryougi/.cargo/bin/"
+      - "/Users/ryougi/Library/pnpm/"
+      - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin/"
+    searched_directories:
+      - "/Users/ryougi/.local/bin/sh-elf-gcc-ranlib-"
+      - "/Users/ryougi/.bun/bin/sh-elf-gcc-ranlib-"
+      - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin/sh-elf-gcc-ranlib-"
+      - "/usr/local/bin/sh-elf-gcc-ranlib-"
+      - "/System/Cryptexes/App/usr/bin/sh-elf-gcc-ranlib-"
+      - "/usr/bin/sh-elf-gcc-ranlib-"
+      - "/bin/sh-elf-gcc-ranlib-"
+      - "/usr/sbin/sh-elf-gcc-ranlib-"
+      - "/sbin/sh-elf-gcc-ranlib-"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/sh-elf-gcc-ranlib-"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/sh-elf-gcc-ranlib-"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/sh-elf-gcc-ranlib-"
+      - "/opt/X11/bin/sh-elf-gcc-ranlib-"
+      - "/usr/local/go/bin/sh-elf-gcc-ranlib-"
+      - "/opt/homebrew/bin/sh-elf-gcc-ranlib-"
+      - "/Users/ryougi/.cargo/bin/sh-elf-gcc-ranlib-"
+      - "/Users/ryougi/Library/pnpm/sh-elf-gcc-ranlib-"
+      - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin/sh-elf-gcc-ranlib-"
+      - "/Users/ryougi/.local/bin/sh-elf-gcc-ranlib-"
+      - "/Users/ryougi/.bun/bin/sh-elf-gcc-ranlib-"
+      - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin/sh-elf-gcc-ranlib-"
+      - "/usr/local/bin/sh-elf-gcc-ranlib-"
+      - "/System/Cryptexes/App/usr/bin/sh-elf-gcc-ranlib-"
+      - "/usr/bin/sh-elf-gcc-ranlib-"
+      - "/bin/sh-elf-gcc-ranlib-"
+      - "/usr/sbin/sh-elf-gcc-ranlib-"
+      - "/sbin/sh-elf-gcc-ranlib-"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/sh-elf-gcc-ranlib-"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/sh-elf-gcc-ranlib-"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/sh-elf-gcc-ranlib-"
+      - "/opt/X11/bin/sh-elf-gcc-ranlib-"
+      - "/usr/local/go/bin/sh-elf-gcc-ranlib-"
+      - "/opt/homebrew/bin/sh-elf-gcc-ranlib-"
+      - "/Users/ryougi/.cargo/bin/sh-elf-gcc-ranlib-"
+      - "/Users/ryougi/Library/pnpm/sh-elf-gcc-ranlib-"
+      - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin/sh-elf-gcc-ranlib-"
+    found: "/Users/ryougi/.local/bin/sh-elf-gcc-ranlib"
+    search_context:
+      ENV{PATH}:
+        - "/Users/ryougi/.bun/bin"
+        - "/Users/ryougi/.local/bin"
+        - "/Users/ryougi/.antigravity-ide/antigravity-ide/bin"
+        - "/usr/local/bin"
+        - "/System/Cryptexes/App/usr/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/X11/bin"
+        - "/usr/local/go/bin"
+        - "/opt/homebrew/bin"
+        - "/Users/ryougi/.cargo/bin"
+        - "/Users/ryougi/Library/pnpm"
+        - "/Users/ryougi/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/0a6270f4-a552-49eb-a64e-c833646aa1d9/4bcb7c0f-051e-4f6e-b2a4-9a3ae5daa5a6/bin"
+  -
+    kind: "try_compile-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerABI.cmake:83 (try_compile)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeTestCCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "CMakeLists.txt:2 (project)"
+    checks:
+      - "Detecting C compiler ABI info"
+    directories:
+      source: "/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/gint-gpsp/build-mv-slow2/CMakeFiles/CMakeScratch/TryCompile-CJSTCr"
+      binary: "/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/gint-gpsp/build-mv-slow2/CMakeFiles/CMakeScratch/TryCompile-CJSTCr"
+    cmakeVariables:
+      CMAKE_CXX_STDLIB_MODULES_JSON: ""
+      CMAKE_C_FLAGS: ""
+      CMAKE_C_FLAGS_DEBUG: "-g"
+      CMAKE_EXE_LINKER_FLAGS: ""
+      CMAKE_MODULE_PATH: "/Users/ryougi/.local/lib/cmake/fxsdk"
+    buildResult:
+      variable: "CMAKE_C_ABI_COMPILED"
+      cached: true
+      stdout: |
+        Change Dir: '/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/gint-gpsp/build-mv-slow2/CMakeFiles/CMakeScratch/TryCompile-CJSTCr'
+        
+        Run Build Command(s): /opt/homebrew/bin/cmake -E env VERBOSE=1 /usr/bin/make -f Makefile cmTC_7a0d1/fast
+        /Library/Developer/CommandLineTools/usr/bin/make  -f CMakeFiles/cmTC_7a0d1.dir/build.make CMakeFiles/cmTC_7a0d1.dir/build
+        Building C object CMakeFiles/cmTC_7a0d1.dir/CMakeCCompilerABI.c.obj
+        /Users/ryougi/.local/bin/sh-elf-gcc -DTARGET_FXCG50  -v -m4-nofpu -mb -ffreestanding -nostdlib -Wa,--dsp -o CMakeFiles/cmTC_7a0d1.dir/CMakeCCompilerABI.c.obj -c /opt/homebrew/share/cmake/Modules/CMakeCCompilerABI.c
+        Using built-in specs.
+        COLLECT_AS_OPTIONS='--dsp'
+        COLLECT_GCC=/Users/ryougi/.local/bin/sh-elf-gcc
+        Target: sh3eb-elf
+        Configured with: ../gcc-14.1.0/configure --prefix=/Users/ryougi/.local/share/fxsdk/sysroot --target=sh3eb-elf --with-multilib-list=m3,m4-nofpu,m4a-nofpu --enable-languages=c,c++ --without-headers --program-prefix=sh-elf- --enable-libssp --enable-lto --enable-clocale=generic --enable-libstdcxx-allocator --disable-threads --disable-libstdcxx-verbose --enable-cxx-flags=-fno-exceptions --with-gmp=/opt/homebrew --with-mpfr=/opt/homebrew --with-mpc=/opt/homebrew --with-isl=/opt/homebrew --with-system-zlib --disable-werror
+        Thread model: single
+        Supported LTO compression algorithms: zlib zstd
+        gcc version 14.1.0 (GCC) 
+        COLLECT_GCC_OPTIONS='-D' 'TARGET_FXCG50' '-v' '-m4-nofpu' '-mb' '-ffreestanding' '-nostdlib' '-o' 'CMakeFiles/cmTC_7a0d1.dir/CMakeCCompilerABI.c.obj' '-c' '-dumpdir' 'CMakeFiles/cmTC_7a0d1.dir/'
+         /Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/cc1 -quiet -v -imultilib m4-nofpu -D TARGET_FXCG50 /opt/homebrew/share/cmake/Modules/CMakeCCompilerABI.c -quiet -dumpdir CMakeFiles/cmTC_7a0d1.dir/ -dumpbase CMakeCCompilerABI.c.c -dumpbase-ext .c -m4-nofpu -mb -version -ffreestanding -o /var/folders/p_/62vqyc5j0vbb0vcv8xjtc3tw0000gn/T//ccrTIV4F.s
+        GNU C17 (GCC) version 14.1.0 (sh3eb-elf)
+        	compiled by GNU C version Apple LLVM 17.0.0 (clang-1700.6.3.2), GMP version 6.3.0, MPFR version 4.2.2, MPC version 1.4.1, isl version isl-0.27-GMP
+        
+        GGC heuristics: --param ggc-min-expand=100 --param ggc-min-heapsize=131072
+        ignoring nonexistent directory "/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/sys-include"
+        #include "..." search starts here:
+        #include <...> search starts here:
+         /usr/local/include
+         /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/include
+         /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/include-fixed
+         /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/include
+        End of search list.
+        Compiler executable checksum: baa9e1bcbd25fa38fa28d87a2f5e3ec4
+        COLLECT_GCC_OPTIONS='-D' 'TARGET_FXCG50' '-v' '-m4-nofpu' '-mb' '-ffreestanding' '-nostdlib' '-o' 'CMakeFiles/cmTC_7a0d1.dir/CMakeCCompilerABI.c.obj' '-c' '-dumpdir' 'CMakeFiles/cmTC_7a0d1.dir/'
+         /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/bin/as -big --isa=sh4a-nofpu --dsp -o CMakeFiles/cmTC_7a0d1.dir/CMakeCCompilerABI.c.obj /var/folders/p_/62vqyc5j0vbb0vcv8xjtc3tw0000gn/T//ccrTIV4F.s
+        COMPILER_PATH=/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/bin/
+        LIBRARY_PATH=/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/m4-nofpu/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/lib/m4-nofpu/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/lib/
+        COLLECT_GCC_OPTIONS='-D' 'TARGET_FXCG50' '-v' '-m4-nofpu' '-mb' '-ffreestanding' '-nostdlib' '-o' 'CMakeFiles/cmTC_7a0d1.dir/CMakeCCompilerABI.c.obj' '-c' '-dumpdir' 'CMakeFiles/cmTC_7a0d1.dir/CMakeCCompilerABI.c.'
+        Linking C executable cmTC_7a0d1
+        /opt/homebrew/bin/cmake -E cmake_link_script CMakeFiles/cmTC_7a0d1.dir/link.txt --verbose=1
+        Using built-in specs.
+        COLLECT_GCC=/Users/ryougi/.local/bin/sh-elf-gcc
+        COLLECT_LTO_WRAPPER=/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/lto-wrapper
+        Target: sh3eb-elf
+        Configured with: ../gcc-14.1.0/configure --prefix=/Users/ryougi/.local/share/fxsdk/sysroot --target=sh3eb-elf --with-multilib-list=m3,m4-nofpu,m4a-nofpu --enable-languages=c,c++ --without-headers --program-prefix=sh-elf- --enable-libssp --enable-lto --enable-clocale=generic --enable-libstdcxx-allocator --disable-threads --disable-libstdcxx-verbose --enable-cxx-flags=-fno-exceptions --with-gmp=/opt/homebrew --with-mpfr=/opt/homebrew --with-mpc=/opt/homebrew --with-isl=/opt/homebrew --with-system-zlib --disable-werror
+        Thread model: single
+        Supported LTO compression algorithms: zlib zstd
+        gcc version 14.1.0 (GCC) 
+        COMPILER_PATH=/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/bin/
+        LIBRARY_PATH=/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/lib/
+        COLLECT_GCC_OPTIONS='-v' '-nostdlib' '-o' 'cmTC_7a0d1' '-dumpdir' 'cmTC_7a0d1.'
+         /Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/collect2 -plugin /Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/liblto_plugin.so -plugin-opt=/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/lto-wrapper -plugin-opt=-fresolution=/var/folders/p_/62vqyc5j0vbb0vcv8xjtc3tw0000gn/T//ccJroe4b.res -m shelf -o cmTC_7a0d1 -L/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0 -L/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/lib --no-warn-rwx-segments CMakeFiles/cmTC_7a0d1.dir/CMakeCCompilerABI.c.obj -lgcc
+        /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/bin/ld: warning: cannot find entry symbol start; defaulting to 00001000
+        COLLECT_GCC_OPTIONS='-v' '-nostdlib' '-o' 'cmTC_7a0d1' '-dumpdir' 'cmTC_7a0d1.'
+        /Users/ryougi/.local/bin/sh-elf-gcc  -v -nostdlib -Wl,--no-warn-rwx-segments CMakeFiles/cmTC_7a0d1.dir/CMakeCCompilerABI.c.obj -o cmTC_7a0d1  -lgcc
+        
+      exitCode: 0
+  -
+    kind: "message-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerABI.cmake:217 (message)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeTestCCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "CMakeLists.txt:2 (project)"
+    message: |
+      Parsed C implicit include dir info: rv=done
+        found start of include info
+        found start of implicit include info
+          add: [/usr/local/include]
+          add: [/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/include]
+          add: [/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/include-fixed]
+          add: [/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/include]
+        end of search list found
+        collapse include dir [/usr/local/include] ==> [/usr/local/include]
+        collapse include dir [/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/include] ==> [/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/include]
+        collapse include dir [/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/include-fixed] ==> [/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/include-fixed]
+        collapse include dir [/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/include] ==> [/Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/include]
+        implicit include dirs: [/usr/local/include;/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/include;/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/include-fixed;/Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/include]
+      
+      
+  -
+    kind: "message-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerABI.cmake:253 (message)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeTestCCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "CMakeLists.txt:2 (project)"
+    message: |
+      Parsed C implicit link information:
+        link line regex: [^( *|.*[/\\])(ld[0-9]*(|\\.[a-rt-z][a-z]*|\\.s[a-np-z][a-z]*|\\.so[a-z]+)|CMAKE_LINK_STARTFILE-NOTFOUND|([^/\\]+-)?ld|collect2)[^/\\]*( |$)]
+        linker tool regex: [^[ 	]*(->|"|[0-9]+>[ 	-]*Build:[ 	0-9]+ ms[ 	]*)?[ 	]*(([^"]*[/\\])?(ld[0-9]*(|\\.[a-rt-z][a-z]*|\\.s[a-np-z][a-z]*|\\.so[a-z]+)))("|,| |$)]
+        ignore line: [Change Dir: '/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/gint-gpsp/build-mv-slow2/CMakeFiles/CMakeScratch/TryCompile-CJSTCr']
+        ignore line: []
+        ignore line: [Run Build Command(s): /opt/homebrew/bin/cmake -E env VERBOSE=1 /usr/bin/make -f Makefile cmTC_7a0d1/fast]
+        ignore line: [/Library/Developer/CommandLineTools/usr/bin/make  -f CMakeFiles/cmTC_7a0d1.dir/build.make CMakeFiles/cmTC_7a0d1.dir/build]
+        ignore line: [Building C object CMakeFiles/cmTC_7a0d1.dir/CMakeCCompilerABI.c.obj]
+        ignore line: [/Users/ryougi/.local/bin/sh-elf-gcc -DTARGET_FXCG50  -v -m4-nofpu -mb -ffreestanding -nostdlib -Wa --dsp -o CMakeFiles/cmTC_7a0d1.dir/CMakeCCompilerABI.c.obj -c /opt/homebrew/share/cmake/Modules/CMakeCCompilerABI.c]
+        ignore line: [Using built-in specs.]
+        ignore line: [COLLECT_AS_OPTIONS='--dsp']
+        ignore line: [COLLECT_GCC=/Users/ryougi/.local/bin/sh-elf-gcc]
+        ignore line: [Target: sh3eb-elf]
+        ignore line: [Configured with: ../gcc-14.1.0/configure --prefix=/Users/ryougi/.local/share/fxsdk/sysroot --target=sh3eb-elf --with-multilib-list=m3 m4-nofpu m4a-nofpu --enable-languages=c c++ --without-headers --program-prefix=sh-elf- --enable-libssp --enable-lto --enable-clocale=generic --enable-libstdcxx-allocator --disable-threads --disable-libstdcxx-verbose --enable-cxx-flags=-fno-exceptions --with-gmp=/opt/homebrew --with-mpfr=/opt/homebrew --with-mpc=/opt/homebrew --with-isl=/opt/homebrew --with-system-zlib --disable-werror]
+        ignore line: [Thread model: single]
+        ignore line: [Supported LTO compression algorithms: zlib zstd]
+        ignore line: [gcc version 14.1.0 (GCC) ]
+        ignore line: [COLLECT_GCC_OPTIONS='-D' 'TARGET_FXCG50' '-v' '-m4-nofpu' '-mb' '-ffreestanding' '-nostdlib' '-o' 'CMakeFiles/cmTC_7a0d1.dir/CMakeCCompilerABI.c.obj' '-c' '-dumpdir' 'CMakeFiles/cmTC_7a0d1.dir/']
+        ignore line: [ /Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/cc1 -quiet -v -imultilib m4-nofpu -D TARGET_FXCG50 /opt/homebrew/share/cmake/Modules/CMakeCCompilerABI.c -quiet -dumpdir CMakeFiles/cmTC_7a0d1.dir/ -dumpbase CMakeCCompilerABI.c.c -dumpbase-ext .c -m4-nofpu -mb -version -ffreestanding -o /var/folders/p_/62vqyc5j0vbb0vcv8xjtc3tw0000gn/T//ccrTIV4F.s]
+        ignore line: [GNU C17 (GCC) version 14.1.0 (sh3eb-elf)]
+        ignore line: [	compiled by GNU C version Apple LLVM 17.0.0 (clang-1700.6.3.2)  GMP version 6.3.0  MPFR version 4.2.2  MPC version 1.4.1  isl version isl-0.27-GMP]
+        ignore line: []
+        ignore line: [GGC heuristics: --param ggc-min-expand=100 --param ggc-min-heapsize=131072]
+        ignore line: [ignoring nonexistent directory "/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/sys-include"]
+        ignore line: [#include "..." search starts here:]
+        ignore line: [#include <...> search starts here:]
+        ignore line: [ /usr/local/include]
+        ignore line: [ /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/include]
+        ignore line: [ /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/include-fixed]
+        ignore line: [ /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/include]
+        ignore line: [End of search list.]
+        ignore line: [Compiler executable checksum: baa9e1bcbd25fa38fa28d87a2f5e3ec4]
+        ignore line: [COLLECT_GCC_OPTIONS='-D' 'TARGET_FXCG50' '-v' '-m4-nofpu' '-mb' '-ffreestanding' '-nostdlib' '-o' 'CMakeFiles/cmTC_7a0d1.dir/CMakeCCompilerABI.c.obj' '-c' '-dumpdir' 'CMakeFiles/cmTC_7a0d1.dir/']
+        ignore line: [ /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/bin/as -big --isa=sh4a-nofpu --dsp -o CMakeFiles/cmTC_7a0d1.dir/CMakeCCompilerABI.c.obj /var/folders/p_/62vqyc5j0vbb0vcv8xjtc3tw0000gn/T//ccrTIV4F.s]
+        ignore line: [COMPILER_PATH=/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/bin/]
+        ignore line: [LIBRARY_PATH=/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/m4-nofpu/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/lib/m4-nofpu/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/lib/]
+        ignore line: [COLLECT_GCC_OPTIONS='-D' 'TARGET_FXCG50' '-v' '-m4-nofpu' '-mb' '-ffreestanding' '-nostdlib' '-o' 'CMakeFiles/cmTC_7a0d1.dir/CMakeCCompilerABI.c.obj' '-c' '-dumpdir' 'CMakeFiles/cmTC_7a0d1.dir/CMakeCCompilerABI.c.']
+        ignore line: [Linking C executable cmTC_7a0d1]
+        ignore line: [/opt/homebrew/bin/cmake -E cmake_link_script CMakeFiles/cmTC_7a0d1.dir/link.txt --verbose=1]
+        ignore line: [Using built-in specs.]
+        ignore line: [COLLECT_GCC=/Users/ryougi/.local/bin/sh-elf-gcc]
+        ignore line: [COLLECT_LTO_WRAPPER=/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/lto-wrapper]
+        ignore line: [Target: sh3eb-elf]
+        ignore line: [Configured with: ../gcc-14.1.0/configure --prefix=/Users/ryougi/.local/share/fxsdk/sysroot --target=sh3eb-elf --with-multilib-list=m3 m4-nofpu m4a-nofpu --enable-languages=c c++ --without-headers --program-prefix=sh-elf- --enable-libssp --enable-lto --enable-clocale=generic --enable-libstdcxx-allocator --disable-threads --disable-libstdcxx-verbose --enable-cxx-flags=-fno-exceptions --with-gmp=/opt/homebrew --with-mpfr=/opt/homebrew --with-mpc=/opt/homebrew --with-isl=/opt/homebrew --with-system-zlib --disable-werror]
+        ignore line: [Thread model: single]
+        ignore line: [Supported LTO compression algorithms: zlib zstd]
+        ignore line: [gcc version 14.1.0 (GCC) ]
+        ignore line: [COMPILER_PATH=/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/bin/]
+        ignore line: [LIBRARY_PATH=/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/lib/]
+        ignore line: [COLLECT_GCC_OPTIONS='-v' '-nostdlib' '-o' 'cmTC_7a0d1' '-dumpdir' 'cmTC_7a0d1.']
+        link line: [ /Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/collect2 -plugin /Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/liblto_plugin.so -plugin-opt=/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/lto-wrapper -plugin-opt=-fresolution=/var/folders/p_/62vqyc5j0vbb0vcv8xjtc3tw0000gn/T//ccJroe4b.res -m shelf -o cmTC_7a0d1 -L/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0 -L/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/lib --no-warn-rwx-segments CMakeFiles/cmTC_7a0d1.dir/CMakeCCompilerABI.c.obj -lgcc]
+          arg [/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/collect2] ==> ignore
+          arg [-plugin] ==> ignore
+          arg [/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/liblto_plugin.so] ==> ignore
+          arg [-plugin-opt=/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/lto-wrapper] ==> ignore
+          arg [-plugin-opt=-fresolution=/var/folders/p_/62vqyc5j0vbb0vcv8xjtc3tw0000gn/T//ccJroe4b.res] ==> ignore
+          arg [-m] ==> ignore
+          arg [shelf] ==> ignore
+          arg [-o] ==> ignore
+          arg [cmTC_7a0d1] ==> ignore
+          arg [-L/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0] ==> dir [/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0]
+          arg [-L/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/lib] ==> dir [/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/lib]
+          arg [--no-warn-rwx-segments] ==> ignore
+          arg [CMakeFiles/cmTC_7a0d1.dir/CMakeCCompilerABI.c.obj] ==> ignore
+          arg [-lgcc] ==> lib [gcc]
+        ignore line: [/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/bin/ld: warning: cannot find entry symbol start]
+        ignore line: [ defaulting to 00001000]
+        ignore line: [COLLECT_GCC_OPTIONS='-v' '-nostdlib' '-o' 'cmTC_7a0d1' '-dumpdir' 'cmTC_7a0d1.']
+        ignore line: [/Users/ryougi/.local/bin/sh-elf-gcc  -v -nostdlib -Wl --no-warn-rwx-segments CMakeFiles/cmTC_7a0d1.dir/CMakeCCompilerABI.c.obj -o cmTC_7a0d1  -lgcc]
+        ignore line: []
+        ignore line: []
+        collapse library dir [/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0] ==> [/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0]
+        collapse library dir [/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/lib] ==> [/Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/lib]
+        implicit libs: [gcc]
+        implicit objs: []
+        implicit dirs: [/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0;/Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/lib]
+        implicit fwks: []
+      
+      
+  -
+    kind: "try_compile-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerABI.cmake:83 (try_compile)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeTestCXXCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "CMakeLists.txt:2 (project)"
+    checks:
+      - "Detecting CXX compiler ABI info"
+    directories:
+      source: "/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/gint-gpsp/build-mv-slow2/CMakeFiles/CMakeScratch/TryCompile-FOPaoW"
+      binary: "/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/gint-gpsp/build-mv-slow2/CMakeFiles/CMakeScratch/TryCompile-FOPaoW"
+    cmakeVariables:
+      CMAKE_CXX_FLAGS: ""
+      CMAKE_CXX_FLAGS_DEBUG: "-g"
+      CMAKE_CXX_SCAN_FOR_MODULES: "OFF"
+      CMAKE_CXX_STDLIB_MODULES_JSON: ""
+      CMAKE_EXE_LINKER_FLAGS: ""
+      CMAKE_MODULE_PATH: "/Users/ryougi/.local/lib/cmake/fxsdk"
+    buildResult:
+      variable: "CMAKE_CXX_ABI_COMPILED"
+      cached: true
+      stdout: |
+        Change Dir: '/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/gint-gpsp/build-mv-slow2/CMakeFiles/CMakeScratch/TryCompile-FOPaoW'
+        
+        Run Build Command(s): /opt/homebrew/bin/cmake -E env VERBOSE=1 /usr/bin/make -f Makefile cmTC_20d92/fast
+        /Library/Developer/CommandLineTools/usr/bin/make  -f CMakeFiles/cmTC_20d92.dir/build.make CMakeFiles/cmTC_20d92.dir/build
+        Building CXX object CMakeFiles/cmTC_20d92.dir/CMakeCXXCompilerABI.cpp.obj
+        /Users/ryougi/.local/bin/sh-elf-g++ -DTARGET_FXCG50  -v -m4-nofpu -mb -ffreestanding -nostdlib -Wa,--dsp -o CMakeFiles/cmTC_20d92.dir/CMakeCXXCompilerABI.cpp.obj -c /opt/homebrew/share/cmake/Modules/CMakeCXXCompilerABI.cpp
+        Using built-in specs.
+        COLLECT_AS_OPTIONS='--dsp'
+        COLLECT_GCC=/Users/ryougi/.local/bin/sh-elf-g++
+        Target: sh3eb-elf
+        Configured with: ../gcc-14.1.0/configure --prefix=/Users/ryougi/.local/share/fxsdk/sysroot --target=sh3eb-elf --with-multilib-list=m3,m4-nofpu,m4a-nofpu --enable-languages=c,c++ --without-headers --program-prefix=sh-elf- --enable-libssp --enable-lto --enable-clocale=generic --enable-libstdcxx-allocator --disable-threads --disable-libstdcxx-verbose --enable-cxx-flags=-fno-exceptions --with-gmp=/opt/homebrew --with-mpfr=/opt/homebrew --with-mpc=/opt/homebrew --with-isl=/opt/homebrew --with-system-zlib --disable-werror
+        Thread model: single
+        Supported LTO compression algorithms: zlib zstd
+        gcc version 14.1.0 (GCC) 
+        COLLECT_GCC_OPTIONS='-D' 'TARGET_FXCG50' '-v' '-m4-nofpu' '-mb' '-ffreestanding' '-nostdlib' '-o' 'CMakeFiles/cmTC_20d92.dir/CMakeCXXCompilerABI.cpp.obj' '-c' '-dumpdir' 'CMakeFiles/cmTC_20d92.dir/'
+         /Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/cc1plus -quiet -v -imultilib m4-nofpu -D TARGET_FXCG50 /opt/homebrew/share/cmake/Modules/CMakeCXXCompilerABI.cpp -quiet -dumpdir CMakeFiles/cmTC_20d92.dir/ -dumpbase CMakeCXXCompilerABI.cpp.cpp -dumpbase-ext .cpp -m4-nofpu -mb -version -ffreestanding -o /var/folders/p_/62vqyc5j0vbb0vcv8xjtc3tw0000gn/T//ccxkTSuJ.s
+        GNU C++17 (GCC) version 14.1.0 (sh3eb-elf)
+        	compiled by GNU C version Apple LLVM 17.0.0 (clang-1700.6.3.2), GMP version 6.3.0, MPFR version 4.2.2, MPC version 1.4.1, isl version isl-0.27-GMP
+        
+        GGC heuristics: --param ggc-min-expand=100 --param ggc-min-heapsize=131072
+        ignoring nonexistent directory "/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/sys-include"
+        #include "..." search starts here:
+        #include <...> search starts here:
+         /usr/local/include
+         /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/include/c++/14.1.0
+         /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/include/c++/14.1.0/sh3eb-elf/m4-nofpu
+         /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/include/c++/14.1.0/backward
+         /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/include
+         /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/include-fixed
+         /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/include
+        End of search list.
+        Compiler executable checksum: d1d412cc0aea4c17fe7b1c2c9181b07f
+        COLLECT_GCC_OPTIONS='-D' 'TARGET_FXCG50' '-v' '-m4-nofpu' '-mb' '-ffreestanding' '-nostdlib' '-o' 'CMakeFiles/cmTC_20d92.dir/CMakeCXXCompilerABI.cpp.obj' '-c' '-dumpdir' 'CMakeFiles/cmTC_20d92.dir/'
+         /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/bin/as -big --isa=sh4a-nofpu --dsp -o CMakeFiles/cmTC_20d92.dir/CMakeCXXCompilerABI.cpp.obj /var/folders/p_/62vqyc5j0vbb0vcv8xjtc3tw0000gn/T//ccxkTSuJ.s
+        COMPILER_PATH=/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/bin/
+        LIBRARY_PATH=/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/m4-nofpu/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/lib/m4-nofpu/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/lib/
+        COLLECT_GCC_OPTIONS='-D' 'TARGET_FXCG50' '-v' '-m4-nofpu' '-mb' '-ffreestanding' '-nostdlib' '-o' 'CMakeFiles/cmTC_20d92.dir/CMakeCXXCompilerABI.cpp.obj' '-c' '-dumpdir' 'CMakeFiles/cmTC_20d92.dir/CMakeCXXCompilerABI.cpp.'
+        Linking CXX executable cmTC_20d92
+        /opt/homebrew/bin/cmake -E cmake_link_script CMakeFiles/cmTC_20d92.dir/link.txt --verbose=1
+        Using built-in specs.
+        COLLECT_GCC=/Users/ryougi/.local/bin/sh-elf-g++
+        COLLECT_LTO_WRAPPER=/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/lto-wrapper
+        Target: sh3eb-elf
+        Configured with: ../gcc-14.1.0/configure --prefix=/Users/ryougi/.local/share/fxsdk/sysroot --target=sh3eb-elf --with-multilib-list=m3,m4-nofpu,m4a-nofpu --enable-languages=c,c++ --without-headers --program-prefix=sh-elf- --enable-libssp --enable-lto --enable-clocale=generic --enable-libstdcxx-allocator --disable-threads --disable-libstdcxx-verbose --enable-cxx-flags=-fno-exceptions --with-gmp=/opt/homebrew --with-mpfr=/opt/homebrew --with-mpc=/opt/homebrew --with-isl=/opt/homebrew --with-system-zlib --disable-werror
+        Thread model: single
+        Supported LTO compression algorithms: zlib zstd
+        gcc version 14.1.0 (GCC) 
+        COMPILER_PATH=/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/bin/
+        LIBRARY_PATH=/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/lib/
+        COLLECT_GCC_OPTIONS='-v' '-nostdlib' '-o' 'cmTC_20d92' '-dumpdir' 'cmTC_20d92.'
+         /Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/collect2 -plugin /Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/liblto_plugin.so -plugin-opt=/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/lto-wrapper -plugin-opt=-fresolution=/var/folders/p_/62vqyc5j0vbb0vcv8xjtc3tw0000gn/T//cchfXRx7.res -m shelf -o cmTC_20d92 -L/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0 -L/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/lib --no-warn-rwx-segments CMakeFiles/cmTC_20d92.dir/CMakeCXXCompilerABI.cpp.obj -lgcc
+        /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/bin/ld: warning: cannot find entry symbol start; defaulting to 00001000
+        COLLECT_GCC_OPTIONS='-v' '-nostdlib' '-o' 'cmTC_20d92' '-dumpdir' 'cmTC_20d92.'
+        /Users/ryougi/.local/bin/sh-elf-g++  -v -nostdlib -Wl,--no-warn-rwx-segments CMakeFiles/cmTC_20d92.dir/CMakeCXXCompilerABI.cpp.obj -o cmTC_20d92  -lgcc
+        
+      exitCode: 0
+  -
+    kind: "message-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerABI.cmake:217 (message)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeTestCXXCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "CMakeLists.txt:2 (project)"
+    message: |
+      Parsed CXX implicit include dir info: rv=done
+        found start of include info
+        found start of implicit include info
+          add: [/usr/local/include]
+          add: [/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/include/c++/14.1.0]
+          add: [/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/include/c++/14.1.0/sh3eb-elf/m4-nofpu]
+          add: [/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/include/c++/14.1.0/backward]
+          add: [/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/include]
+          add: [/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/include-fixed]
+          add: [/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/include]
+        end of search list found
+        collapse include dir [/usr/local/include] ==> [/usr/local/include]
+        collapse include dir [/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/include/c++/14.1.0] ==> [/Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/include/c++/14.1.0]
+        collapse include dir [/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/include/c++/14.1.0/sh3eb-elf/m4-nofpu] ==> [/Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/include/c++/14.1.0/sh3eb-elf/m4-nofpu]
+        collapse include dir [/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/include/c++/14.1.0/backward] ==> [/Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/include/c++/14.1.0/backward]
+        collapse include dir [/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/include] ==> [/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/include]
+        collapse include dir [/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/include-fixed] ==> [/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/include-fixed]
+        collapse include dir [/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/include] ==> [/Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/include]
+        implicit include dirs: [/usr/local/include;/Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/include/c++/14.1.0;/Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/include/c++/14.1.0/sh3eb-elf/m4-nofpu;/Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/include/c++/14.1.0/backward;/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/include;/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/include-fixed;/Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/include]
+      
+      
+  -
+    kind: "message-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerABI.cmake:253 (message)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeTestCXXCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "CMakeLists.txt:2 (project)"
+    message: |
+      Parsed CXX implicit link information:
+        link line regex: [^( *|.*[/\\])(ld[0-9]*(|\\.[a-rt-z][a-z]*|\\.s[a-np-z][a-z]*|\\.so[a-z]+)|CMAKE_LINK_STARTFILE-NOTFOUND|([^/\\]+-)?ld|collect2)[^/\\]*( |$)]
+        linker tool regex: [^[ 	]*(->|"|[0-9]+>[ 	-]*Build:[ 	0-9]+ ms[ 	]*)?[ 	]*(([^"]*[/\\])?(ld[0-9]*(|\\.[a-rt-z][a-z]*|\\.s[a-np-z][a-z]*|\\.so[a-z]+)))("|,| |$)]
+        ignore line: [Change Dir: '/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/gint-gpsp/build-mv-slow2/CMakeFiles/CMakeScratch/TryCompile-FOPaoW']
+        ignore line: []
+        ignore line: [Run Build Command(s): /opt/homebrew/bin/cmake -E env VERBOSE=1 /usr/bin/make -f Makefile cmTC_20d92/fast]
+        ignore line: [/Library/Developer/CommandLineTools/usr/bin/make  -f CMakeFiles/cmTC_20d92.dir/build.make CMakeFiles/cmTC_20d92.dir/build]
+        ignore line: [Building CXX object CMakeFiles/cmTC_20d92.dir/CMakeCXXCompilerABI.cpp.obj]
+        ignore line: [/Users/ryougi/.local/bin/sh-elf-g++ -DTARGET_FXCG50  -v -m4-nofpu -mb -ffreestanding -nostdlib -Wa --dsp -o CMakeFiles/cmTC_20d92.dir/CMakeCXXCompilerABI.cpp.obj -c /opt/homebrew/share/cmake/Modules/CMakeCXXCompilerABI.cpp]
+        ignore line: [Using built-in specs.]
+        ignore line: [COLLECT_AS_OPTIONS='--dsp']
+        ignore line: [COLLECT_GCC=/Users/ryougi/.local/bin/sh-elf-g++]
+        ignore line: [Target: sh3eb-elf]
+        ignore line: [Configured with: ../gcc-14.1.0/configure --prefix=/Users/ryougi/.local/share/fxsdk/sysroot --target=sh3eb-elf --with-multilib-list=m3 m4-nofpu m4a-nofpu --enable-languages=c c++ --without-headers --program-prefix=sh-elf- --enable-libssp --enable-lto --enable-clocale=generic --enable-libstdcxx-allocator --disable-threads --disable-libstdcxx-verbose --enable-cxx-flags=-fno-exceptions --with-gmp=/opt/homebrew --with-mpfr=/opt/homebrew --with-mpc=/opt/homebrew --with-isl=/opt/homebrew --with-system-zlib --disable-werror]
+        ignore line: [Thread model: single]
+        ignore line: [Supported LTO compression algorithms: zlib zstd]
+        ignore line: [gcc version 14.1.0 (GCC) ]
+        ignore line: [COLLECT_GCC_OPTIONS='-D' 'TARGET_FXCG50' '-v' '-m4-nofpu' '-mb' '-ffreestanding' '-nostdlib' '-o' 'CMakeFiles/cmTC_20d92.dir/CMakeCXXCompilerABI.cpp.obj' '-c' '-dumpdir' 'CMakeFiles/cmTC_20d92.dir/']
+        ignore line: [ /Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/cc1plus -quiet -v -imultilib m4-nofpu -D TARGET_FXCG50 /opt/homebrew/share/cmake/Modules/CMakeCXXCompilerABI.cpp -quiet -dumpdir CMakeFiles/cmTC_20d92.dir/ -dumpbase CMakeCXXCompilerABI.cpp.cpp -dumpbase-ext .cpp -m4-nofpu -mb -version -ffreestanding -o /var/folders/p_/62vqyc5j0vbb0vcv8xjtc3tw0000gn/T//ccxkTSuJ.s]
+        ignore line: [GNU C++17 (GCC) version 14.1.0 (sh3eb-elf)]
+        ignore line: [	compiled by GNU C version Apple LLVM 17.0.0 (clang-1700.6.3.2)  GMP version 6.3.0  MPFR version 4.2.2  MPC version 1.4.1  isl version isl-0.27-GMP]
+        ignore line: []
+        ignore line: [GGC heuristics: --param ggc-min-expand=100 --param ggc-min-heapsize=131072]
+        ignore line: [ignoring nonexistent directory "/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/sys-include"]
+        ignore line: [#include "..." search starts here:]
+        ignore line: [#include <...> search starts here:]
+        ignore line: [ /usr/local/include]
+        ignore line: [ /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/include/c++/14.1.0]
+        ignore line: [ /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/include/c++/14.1.0/sh3eb-elf/m4-nofpu]
+        ignore line: [ /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/include/c++/14.1.0/backward]
+        ignore line: [ /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/include]
+        ignore line: [ /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/include-fixed]
+        ignore line: [ /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/include]
+        ignore line: [End of search list.]
+        ignore line: [Compiler executable checksum: d1d412cc0aea4c17fe7b1c2c9181b07f]
+        ignore line: [COLLECT_GCC_OPTIONS='-D' 'TARGET_FXCG50' '-v' '-m4-nofpu' '-mb' '-ffreestanding' '-nostdlib' '-o' 'CMakeFiles/cmTC_20d92.dir/CMakeCXXCompilerABI.cpp.obj' '-c' '-dumpdir' 'CMakeFiles/cmTC_20d92.dir/']
+        ignore line: [ /Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/bin/as -big --isa=sh4a-nofpu --dsp -o CMakeFiles/cmTC_20d92.dir/CMakeCXXCompilerABI.cpp.obj /var/folders/p_/62vqyc5j0vbb0vcv8xjtc3tw0000gn/T//ccxkTSuJ.s]
+        ignore line: [COMPILER_PATH=/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/bin/]
+        ignore line: [LIBRARY_PATH=/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/m4-nofpu/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/lib/m4-nofpu/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/lib/]
+        ignore line: [COLLECT_GCC_OPTIONS='-D' 'TARGET_FXCG50' '-v' '-m4-nofpu' '-mb' '-ffreestanding' '-nostdlib' '-o' 'CMakeFiles/cmTC_20d92.dir/CMakeCXXCompilerABI.cpp.obj' '-c' '-dumpdir' 'CMakeFiles/cmTC_20d92.dir/CMakeCXXCompilerABI.cpp.']
+        ignore line: [Linking CXX executable cmTC_20d92]
+        ignore line: [/opt/homebrew/bin/cmake -E cmake_link_script CMakeFiles/cmTC_20d92.dir/link.txt --verbose=1]
+        ignore line: [Using built-in specs.]
+        ignore line: [COLLECT_GCC=/Users/ryougi/.local/bin/sh-elf-g++]
+        ignore line: [COLLECT_LTO_WRAPPER=/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/lto-wrapper]
+        ignore line: [Target: sh3eb-elf]
+        ignore line: [Configured with: ../gcc-14.1.0/configure --prefix=/Users/ryougi/.local/share/fxsdk/sysroot --target=sh3eb-elf --with-multilib-list=m3 m4-nofpu m4a-nofpu --enable-languages=c c++ --without-headers --program-prefix=sh-elf- --enable-libssp --enable-lto --enable-clocale=generic --enable-libstdcxx-allocator --disable-threads --disable-libstdcxx-verbose --enable-cxx-flags=-fno-exceptions --with-gmp=/opt/homebrew --with-mpfr=/opt/homebrew --with-mpc=/opt/homebrew --with-isl=/opt/homebrew --with-system-zlib --disable-werror]
+        ignore line: [Thread model: single]
+        ignore line: [Supported LTO compression algorithms: zlib zstd]
+        ignore line: [gcc version 14.1.0 (GCC) ]
+        ignore line: [COMPILER_PATH=/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/bin/]
+        ignore line: [LIBRARY_PATH=/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/:/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/lib/]
+        ignore line: [COLLECT_GCC_OPTIONS='-v' '-nostdlib' '-o' 'cmTC_20d92' '-dumpdir' 'cmTC_20d92.']
+        link line: [ /Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/collect2 -plugin /Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/liblto_plugin.so -plugin-opt=/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/lto-wrapper -plugin-opt=-fresolution=/var/folders/p_/62vqyc5j0vbb0vcv8xjtc3tw0000gn/T//cchfXRx7.res -m shelf -o cmTC_20d92 -L/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0 -L/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/lib --no-warn-rwx-segments CMakeFiles/cmTC_20d92.dir/CMakeCXXCompilerABI.cpp.obj -lgcc]
+          arg [/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/collect2] ==> ignore
+          arg [-plugin] ==> ignore
+          arg [/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/liblto_plugin.so] ==> ignore
+          arg [-plugin-opt=/Users/ryougi/.local/share/fxsdk/sysroot/libexec/gcc/sh3eb-elf/14.1.0/lto-wrapper] ==> ignore
+          arg [-plugin-opt=-fresolution=/var/folders/p_/62vqyc5j0vbb0vcv8xjtc3tw0000gn/T//cchfXRx7.res] ==> ignore
+          arg [-m] ==> ignore
+          arg [shelf] ==> ignore
+          arg [-o] ==> ignore
+          arg [cmTC_20d92] ==> ignore
+          arg [-L/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0] ==> dir [/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0]
+          arg [-L/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/lib] ==> dir [/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/lib]
+          arg [--no-warn-rwx-segments] ==> ignore
+          arg [CMakeFiles/cmTC_20d92.dir/CMakeCXXCompilerABI.cpp.obj] ==> ignore
+          arg [-lgcc] ==> lib [gcc]
+        ignore line: [/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/bin/ld: warning: cannot find entry symbol start]
+        ignore line: [ defaulting to 00001000]
+        ignore line: [COLLECT_GCC_OPTIONS='-v' '-nostdlib' '-o' 'cmTC_20d92' '-dumpdir' 'cmTC_20d92.']
+        ignore line: [/Users/ryougi/.local/bin/sh-elf-g++  -v -nostdlib -Wl --no-warn-rwx-segments CMakeFiles/cmTC_20d92.dir/CMakeCXXCompilerABI.cpp.obj -o cmTC_20d92  -lgcc]
+        ignore line: []
+        ignore line: []
+        collapse library dir [/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0] ==> [/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0]
+        collapse library dir [/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0/../../../../sh3eb-elf/lib] ==> [/Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/lib]
+        implicit libs: [gcc]
+        implicit objs: []
+        implicit dirs: [/Users/ryougi/.local/share/fxsdk/sysroot/lib/gcc/sh3eb-elf/14.1.0;/Users/ryougi/.local/share/fxsdk/sysroot/sh3eb-elf/lib]
+        implicit fwks: []
+      
+      
+...

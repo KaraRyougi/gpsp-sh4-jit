@@ -1122,6 +1122,10 @@ int main(void)
       cgba_sh4_fastmem_routine[fm] = sh4g_fastmem_emit_routine(&tp, fm);
     for (int fm = CGBA_FMB_LDM; fm < CGBA_FM_TOTAL; fm++)
       cgba_sh4_fastmem_routine[fm] = sh4g_fastmem_emit_block_routine(&tp, fm);
+    if (getenv("ORC_PRINT_FM"))
+      for (int fm = 0; fm < CGBA_FM_TOTAL; fm++)
+        fprintf(stderr, "fm[%d] off=0x%zx\n", fm,
+                (size_t)(cgba_sh4_fastmem_routine[fm] - fm_buf));
 
     memset(memory_map_read, 0, sizeof memory_map_read);
     memory_map_read[0x02000000u >> 15] = ewram;

@@ -273,6 +273,8 @@ static const u32 prescale_table[] = { 0, 6, 8, 10 };
      (gbc_sound_buffer_index + buffer_adjust) % BUFFER_SIZE;                  \
   }                                                                           \
 
+void cgba_recompute_timer_cap_mask(void);   /* main.c */
+
 static void trigger_timer(u32 timer_number, u32 value)
 {
    if (value & 0x80)
@@ -318,6 +320,8 @@ static void trigger_timer(u32 timer_number, u32 value)
       }
    }
    write_ioreg(REG_TMXCNT(timer_number), value);
+
+   cgba_recompute_timer_cap_mask();
 }
 
 bool is_known_game = false;
