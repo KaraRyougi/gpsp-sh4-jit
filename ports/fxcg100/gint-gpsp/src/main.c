@@ -911,11 +911,64 @@ static int headless_a_edge(unsigned frame)
 		(frame == 0 || !headless_a_down(frame - 1));
 }
 
+#ifndef CGBA_GPSP_HEADLESS_FUZZ_SEED
+#define CGBA_GPSP_HEADLESS_FUZZ_SEED 0
+#endif
+/* Tolerate an empty macro from stale build caches. */
+#if (CGBA_GPSP_HEADLESS_FUZZ_SEED + 0) > 0
+#define CGBA_HEADLESS_FUZZ_ON 1
+#else
+#define CGBA_HEADLESS_FUZZ_ON 0
+#endif
+
+#if CGBA_HEADLESS_FUZZ_ON
+/* Seeded input monkey: hold one direction for 12..43 frames while
+ * occasionally tapping A/B (interaction) and rarely Start (menus). Unlike
+ * the fixed-key harnesses it actually wanders and interacts, reaching
+ * deeper game states; the seed makes every run reproducible. */
+static uint32_t headless_fuzz_buttons(unsigned frame)
+{
+	static uint32_t rng = (uint32_t)CGBA_GPSP_HEADLESS_FUZZ_SEED;
+	static unsigned until, dir;
+	static unsigned tap_until, tap_mask;
+	uint32_t buttons;
+
+	if(frame >= until) {
+		rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5;
+		dir = (rng >> 3) & 3;                   /* R/L/U/D */
+		until = frame + 12 + ((rng >> 8) & 31);
+	}
+	buttons = FXCG100_GBA_BUTTON_RIGHT << dir;
+	if(frame >= tap_until) {
+		rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5;
+		{
+			unsigned r = (rng >> 4) & 0xFF;
+			if(r < 64)       tap_mask = FXCG100_GBA_BUTTON_A;
+			else if(r < 96)  tap_mask = FXCG100_GBA_BUTTON_B;
+			else if(r < 104) tap_mask = FXCG100_GBA_BUTTON_START;
+			else             tap_mask = 0;
+		}
+		tap_until = frame + 6 + ((rng >> 12) & 15);
+	}
+	if(tap_mask && frame + 4 >= tap_until)
+		buttons |= tap_mask;
+	return buttons;
+}
+#endif
+
 static uint32_t headless_buttons_for_frame(unsigned frame)
 {
 	const unsigned start = (unsigned)CGBA_GPSP_HEADLESS_START_FRAME;
 	const unsigned hold = (unsigned)CGBA_GPSP_HEADLESS_START_HOLD;
 	uint32_t buttons = FXCG100_GBA_BUTTON_NONE;
+
+	/* A loaded <BASE>.INP script (recorded real play) overrides every
+	 * synthetic generator: replay it verbatim. */
+	if(cgba_gpsp_input_script_active())
+		return cgba_gpsp_input_script_mask(frame);
+#if CGBA_HEADLESS_FUZZ_ON
+	return headless_fuzz_buttons(frame);
+#endif
 
 	if(hold != 0 && frame >= start && frame < start + hold) {
 #if CGBA_GPSP_HEADLESS_START_PERIOD > 0
@@ -1064,6 +1117,13 @@ static int cgba_headless_test(uint16_t *framebuffer)
 
 	frame_base = headless_frame_base();
 	frame_end = headless_frame_end();
+	{
+		int nev = cgba_gpsp_input_script_load();
+		if(nev > 0) {
+			snprintf(buf, sizeof buf, "input script: %d events", nev);
+			hputs_dbg(buf);
+		}
+	}
 	snprintf(buf, sizeof buf, "loaded OK; running %u frames [%u,%u)",
 		(unsigned)CGBA_GPSP_HEADLESS_FRAMES, frame_base, frame_end);
 	hputs_dbg(buf);
@@ -1077,6 +1137,11 @@ static int cgba_headless_test(uint16_t *framebuffer)
 			;
 		int log_frame = headless_log_frame(frame);
 		uint32_t buttons = headless_buttons_for_frame(frame);
+
+		/* Capture generated/fuzz input as a replayable .INP asset; when a
+		 * script is driving, don't re-record it over itself. */
+		if(!cgba_gpsp_input_script_active())
+			cgba_gpsp_input_record_frame(frame, buttons);
 
 		if(log_frame) {
 			snprintf(buf, sizeof buf, "frame %u before render=%d",
@@ -1159,6 +1224,27 @@ static int cgba_headless_test(uint16_t *framebuffer)
 		headless_log_phase(frame, "loop-end");
 	}
 
+	if(!cgba_gpsp_input_script_active()) {
+		/* Write through the headless BFile trampolines: the generic
+		 * storage path is not serviced by the emulator's HLE. */
+		unsigned char *ibuf = (unsigned char *)framebuffer;
+		unsigned ilen = cgba_gpsp_input_record_render(ibuf,
+			CGBA_GBA_BUFFER_PIXELS * 2u);
+		int inp_ok = 0;
+		if(ilen) {
+			uint16_t ipath[24];
+			int existing;
+			cgba_gpsp_input_path(ipath);
+			existing = headless_storage_blob_size(ipath);
+			if(existing >= 0)
+				headless_bfile_remove(ipath);
+			if(headless_create_blob(ipath, ilen))
+				inp_ok = headless_write_blob_contents(ipath, ibuf, ilen);
+		}
+		snprintf(buf, sizeof buf, "@@CGBA_INPSAVE ok=%d bytes=%u", inp_ok, ilen);
+		hputs_dbg(buf);
+	}
+
 	snprintf(buf, sizeof buf, "fps emu=%u draw=%u",
 		(unsigned)cgba_fps.emu_fps, (unsigned)cgba_fps.draw_fps);
 	hputs_dbg(buf);
@@ -1214,6 +1300,18 @@ static int cgba_headless_test(uint16_t *framebuffer)
 		hputs_dbg(buf);
 	}
 	{
+		extern unsigned long cgba_swi_interp_n[32];
+		extern unsigned long cgba_swi_interp_words[32];
+		unsigned si;
+		for(si = 0; si < 32; si++) {
+			if(!cgba_swi_interp_n[si])
+				continue;
+			snprintf(buf, sizeof buf, "jit swi-census %02X n=%lu words=%lu",
+				si, cgba_swi_interp_n[si], cgba_swi_interp_words[si]);
+			hputs_dbg(buf);
+		}
+	}
+	{
 		extern u32 cgba_cap_src[8];
 		snprintf(buf, sizeof buf,
 			"jit cap vid=%lu ser=%lu t0=%lu t1=%lu t2=%lu t3=%lu cyc=%lu small=%lu",
@@ -1251,6 +1349,15 @@ static int cgba_headless_test(uint16_t *framebuffer)
 				hputs_dbg(buf);
 			}
 	}
+#if CGBA_SH4_SWI_HLE_VERIFY
+	{
+		extern u32 cgba_swi_verify_checked, cgba_swi_verify_bad;
+		snprintf(buf, sizeof buf, "jit swiv checked=%lu bad=%lu",
+			(unsigned long)cgba_swi_verify_checked,
+			(unsigned long)cgba_swi_verify_bad);
+		hputs_dbg(buf);
+	}
+#endif
 	{
 		extern void cgba_sh4_dump_rom_blockmap(void);
 		cgba_sh4_dump_rom_blockmap();
@@ -1369,6 +1476,18 @@ static int cgba_headless_test(uint16_t *framebuffer)
 		hputs_dbg(buf);
 	}
 	{
+		extern unsigned long cgba_swi_interp_n[32];
+		extern unsigned long cgba_swi_interp_words[32];
+		unsigned si;
+		for(si = 0; si < 32; si++) {
+			if(!cgba_swi_interp_n[si])
+				continue;
+			snprintf(buf, sizeof buf, "jit swi-census %02X n=%lu words=%lu",
+				si, cgba_swi_interp_n[si], cgba_swi_interp_words[si]);
+			hputs_dbg(buf);
+		}
+	}
+	{
 		extern u32 cgba_cap_src[8];
 		snprintf(buf, sizeof buf,
 			"jit cap vid=%lu ser=%lu t0=%lu t1=%lu t2=%lu t3=%lu cyc=%lu small=%lu",
@@ -1406,6 +1525,15 @@ static int cgba_headless_test(uint16_t *framebuffer)
 				hputs_dbg(buf);
 			}
 	}
+#if CGBA_SH4_SWI_HLE_VERIFY
+	{
+		extern u32 cgba_swi_verify_checked, cgba_swi_verify_bad;
+		snprintf(buf, sizeof buf, "jit swiv checked=%lu bad=%lu",
+			(unsigned long)cgba_swi_verify_checked,
+			(unsigned long)cgba_swi_verify_bad);
+		hputs_dbg(buf);
+	}
+#endif
 	{
 		extern void cgba_sh4_dump_rom_blockmap(void);
 		cgba_sh4_dump_rom_blockmap();
@@ -1677,6 +1805,7 @@ int main(void)
 		}
 
 		gba_buttons = fxcg100_poll_gba_buttons_mapped(menu_state.keymap);
+		cgba_gpsp_input_record_frame(frame, gba_buttons);
 
 		int render_video;
 		if(hotkeys & FXCG100_HOTKEY_BIT(FXCG100_HOTKEY_FAST_FORWARD))

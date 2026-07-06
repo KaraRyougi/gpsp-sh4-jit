@@ -59,6 +59,8 @@ option(CGBA_SH4_INTERP_STATS
   "Count interpreted guest instructions by region (diag; ~4.5% overhead)" OFF)
 option(CGBA_SH4_DIAG_COUNTERS
   "Per-slice/per-helper diagnostic counters in headless builds (~0.5%)" OFF)
+option(CGBA_SH4_SWI_HLE_VERIFY
+  "Diag: predict faithful SWI HLE results, run the interpreted BIOS, compare" OFF)
 set(CGBA_SH4_HEAT_QUIET_FRAMES "180" CACHE STRING
   "Cold-gate: frames after a ROM flush before heating switches to the fast increment")
 set(CGBA_SH4_HEAT_SLOW "1" CACHE STRING
@@ -173,6 +175,17 @@ if(CGBA_DYNAREC)
   endif()
   if(CGBA_SH4_DIAG_COUNTERS)
     target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_SH4_DIAG_COUNTERS=1)
+  endif()
+  if(DEFINED CGBA_SH4_SWI_MEM_HLE)
+    target_compile_definitions(cgba-gint-gpsp PRIVATE
+      CGBA_SH4_SWI_MEM_HLE=${CGBA_SH4_SWI_MEM_HLE})
+  endif()
+  if(DEFINED CGBA_SH4_SWI_CPUSET_FAITHFUL)
+    target_compile_definitions(cgba-gint-gpsp PRIVATE
+      CGBA_SH4_SWI_CPUSET_FAITHFUL=${CGBA_SH4_SWI_CPUSET_FAITHFUL})
+  endif()
+  if(CGBA_SH4_SWI_HLE_VERIFY)
+    target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_SH4_SWI_HLE_VERIFY=1)
   endif()
   target_compile_definitions(cgba-gint-gpsp PRIVATE
     CGBA_SH4_HEAT_QUIET_FRAMES=${CGBA_SH4_HEAT_QUIET_FRAMES}
@@ -327,6 +340,7 @@ if(CGBA_GPSP_HEADLESS_TEST)
     CGBA_GPSP_HEADLESS_START_PERIOD=${CGBA_GPSP_HEADLESS_START_PERIOD}
     CGBA_GPSP_HEADLESS_SAVE_SLOT_FRAME=${CGBA_GPSP_HEADLESS_SAVE_SLOT_FRAME}
     CGBA_GPSP_HEADLESS_ALT_PERIOD=${CGBA_GPSP_HEADLESS_ALT_PERIOD}
+    CGBA_GPSP_HEADLESS_FUZZ_SEED=${CGBA_GPSP_HEADLESS_FUZZ_SEED}
     CGBA_GPSP_HEADLESS_ALT_PRESS=${CGBA_GPSP_HEADLESS_ALT_PRESS}
     CGBA_GPSP_HEADLESS_ALT_FRAME=${CGBA_GPSP_HEADLESS_ALT_FRAME}
     CGBA_GPSP_HEADLESS_START_PRESS=${CGBA_GPSP_HEADLESS_START_PRESS}

@@ -34,6 +34,15 @@ void cgba_gpsp_shutdown(void);
 /* Savestates: raw gba_save_state image at \\fls0\CGBAST<slot>.SAV (also
  * loadable by the emulator harness as its checkpoint blob). 1 = ok. */
 int cgba_gpsp_state_save(unsigned slot);
+
+/* Input recording / playback scripts (<BASE>.INP; see gpsp_runner.c). */
+void cgba_gpsp_input_record_frame(unsigned frame, unsigned mask);
+int cgba_gpsp_input_record_save(void);
+unsigned cgba_gpsp_input_record_render(unsigned char *buf, unsigned cap);
+void cgba_gpsp_input_path(unsigned short *path);
+int cgba_gpsp_input_script_load(void);
+int cgba_gpsp_input_script_active(void);
+unsigned cgba_gpsp_input_script_mask(unsigned frame);
 int cgba_gpsp_state_load(unsigned slot);
 
 /* Fill up to max_lines short strings with a pipeline snapshot (ROM load result,
