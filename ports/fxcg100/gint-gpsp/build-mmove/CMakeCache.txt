@@ -179,12 +179,22 @@ CGBA_SH4_ARM_DEAD_FLAGS:BOOL=ON
 //Enable SH4 native ARM single load fast path
 CGBA_SH4_ARM_LDST_NATIVE:BOOL=ON
 
+//Per-slice/per-helper diagnostic counters in headless builds (~0.5%)
+CGBA_SH4_DIAG_COUNTERS:BOOL=OFF
+
 //Headless/debug: dump block-diff op/cycle diagnostics
 CGBA_SH4_DIFF_DUMP_OPS:BOOL=OFF
 
 //Headless/debug: check the SH4 dynarec cycle budget at each translated
 // instruction boundary
 CGBA_SH4_EXACT_CYCLE_BOUNDARIES:BOOL=OFF
+
+//Cold-gate: frames after a ROM flush before heating switches to
+// the fast increment
+CGBA_SH4_HEAT_QUIET_FRAMES:STRING=180
+
+//Cold-gate heat increment within the post-flush window
+CGBA_SH4_HEAT_SLOW:STRING=1
 
 //Cold-code gate: translate ROM blocks after N dispatches (1-255;
 // 0 = gate off)

@@ -160,6 +160,7 @@ bool gba_load_state(const void* src)
   instruction_count = 0;
   reg[OAM_UPDATED] = 1;
 
+  do { void cgba_recompute_timer_cap_mask(void); cgba_recompute_timer_cap_mask(); } while (0);
   return true;
 }
 

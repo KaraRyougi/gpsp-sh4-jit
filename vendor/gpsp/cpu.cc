@@ -1377,6 +1377,13 @@ const u32 cpu_modes[16] =
 
 u32 instruction_count = 0;
 
+#ifdef CGBA_DYNAREC
+#ifdef __cplusplus
+extern "C"
+#endif
+int cgba_sh4_interp_swi_hle(s32 *spent);  /* sh4_interp_helpers.c */
+#endif
+
 void set_cpu_mode(cpu_mode_type new_mode)
 {
   cpu_mode_type cpu_mode = reg[CPU_MODE];
@@ -1547,6 +1554,18 @@ extern u32 cgba_interp_instr_bios, cgba_interp_instr_rom, cgba_interp_instr_ram;
 #define CGBA_INTERP_COUNT() do {} while(0)
 #endif
 
+/* Heating tunables: fast increment while the ROM cache is quiet, slow while
+ * within the post-flush window (see the adaptive comment below). */
+#ifndef CGBA_SH4_HEAT_QUIET_FRAMES
+#define CGBA_SH4_HEAT_QUIET_FRAMES 180
+#endif
+#ifndef CGBA_SH4_HEAT_FAST
+#define CGBA_SH4_HEAT_FAST 4
+#endif
+#ifndef CGBA_SH4_HEAT_SLOW
+#define CGBA_SH4_HEAT_SLOW 1
+#endif
+
 #define CGBA_COLD_HEAT(isz, thumbbit)                                         \
   do { if(CGBA_SH4_INTERP_HEAT &&                                             \
           cgba_diff_stop_active && cgba_diff_stop_on_budget) {                \
@@ -1557,7 +1576,9 @@ extern u32 cgba_interp_instr_bios, cgba_interp_instr_rom, cgba_interp_instr_ram;
             * set fits — promote scene-cycling once-per-frame code fast),
             * +1 within 180 frames of a wholesale flush (thrash regime: the
             * halve-on-flush decay must outpace accumulation). */             \
-           u32 _inc = (frame_counter - cgba_last_rom_flush_frame > 180) ? 4 : 1; \
+           u32 _inc = (frame_counter - cgba_last_rom_flush_frame >           \
+                       CGBA_SH4_HEAT_QUIET_FRAMES)                            \
+             ? CGBA_SH4_HEAT_FAST : CGBA_SH4_HEAT_SLOW;                       \
            u8 _hc = cgba_hot_count[_hi];                                      \
            cgba_hot_count[_hi] = (_hc < CGBA_SH4_HOT_THRESHOLD - _inc)        \
              ? (u8)(_hc + _inc) : (u8)CGBA_SH4_HOT_THRESHOLD;                 \
@@ -3208,6 +3229,18 @@ arm_loop:
             // Move to ARM mode, Supervisor mode and disable IRQs
             reg[REG_CPSR] = (reg[REG_CPSR] & ~0x3F) | 0x13 | 0x80;
             set_cpu_mode(MODE_SUPERVISOR);
+#ifdef CGBA_DYNAREC
+            {
+              /* SWI HLE (shared with the JIT dispatch path); on success the
+                 return state is restored and execution resumes inline. */
+              s32 swi_spent;
+              if (cgba_sh4_interp_swi_hle(&swi_spent)) {
+                cycles_remaining -= swi_spent;
+                extract_flags();
+                break;
+              }
+            }
+#endif
             break;
        }
 
@@ -3679,6 +3712,18 @@ thumb_loop:
              reg[REG_CPSR] = (reg[REG_CPSR] & ~0x3F) | 0x13 | 0x80;
              set_cpu_mode(MODE_SUPERVISOR);
              reg[REG_BUS_VALUE] = 0xe3a02004;  // After SWI, we read bios[0xE4]
+#ifdef CGBA_DYNAREC
+             {
+               /* SWI HLE; on success SPSR (Thumb bit included) is restored
+                  and the caller's next Thumb instruction is at reg[REG_PC]. */
+               s32 swi_spent;
+               if (cgba_sh4_interp_swi_hle(&swi_spent)) {
+                 cycles_remaining -= swi_spent;
+                 extract_flags();
+                 break;
+               }
+             }
+#endif
              goto arm_loop;
              break;
 

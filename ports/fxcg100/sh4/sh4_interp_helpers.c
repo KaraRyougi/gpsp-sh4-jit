@@ -21,6 +21,10 @@
 
 u32 execute_arm_translate_internal(u32 cycles, void *reg_base);  /* sh4_stub.S */
 
+#ifndef CGBA_SH4_INTERP_SWI_HLE
+#define CGBA_SH4_INTERP_SWI_HLE 0   /* see cgba_sh4_interp_swi_hle */
+#endif
+
 extern u32 cgba_diff_stop_pc;
 extern int cgba_diff_stop_active;
 extern int cgba_diff_stop_skip_initial;
@@ -805,7 +809,7 @@ u32 cgba_armldst_fb_pc[16], cgba_armldst_fb_op[16], cgba_armldst_fb_n[16];
 
 int cgba_sh4_arm_ldst(u32 opcode, u32 pc)
 {
-#ifdef CGBA_GPSP_HEADLESS_TEST
+#if defined(CGBA_GPSP_HEADLESS_TEST) && defined(CGBA_SH4_DIAG_COUNTERS)
   {
     u32 slot = (pc * 2654435761u) >> 28;
     if (cgba_armldst_fb_n[slot] == 0 || cgba_armldst_fb_pc[slot] == pc) {
@@ -1119,7 +1123,7 @@ void cgba_sh4_arm_multiply_long(u32 opcode, u32 pc)
 
 int cgba_sh4_arm_psr(u32 opcode, u32 pc)
 {
-#ifdef CGBA_GPSP_HEADLESS_TEST
+#if defined(CGBA_GPSP_HEADLESS_TEST) && defined(CGBA_SH4_DIAG_COUNTERS)
   {
     extern u32 cgba_psr_fb[8];
     /* [0]=mrs [1]=msr-imm [2]=msr-reg-c [3]=msr-reg-f [4]=msr-reg-cf
@@ -1944,6 +1948,44 @@ static u32 cgba_hle_intrwait_step(u32 cycles)
   return cgba_intrwait_halt_wait(cycles);
 }
 #endif /* CGBA_SH4_INTRWAIT_HLE */
+
+/* Interpreter SWI hook: cpu.cc calls this right after vectoring a guest SWI
+ * to 0x08 (LR_svc/SPSR_svc/SVC mode already established — the same state the
+ * JIT stub presents). Cold-gated code executing SWIs otherwise interprets
+ * the REAL BIOS bodies (AW: 359 entries / 2.36M interpreted instructions per
+ * 2000 frames, resumed mid-copy at 0x6B4/0x7A8 after IRQs). Returns nonzero
+ * when serviced, with reg[REG_PC]/CPSR/mode restored to the caller and the
+ * HLE's data-access wait states in *spent for the interpreter to debit (the
+ * JIT path debits them from R13 via the stub instead). Only compiled-in HLE
+ * cases return 1; the gated-off IntrWait park (return 2) cannot occur while
+ * CGBA_SH4_INTRWAIT_HLE is 0, and must stay on the interpreted path if it is
+ * ever enabled here. */
+int cgba_sh4_interp_swi_hle(s32 *spent)
+{
+  int saved = cgba_sh4_extra_cycles;
+  int handled;
+
+#if !CGBA_SH4_INTERP_SWI_HLE
+  /* DISABLED: servicing interpreter SWIs via the HLE measured +2.85 fps on
+   * AW but broke the Metroid dense JIT-vs-interp bit-exactness (boot-phase
+   * IRQ count shifted 1203 -> 1252; first pixel divergence by frame 200;
+   * bisect-confirmed). The HLE is cheaper than interpreting the real BIOS
+   * body (only data accesses are charged) and does not reproduce the real
+   * routines' post-SWI scratch-register state, so cold-context SWIs must
+   * keep interpreting the real BIOS until the HLE is made cycle- and
+   * register-faithful. Re-enable with CGBA_SH4_INTERP_SWI_HLE=1. */
+  (void)saved; (void)handled; (void)spent;
+  return 0;
+#else
+  if (cgba_dynarec_single_block)
+    return 0;
+  cgba_sh4_extra_cycles = 0;
+  handled = (cgba_hle_bios_swi() == 1);
+  *spent = handled ? cgba_sh4_extra_cycles : 0;
+  cgba_sh4_extra_cycles = saved;
+  return handled;
+#endif
+}
 
 u32 cgba_sh4_bios_fallback(u32 cycles)
 {

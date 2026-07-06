@@ -57,6 +57,12 @@ option(CGBA_SH4_THUMB_BLOCK_NATIVE
   "Enable SH4 native Thumb RAM block-load fast path" ON)
 option(CGBA_SH4_INTERP_STATS
   "Count interpreted guest instructions by region (diag; ~4.5% overhead)" OFF)
+option(CGBA_SH4_DIAG_COUNTERS
+  "Per-slice/per-helper diagnostic counters in headless builds (~0.5%)" OFF)
+set(CGBA_SH4_HEAT_QUIET_FRAMES "180" CACHE STRING
+  "Cold-gate: frames after a ROM flush before heating switches to the fast increment")
+set(CGBA_SH4_HEAT_SLOW "1" CACHE STRING
+  "Cold-gate heat increment within the post-flush window")
 option(CGBA_SH4_ARM_DEAD_FLAGS
   "ARM dead-flag elimination (OFF forces all-flags-live; A/B diagnostic)" ON)
 set(CGBA_SH4_HOT_THRESHOLD "64" CACHE STRING
@@ -163,6 +169,12 @@ if(CGBA_DYNAREC)
   if(CGBA_SH4_INTERP_STATS)
     target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_SH4_INTERP_STATS=1)
   endif()
+  if(CGBA_SH4_DIAG_COUNTERS)
+    target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_SH4_DIAG_COUNTERS=1)
+  endif()
+  target_compile_definitions(cgba-gint-gpsp PRIVATE
+    CGBA_SH4_HEAT_QUIET_FRAMES=${CGBA_SH4_HEAT_QUIET_FRAMES}
+    CGBA_SH4_HEAT_SLOW=${CGBA_SH4_HEAT_SLOW})
   if(NOT CGBA_SH4_ARM_DEAD_FLAGS)
     target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_SH4_ARM_DEAD_FLAGS=0)
   endif()

@@ -179,6 +179,9 @@ CGBA_SH4_ARM_DEAD_FLAGS:BOOL=ON
 //Enable SH4 native ARM single load fast path
 CGBA_SH4_ARM_LDST_NATIVE:BOOL=ON
 
+//Per-slice/per-helper diagnostic counters in headless builds (~0.5%)
+CGBA_SH4_DIAG_COUNTERS:BOOL=OFF
+
 //Headless/debug: dump block-diff op/cycle diagnostics
 CGBA_SH4_DIFF_DUMP_OPS:BOOL=OFF
 
