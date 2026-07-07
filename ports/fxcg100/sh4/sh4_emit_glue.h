@@ -52,7 +52,7 @@ extern u8 ws_cyc_nseq[16][2];  /* [region][word?1:0], live under WAITCNT.    */
  * store and MOV.L load are D-cache-coherent on one core, so the read sees the
  * new value with no flush; an OCBWB+ICBI there is pure waste on the hottest
  * (every-chain) path. The host build of the encoder has no caches: no-op. */
-#if defined(CGBA_FXCG100) && defined(CGBA_SH4_PATCH_RESYNC)
+#if (defined(CGBA_FXCG100) || defined(CGBA_FXCG50)) && defined(CGBA_SH4_PATCH_RESYNC)
 #include "ports/fxcg100/sh4/sh4_cache.h"
 #define SH4G_RESYNC(p, n) cgba_sh4_cache_sync((void *)(p), (void *)((u8 *)(p) + (n)))
 #else

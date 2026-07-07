@@ -98,7 +98,7 @@ void cgba_sh4_thumb_shift_imm(u32 opcode, u32 pc);
 extern void *tmemld[11][16];
 extern void *tmemst[4][16];
 
-#ifdef CGBA_FXCG100
+#if defined(CGBA_FXCG100) || defined(CGBA_FXCG50)
 #include "ports/fxcg100/sh4/sh4_cache.h"
 #endif
 
