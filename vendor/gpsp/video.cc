@@ -237,7 +237,8 @@ static inline void render_tile_Nbpp(
       u32 tilepix = eswap32(((u32*)tile_ptr)[hflip ? 1-j : j]);
       if (tilepix) {
         for (u32 i = 0; i < 4; i++, dest_ptr++) {
-          u8 pval = hflip ? (tilepix >> (24 - i*8)) : (tilepix >> (i*8));
+          u8 pval = hflip ? (tilepix >> 24) : tilepix;
+          if (hflip) tilepix <<= 8; else tilepix >>= 8;
           if (pval) {
             if (rdtype == FULLCOLOR)
               *dest_ptr = paltbl[pval];
@@ -263,7 +264,8 @@ static inline void render_tile_Nbpp(
       u16 pxflg = px_comb | tilepal;
       const u16 *subpal = &paltbl[tilepal];
       for (u32 i = 0; i < 8; i++, dest_ptr++) {
-        u8 pval = (hflip ? (tilepix >> ((7-i)*4)) : (tilepix >> (i*4))) & 0xF;
+        u8 pval = (hflip ? (tilepix >> 28) : tilepix) & 0xF;
+        if (hflip) tilepix <<= 4; else tilepix >>= 4;
         if (pval) {
           if (rdtype == FULLCOLOR)
             *dest_ptr = subpal[pval];
@@ -1080,7 +1082,8 @@ static inline void render_obj_tile_Nbpp(u32 px_comb,
       u32 tilepix = eswap32(((u32*)tile_ptr)[hflip ? 1-j : j]);
       if (tilepix) {
         for (u32 i = 0; i < 4; i++, dest_ptr++) {
-          u8 pval = hflip ? (tilepix >> (24 - i*8)) : (tilepix >> (i*8));
+          u8 pval = hflip ? (tilepix >> 24) : tilepix;
+          if (hflip) tilepix <<= 8; else tilepix >>= 8;
           if (pval) {
             if (rdtype == FULLCOLOR)
               *dest_ptr = pal[pval];
@@ -1103,7 +1106,8 @@ static inline void render_obj_tile_Nbpp(u32 px_comb,
     u32 tilepix = eswap32(*(u32*)tile_ptr);
     if (tilepix) {   // Can skip all pixels if the row is just transparent
       for (u32 i = 0; i < 8; i++, dest_ptr++) {
-        u8 pval = (hflip ? (tilepix >> ((7-i)*4)) : (tilepix >> (i*4))) & 0xF;
+        u8 pval = (hflip ? (tilepix >> 28) : tilepix) & 0xF;
+        if (hflip) tilepix <<= 4; else tilepix >>= 4;
         const u16 *subpal = &pal[palette];
         if (pval) {
           if (rdtype == FULLCOLOR)
