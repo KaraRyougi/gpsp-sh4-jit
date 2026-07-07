@@ -119,8 +119,8 @@ Runtime shape:
   through the loader on the safe-boot screen
 - Menu: settings for graphics/frameskip/FPS display, load/save state slot,
   gpSP-style per-action key mapping, config save/load, cheats/misc,
-  load/restart/return/quit. Defaults are `A=SHIFT`, `B=ALPHA`, `SELECT=VAR`,
-  `START=EXE`, D-pad arrows, `L=BEGIN`, and `R=END`; gpSP hotkeys default to
+  load/restart/return/quit. Defaults are `A=OK`, `B=CATALOG`, `SELECT=PageUp`,
+  `START=PageDown`, D-pad arrows, `L=BEGIN`, and `R=END`; gpSP hotkeys default to
   `NONE`; saved settings live at `\\fls0\\CGBA.CFG`. Manual frameskip is wired
   to skip LCD blits; game save/state storage-backed items currently show TODO
   markers.
