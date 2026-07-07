@@ -444,13 +444,13 @@ static void free_gamepak_mini_rom(void)
   if (!gamepak_mini_rom)
     return;
 
-#ifdef CGBA_FXCG100
+#if defined(CGBA_FXCG100) || defined(CGBA_FXCG50)
   if (!gamepak_mini_rom_static)
 #endif
     free(gamepak_mini_rom);
 
   gamepak_mini_rom = NULL;
-#ifdef CGBA_FXCG100
+#if defined(CGBA_FXCG100) || defined(CGBA_FXCG50)
   gamepak_mini_rom_static = false;
 #endif
 }
@@ -2825,7 +2825,9 @@ u32 load_gamepak_from_memory(const u8 *rom, u32 rom_size,
   gamepak_size = raw_size;
   gamepak_mirror_1m = false;
 
-#ifdef CGBA_FXCG100
+#if defined(CGBA_FXCG100) || defined(CGBA_FXCG50)
+  /* Both calculators run with the OS heap stubbed out (malloc returns NULL),
+   * so materialize into the reserved high-BSS buffer instead of the heap. */
   if (raw_size > sizeof(cgba_static_mini_rom))
     return (u32)-1;
   gamepak_mini_rom = cgba_static_mini_rom;
@@ -2997,7 +2999,7 @@ u32 load_gamepak_from_pages(const u8 * const *pages, u32 rom_size,
   if (backup_type_reset == BACKUP_UNKN)
   {
     u32 scan_size = raw_size < (32 * 1024) ? raw_size : (32 * 1024);
-#ifdef CGBA_FXCG100
+#if defined(CGBA_FXCG100) || defined(CGBA_FXCG50)
     /* The header scan only covers page 0 (32 KB); many games place the
      * EEPROM/SRAM/FLASH tag further in. detect_backup_subcircuit() falls back to
      * rom_scan_signatures_in_memory(), which scans gamepak_buffers[] -- but the
