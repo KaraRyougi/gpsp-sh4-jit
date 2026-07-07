@@ -9,7 +9,7 @@
 #include "vendor/gpsp/common.h"   /* gpSP fixed-size types (u8/u32/...) */
 #include "ports/fxcg100/sh4/sh4_fastmem.h"
 
-#ifdef CGBA_FXCG100
+#if defined(CGBA_FXCG100) || defined(CGBA_FXCG50)
 #include "ports/fxcg100/sh4/sh4_cache.h"
 #endif
 
@@ -31,14 +31,14 @@ void cgba_sh4_fastmem_init(void)
     cgba_sh4_fastmem_routine[fm] = sh4g_fastmem_emit_block_routine(&tp, fm);
   cgba_sh4_psr_rebank_routine = sh4g_psr_emit_rebank_routine(&tp);
   if ((size_t)(tp - cgba_fastmem_buf) > sizeof cgba_fastmem_buf) {
-#ifdef CGBA_FXCG100
+#if defined(CGBA_FXCG100) || defined(CGBA_FXCG50)
     extern void gint_panic(uint32_t code);
     gint_panic(0x0CBBu);              /* resident routine buffer overflow */
 #endif
     for (;;)
       ;
   }
-#ifdef CGBA_FXCG100
+#if defined(CGBA_FXCG100) || defined(CGBA_FXCG50)
   cgba_sh4_cache_sync(cgba_fastmem_buf, tp);
 #endif
 }
