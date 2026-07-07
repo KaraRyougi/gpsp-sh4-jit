@@ -1120,8 +1120,10 @@ static int cgba_headless_test(uint16_t *framebuffer)
 	hputs_dbg(buf);
 #if (CGBA_GPSP_HEADLESS_SCALE + 0) > 0
 	fxcg100_lcd_set_scale(CGBA_GPSP_HEADLESS_SCALE);
-	snprintf(buf, sizeof buf, "display scale mode %u",
-		(unsigned)CGBA_GPSP_HEADLESS_SCALE);
+	fxcg100_lcd_set_filter(CGBA_GPSP_HEADLESS_FILTER + 0);
+	snprintf(buf, sizeof buf, "display scale mode %u filter %u",
+		(unsigned)CGBA_GPSP_HEADLESS_SCALE,
+		(unsigned)(CGBA_GPSP_HEADLESS_FILTER + 0));
 	hputs_dbg(buf);
 #endif
 	cgba_fps_init(&cgba_fps);
@@ -1629,6 +1631,7 @@ int main(void)
 
 	menu_result = fxcg100_menu_run(&menu_state, 0, 0, NULL);
 	fxcg100_lcd_set_scale(menu_state.screen_scale);
+	fxcg100_lcd_set_filter(menu_state.screen_filter);
 	if(menu_result == FXCG100_MENU_QUIT)
 		return exit_to_os(1);
 	wait_for_keys_released();
@@ -1677,6 +1680,7 @@ int main(void)
 			fxcg100_menu_result result =
 				fxcg100_menu_run(&menu_state, frame, last_hash, &debug_info);
 			fxcg100_lcd_set_scale(menu_state.screen_scale);
+			fxcg100_lcd_set_filter(menu_state.screen_filter);
 
 			wait_for_keys_released();
 			previous_app_keys = fxcg100_poll_app_keys();

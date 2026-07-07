@@ -215,19 +215,44 @@ static void start_strip_dma(const uint16_t *strip, int x, int y,
 }
 
 /* ---- Scaled presentation --------------------------------------------------
- * Modes (menu DISPLAY SCALING, fxcg100_lcd_set_scale):
+ * Geometry (menu DISPLAY SCALING, fxcg100_lcd_set_scale):
  *   0  1:1 centered 240x160 (below)
- *   1  4:3 smooth: 320x212, exact 3->4 groups both axes, blended taps
+ *   1  4:3: 320x212, exact 3->4 groups both axes
  *   2  fullscreen: 384x216, 5->8 horizontal taps, 27/20 vertical map
- * Scaled rows are composed directly into the XY-RAM strip banks while the
- * previous strip's DMA is in flight, so the blend cost hides under the LCD
- * transfer. Strip heights stay multiples of 4 (R61524 DMA window). */
+ * Filter (menu SCALE FILTER, fxcg100_lcd_set_filter): SMOOTH / SHARP / CRISP
+ * selects the horizontal row scaler and the vertical tap composition (see
+ * fxcg100_scale.h). Scaled rows are composed directly into the XY-RAM strip
+ * banks while the previous strip's DMA is in flight, so the filter cost
+ * hides under the LCD transfer. Strip heights stay multiples of 4 (R61524
+ * DMA window). */
 
 static uint32_t lcd_scale_mode;
+static uint32_t lcd_scale_filter;   /* CGBA_SCALE_FILTER_{SMOOTH,SHARP,CRISP} */
 
 void fxcg100_lcd_set_scale(uint32_t mode)
 {
 	lcd_scale_mode = (mode <= 2) ? mode : 0;
+}
+
+void fxcg100_lcd_set_filter(uint32_t filter)
+{
+	lcd_scale_filter = (filter <= CGBA_SCALE_FILTER_CRISP) ? filter : 0;
+}
+
+typedef void (*cgba_hscale_fn)(const uint16_t *, uint16_t *);
+
+static cgba_hscale_fn hscale_320_for(uint32_t f)
+{
+	if (f == CGBA_SCALE_FILTER_CRISP) return cgba_scale_row_240_320_crisp;
+	if (f == CGBA_SCALE_FILTER_SHARP) return cgba_scale_row_240_320_sharp;
+	return cgba_scale_row_240_320;
+}
+
+static cgba_hscale_fn hscale_384_for(uint32_t f)
+{
+	if (f == CGBA_SCALE_FILTER_CRISP) return cgba_scale_row_240_384_crisp;
+	if (f == CGBA_SCALE_FILTER_SHARP) return cgba_scale_row_240_384_sharp;
+	return cgba_scale_row_240_384;
 }
 
 /* One 320px scratch row (4:3 middle row) + two cached hscaled rows with
@@ -235,16 +260,20 @@ void fxcg100_lcd_set_scale(uint32_t mode)
 static uint16_t scale_scratch[LCD_W] __attribute__((aligned(4)));
 static uint16_t scale_hrow[2][LCD_W] __attribute__((aligned(4)));
 static int scale_hrow_idx[2];
+static cgba_hscale_fn scale_hrow_fn;   /* selected fullscreen hscaler */
 
-/* 4:3 smooth: 53 groups of 3 source rows -> 4 output rows {A, avg(A,B),
- * avg(B,C), C}; 320px wide, centered (ox=32), top-aligned (oy=0 keeps the
- * window 4-row aligned; enter_gameplay_display() cleared the borders). */
+/* 4:3: 53 groups of 3 source rows -> 4 output rows. Horizontal filter via
+ * the selected 240->320 scaler; vertical taps {A, .75, 1.5, 2.25} composed
+ * per filter (SMOOTH blends r1+r2, SHARP only r2, CRISP neither). 320px
+ * wide, centered (ox=32), top-aligned; the window stays 4-row aligned. */
 static void blit_gba_scaled_43(const uint16_t *pixels)
 {
 	uint16_t *const strips[2] = {
 		(uint16_t *)STRIP_BUF0,
 		(uint16_t *)STRIP_BUF1,
 	};
+	cgba_hscale_fn hs = hscale_320_for(lcd_scale_filter);
+	uint32_t filter = lcd_scale_filter;
 	int ox = (DWIDTH - 320) / 2;
 	int oy = ((DHEIGHT - 212) / 2) & ~3;    /* 4-aligned DMA window */
 	int group = 0, y = 0, bi = 0;
@@ -264,11 +293,19 @@ static void blit_gba_scaled_43(const uint16_t *pixels)
 			uint16_t *r2 = sp + (g * 4 + 2) * 320;
 			uint16_t *r3 = sp + (g * 4 + 3) * 320;
 
-			cgba_scale_row_240_320(A, r0);
-			cgba_scale_row_240_320(B, scale_scratch);
-			cgba_scale_row_240_320(C, r3);
-			cgba_scale_row_avg(r0, scale_scratch, r1, 320);
-			cgba_scale_row_avg(scale_scratch, r3, r2, 320);
+			hs(A, r0);
+			hs(B, scale_scratch);
+			hs(C, r3);
+			if (filter == CGBA_SCALE_FILTER_SMOOTH) {
+				cgba_scale_row_avg(r0, scale_scratch, r1, 320);
+				cgba_scale_row_avg(scale_scratch, r3, r2, 320);
+			} else if (filter == CGBA_SCALE_FILTER_SHARP) {
+				memcpy(r1, scale_scratch, 320 * sizeof(uint16_t));
+				cgba_scale_row_avg(scale_scratch, r3, r2, 320);
+			} else {                               /* CRISP: A,B,C,C */
+				memcpy(r1, scale_scratch, 320 * sizeof(uint16_t));
+				memcpy(r2, r3, 320 * sizeof(uint16_t));
+			}
 		}
 		if (y > 0)
 			wait_lcd_dma();
@@ -286,7 +323,7 @@ static const uint16_t *fs_hrow(const uint16_t *pixels, unsigned s)
 	unsigned slot = s & 1;
 
 	if (scale_hrow_idx[slot] != (int)s) {
-		cgba_scale_row_240_384(pixels + s * GBA_W, scale_hrow[slot]);
+		scale_hrow_fn(pixels + s * GBA_W, scale_hrow[slot]);
 		scale_hrow_idx[slot] = (int)s;
 	}
 	return scale_hrow[slot];
@@ -295,7 +332,7 @@ static const uint16_t *fs_hrow(const uint16_t *pixels, unsigned s)
 static void blit_gba_scaled_full(const uint16_t *pixels)
 {
 	static uint16_t vmap[216];
-	static int vmap_ready;
+	static int vmap_filter = -1;
 	uint16_t *const strips[2] = {
 		(uint16_t *)STRIP_BUF0,
 		(uint16_t *)STRIP_BUF1,
@@ -304,10 +341,11 @@ static void blit_gba_scaled_full(const uint16_t *pixels)
 	int oy = ((DHEIGHT - LCD_H) / 2) & ~3;  /* 4-aligned DMA window */
 	int y = 0, bi = 0;
 
-	if (!vmap_ready) {
-		cgba_scale_build_vmap216(vmap);
-		vmap_ready = 1;
+	if (vmap_filter != (int)lcd_scale_filter) {
+		cgba_scale_build_vmap216_f(vmap, (int)lcd_scale_filter);
+		vmap_filter = (int)lcd_scale_filter;
 	}
+	scale_hrow_fn = hscale_384_for(lcd_scale_filter);
 	scale_hrow_idx[0] = scale_hrow_idx[1] = -1;   /* new frame contents */
 
 	wait_lcd_dma();

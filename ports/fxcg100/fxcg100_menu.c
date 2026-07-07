@@ -31,6 +31,7 @@ typedef enum menu_value_id {
   MENU_VALUE_NONE = 0,
   MENU_VALUE_ROM_SOURCE,
   MENU_VALUE_SCALE,
+  MENU_VALUE_SCALE_FILTER,
   MENU_VALUE_FRAMESKIP_TYPE,
   MENU_VALUE_FRAMESKIP_VALUE,
   MENU_VALUE_FRAMESKIP_VARIATION,
@@ -81,8 +82,14 @@ static const fxcg100_debug_info *menu_debug_info;
 
 static const char * const scale_options[] = {
   "UNSCALED 1:1",
-  "4:3 SMOOTH",
+  "4:3",
   "FULLSCREEN"
+};
+
+static const char * const filter_options[] = {
+  "SMOOTH",
+  "SHARP",
+  "CRISP"
 };
 
 static const char * const rom_options[] = {
@@ -159,6 +166,8 @@ static const menu_item main_items[] = {
 static const menu_item graphics_items[] = {
   { "DISPLAY SCALING", MENU_ITEM_CHOICE, MENU_ACTION_NONE,
     MENU_PAGE_GRAPHICS, MENU_VALUE_SCALE, scale_options, 3, NULL },
+  { "SCALE FILTER", MENU_ITEM_CHOICE, MENU_ACTION_NONE,
+    MENU_PAGE_GRAPHICS, MENU_VALUE_SCALE_FILTER, filter_options, 3, NULL },
   { "FRAMESKIP TYPE", MENU_ITEM_CHOICE, MENU_ACTION_NONE,
     MENU_PAGE_GRAPHICS, MENU_VALUE_FRAMESKIP_TYPE, frameskip_options, 3, NULL },
   { "FRAMESKIP VALUE", MENU_ITEM_NUMBER, MENU_ACTION_NONE,
@@ -325,6 +334,8 @@ static uint32_t *menu_value_ptr(fxcg100_menu_state *state, menu_value_id id)
     return &state->rom_source;
   case MENU_VALUE_SCALE:
     return &state->screen_scale;
+  case MENU_VALUE_SCALE_FILTER:
+    return &state->screen_filter;
   case MENU_VALUE_FRAMESKIP_TYPE:
     return &state->frameskip_type;
   case MENU_VALUE_FRAMESKIP_VALUE:
@@ -753,6 +764,7 @@ void fxcg100_menu_init(fxcg100_menu_state *state)
   memset(state, 0, sizeof(*state));
   state->rom_source = 0;
   state->screen_scale = 0;
+  state->screen_filter = 0;       /* SMOOTH */
   state->frameskip_type = 1;
   state->frameskip_value = 1;
   state->frameskip_variation = 0;
