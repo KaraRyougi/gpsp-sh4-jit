@@ -14,6 +14,21 @@
 #define CGBA_SH4_P2_BASE ((uintptr_t)0xa0000000u)
 #define CGBA_SH4_P2_END  ((uintptr_t)0xc0000000u)
 
+#ifdef CGBA_FXCG50
+/* fx-CG50: use gint's portable BFile_* for the ordinary calls, and OS syscall
+ * 0x1DAA (via the cg50_syscall.S trampoline) for Bfile_GetBlockAddress, which
+ * gint does not wrap. The wrappers below and the NOR block-gather / P2->P1
+ * mapping are model-independent. */
+extern int cgba_cg50_bfile_get_block_address(int fd, int offset, void **addr);
+#define CGBA_BFILE_OPEN              BFile_Open
+#define CGBA_BFILE_SIZE              BFile_Size
+#define CGBA_BFILE_READ             BFile_Read
+#define CGBA_BFILE_CLOSE            BFile_Close
+#define CGBA_BFILE_GET_BLOCK_ADDRESS cgba_cg50_bfile_get_block_address
+#define CGBA_BFILE_FIND_FIRST       BFile_FindFirst
+#define CGBA_BFILE_FIND_NEXT        BFile_FindNext
+#define CGBA_BFILE_FIND_CLOSE       BFile_FindClose
+#else
 #define CGBA_BFILE_OPEN              ((uintptr_t)0x803338d0u)
 #define CGBA_BFILE_SIZE              ((uintptr_t)0x80333b04u)
 #define CGBA_BFILE_READ              ((uintptr_t)0x80333dc2u)
@@ -22,12 +37,13 @@
 #define CGBA_BFILE_FIND_FIRST        ((uintptr_t)0x803345c8u)
 #define CGBA_BFILE_FIND_NEXT         ((uintptr_t)0x80334846u)
 #define CGBA_BFILE_FIND_CLOSE        ((uintptr_t)0x80334950u)
+#endif
 
 #ifndef CGBA_FXCG100_STORAGE
 #define CGBA_FXCG100_STORAGE 0
 #endif
 
-#ifdef CGBA_FXCG100
+#if defined(CGBA_FXCG100) || defined(CGBA_FXCG50)
 #define CGBA_HIGH_BSS __attribute__((section(".cgba.highbss"), aligned(32)))
 #else
 #define CGBA_HIGH_BSS
