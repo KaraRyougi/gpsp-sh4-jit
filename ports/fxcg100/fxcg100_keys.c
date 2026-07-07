@@ -38,10 +38,10 @@ static const fxcg100_key_choice bindable_keys[] = {
 };
 
 /* GBA button -> fx-CG100 key, in enum order:
- *   A=OK(48) B=CAT(37) SELECT=VAR(57) START=EXE(31)
+ *   A=OK(48) B=CAT(37) SELECT=PGUP(29) START=PGDN(28)
  *   RIGHT(38) LEFT(58) UP(49) DOWN(47) L=BEGIN(59) R=END(39) */
 static const uint16_t default_keymap[FXCG100_GBA_KEY_COUNT] = {
-  48, 37, 57, 31, 38, 58, 49, 47, 59, 39
+  48, 37, 29, 28, 38, 58, 49, 47, 59, 39
 };
 
 static const uint16_t default_hotkey_map[FXCG100_HOTKEY_COUNT] = {
