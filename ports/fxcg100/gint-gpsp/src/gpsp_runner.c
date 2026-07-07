@@ -284,7 +284,7 @@ static void cgba_crash_panic(uint32_t code)
 	__asm__ volatile("stc spc, %0" : "=r"(spc));
 
 	cgba_panic_draw_begin();
-	cgba_panic_text(row++, "CGBA CRASH  EXC=%03lX%s", (unsigned long)code,
+	cgba_panic_text(row++, "gpSP CRASH  EXC=%03lX%s", (unsigned long)code,
 		code == CGBA_EXC_WILD_JUMP ? " (JIT WILD JUMP)" : "");
 	cgba_panic_text(row++, "HOST PC=%08lX TEA=%08lX",
 		(unsigned long)spc, (unsigned long)tea);

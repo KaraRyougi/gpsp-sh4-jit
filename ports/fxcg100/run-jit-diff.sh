@@ -73,11 +73,11 @@ OUT="${OUT:-$(mktemp -d)}"
 [[ -x "$CALCEMU" ]] || { echo "missing emulator: $CALCEMU" >&2; exit 1; }
 [[ -r "$ROM" ]]     || { echo "missing ROM: $ROM" >&2; exit 1; }
 
-# fxsdk's generate_g3a() writes CGBA-GPSP.g3a in the source directory, even
+# fxsdk's generate_g3a() writes gpSP.g3a in the source directory, even
 # when CMake builds from separate build dirs. Preserve any calculator-launch
 # artifact that was there before the diagnostic harness so the last headless
 # add-in does not get mistaken for the installable build.
-ROOT_G3A="$GG/CGBA-GPSP.g3a"
+ROOT_G3A="$GG/gpSP.g3a"
 ROOT_G3A_SAVE="$OUT/source-root-before-jitdiff.g3a"
 ROOT_G3A_WAS_PRESENT=0
 if [[ -e "$ROOT_G3A" ]]; then
@@ -130,10 +130,10 @@ cfg() { # build_dir dynarec(0|1) [extra diff args...]
 
 build() { # build_dir tag
   cmake --build "$1" --target clean >/dev/null
-  rm -f "$GG/CGBA-GPSP.g3a"
+  rm -f "$GG/gpSP.g3a"
   cmake --build "$1" -j4 >/dev/null
-  [[ -r "$GG/CGBA-GPSP.g3a" ]] || { echo "build did not produce $GG/CGBA-GPSP.g3a" >&2; exit 1; }
-  cp "$GG/CGBA-GPSP.g3a" "$OUT/$2.g3a"
+  [[ -r "$GG/gpSP.g3a" ]] || { echo "build did not produce $GG/gpSP.g3a" >&2; exit 1; }
+  cp "$GG/gpSP.g3a" "$OUT/$2.g3a"
 }
 
 run() { # g3a logfile secs

@@ -405,5 +405,5 @@ target_link_options(cgba-gint-gpsp PRIVATE
   -Wl,--allow-multiple-definition
 )
 
-generate_g3a(TARGET cgba-gint-gpsp OUTPUT "CGBA-GPSP.g3a"
-  NAME "CGBA-GPSP" VERSION "00.01.0000")
+generate_g3a(TARGET cgba-gint-gpsp OUTPUT "gpSP.g3a"
+  NAME "gpSP" VERSION "00.01.0000")
