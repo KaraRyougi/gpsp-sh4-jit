@@ -415,7 +415,7 @@ bool gamepak_header_nonstandard;
 // We allocate in 1MB chunks.
 const unsigned gamepak_buffer_blocksize = 1024*1024;
 
-#ifdef CGBA_FXCG100
+#if defined(CGBA_FXCG100) || defined(CGBA_FXCG50)
 #define CGBA_FXCG100_STATIC_ROM_MAX (256 * 1024)
 static u8 cgba_static_mini_rom[CGBA_FXCG100_STATIC_ROM_MAX] CGBA_HIGH_BSS;
 static bool gamepak_mini_rom_static;
@@ -2370,7 +2370,7 @@ void init_gamepak_buffer(void)
 {
   unsigned i;
 
-#ifdef CGBA_FXCG100
+#if defined(CGBA_FXCG100) || defined(CGBA_FXCG50)
   for (i = 0; i < CGBA_GAMEPAK_CACHE_BLOCKS; i++)
     gamepak_buffers[i] = cgba_gamepak_cache[i];
   gamepak_buffer_count = CGBA_GAMEPAK_CACHE_BLOCKS;
