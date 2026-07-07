@@ -1,3 +1,0 @@
-/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/gint-gpsp/build-mckpt/CMakeFiles/cgba-gint-gpsp.dir
-/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/gint-gpsp/build-mckpt/CMakeFiles/edit_cache.dir
-/Users/ryougi/Dev/cgba/.claude/worktrees/elegant-faraday-ea393c/ports/fxcg100/gint-gpsp/build-mckpt/CMakeFiles/rebuild_cache.dir
