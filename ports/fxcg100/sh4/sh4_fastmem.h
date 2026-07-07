@@ -272,13 +272,18 @@ static inline u8 *sh4g_fastmem_emit_routine(u8 **tp, int fm)
       sh4_emit_and_imm(&cg, 0xFF);                   /* R0 = rd byte-offset */
       sh4_emit_mov_l_store_r0(&cg, SH4_REG_T1, SH4_REG_BASE);
     } else {
-      /* value = reg[rd]; then rebuild R0 = page offset for the store */
+      /* R0 already holds addr & 0x7FFF (the in-page offset computed above): the
+       * SMC tag scan reads it via @(R0,tag) but never writes R0, and the VRAM
+       * sub-path bypasses the scan entirely, so on every store sub-path R0 is
+       * still the page offset here. Park it in R7 (ARG3 — the tag-page pointer,
+       * dead after the scan; the writeback value lives in R6/ARG2, untouched)
+       * across the R0-indexed reg[rd] load, then restore it for the store,
+       * instead of rebuilding it with a 5-instruction shift dance. */
+      sh4_emit_mov_reg(&cg, SH4_REG_RET, SH4_REG_ARG3);   /* R7 = page offset */
       sh4_emit_mov_reg(&cg, SH4_REG_ARG1, SH4_REG_RET);
       sh4_emit_and_imm(&cg, 0xFF);
       sh4_emit_mov_l_load_r0(&cg, SH4_REG_BASE, SH4_REG_T1);
-      sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
-      sh4_emit_shll16(&cg, SH4_REG_RET); sh4_emit_shll(&cg, SH4_REG_RET);
-      sh4_emit_shlr16(&cg, SH4_REG_RET); sh4_emit_shlr(&cg, SH4_REG_RET);
+      sh4_emit_mov_reg(&cg, SH4_REG_ARG3, SH4_REG_RET);   /* R0 = page offset */
       switch (kind) {
       case CGBA_FM_STORE_W:
         sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_ARG0);
