@@ -42,6 +42,20 @@ int fxcg100_storage_write_blob(const uint16_t *path, const void *src, unsigned s
 #define CGBA_BFILE_READ_ONLY 0x01
 #define CGBA_BFILE_WRITE_ONLY 0x02
 
+#ifdef CGBA_FXCG50
+/* fx-CG50: the OS BFile addresses differ per model, so use gint's portable
+ * BFile_* wrappers instead. They still must run in OS mode, so the existing
+ * gint_world_switch(GINT_CALL(...)) call sites work unchanged once the
+ * CGBA_BFILE_* names point at the functions. */
+#include <gint/bfile.h>
+#define CGBA_BFILE_OPEN   BFile_Open
+#define CGBA_BFILE_SIZE   BFile_Size
+#define CGBA_BFILE_CREATE BFile_Create
+#define CGBA_BFILE_REMOVE BFile_Remove
+#define CGBA_BFILE_READ   BFile_Read
+#define CGBA_BFILE_WRITE  BFile_Write
+#define CGBA_BFILE_CLOSE  BFile_Close
+#else
 #define CGBA_BFILE_OPEN   ((uintptr_t)0x803338d0u)
 #define CGBA_BFILE_SIZE   ((uintptr_t)0x80333b04u)
 #define CGBA_BFILE_CREATE ((uintptr_t)0x80333ef0u)
@@ -49,6 +63,7 @@ int fxcg100_storage_write_blob(const uint16_t *path, const void *src, unsigned s
 #define CGBA_BFILE_READ   ((uintptr_t)0x80333dc2u)
 #define CGBA_BFILE_WRITE  ((uintptr_t)0x80333f9eu)
 #define CGBA_BFILE_CLOSE  ((uintptr_t)0x80333a4eu)
+#endif
 
 typedef struct fxcg100_config_file {
   uint32_t magic;
