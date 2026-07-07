@@ -52,7 +52,6 @@ the standard boot-to-gameplay recipe), and hold-LEFT-flip-RIGHT movement
 (`RUN_FRAME/RUN_FLIP` — the Metroid movement soak). The fuzz monkey
 (`FUZZ_SEED > 0`, xorshift32) replaces them all: hold one direction 12–43
 frames, re-roll a tap every 6–21 frames (A 25%, B 12.5%, START ~3%).
-A loaded `.INP` script overrides *everything*.
 
 ### Framebuffer statistics — the parity primitive
 
@@ -63,28 +62,6 @@ FBSTAT streams between two runs are the parity criterion. `@@CGBA_HASH`
 lines extend this to IWRAM/EWRAM/VRAM/palette/converted-palette/OAM/IO
 hashes for narrowing a divergence to a memory domain.
 
-### Input recording / replay
-
-Format: `\\fls0\<BASE>.INP`, text, one `<frame> <hexmask>` line per
-*change* (KEYINPUT bit order, mask & 0x3FF; an event holds until the next
-event; max 6144 events, leading silence skipped). `<BASE>` = up to 6
-uppercased alphanumerics of the ROM name — the same naming as savestates,
-so a recording pairs with the state saved in the same session.
-
-- **On device**: gated by the RECORD INPUT LOG menu option (misc options
-  page, default OFF, persisted in `CGBA.CFG`); when enabled, the `.INP` is
-  written as a side effect of saving a state. Any play session becomes a
-  replayable regression asset.
-- **Headless**: recording is always on (captures whatever the generators
-  or fuzz produced); written at run end via the raw BFile trampolines
-  (`@@CGBA_INPSAVE ok=%d bytes=%u`) unless a script was replaying.
-- **Replay**: a present `.INP` is loaded at boot (`input script: N events`)
-  and drives the run verbatim.
-
-Validated round trip: a 1500-frame fuzz run recorded 129 events; replaying
-the produced `.INP` reproduced all 150 in-run FBSTAT hashes identically
-(the final frame differs — the known presentation-phase artifact class).
-
 ### Persistence between calculator and emulator
 
 The headless harness calls Casio BFile syscalls by absolute address (open
@@ -94,8 +71,7 @@ table onto a host directory (`HLE_FLS0=dir`). `CGBACHK.SAV` is the
 416 KiB checkpoint blob (raw `gba_save_state` image; the loader also
 accepts the word-RLE compressed `.SVS` format, so a state saved on the
 calculator can be copied in and used as the deep-gameplay checkpoint). The
-`.SVS` slot saves, `.INP` recordings and `CGBACHK.SAV` all round-trip
-between device and emulator.
+`.SVS` slot saves and `CGBACHK.SAV` round-trip between device and emulator.
 
 ## 2. Host unit tests (`tests/`)
 

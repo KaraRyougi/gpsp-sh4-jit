@@ -9,8 +9,8 @@ As-built (current):
   contract, faithful slice-gated CpuSet/CpuFastSet, the parked/resumable
   FastSet engine, verify harness, why the infidel HLEs were demoted.
 - [testing-harness.md](testing-harness.md) — headless harness knobs, FBSTAT
-  parity batteries, input record/replay, the exec oracle, calcemu
-  facilities, standing measurement protocols.
+  parity batteries, the exec oracle, calcemu facilities, standing
+  measurement protocols.
 - [performance-history.md](performance-history.md) — measurement
   methodology and its traps, the commit-anchored optimization chronology,
   state at HEAD, future directions.
