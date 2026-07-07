@@ -116,9 +116,11 @@ bulk SMC tag scan — hardware-only, calcemu tolerates misaligned loads
 memory canary (`7b8889e`) distinguishes memory-margin failures from
 codegen bugs; an 8000-frame fuzz soak at stock behavior ran clean.
 
-**Display scale modes** (`b249fef`): 4:3 smooth 320×212 and fullscreen
-384×216, packed-pair RGB565 blends composed into the strip banks under
-the LCD DMA; +1.9/+2.8 Mcyc per rendered frame before DMA overlap.
+**Display scale modes** (`b249fef`): 4:3 320×212 and fullscreen 384×216,
+packed-pair RGB565 blends composed into the strip banks under the LCD DMA;
++1.9/+2.8 Mcyc per rendered frame before DMA overlap. An orthogonal SCALE
+FILTER (SMOOTH / SHARP / CRISP-nearest) selects the horizontal row scaler
+and vertical tap composition; CRISP is the cheapest (no blends).
 
 ## State at HEAD
 

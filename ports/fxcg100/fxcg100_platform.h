@@ -142,8 +142,11 @@ void fxcg100_lcd_update(void);
 void fxcg100_lcd_status(const char *text);
 void fxcg100_lcd_blit_gba(const uint16_t *pixels);
 /* Display scaling for the gameplay blit (menu DISPLAY SCALING):
- * 0 = 1:1 centered, 1 = 4:3 smooth 320x212, 2 = fullscreen 384x216. */
+ * 0 = 1:1 centered, 1 = 4:3 320x212, 2 = fullscreen 384x216. */
 void fxcg100_lcd_set_scale(uint32_t mode);
+/* Scale filter (menu SCALE FILTER), applied to the scaled modes:
+ * 0 = SMOOTH, 1 = SHARP, 2 = CRISP (nearest). */
+void fxcg100_lcd_set_filter(uint32_t filter);
 uint32_t fxcg100_frame_hash(const uint16_t *pixels);
 
 /* Draw an FPS metrics overlay into the top-left of a 240x160 GBA frame buffer

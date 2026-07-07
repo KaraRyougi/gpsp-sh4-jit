@@ -177,6 +177,84 @@ static void test_vmap216(void)
 	}
 }
 
+/* CRISP / SHARP horizontal cores against their documented patterns. */
+static void test_filter_rows(void)
+{
+	_Alignas(4) uint16_t src[240];
+	_Alignas(4) uint16_t dst[386];
+	unsigned i, g;
+
+	for (i = 0; i < 240; i++)
+		src[i] = (uint16_t)(i << 5);
+
+	/* 240->320 CRISP {a,b,c,c} */
+	cgba_scale_row_240_320_crisp(src, dst);
+	for (g = 0; g < 80; g++) {
+		const uint16_t *s = src + g * 3;
+		uint16_t *o = dst + g * 4;
+		CHECK(o[0] == s[0] && o[1] == s[1] && o[2] == s[2] && o[3] == s[2],
+			"320 crisp g%u {%04X %04X %04X %04X}", g, o[0], o[1], o[2], o[3]);
+	}
+	/* 240->320 SHARP {a,b,avg(b,c),c} */
+	cgba_scale_row_240_320_sharp(src, dst);
+	for (g = 0; g < 80; g++) {
+		const uint16_t *s = src + g * 3;
+		uint16_t *o = dst + g * 4;
+		CHECK(o[0] == s[0] && o[1] == s[1] &&
+			o[2] == cgba_avg565(s[1], s[2]) && o[3] == s[2],
+			"320 sharp g%u", g);
+	}
+	/* 240->384 CRISP {a,b,b,c,d,d,e,e} */
+	cgba_scale_row_240_384_crisp(src, dst);
+	for (g = 0; g < 48; g++) {
+		const uint16_t *s = src + g * 5;
+		uint16_t *o = dst + g * 8;
+		CHECK(o[0] == s[0] && o[1] == s[1] && o[2] == s[1] && o[3] == s[2] &&
+			o[4] == s[3] && o[5] == s[3] && o[6] == s[4] && o[7] == s[4],
+			"384 crisp g%u", g);
+	}
+	/* 240->384 SHARP {a,ab,b,c,cd,d,e,e} */
+	cgba_scale_row_240_384_sharp(src, dst);
+	for (g = 0; g < 48; g++) {
+		const uint16_t *s = src + g * 5;
+		uint16_t *o = dst + g * 8;
+		CHECK(o[0] == s[0] && o[1] == cgba_avg565(s[0], s[1]) &&
+			o[2] == s[1] && o[3] == s[2] &&
+			o[4] == cgba_avg565(s[2], s[3]) && o[5] == s[3] &&
+			o[6] == s[4] && o[7] == s[4], "384 sharp g%u", g);
+	}
+}
+
+/* Filtered vmap: CRISP has no blend bits; SMOOTH blends whenever fractional;
+ * all three stay monotonic, in range, no skipped source rows. */
+static void test_vmap_filters(void)
+{
+	uint16_t vmap[216];
+	int filter;
+
+	for (filter = 0; filter <= 2; filter++) {
+		unsigned t, prev = 0;
+		unsigned seen[160] = { 0 };
+
+		cgba_scale_build_vmap216_f(vmap, filter);
+		CHECK((vmap[0] & CGBA_SCALE_VROW) == 0, "f%d first row 0", filter);
+		CHECK((vmap[215] & CGBA_SCALE_VROW) == 159, "f%d last row 159", filter);
+		for (t = 0; t < 216; t++) {
+			unsigned s = vmap[t] & CGBA_SCALE_VROW;
+			int blend = (vmap[t] & CGBA_SCALE_VBLEND) != 0;
+			CHECK(s < 160, "f%d t%u range", filter, t);
+			CHECK(!blend || s + 1 < 160, "f%d t%u blend past end", filter, t);
+			CHECK(s >= prev && s - prev <= 1, "f%d t%u step", filter, t);
+			if (filter == CGBA_SCALE_FILTER_CRISP)
+				CHECK(!blend, "f%d t%u crisp must not blend", filter, t);
+			prev = s;
+			seen[s] = 1;
+		}
+		for (t = 0; t < 160; t++)
+			CHECK(seen[t], "f%d src row %u never sampled", filter, t);
+	}
+}
+
 /* The 4:3 vertical grouping used by the presenter: 53 groups of 3 source
  * rows -> 4 output rows covers 159 of 160 source rows and 212 output rows. */
 static void test_43_geometry(void)
@@ -195,7 +273,9 @@ int main(void)
 	test_row_avg();
 	test_row_240_320();
 	test_row_240_384();
+	test_filter_rows();
 	test_vmap216();
+	test_vmap_filters();
 	test_43_geometry();
 
 	if (failures) {
