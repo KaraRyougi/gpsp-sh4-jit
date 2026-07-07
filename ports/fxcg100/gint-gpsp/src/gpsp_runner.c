@@ -610,6 +610,7 @@ int cgba_gpsp_init(uint16_t *framebuffer, unsigned rom_id)
 	dynarec_enable = 1;   /* JIT on by default (SAVE_STATE hotkey still toggles) */
 	sprite_limit = 1;
 	reset_gba();
+	cgba_gpsp_backup_load();   /* restore the game's in-cart save, if any */
 	return 0;
 }
 
@@ -1019,6 +1020,78 @@ int cgba_gpsp_state_load(unsigned slot)
 	return ok;
 }
 
+/* ---- GBA in-game backup save (SRAM / Flash / EEPROM) persistence ---------- */
+/* The live save lives in gpSP's gamepak_backup[]; it is loaded when a ROM boots
+ * and written back to \\fls0\<BASE>.SAV (BASE = the ROM stem, matching the
+ * savestate naming) when it changes. Nothing wrote it to storage before, so
+ * in-game saves were lost on power-off. */
+static void cgba_backup_path(uint16_t *path)
+{
+	static const char prefix[] = "\\\\fls0\\";
+	const char *nm = cgba_gpsp_rom_name(cgba_loaded_rom_id);
+	char base[7];
+	unsigned i, b = 0;
+
+	for (i = 0; nm && nm[i] && nm[i] != '.' && b < 6; i++) {
+		char c = nm[i];
+		if (c >= 'a' && c <= 'z')
+			c = (char)(c - 'a' + 'A');
+		if ((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9'))
+			base[b++] = c;
+	}
+	if (b == 0) {
+		base[0] = 'G'; base[1] = 'A'; base[2] = 'M'; base[3] = 'E';
+		b = 4;
+	}
+	base[b] = 0;
+
+	for (i = 0; prefix[i]; i++)
+		path[i] = (uint16_t)prefix[i];
+	for (b = 0; base[b]; b++)
+		path[i++] = (uint16_t)base[b];
+	path[i++] = '.'; path[i++] = 'S'; path[i++] = 'A'; path[i++] = 'V';
+	path[i] = 0;
+}
+
+/* Bytes of gamepak_backup the current game actually uses, by detected type. */
+static unsigned cgba_backup_size(void)
+{
+	switch (backup_type) {
+	case BACKUP_SRAM:   return 0x8000u;                            /* 32 KiB */
+	case BACKUP_FLASH:  return (unsigned)flash_bank_cnt * 0x10000u;/* 64/128 KiB */
+	case BACKUP_EEPROM: return (unsigned)eeprom_size * 512u;       /* 512 B / 8 KiB */
+	default:            return 0u;                                 /* UNKN: unused */
+	}
+}
+
+void cgba_gpsp_backup_load(void)
+{
+	uint16_t path[24];
+	int fsz;
+
+	cgba_backup_path(path);
+	fsz = fxcg100_storage_blob_size(path);
+	/* Load whatever the file holds; gpSP detects the type on first access and
+	 * reads it straight from gamepak_backup, so the bytes just need to be there. */
+	if (fsz > 0 && fsz <= (int)sizeof(gamepak_backup))
+		fxcg100_storage_read_blob(path, gamepak_backup, (unsigned)fsz);
+	cgba_backup_dirty = 0;
+}
+
+void cgba_gpsp_backup_flush(int force)
+{
+	unsigned sz = cgba_backup_size();
+	uint16_t path[24];
+
+	if (sz == 0)
+		return;                       /* game never touched its backup */
+	if (!force && !cgba_backup_dirty)
+		return;                       /* nothing new since the last flush */
+	cgba_backup_path(path);
+	if (fxcg100_storage_write_blob(path, gamepak_backup, sz))
+		cgba_backup_dirty = 0;
+}
+
 void cgba_gpsp_run_frame(uint32_t gba_buttons, int render_video)
 {
 	u32 cycles = (reg[CPU_HALT_STATE] == CPU_ACTIVE) ? execute_cycles : (u32)-64;
@@ -1384,6 +1457,7 @@ unsigned cgba_gpsp_diag(char out[][CGBA_DIAG_LINE_MAX], unsigned max_lines)
 
 void cgba_gpsp_shutdown(void)
 {
+	cgba_gpsp_backup_flush(0);   /* persist the game's save before teardown */
 	if(!cgba_lcd_test_active)
 		memory_term();
 	cgba_nor_rom_close(&cgba_current_nor_rom);

@@ -9,6 +9,11 @@
 #include "gpsp_runner.h"
 #ifdef CGBA_DYNAREC
 #include "sh4/sh4_diff_harness.h"
+
+/* AUTOMATIC backup-save flush cadence (guest frames). ~10s at 60fps; only
+ * writes NOR when the save is dirty, so idle play never touches flash. */
+#define CGBA_BACKUP_AUTO_FRAMES 600u
+
 extern int dynarec_enable;   /* gpSP: 0 = interpreter, 1 = SH4 recompiler */
 extern uint32_t execute_cycles;
 extern uint32_t reg[64];
@@ -1795,6 +1800,12 @@ int main(void)
 			render_video = fxcg100_menu_should_blit(&menu_state, frame);
 
 		cgba_gpsp_run_frame(gba_buttons, render_video);
+		/* AUTOMATIC backup mode: flush the game's save to NOR when it has
+		 * changed, ~every CGBA_BACKUP_AUTO_FRAMES frames. EXIT ONLY (default)
+		 * relies solely on the shutdown flush. */
+		if(menu_state.backup_update &&
+				(frame % CGBA_BACKUP_AUTO_FRAMES) == 0)
+			cgba_gpsp_backup_flush(0);
 		cgba_fps_tick(&cgba_fps, render_video);
 		if(render_video) {
 			if(menu_state.show_fps)
