@@ -3,7 +3,7 @@
 # Build a *playable* JIT (SH4 dynarec) .g3a add-in for the fx-CG100.
 #
 #   Usage:  ports/fxcg100/build-calc-jit.sh [build-dir]
-#   Output: ports/fxcg100/gint-gpsp/CGBA-GPSP.g3a
+#   Output: ports/fxcg100/gint-gpsp/gpSP.g3a
 #
 # This is the real, hand-held build (NOT the headless emulator test harness):
 #   - CGBA_DYNAREC=ON              the SH4 dynamic recompiler (the "JIT")
@@ -11,7 +11,7 @@
 #   - Thumb LDST/block native ON, ARM-LDST native ON, 768K/256K translation
 #     cache, 12-bit (16 KiB) branch hash — the perf configuration.
 #
-# Copy CGBA-GPSP.g3a to the calculator's main memory and put a GBA ROM named
+# Copy gpSP.g3a to the calculator's main memory and put a GBA ROM named
 # GAME.GBA alongside it (or use the in-app ROM picker).
 #
 # Override the fxSDK location with FXSDK_PREFIX=/path if it is not auto-found.
@@ -49,8 +49,8 @@ cmake -S "$GG" -B "$GG/$BUILD" \
   -DCGBA_SH4_ARM_LDST_NATIVE=ON
 cmake --build "$GG/$BUILD" -j"$JOBS"
 
-G3A="$(find "$GG/$BUILD" "$GG" -maxdepth 1 -name 'CGBA-GPSP.g3a' 2>/dev/null | head -1)"
-[ -n "$G3A" ] || { echo "error: CGBA-GPSP.g3a was not produced" >&2; exit 1; }
+G3A="$(find "$GG/$BUILD" "$GG" -maxdepth 1 -name 'gpSP.g3a' 2>/dev/null | head -1)"
+[ -n "$G3A" ] || { echo "error: gpSP.g3a was not produced" >&2; exit 1; }
 
 # Make it visible on macOS. fxSDK's mkg3a marks the .g3a with the 'hidden' file
 # flag, and this checkout may live under a dot-directory (e.g. .claude/worktrees)
@@ -60,7 +60,7 @@ G3A="$(find "$GG/$BUILD" "$GG" -maxdepth 1 -name 'CGBA-GPSP.g3a' 2>/dev/null | h
 command -v chflags >/dev/null 2>&1 && chflags nohidden "$G3A" 2>/dev/null || true
 OUT_DIR="${CGBA_G3A_OUT:-$HOME/Desktop}"
 [ -d "$OUT_DIR" ] || OUT_DIR="$HOME"
-OUT="$OUT_DIR/CGBA-GPSP.g3a"
+OUT="$OUT_DIR/gpSP.g3a"
 cp -f "$G3A" "$OUT"
 command -v xattr   >/dev/null 2>&1 && xattr -c "$OUT" 2>/dev/null || true
 command -v chflags >/dev/null 2>&1 && chflags nohidden "$OUT" 2>/dev/null || true
