@@ -59,6 +59,8 @@ option(CGBA_SH4_INTERP_STATS
   "Count interpreted guest instructions by region (diag; ~4.5% overhead)" OFF)
 option(CGBA_SH4_DIAG_COUNTERS
   "Per-slice/per-helper diagnostic counters in headless builds (~0.5%)" OFF)
+option(CGBA_DEBUG_MENU
+  "Show the in-menu DEBUG INFO submenu + F:/H frame/hash overlay (dev; hidden in release)" OFF)
 option(CGBA_SH4_SWI_HLE_VERIFY
   "Diag: predict faithful SWI HLE results, run the interpreted BIOS, compare" OFF)
 set(CGBA_SH4_HEAT_QUIET_FRAMES "180" CACHE STRING
@@ -143,6 +145,9 @@ target_compile_definitions(cgba-gint-gpsp PRIVATE
 )
 if(CGBA_FXCG100_STORAGE)
   target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_FXCG100_STORAGE=1)
+endif()
+if(CGBA_DEBUG_MENU)
+  target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_DEBUG_MENU=1)
 endif()
 
 if(CGBA_DYNAREC)

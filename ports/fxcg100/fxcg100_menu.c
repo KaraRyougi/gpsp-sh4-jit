@@ -4,6 +4,13 @@
 #include <stdio.h>
 #include <string.h>
 
+/* Developer diagnostics in the menu (the DEBUG INFO submenu and the F:/H:
+ * frame/hash overlay in the header) are hidden by default for formal releases.
+ * Build with -DCGBA_DEBUG_MENU=1 to show them. */
+#ifndef CGBA_DEBUG_MENU
+#define CGBA_DEBUG_MENU 0
+#endif
+
 #define LCD_W 384
 #define LCD_H 216
 #define MENU_TOP 28
@@ -139,8 +146,10 @@ static const menu_item main_items[] = {
     sizeof(rom_options) / sizeof(rom_options[0]), NULL },
   { "GRAPHICS OPTIONS", MENU_ITEM_SUBMENU, MENU_ACTION_NONE,
     MENU_PAGE_GRAPHICS, MENU_VALUE_NONE, NULL, 0, NULL },
+#if CGBA_DEBUG_MENU
   { "DEBUG INFO", MENU_ITEM_SUBMENU, MENU_ACTION_NONE,
     MENU_PAGE_DEBUG, MENU_VALUE_NONE, NULL, 0, NULL },
+#endif
   { "LOAD STATE FROM SLOT", MENU_ITEM_NUMBER_ACTION, MENU_ACTION_LOAD_STATE,
     MENU_PAGE_MAIN, MENU_VALUE_SAVE_SLOT, NULL, 10, NULL },
   { "SAVE STATE TO SLOT", MENU_ITEM_NUMBER_ACTION, MENU_ACTION_SAVE_STATE,
@@ -573,9 +582,14 @@ static void menu_draw(fxcg100_menu_state *state, menu_page_id page,
   fxcg100_lcd_clear(bg);
   fxcg100_lcd_fill_rect(0, 0, LCD_W, 18, panel);
   fxcg100_lcd_draw_text(4, 5, "gpSP", text, panel);
+#if CGBA_DEBUG_MENU
   snprintf(line, sizeof(line), "F:%06u H:%08x",
            (unsigned)frame, (unsigned)last_hash);
   fxcg100_lcd_draw_text(246, 5, line, dim, panel);
+#else
+  (void)frame;
+  (void)last_hash;
+#endif
   if (page == MENU_PAGE_MAIN) {
     fxcg100_lcd_draw_text(8, 20,
                           "a gpSP port for CASIO fx-CG calculators with JIT",
