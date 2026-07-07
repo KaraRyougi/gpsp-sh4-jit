@@ -578,7 +578,7 @@ static void menu_draw(fxcg100_menu_state *state, menu_page_id page,
   fxcg100_lcd_draw_text(246, 5, line, dim, panel);
   if (page == MENU_PAGE_MAIN) {
     fxcg100_lcd_draw_text(8, 20,
-                          "a gpSP port for CASIO fx-CG calculators",
+                          "a gpSP port for CASIO fx-CG calculators with JIT",
                           text, bg);
   } else {
     fxcg100_lcd_draw_text(8, 20, title, accent, bg);
