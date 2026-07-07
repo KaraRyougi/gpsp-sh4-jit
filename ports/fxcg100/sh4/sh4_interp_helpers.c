@@ -2035,6 +2035,194 @@ static u32 cgba_swi_fastset_engine(s32 remaining)
   return (u32)remaining;
 }
 
+/* ---- Parked/resumable CpuSet -----------------------------------------------
+ * Same canonical-state approach as the FastSet engine, for the two CpuSet
+ * COPY loops (fills stay interpreted — rare). Shares the dispatcher prologue
+ * (STR r4) and epilogue (LDM {r4}; BX lr -> 0x94 -> dispatcher tail) with
+ * FastSet; only the copy loop-top register layout and per-element chunking
+ * differ. Open-BIOS geometry (capstone-verified, 0x614):
+ *   word copy top 0x6AC: r2=src cursor, r1=dst-src, r3=count left,
+ *     r12=0x0EFFFFFF, r0=last loaded word (escapes: r0=last, r1=dst-src).
+ *   half copy top 0x668: r2=src cursor, r3=src END, r1=dst-src,
+ *     r4=0x0EFFFFFF, r12=last half (escapes: r0=src unchanged, r1=dst-src).
+ * Zelda's rain intro rebuilds OAM every frame via ~256-word CpuSets that
+ * exceed the event slice (~2700 > ~1200 cyc) — previously interpreted. */
+#define CGBA_CS_WCOPY_LOOP 0x000006ACu
+#define CGBA_CS_HCOPY_LOOP 0x00000668u
+
+static u32 cgba_cs_entry_cost;
+
+static void cgba_swi_cpuset_materialize(int half)
+{
+  u32 spsr_v = REG_SPSR(MODE_SUPERVISOR);
+  u32 sp_svc = reg[REG_SP];
+  u32 S0 = CGBA_WS_S(0, 1), N0 = CGBA_WS_N(0, 1);
+  u32 sp_r = sp_svc >> 24, lr_r = (reg[REG_LR] & ~1u) >> 24;
+  u32 src0 = reg[0], dst0 = reg[1], count = reg[2] & 0x1FFFFFu;
+
+  /* dispatcher SVC-stack pushes (identical to FastSet) */
+  execute_store_u32(sp_svc - 4, reg[REG_LR]);
+  execute_store_u32(sp_svc - 8, reg[12]);
+  execute_store_u32(sp_svc - 12, reg[11]);
+  execute_store_u32(sp_svc - 16, spsr_v);
+  reg[REG_SP] = sp_svc - 16;
+  reg[REG_CPSR] = (spsr_v & 0x80u) | 0x1Fu;
+  set_cpu_mode(MODE_SYSTEM);
+  {
+    u32 sp_usr = reg[REG_SP];
+    execute_store_u32(sp_usr - 4, reg[REG_LR]);
+    execute_store_u32(sp_usr - 8, reg[3]);
+    execute_store_u32(sp_usr - 12, reg[2]);
+    execute_store_u32(sp_usr - 16, reg[4]);         /* 0x618 STR r4 */
+    reg[REG_SP] = sp_usr - 16;
+  }
+  reg[REG_LR] = 0x00000094u;
+  reg[11] = (spsr_v & 0x80u) | 0x1Fu;
+
+  cgba_cs_entry_cost = cgba_swi_dispatch_cycles(sp_r, lr_r, 1)
+                     + CGBA_WS_N(sp_r, 1);          /* 0x618 STR r4 */
+  reg[0] = src0;                                    /* r0 pre-first-load */
+  if (half) {
+    reg[2] = src0;                                  /* src cursor */
+    reg[3] = src0 + count * 2u;                     /* src END */
+    reg[1] = dst0 - src0;                           /* delta */
+    reg[4] = 0x0EFFFFFFu;
+    cgba_cs_entry_cost += 21 * S0;
+    reg[REG_PC] = CGBA_CS_HCOPY_LOOP;
+  } else {
+    u32 ws = src0 & ~3u, wd = dst0 & ~3u;
+    reg[2] = ws;                                    /* src cursor */
+    reg[1] = wd - ws;                               /* delta */
+    reg[3] = count;                                 /* count remaining */
+    reg[12] = 0x0EFFFFFFu;
+    cgba_cs_entry_cost += 22 * S0 + N0;
+    reg[REG_PC] = CGBA_CS_WCOPY_LOOP;
+  }
+}
+
+static u32 cgba_swi_cpuset_engine(s32 remaining)
+{
+  int half = (reg[REG_PC] == CGBA_CS_HCOPY_LOOP);
+  u32 S0 = CGBA_WS_S(0, 1), N0 = CGBA_WS_N(0, 1);
+  u32 src, dst, per_elem, width;
+  s32 count;
+
+  remaining -= (s32)cgba_cs_entry_cost;
+  cgba_cs_entry_cost = 0;
+
+  if (half) {
+    if (reg[4] != 0x0EFFFFFFu)
+      return CGBA_FS_DECLINE;
+    src = reg[2];
+    count = (s32)((reg[3] - reg[2]) >> 1);           /* (src_end - src)/2 */
+    width = 2;
+    dst = reg[1] + reg[2];
+    per_elem = 7 * S0 + CGBA_WS_N(src >> 24, 0) + CGBA_WS_N(dst >> 24, 0) + N0;
+  } else {
+    if (reg[12] != 0x0EFFFFFFu)
+      return CGBA_FS_DECLINE;
+    src = reg[2];
+    count = (s32)reg[3];
+    width = 4;
+    dst = reg[1] + reg[2];
+    per_elem = 7 * S0 + CGBA_WS_N(src >> 24, 1) + CGBA_WS_N(dst >> 24, 1) + N0;
+  }
+  if (count <= 0)
+    return CGBA_FS_DECLINE;
+  if ((dst >> 24) >= 0x0F ||
+      (half ? (((dst | src) & 1) != 0) : (((dst | src) & 3) != 0)))
+    return CGBA_FS_DECLINE;
+
+  while (1) {
+    if (count <= 0) {
+      /* routine + dispatcher epilogue (shared shape with FastSet) */
+      u32 sp_usr = reg[REG_SP];
+      u32 sp_svc, spsr_pop, sp_r = sp_usr >> 24;
+      reg[4] = execute_load_u32(sp_usr);
+      reg[2] = execute_load_u32(sp_usr + 4);
+      reg[3] = execute_load_u32(sp_usr + 8);
+      reg[REG_LR] = execute_load_u32(sp_usr + 12);
+      reg[REG_SP] = sp_usr + 16;
+      remaining -= (s32)(2 * S0 + CGBA_WS_S(sp_r, 1) + N0);   /* 684 LDM+688 BX */
+      if (half)
+        remaining += (s32)N0;         /* half exits via fall-through: -1 N0 */
+      reg[12] = 0x000000D3u;
+      reg[REG_CPSR] = 0x000000D3u;
+      set_cpu_mode(MODE_SUPERVISOR);
+      sp_svc = reg[REG_SP];
+      spsr_pop = execute_load_u32(sp_svc);
+      reg[11] = execute_load_u32(sp_svc + 4);
+      reg[12] = execute_load_u32(sp_svc + 8);
+      reg[REG_LR] = execute_load_u32(sp_svc + 12);
+      reg[REG_SP] = sp_svc + 16;
+      REG_SPSR(MODE_SUPERVISOR) = spsr_pop;
+      reg[REG_PC] = reg[REG_LR] & ~1u;
+      reg[REG_CPSR] = spsr_pop;
+      set_cpu_mode(cpu_modes[spsr_pop & 0xF]);
+#ifdef CGBA_GPSP_HEADLESS_TEST
+      cgba_bios_hle_swi_count++;
+#endif
+      break;
+    }
+    if (remaining <= 0) {
+      u32 ret = update_gba(remaining);
+      if (completed_frame(ret))
+        return 0x80000000u;
+      remaining = (s32)cycles_to_run(ret);
+      if (reg[REG_PC] != (half ? CGBA_CS_HCOPY_LOOP : CGBA_CS_WCOPY_LOOP)) {
+        if (reg[REG_PC] == 0x00000018u && reg[CPU_MODE] == MODE_IRQ)
+          (void)cgba_hle_bios_irq_entry();
+        return (u32)remaining;
+      }
+      continue;
+    }
+    {
+      s32 fit = remaining / (s32)per_elem;
+      u32 k = (fit < 1) ? 1u
+            : ((u32)fit > (u32)count ? (u32)count : (u32)fit);
+      u32 bytes = k * width;
+      const u8 *sh = cgba_bulk_src_host(src, bytes);
+      u8 *tags = NULL;
+      u8 *dh;
+      if (!sh)
+        return CGBA_FS_DECLINE;
+      dh = cgba_bulk_ram_host(dst, bytes, &tags);
+      if (dh) {
+        memmove(dh, sh, bytes);
+        if (cgba_bulk_tags_smc(tags, bytes))
+          cgba_store_alert |= CPU_ALERT_SMC;
+      } else {
+        int saved = cgba_sh4_extra_cycles;
+        u32 i;
+        for (i = 0; i < bytes; i += width) {
+          if (half)
+            execute_store_u16(dst + i, (u32)sh[i] | ((u32)sh[i + 1] << 8));
+          else
+            execute_store_u32(dst + i, cgba_le32_read(sh + i));
+        }
+        cgba_sh4_extra_cycles = saved;    /* per_elem is the exact charge */
+      }
+      src += bytes;
+      dst += bytes;
+      count -= (s32)k;
+      reg[2] = src;                       /* src cursor (canonical) */
+      if (half) {
+        reg[12] = (u32)sh[bytes - 2] | ((u32)sh[bytes - 1] << 8);
+      } else {
+        reg[3] = (u32)count;              /* count remaining */
+        reg[0] = cgba_le32_read(sh + bytes - 4);   /* last word (escapes) */
+      }
+      remaining -= (s32)(k * per_elem);
+    }
+  }
+
+  if (remaining <= 0) {
+    u32 ret = update_gba(remaining);
+    return completed_frame(ret) ? ret : cycles_to_run(ret);
+  }
+  return (u32)remaining;
+}
+
 #if CGBA_SH4_SWI_HLE_VERIFY
 static struct {
   int pending;
@@ -2551,12 +2739,17 @@ static int cgba_hle_bios_swi_num(u32 num, u32 budget)
        style park state). */
     if (pred.cycles + 64u > budget) {
 #if !CGBA_SH4_SWI_HLE_VERIFY
-      /* Oversized CpuFastSet: parked/resumable chunked execution (copy or
-       * fill), canonical at every pause point. CpuSet stays interpreted
-       * (census: 0.7%% of declined traffic). */
-      if (num == 0x0C && budget > 0 && (reg[2] & 0x1FFFFFu) != 0) {
-        cgba_swi_fastset_materialize((reg[2] >> 24) & 1);
-        return 3;                        /* caller runs the chunk engine */
+      /* Oversized copies: parked/resumable chunked execution, canonical at
+       * every pause point so IRQs vector exactly as the interpreter would.
+       * Fills stay interpreted (rare). */
+      u32 cnt = reg[2] & 0x1FFFFFu, fill = (reg[2] >> 24) & 1;
+      if (num == 0x0C && budget > 0 && cnt != 0) {
+        cgba_swi_fastset_materialize(fill);
+        return 3;                        /* caller runs the FastSet engine */
+      }
+      if (num == 0x0B && budget > 0 && cnt != 0 && !fill) {
+        cgba_swi_cpuset_materialize(((reg[2] >> 26) & 1) ? 0 : 1);
+        return 4;                        /* caller runs the CpuSet engine */
       }
 #endif
       return 0;
@@ -2728,6 +2921,8 @@ u32 cgba_sh4_bios_fallback(u32 cycles)
     int h = cgba_hle_bios_swi(cycles);
     if (h == 3)
       return cgba_swi_fastset_engine((s32)cycles);
+    if (h == 4)
+      return cgba_swi_cpuset_engine((s32)cycles);
     if (h)
       return cycles;                 /* PC/mode restored; stub redispatches */
   }
@@ -2737,6 +2932,13 @@ u32 cgba_sh4_bios_fallback(u32 cycles)
      * copy, or the interpreter stopped exactly there). Declined -> the
      * interpreter continues the real BIOS from the same state. */
     u32 r = cgba_swi_fastset_engine((s32)cycles);
+    if (r != CGBA_FS_DECLINE)
+      return r;
+  }
+  if (!cgba_dynarec_single_block && reg[CPU_MODE] == MODE_SYSTEM &&
+      (reg[REG_PC] == CGBA_CS_WCOPY_LOOP || reg[REG_PC] == CGBA_CS_HCOPY_LOOP)) {
+    /* Re-entry at a canonical CpuSet chunk top (ISR returned mid-copy). */
+    u32 r = cgba_swi_cpuset_engine((s32)cycles);
     if (r != CGBA_FS_DECLINE)
       return r;
   }
