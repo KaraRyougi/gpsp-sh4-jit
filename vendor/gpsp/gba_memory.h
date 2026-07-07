@@ -317,6 +317,10 @@ extern u32 eeprom_size;
 
 extern u8 gamepak_backup[1024 * 128];
 
+/* cgba: set whenever the game writes its backup (SRAM/Flash/EEPROM) so the
+ * fx-CG100 port only flushes the .SAV to NOR flash when the save changed. */
+extern u32 cgba_backup_dirty;
+
 // Page sticky bit routines
 extern u32 gamepak_sticky_bit[1024/32];
 static inline void touch_gamepak_page(u32 physical_index)

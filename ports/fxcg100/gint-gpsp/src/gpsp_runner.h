@@ -31,6 +31,12 @@ void cgba_gpsp_debug_menu(fxcg100_debug_info *debug, unsigned frame,
 	const uint16_t *framebuffer, uint32_t host_sp);
 void cgba_gpsp_shutdown(void);
 
+/* GBA in-game backup save (SRAM/Flash/EEPROM) persistence to \\fls0\<ROM>.SAV.
+ * load runs when a ROM boots; flush(force) writes the save when it changed
+ * (or always if force) -- driven by the UPDATE BACKUP menu setting + shutdown. */
+void cgba_gpsp_backup_load(void);
+void cgba_gpsp_backup_flush(int force);
+
 /* Savestates: raw gba_save_state image at \\fls0\CGBAST<slot>.SAV (also
  * loadable by the emulator harness as its checkpoint blob). 1 = ok. */
 int cgba_gpsp_state_save(unsigned slot);
