@@ -65,8 +65,7 @@ typedef struct fxcg100_config_file {
   uint32_t quick_save_slot;
   uint32_t backup_update;
   uint32_t show_fps;
-  uint32_t input_record;      /* was reserved[0]: old configs read as OFF */
-  uint32_t reserved[7];
+  uint32_t reserved[8];
 } fxcg100_config_file;
 
 static const uint16_t config_path[] = {
@@ -168,7 +167,6 @@ static int config_options_valid(const fxcg100_config_file *config)
     config->frameskip_variation < 2 &&
     config->savestate_slot < 10 &&
     config->quick_save_slot < 10 &&
-    config->input_record < 2 &&
     config->backup_update < 2 &&
     config->show_fps < 2;
 }
@@ -204,7 +202,6 @@ static void config_from_state(fxcg100_config_file *config,
   config->quick_save_slot = state->quick_save_slot;
   config->backup_update = state->backup_update;
   config->show_fps = state->show_fps;
-  config->input_record = state->input_record;
 }
 
 static void state_from_config(fxcg100_menu_state *state,
@@ -222,7 +219,6 @@ static void state_from_config(fxcg100_menu_state *state,
   state->quick_save_slot = config->quick_save_slot;
   state->backup_update = config->backup_update;
   state->show_fps = config->show_fps;
-  state->input_record = config->input_record;
 }
 
 static int read_config(fxcg100_config_file *config)

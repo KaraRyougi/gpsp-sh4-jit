@@ -964,10 +964,6 @@ static uint32_t headless_buttons_for_frame(unsigned frame)
 	const unsigned hold = (unsigned)CGBA_GPSP_HEADLESS_START_HOLD;
 	uint32_t buttons = FXCG100_GBA_BUTTON_NONE;
 
-	/* A loaded <BASE>.INP script (recorded real play) overrides every
-	 * synthetic generator: replay it verbatim. */
-	if(cgba_gpsp_input_script_active())
-		return cgba_gpsp_input_script_mask(frame);
 #if CGBA_HEADLESS_FUZZ_ON
 	return headless_fuzz_buttons(frame);
 #endif
@@ -1119,13 +1115,6 @@ static int cgba_headless_test(uint16_t *framebuffer)
 
 	frame_base = headless_frame_base();
 	frame_end = headless_frame_end();
-	{
-		int nev = cgba_gpsp_input_script_load();
-		if(nev > 0) {
-			snprintf(buf, sizeof buf, "input script: %d events", nev);
-			hputs_dbg(buf);
-		}
-	}
 	snprintf(buf, sizeof buf, "loaded OK; running %u frames [%u,%u)",
 		(unsigned)CGBA_GPSP_HEADLESS_FRAMES, frame_base, frame_end);
 	hputs_dbg(buf);
@@ -1145,11 +1134,6 @@ static int cgba_headless_test(uint16_t *framebuffer)
 			;
 		int log_frame = headless_log_frame(frame);
 		uint32_t buttons = headless_buttons_for_frame(frame);
-
-		/* Capture generated/fuzz input as a replayable .INP asset; when a
-		 * script is driving, don't re-record it over itself. */
-		if(!cgba_gpsp_input_script_active())
-			cgba_gpsp_input_record_frame(frame, buttons);
 
 		if(log_frame) {
 			snprintf(buf, sizeof buf, "frame %u before render=%d",
@@ -1230,27 +1214,6 @@ static int cgba_headless_test(uint16_t *framebuffer)
 			headless_log_phase(frame, "post-blit");
 		}
 		headless_log_phase(frame, "loop-end");
-	}
-
-	if(!cgba_gpsp_input_script_active()) {
-		/* Write through the headless BFile trampolines: the generic
-		 * storage path is not serviced by the emulator's HLE. */
-		unsigned char *ibuf = (unsigned char *)framebuffer;
-		unsigned ilen = cgba_gpsp_input_record_render(ibuf,
-			CGBA_GBA_BUFFER_PIXELS * 2u);
-		int inp_ok = 0;
-		if(ilen) {
-			uint16_t ipath[24];
-			int existing;
-			cgba_gpsp_input_path(ipath);
-			existing = headless_storage_blob_size(ipath);
-			if(existing >= 0)
-				headless_bfile_remove(ipath);
-			if(headless_create_blob(ipath, ilen))
-				inp_ok = headless_write_blob_contents(ipath, ibuf, ilen);
-		}
-		snprintf(buf, sizeof buf, "@@CGBA_INPSAVE ok=%d bytes=%u", inp_ok, ilen);
-		hputs_dbg(buf);
 	}
 
 	snprintf(buf, sizeof buf, "fps emu=%u draw=%u",
@@ -1666,7 +1629,6 @@ int main(void)
 
 	menu_result = fxcg100_menu_run(&menu_state, 0, 0, NULL);
 	fxcg100_lcd_set_scale(menu_state.screen_scale);
-	cgba_gpsp_input_record_set_enabled((int)menu_state.input_record);
 	if(menu_result == FXCG100_MENU_QUIT)
 		return exit_to_os(1);
 	wait_for_keys_released();
@@ -1715,8 +1677,6 @@ int main(void)
 			fxcg100_menu_result result =
 				fxcg100_menu_run(&menu_state, frame, last_hash, &debug_info);
 			fxcg100_lcd_set_scale(menu_state.screen_scale);
-			cgba_gpsp_input_record_set_enabled(
-				(int)menu_state.input_record);
 
 			wait_for_keys_released();
 			previous_app_keys = fxcg100_poll_app_keys();
@@ -1818,7 +1778,6 @@ int main(void)
 		}
 
 		gba_buttons = fxcg100_poll_gba_buttons_mapped(menu_state.keymap);
-		cgba_gpsp_input_record_frame(frame, gba_buttons);
 
 		int render_video;
 		if(hotkeys & FXCG100_HOTKEY_BIT(FXCG100_HOTKEY_FAST_FORWARD))
