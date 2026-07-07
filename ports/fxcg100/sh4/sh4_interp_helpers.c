@@ -1993,7 +1993,7 @@ static u32 cgba_swi_fastset_engine(s32 remaining)
           for (i = 0; i < bytes; i += 4)
             cgba_le32_write(dh + i, reg[2]);
           if (cgba_bulk_tags_smc(tags, bytes))
-            cgba_store_alert |= CPU_ALERT_SMC;
+            flush_translation_cache_ram();     /* SMC: see note at copy site */
         } else {
           u32 i;
           for (i = 0; i < bytes; i += 4)
@@ -2008,8 +2008,14 @@ static u32 cgba_swi_fastset_engine(s32 remaining)
           return CGBA_FS_DECLINE;              /* state stays canonical */
         if (dh) {
           memmove(dh, sh, bytes);
+          /* The copy just overwrote tagged RAM code. The engine's return and
+             park points do NOT run the common HLE tail, so flush the RAM
+             translation cache HERE — otherwise a stale block could execute
+             at the next park (ISR) or on completion. Safe mid-copy: the
+             engine's state lives in guest memory + registers, not the cache,
+             and dh/tags point into the GBA RAM arrays, not the cache. */
           if (cgba_bulk_tags_smc(tags, bytes))
-            cgba_store_alert |= CPU_ALERT_SMC;
+            flush_translation_cache_ram();
         } else {
           u32 i;
           for (i = 0; i < bytes; i += 4)
@@ -2190,7 +2196,9 @@ static u32 cgba_swi_cpuset_engine(s32 remaining)
       if (dh) {
         memmove(dh, sh, bytes);
         if (cgba_bulk_tags_smc(tags, bytes))
-          cgba_store_alert |= CPU_ALERT_SMC;
+          flush_translation_cache_ram();       /* SMC: flush now, not via the
+                                                  skipped common tail (see the
+                                                  FastSet copy-site note) */
       } else {
         int saved = cgba_sh4_extra_cycles;
         u32 i;
