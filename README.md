@@ -1,6 +1,6 @@
-# cgba
+# gpSP
 
-`cgba` is an experimental Game Boy Advance emulator for the Casio fx-CG100
+`gpSP` is an experimental Game Boy Advance emulator for the Casio fx-CG100
 (SH7305 / SH-4A, big-endian, no FPU). It is built on gpSP, imported under
 `vendor/gpsp`, and adds an SH-4 dynamic recompiler (the "JIT") so GBA games run
 at playable speeds on the calculator's CPU.
@@ -51,7 +51,7 @@ fxSDK / gint. The playable JIT add-in:
 ports/fxcg100/build-calc-jit.sh
 ```
 
-This emits `ports/fxcg100/gint-gpsp/CGBA-GPSP.g3a` with the SH-4 dynarec and the
+This emits `ports/fxcg100/gint-gpsp/gpSP.g3a` with the SH-4 dynarec and the
 menu / ROM-picker front end. Copy it to the calculator's main memory and put a
 GBA ROM named `GAME.GBA` alongside it (or pick one with the in-app ROM browser).
 Set `FXSDK_PREFIX=/path` if the fxSDK is not auto-detected.
@@ -62,8 +62,8 @@ The SH-4 instruction encoder is audited byte-for-byte against `sh-elf-as`. A
 minimal host-side smoke test verifies big-endian emission without a calculator:
 
 ```sh
-cc -std=c11 -Wall -Wextra -I. tests/sh4_codegen_smoke.c -o /tmp/cgba-sh4-smoke
-/tmp/cgba-sh4-smoke
+cc -std=c11 -Wall -Wextra -I. tests/sh4_codegen_smoke.c -o /tmp/gpsp-sh4-smoke
+/tmp/gpsp-sh4-smoke
 ```
 
 The full regression suite — host unit tests in `tests/`, the on-target headless

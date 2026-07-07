@@ -5,7 +5,7 @@ static void draw_smoke_screen(void)
 	dclear(C_WHITE);
 
 	drect(0, 0, DWIDTH - 1, 21, C_RGB(0, 10, 22));
-	dtext(8, 5, C_WHITE, "CGBA GINT SMOKE");
+	dtext(8, 5, C_WHITE, "gpSP GINT SMOKE");
 
 	drect_border(8, 34, DWIDTH - 9, 120,
 		C_RGB(30, 31, 30), 1, C_RGB(0, 13, 24));

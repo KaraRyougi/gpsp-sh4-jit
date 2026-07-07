@@ -50,11 +50,11 @@ fxsdk build-cg
 
 Output:
 
-- `ports/fxcg100/gint-smoke/CGBA-GINT.g3a`
+- `ports/fxcg100/gint-smoke/gpSP-GINT.g3a`
 
 Runtime shape:
 
-- Draws `CGBA GINT SMOKE` with full-screen color bands using
+- Draws `gpSP GINT SMOKE` with full-screen color bands using
   `dclear()`/`dtext()`/`dupdate()`
 - Holds briefly, then returns through the loader
 - Does not use raw LCD init, raw KEYSC, or the emulator-only debug port
@@ -73,7 +73,7 @@ fxsdk build-cg
 
 Output:
 
-- `ports/fxcg100/gint-gpsp/CGBA-GPSP.g3a`
+- `ports/fxcg100/gint-gpsp/gpSP.g3a`
 
 The plain command above builds the current interpreter/default artifact. The SH4
 dynarec is still an opt-in correctness build; enable it explicitly when testing
@@ -110,7 +110,7 @@ Runtime shape:
 
 ## Current Runtime Shape
 
-- Default app: physical smoke screen with `CGBA SAFE BOOT`, stack/key
+- Default app: physical smoke screen with `gpSP SAFE BOOT`, stack/key
   diagnostics, and bottom color bars
 - Video: direct R61524 GRAM writes
 - Input: raw fx-CG100 KEYSC reads are used only for the smoke UI; implausible
@@ -179,7 +179,7 @@ cd ../../..
 env HLE_EXIT_AT=120000 HLE_GRAMLOG=1 \
   CGBA_FBDUMP=/tmp/cgba-gint-zelda-final.ppm \
   CGBA_LOG=/tmp/cgba-gint-zelda-final.log \
-  ports/fxcg100/run-zelda-flash.sh ports/fxcg100/gint-smoke/CGBA-GINT.g3a
+  ports/fxcg100/run-zelda-flash.sh ports/fxcg100/gint-smoke/gpSP-GINT.g3a
 ```
 
 Expected log shape:
@@ -209,7 +209,7 @@ presses calculator `SHIFT`'s default GBA binding (`A`) for two frames every
 the native Thumb byte-load fast path for isolation runs. Harness `.g3a` files
 under the output directory are headless diagnostics for casio-emu; do not install
 them on hardware. The script preserves/restores the source-tree
-`gint-gpsp/CGBA-GPSP.g3a` so it remains the calculator-launch build.
+`gint-gpsp/gpSP.g3a` so it remains the calculator-launch build.
 
 The full MPM flow is scaffolded in `run-mpm-smoke.sh`. It provisions a temporary
 flash image under `/tmp`, installs `MPM.BIN`, attempts to install `CGBA.G3A`,
@@ -224,7 +224,7 @@ cd ../../..
 env HLE_HB=1 HLE_TLBLOG=1 HLE_EXIT_AT=3000000 HLE_GRAMLOG=1 \
   CGBA_FBDUMP=/tmp/cgba-gpsp-mode3-fixed.ppm \
   CGBA_LOG=/tmp/cgba-gpsp-mode3-fixed.log \
-  ports/fxcg100/run-zelda-flash.sh ports/fxcg100/gint-gpsp/CGBA-GPSP.g3a
+  ports/fxcg100/run-zelda-flash.sh ports/fxcg100/gint-gpsp/gpSP.g3a
 ```
 
 Expected result:
@@ -254,7 +254,7 @@ page.
 Safety note: the previous gpSP isolate placed `.cgba.highbss` at `0x8c800000`
 and installed HLE-only UTLB mappings before entering gint. On the real fx-CG100
 that address is past the conservative 8 MiB RAM window, and touching it can cold
-boot the calculator. The default `CGBA-GPSP.g3a` no longer contains that
+boot the calculator. The default `gpSP.g3a` no longer contains that
 trampoline or fake hardware detector.
 
 Current MPM status: the harness reaches `[MPM] reached mpmMain`, but the add-in

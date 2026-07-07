@@ -56,7 +56,7 @@ build() { # dir dynarec out
     -DCGBA_GPSP_HEADLESS_A_FRAME="$A_FRAME" -DCGBA_GPSP_HEADLESS_A_HOLD="$A_HOLD" \
     -DCGBA_GPSP_HEADLESS_A_PERIOD="$A_PERIOD" -DCGBA_GPSP_HEADLESS_A_PRESS="$A_PRESS" >/dev/null 2>&1
   cmake --build "$1" -j4 >/dev/null 2>&1
-  cp "$GG/CGBA-GPSP.g3a" "$3"
+  cp "$GG/gpSP.g3a" "$3"
 }
 
 run() { # g3a log

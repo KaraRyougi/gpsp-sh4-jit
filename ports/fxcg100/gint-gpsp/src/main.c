@@ -138,7 +138,7 @@ static void draw_status(const char *line1, const char *line2)
 {
 	dclear(C_WHITE);
 	drect(0, 0, DWIDTH - 1, 21, C_RGB(0, 10, 22));
-	dtext(8, 5, C_WHITE, "CGBA GPSP");
+	dtext(8, 5, C_WHITE, "gpSP");
 	dtext(16, 44, C_BLACK, line1);
 	if(line2)
 		dtext(16, 62, C_BLACK, line2);
@@ -296,7 +296,7 @@ static void show_diag_overlay(void)
 
 	n = cgba_gpsp_diag(lines, 20);
 	dclear(C_WHITE);
-	dtext(2, 2, C_BLACK, "CGBA DIAG  (EXE = continue)");
+	dtext(2, 2, C_BLACK, "gpSP DIAG  (EXE = continue)");
 	for(i = 0; i < n; i++)
 		dtext(2, 22 + 16 * (int)i, C_BLACK, lines[i]);
 	dupdate();

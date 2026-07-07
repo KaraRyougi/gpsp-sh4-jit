@@ -392,7 +392,7 @@ static const menu_item *menu_page_items(menu_page_id page, size_t *count,
   case MENU_PAGE_MAIN:
   default:
     *count = sizeof(main_items) / sizeof(main_items[0]);
-    *title = "CGBA SETTINGS";
+    *title = "gpSP SETTINGS";
     return main_items;
   }
 }
@@ -572,15 +572,15 @@ static void menu_draw(fxcg100_menu_state *state, menu_page_id page,
 
   fxcg100_lcd_clear(bg);
   fxcg100_lcd_fill_rect(0, 0, LCD_W, 18, panel);
-  fxcg100_lcd_draw_text(4, 5, "CGBA", text, panel);
+  fxcg100_lcd_draw_text(4, 5, "gpSP", text, panel);
   snprintf(line, sizeof(line), "F:%06u H:%08x",
            (unsigned)frame, (unsigned)last_hash);
   fxcg100_lcd_draw_text(246, 5, line, dim, panel);
   if (page == MENU_PAGE_MAIN) {
-    fxcg100_lcd_draw_text(8, 20, "C", RGB565(31, 4, 4), bg);
-    fxcg100_lcd_draw_text(14, 20, "G", RGB565(31, 26, 0), bg);
-    fxcg100_lcd_draw_text(20, 20, "B", RGB565(0, 26, 8), bg);
-    fxcg100_lcd_draw_text(26, 20, "A", RGB565(5, 14, 31), bg);
+    fxcg100_lcd_draw_text(8, 20, "g", RGB565(31, 4, 4), bg);
+    fxcg100_lcd_draw_text(14, 20, "p", RGB565(31, 26, 0), bg);
+    fxcg100_lcd_draw_text(20, 20, "S", RGB565(0, 26, 8), bg);
+    fxcg100_lcd_draw_text(26, 20, "P", RGB565(5, 14, 31), bg);
     fxcg100_lcd_draw_text(8, 34,
                           "a gpSP port for CASIO fx-CG calculators",
                           text, bg);
@@ -620,7 +620,7 @@ static void menu_draw_capture(const char *target, const char *message)
 
   fxcg100_lcd_clear(bg);
   fxcg100_lcd_fill_rect(0, 0, LCD_W, 18, panel);
-  fxcg100_lcd_draw_text(4, 5, "CGBA GPSP", text, panel);
+  fxcg100_lcd_draw_text(4, 5, "gpSP", text, panel);
   fxcg100_lcd_draw_text(8, 28, "MAP INPUT", accent, bg);
   fxcg100_lcd_draw_text(8, 58, "PRESS KEY FOR", text, bg);
   fxcg100_lcd_draw_text(8, 76, target ? target : "?", accent, bg);

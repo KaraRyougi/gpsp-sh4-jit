@@ -80,7 +80,7 @@ static void draw_safe_boot_screen(uint32_t keys, uint32_t ticks)
   fxcg100_lcd_fill_rect(0, 206, 132, 18, stripe0);
   fxcg100_lcd_fill_rect(132, 206, 132, 18, stripe1);
   fxcg100_lcd_fill_rect(264, 206, 132, 18, stripe2);
-  fxcg100_lcd_status("CGBA SAFE BOOT");
+  fxcg100_lcd_status("gpSP SAFE BOOT");
   fxcg100_lcd_draw_text(12, 34, "PHYSICAL SMOKE BUILD", accent, bg);
   fxcg100_lcd_draw_text(12, 50, "GPSP CORE NOT STARTED", text, bg);
   fxcg100_lcd_draw_text(12, 66, "ON SETTINGS", text, bg);
@@ -113,10 +113,10 @@ static int run_safe_boot_app(void)
     int jit_probe = cgba_run_jit_probe();
     if (jit_probe == 0) {
       fxcg100_debug_puts("[cgba] sh4 jit probe ok\n");
-      fxcg100_lcd_status("CGBA JIT OK");
+      fxcg100_lcd_status("gpSP JIT OK");
     } else {
       print_hex_line("[cgba] sh4 jit probe fail ", (uint32_t)jit_probe);
-      fxcg100_lcd_status("CGBA JIT FAIL");
+      fxcg100_lcd_status("gpSP JIT FAIL");
     }
   }
 #else
@@ -158,7 +158,7 @@ static int run_safe_boot_app(void)
     app_delay();
   }
 
-  fxcg100_lcd_status("CGBA RETURN");
+  fxcg100_lcd_status("gpSP RETURN");
   fxcg100_lcd_shutdown();
   return 0;
 }
@@ -190,7 +190,7 @@ int emain(void)
   fxcg100_debug_puts("\n[cgba] fx-CG100 gpSP port boot\n");
   fxcg100_lcd_init();
   fxcg100_lcd_clear(0);
-  fxcg100_lcd_status("CGBA BOOT");
+  fxcg100_lcd_status("gpSP BOOT");
   fxcg100_menu_init(&menu_state);
 
 #if CGBA_RUN_JIT_PROBE
@@ -198,15 +198,15 @@ int emain(void)
     int jit_probe = cgba_run_jit_probe();
     if (jit_probe == 0) {
       fxcg100_debug_puts("[cgba] sh4 jit probe ok\n");
-      fxcg100_lcd_status("CGBA JIT OK");
+      fxcg100_lcd_status("gpSP JIT OK");
     } else {
       print_hex_line("[cgba] sh4 jit probe fail ", (uint32_t)jit_probe);
-      fxcg100_lcd_status("CGBA JIT FAIL");
+      fxcg100_lcd_status("gpSP JIT FAIL");
     }
   }
 #else
   fxcg100_debug_puts("[cgba] sh4 jit probe skipped\n");
-  fxcg100_lcd_status("CGBA JIT OFF");
+  fxcg100_lcd_status("gpSP JIT OFF");
 #endif
 
   gba_screen_pixels = fxcg100_framebuffer;
@@ -220,10 +220,10 @@ int emain(void)
                                cgba_mode3_smoke_gba_len,
                                FEAT_DISABLE, FEAT_DISABLE,
                                SERIAL_MODE_DISABLED) != 0) {
-    fxcg100_lcd_status("CGBA ROM FAIL");
+    fxcg100_lcd_status("gpSP ROM FAIL");
     fxcg100_panic("load embedded rom");
   }
-  fxcg100_lcd_status("CGBA ROM OK");
+  fxcg100_lcd_status("gpSP ROM OK");
 
   selected_boot_mode = boot_game;
   dynarec_enable = 0;
@@ -232,7 +232,7 @@ int emain(void)
   reset_gba();
 
   fxcg100_debug_puts("[cgba] interpreter start\n");
-  fxcg100_lcd_status("CGBA INT RUN");
+  fxcg100_lcd_status("gpSP INT RUN");
   previous_hotkeys = fxcg100_poll_hotkeys_mapped(menu_state.hotkey_map);
 
   for (frame = 1;; frame++) {
@@ -261,27 +261,27 @@ int emain(void)
       if (menu_result == FXCG100_MENU_RESET) {
         reset_gba();
         frame = 0;
-        fxcg100_lcd_status("CGBA RESET");
+        fxcg100_lcd_status("gpSP RESET");
         fxcg100_debug_puts("[cgba] menu reset requested\n");
         continue;
       }
 
-      fxcg100_lcd_status("CGBA INT RUN");
+      fxcg100_lcd_status("gpSP INT RUN");
       fxcg100_debug_puts("[cgba] menu close\n");
       continue;
     }
 
     if (hotkey_edge & FXCG100_HOTKEY_BIT(FXCG100_HOTKEY_DISPLAY_FPS)) {
       menu_state.show_fps = menu_state.show_fps ? 0 : 1;
-      fxcg100_lcd_status(menu_state.show_fps ? "CGBA FPS ON" :
-                         "CGBA FPS OFF");
+      fxcg100_lcd_status(menu_state.show_fps ? "gpSP FPS ON" :
+                         "gpSP FPS OFF");
     }
     if (hotkey_edge & FXCG100_HOTKEY_BIT(FXCG100_HOTKEY_LOAD_STATE))
-      fxcg100_lcd_status("CGBA LOAD STATE TODO");
+      fxcg100_lcd_status("gpSP LOAD STATE TODO");
     if (hotkey_edge & FXCG100_HOTKEY_BIT(FXCG100_HOTKEY_SAVE_STATE))
-      fxcg100_lcd_status("CGBA SAVE STATE TODO");
+      fxcg100_lcd_status("gpSP SAVE STATE TODO");
     if (hotkey_edge & FXCG100_HOTKEY_BIT(FXCG100_HOTKEY_SAVE_EXIT))
-      fxcg100_lcd_status("CGBA SAVE+EXIT TODO");
+      fxcg100_lcd_status("gpSP SAVE+EXIT TODO");
 
     gba_buttons = fxcg100_poll_gba_buttons_mapped(menu_state.keymap);
 
@@ -299,16 +299,16 @@ int emain(void)
 
     if (frame == 1) {
       print_hex_line("[cgba] frame1 hash ", last_hash);
-      snprintf(status, sizeof(status), "CGBA F:%06u H:%08x", frame, last_hash);
+      snprintf(status, sizeof(status), "gpSP F:%06u H:%08x", frame, last_hash);
       fxcg100_lcd_status(status);
     } else if ((frame % 60) == 0) {
       print_hex_line("[cgba] frame hash ", last_hash);
-      snprintf(status, sizeof(status), "CGBA F:%06u H:%08x", frame, last_hash);
+      snprintf(status, sizeof(status), "gpSP F:%06u H:%08x", frame, last_hash);
       fxcg100_lcd_status(status);
     }
   }
 
-  fxcg100_lcd_status("CGBA EXIT");
+  fxcg100_lcd_status("gpSP EXIT");
   fxcg100_lcd_shutdown();
   return 0;
 #endif
