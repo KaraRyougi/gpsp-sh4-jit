@@ -411,5 +411,5 @@ target_link_options(cgba-gint-gpsp PRIVATE
 )
 
 generate_g3a(TARGET cgba-gint-gpsp OUTPUT "gpSP.g3a"
-  NAME "gpSP" VERSION "00.01.0000"
+  NAME "gpSP" VERSION "00.02.0707"
   ICONS icon-uns.png icon-sel.png)
