@@ -1,11 +1,9 @@
 # cgba
 
-`cgba` is an experimental Game Boy Advance emulator port for the Casio
-fx-CG100 / SH7305 target.
-
-The current base emulator is gpSP, imported under `vendor/gpsp` for study and
-port work. gpSP is a good fit because its architecture already separates the
-ARM7TDMI translator from host-specific dynamic-recompiler emitters.
+`cgba` is an experimental Game Boy Advance emulator for the Casio fx-CG100
+(SH7305 / SH-4A, big-endian, no FPU). It is built on gpSP, imported under
+`vendor/gpsp`, and adds an SH-4 dynamic recompiler (the "JIT") so GBA games run
+at playable speeds on the calculator's CPU.
 
 ## Target
 
@@ -14,124 +12,60 @@ ARM7TDMI translator from host-specific dynamic-recompiler emitters.
 - ROM: mapped NOR flash, so full-ROM RAM buffering is not the first constraint
 - Primary constraint: CPU throughput
 
-## Direction
+## Status
 
-The port should keep gpSP's interpreter as the correctness baseline and add an
-SH4 dynamic recompiler for speed. The first dynarec milestone is a Thumb-only
-translator subset, because most GBA game code is Thumb-heavy.
+gpSP's interpreter is the correctness baseline and the shipping default
+(`CGBA_DYNAREC=OFF`). The SH-4 dynarec is the opt-in speed path: a full
+ARM/Thumb host translator with fastmem, dead-flag elimination, block linking,
+self-modifying-code handling, and a cold-code translation gate, all pinned to a
+hardware-fixed memory layout. It runs real games — the Metroid Fusion
+JIT-vs-interpreter frame battery is bit-exact — and reaches roughly 30–40
+modeled fps on the standing test scenarios. The measurement methodology, the
+commit-anchored optimization chronology, and the remaining bottlenecks are in
+[docs/performance-history.md](docs/performance-history.md).
 
-See:
+## Documentation
 
-- [fx-CG100 Port Plan](docs/fxcg100-port-plan.md)
-- [SH4 JIT & Optimization Plan](docs/sh4-jit-optimization-plan.md)
-- [SH4 JIT Implementation Status](docs/sh4-jit-status.md)
-- [gpSP Upstream Snapshot](docs/gpsp-upstream.md)
-- [SH4 Dynarec Contract](docs/sh4-dynarec-contract.md)
+[docs/README.md](docs/README.md) is the index. The current as-built docs:
 
-## First Smoke Test
+- [SH-4 JIT architecture](docs/sh4-jit-architecture.md) — dynarec internals:
+  translation flow, dispatch, emitters, fastmem, dead flags, block linking,
+  SMC, the cold-code gate, and the hardware-pinned memory layout.
+- [BIOS / SWI HLE](docs/bios-swi-hle.md) — the BIOS/SWI high-level emulation
+  layer and its fidelity harness.
+- [Testing & measurement harness](docs/testing-harness.md) — headless harness
+  knobs, FBSTAT parity batteries, the exec oracle, calcemu facilities.
+- [Performance history](docs/performance-history.md) — methodology, chronology,
+  future directions.
 
-The initial SH4 emitter is intentionally tiny. It verifies byte-level
-big-endian SH4 instruction emission before being wired into gpSP.
+The bring-up-era research and design docs (port plan, optimization plan,
+implementation-status tracker, dynarec contract, upstream snapshot, and the
+new-game decompress-bug postmortem) are kept under `docs/` for history.
+
+## Building the calculator add-in
+
+The calculator port lives in `ports/fxcg100/gint-gpsp` and builds against the
+fxSDK / gint. The playable JIT add-in:
+
+```sh
+ports/fxcg100/build-calc-jit.sh
+```
+
+This emits `ports/fxcg100/gint-gpsp/CGBA-GPSP.g3a` with the SH-4 dynarec and the
+menu / ROM-picker front end. Copy it to the calculator's main memory and put a
+GBA ROM named `GAME.GBA` alongside it (or pick one with the in-app ROM browser).
+Set `FXSDK_PREFIX=/path` if the fxSDK is not auto-detected.
+
+## SH-4 codegen smoke test
+
+The SH-4 instruction encoder is audited byte-for-byte against `sh-elf-as`. A
+minimal host-side smoke test verifies big-endian emission without a calculator:
 
 ```sh
 cc -std=c11 -Wall -Wextra -I. tests/sh4_codegen_smoke.c -o /tmp/cgba-sh4-smoke
 /tmp/cgba-sh4-smoke
 ```
 
-## fx-CG100 Calculator Port
-
-The calculator build lives in `ports/fxcg100`. The default target is now a
-hardware-safe boot/menu smoke add-in, not the full gpSP interpreter. It uses the
-standard fx-CG add-in RAM window, keeps the loader-provided stack, avoids the
-emulator debug port, skips generated-code probes, and returns through the loader
-when explicitly requested. This keeps physical bring-up focused on launch,
-direct LCD writes, and keypad behavior before gpSP's larger memory footprint is
-reintroduced.
-
-```sh
-make -C ports/fxcg100
-```
-
-The default build emits `ports/fxcg100/build/cgba.g3a` and
-`ports/fxcg100/build/cgba.raw.g3a`. The full gpSP interpreter bring-up target is
-still available explicitly:
-
-```sh
-make -C ports/fxcg100 BUILD=build-full CGBA_FULL_GPSP=1
-```
-
-The physical LCD result showed that the freestanding direct-R61524 path can run
-but only produces a single line on hardware. Treat that build as a low-level
-probe. The current display bring-up candidate is the `gint`-backed smoke app,
-which uses the same fxSDK/gint startup and display driver family as the working
-CGBC port:
-
-```sh
-cd ports/fxcg100/gint-smoke
-fxsdk build-cg -c
-fxsdk build-cg
-```
-
-It emits `ports/fxcg100/gint-smoke/CGBA-GINT.g3a`. It draws one full-screen
-`CGBA GINT SMOKE` frame through `dclear()`/`dtext()`/`dupdate()`, holds briefly,
-then returns through the add-in loader. Keyboard is intentionally disabled in
-this isolate because direct HLE currently rejects gint's keyscan timer register
-write.
-
-The smoke app should show `CGBA SAFE BOOT`, diagnostic stack/key lines, and
-bottom color bars. The on-calculator shell uses a CGBC-like `ON` settings key
-with gpSP-style per-action input binding:
-
-- `ON`: open the in-game settings menu
-- `HOME`: return through the loader from the safe-boot screen after the startup
-  grace period
-- All other calculator keys, including `TOOLS`, `SHIFT`, `AC`, `HOME`, digits,
-  operators, and arrows, are bindable
-
-The default map mirrors CGBC's feel: `A=SHIFT`, `B=ALPHA`, `SELECT=VAR`,
-`START=EXE`, D-pad arrows, `L=BEGIN`, and `R=END`. gpSP hotkeys such as fast
-forward, load state, save state, save+exit, and display FPS are configured as
-separate bindings and default to `NONE`. The menu exposes graphics/frameskip/FPS
-display, load/save-state slot, gpSP-style key mapping, config save/load at
-`\\fls0\\CGBA.CFG`, cheats/misc, load/restart/return/quit. Manual frameskip
-currently skips LCD blits; game save/state storage-backed options are present
-but marked TODO until file/NOR save plumbing is added.
-
-An experimental helper for the longer OS/MPM path is also present:
-
-```sh
-ports/fxcg100/run-mpm-smoke.sh
-```
-
-It follows the local `~/Dev/casio-emu` flash provisioning flow and expects the
-documented local assets (`os200_correct.bin`, `fls0_16MiB.bin`, `mpm.bin`, and
-`/tmp/os200_mpm_fixed.bin`). Current validation reaches the patched OS MPM entry
-point; add-in USB install timing still needs work before this is a full
-end-to-end MPM launch test.
-
-For the CGBC-style shortcut, use a copied Zelda flash image and pass only the
-`.g3a` as the emulator positional argument:
-
-```sh
-ports/fxcg100/run-zelda-flash.sh ports/fxcg100/build/cgba.g3a
-```
-
-The current safe build has been verified with this `~/Dev/casio-emu` harness:
-the emulator logs direct R61524 writes and `/tmp/cgba-zelda-safe.ppm` captures
-the `CGBA SAFE BOOT` screen.
-
-The `gint` display isolate has also been verified through the same shortcut:
-
-```sh
-env HLE_EXIT_AT=120000 HLE_GRAMLOG=1 \
-  CGBA_FBDUMP=/tmp/cgba-gint-zelda-final.ppm \
-  CGBA_LOG=/tmp/cgba-gint-zelda-final.log \
-  ports/fxcg100/run-zelda-flash.sh ports/fxcg100/gint-smoke/CGBA-GINT.g3a
-```
-
-Expected log shape:
-
-```text
-[FLASHLOAD] loaded NOR filesystem (...)
-[disp] f=1 driven=1 hot=1 use=0 h[0..395] (88704 writes)
-```
+The full regression suite — host unit tests in `tests/`, the on-target headless
+harness, and the calcemu round-trip — is documented in
+[docs/testing-harness.md](docs/testing-harness.md).
