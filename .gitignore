@@ -2,16 +2,20 @@ ports/fxcg100/build/
 ports/fxcg100/build-full/
 ports/fxcg100/build-*/
 ports/fxcg100/gint-smoke/build-cg*/
-ports/fxcg100/gint-smoke/CGBA-GINT.g3a
+ports/fxcg100/gint-smoke/*.g3a
 # build-cg (shipping), build-cg-headless-* (dynarec soak/diff harness builds),
 # build-calc-jit (hand-held JIT build, ports/fxcg100/build-calc-jit.sh)
 ports/fxcg100/gint-gpsp/build-cg*/
 ports/fxcg100/gint-gpsp/build-calc-jit*/
-ports/fxcg100/gint-gpsp/CGBA-GPSP.g3a
+# all g3a build outputs (shipping, -profile/-release variants, Finder "N.g3a" dupes)
+ports/fxcg100/gint-gpsp/*.g3a
 
 # macOS + accidental Finder "Keep both" duplicate dirs (e.g. "mips 2/")
 .DS_Store
 * 2/
+
+# nested git worktree checked out inside the repo root
+/prejit-interpreter-g3a/
 
 # ROM images are large binaries (and usually copyrighted) — keep them local
 *.gba
