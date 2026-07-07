@@ -153,6 +153,7 @@ target_compile_definitions(cgba-gint-gpsp PRIVATE
 )
 if(CGBA_FXCG50)
   target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_FXCG50=1)
+  target_sources(cgba-gint-gpsp PRIVATE src/cg50_syscall.S)  # Bfile_GetBlockAddress syscall trampoline
 else()
   target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_FXCG100=1)
 endif()
