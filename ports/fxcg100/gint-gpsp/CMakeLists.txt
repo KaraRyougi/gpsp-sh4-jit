@@ -7,7 +7,16 @@ find_package(Gint 2.9 REQUIRED)
 set(CGBA_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../..")
 set(FXCG100 "${CGBA_ROOT}/ports/fxcg100")
 set(GPSP "${CGBA_ROOT}/vendor/gpsp")
-set(CGBA_GPSP_LINKER "${CMAKE_CURRENT_SOURCE_DIR}/fxcg100_gpsp.ld")
+# Target model: fx-CG100 (default) or fx-CG50 / Graph 90+E. Both are SH7305 with
+# 8 MiB RAM at 0x8c000000, so they share the gpSP core, the high-RAM arena, and
+# the JIT; they differ in keyboard codes, storage backing, and the ROM source
+# (CG100 memory-maps NOR; CG50 streams the .gba via BFile).
+option(CGBA_FXCG50 "Build for fx-CG50 / Graph 90+E instead of fx-CG100" OFF)
+if(CGBA_FXCG50)
+  set(CGBA_GPSP_LINKER "${CMAKE_CURRENT_SOURCE_DIR}/fxcg50_gpsp.ld")
+else()
+  set(CGBA_GPSP_LINKER "${CMAKE_CURRENT_SOURCE_DIR}/fxcg100_gpsp.ld")
+endif()
 
 set_target_properties(Gint::Gint PROPERTIES
   INTERFACE_LINK_OPTIONS "-T;${CGBA_GPSP_LINKER}"
@@ -138,11 +147,15 @@ target_include_directories(cgba-gint-gpsp PRIVATE
 
 target_compile_definitions(cgba-gint-gpsp PRIVATE
   MSB_FIRST=1
-  CGBA_FXCG100=1
   CGBA_FULL_GPSP=1
   ROM_BUFFER_SIZE=1
   dma_transfer=gpsp_dma_transfer
 )
+if(CGBA_FXCG50)
+  target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_FXCG50=1)
+else()
+  target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_FXCG100=1)
+endif()
 if(CGBA_FXCG100_STORAGE)
   target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_FXCG100_STORAGE=1)
 endif()

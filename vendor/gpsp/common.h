@@ -98,7 +98,10 @@
   typedef signed long long int s64;
 #endif
 
-#ifdef CGBA_FXCG100
+/* fx-CG100 and fx-CG50 are both SH7305 with 8 MiB of RAM at 0x8c000000; gpSP's
+ * large state is staged in a high-RAM arena (.cgba.highbss) on both. Only the
+ * fx-CG20/CG10 Prizm (2 MiB at 0x88000000) lacks room and is unsupported. */
+#if defined(CGBA_FXCG100) || defined(CGBA_FXCG50)
   #define CGBA_HIGH_BSS __attribute__((section(".cgba.highbss"), aligned(32)))
 #else
   #define CGBA_HIGH_BSS
