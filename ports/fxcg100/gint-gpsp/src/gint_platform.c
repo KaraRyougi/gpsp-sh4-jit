@@ -67,6 +67,7 @@ static void restore_full_window(void)
 	lcd_window_partial = 0;
 }
 
+#ifndef CGBA_FXCG50
 static int keycode_from_cg100_skin_code(int basic_keycode)
 {
 	static const int cg100_rows_9_to_5[][6] = {
@@ -97,11 +98,18 @@ static int keycode_from_cg100_skin_code(int basic_keycode)
 	return (row << 4) + (7 - col);
 }
 
+#endif /* !CGBA_FXCG50 */
+
 int fxcg100_key_down(int basic_keycode)
 {
+#ifdef CGBA_FXCG50
+	/* fx-CG50: keymaps hold gint KEY_* codes directly (the classic matrix). */
+	return basic_keycode ? (keydown(basic_keycode) ? 1 : 0) : 0;
+#else
 	int keycode = keycode_from_cg100_skin_code(basic_keycode);
 
 	return keycode ? keydown(keycode) : 0;
+#endif
 }
 
 uint32_t fxcg100_poll_app_keys(void)
@@ -110,6 +118,32 @@ uint32_t fxcg100_poll_app_keys(void)
 
 	clearevents();
 
+#ifdef CGBA_FXCG50
+	/* fx-CG50 shell navigation. Only APPKEY_ON is read during gameplay (to
+	 * open the emulator menu), so it must be a non-GBA key -> AC/ON. The rest
+	 * are polled only inside the menu, where GBA input is paused, so they can
+	 * reuse the arrows / EXE / EXIT. */
+	if(keydown(KEY_SHIFT))
+		keys |= FXCG100_APPKEY_SHIFT;
+	if(keydown(KEY_MENU))
+		keys |= FXCG100_APPKEY_HOME;
+	if(keydown(KEY_ACON))
+		keys |= FXCG100_APPKEY_AC | FXCG100_APPKEY_ON;
+	if(keydown(KEY_EXE))
+		keys |= FXCG100_APPKEY_EXE;
+	if(keydown(KEY_OPTN))
+		keys |= FXCG100_APPKEY_MENU;
+	if(keydown(KEY_UP))
+		keys |= FXCG100_APPKEY_UP;
+	if(keydown(KEY_DOWN))
+		keys |= FXCG100_APPKEY_DOWN;
+	if(keydown(KEY_LEFT))
+		keys |= FXCG100_APPKEY_LEFT;
+	if(keydown(KEY_RIGHT))
+		keys |= FXCG100_APPKEY_RIGHT;
+	if(keydown(KEY_EXIT))
+		keys |= FXCG100_APPKEY_BACK;
+#else
 	if(fxcg100_key_down(77))
 		keys |= FXCG100_APPKEY_SHIFT;
 	if(fxcg100_key_down(69))
@@ -132,6 +166,7 @@ uint32_t fxcg100_poll_app_keys(void)
 		keys |= FXCG100_APPKEY_BACK;
 	if(fxcg100_key_down(FXCG100_PHYSKEY_ON))
 		keys |= FXCG100_APPKEY_ON;
+#endif
 
 	return keys;
 }

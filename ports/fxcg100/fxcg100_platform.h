@@ -21,7 +21,11 @@ void fxcg100_panic(const char *text);
 #define FXCG100_APPKEY_BACK   (1u << 9)
 #define FXCG100_APPKEY_ON     (1u << 10)
 
-#define FXCG100_PHYSKEY_ON 79u
+#ifdef CGBA_FXCG50
+#define FXCG100_PHYSKEY_ON 0x07u   /* fx-CG50 KEY_ACON (AC/ON) */
+#else
+#define FXCG100_PHYSKEY_ON 79u     /* fx-CG100 ON */
+#endif
 
 #define FXCG100_GBA_BUTTON_L      0x200u
 #define FXCG100_GBA_BUTTON_R      0x100u

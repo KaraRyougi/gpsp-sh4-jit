@@ -8,6 +8,41 @@ typedef struct fxcg100_key_choice {
   const char *label;
 } fxcg100_key_choice;
 
+#ifdef CGBA_FXCG50
+#include <gint/keycodes.h>
+
+/* fx-CG50 / Graph 90+E: bindable keys are gint KEY_* codes on the classic
+ * matrix (labels are the fx-CG50 silkscreen). AC/ON is reserved for the
+ * emulator menu, so it is not offered as a GBA binding. */
+static const fxcg100_key_choice bindable_keys[] = {
+  { KEY_MENU, "MENU" },   { KEY_EXIT, "EXIT" },
+  { KEY_SHIFT, "SHIFT" }, { KEY_ALPHA, "ALPHA" },
+  { KEY_OPTN, "OPTN" },   { KEY_VARS, "VARS" },
+  { KEY_F1, "F1" },       { KEY_F2, "F2" },
+  { KEY_F3, "F3" },       { KEY_F4, "F4" },
+  { KEY_F5, "F5" },       { KEY_F6, "F6" },
+  { KEY_LEFT, "LEFT" },   { KEY_RIGHT, "RIGHT" },
+  { KEY_UP, "UP" },       { KEY_DOWN, "DOWN" },
+  { KEY_EXE, "EXE" },
+  { KEY_XOT, "X,T" },     { KEY_LOG, "LOG" },
+  { KEY_LN, "LN" },       { KEY_SIN, "SIN" },
+  { KEY_COS, "COS" },     { KEY_TAN, "TAN" },
+  { KEY_FRAC, "a b/c" },  { KEY_DEL, "DEL" },
+  { KEY_7, "7" },         { KEY_8, "8" },
+  { KEY_9, "9" },         { KEY_4, "4" },
+  { KEY_5, "5" },         { KEY_6, "6" },
+  { KEY_1, "1" },         { KEY_2, "2" },
+  { KEY_3, "3" },         { KEY_0, "0" },
+};
+
+/* GBA button -> fx-CG50 key, in enum order:
+ *   A=MENU B=EXIT SELECT=SHIFT START=VARS
+ *   RIGHT LEFT UP DOWN L=F5 R=F6  (AC/ON opens the emulator menu) */
+static const uint16_t default_keymap[FXCG100_GBA_KEY_COUNT] = {
+  KEY_MENU, KEY_EXIT, KEY_SHIFT, KEY_VARS,
+  KEY_RIGHT, KEY_LEFT, KEY_UP, KEY_DOWN, KEY_F5, KEY_F6
+};
+#else
 static const fxcg100_key_choice bindable_keys[] = {
   { 69, "HOME" },     { 78, "SETTINGS" },
   { 68, "BACK" },     { 77, "SHIFT" },
@@ -43,6 +78,7 @@ static const fxcg100_key_choice bindable_keys[] = {
 static const uint16_t default_keymap[FXCG100_GBA_KEY_COUNT] = {
   48, 37, 29, 28, 38, 58, 49, 47, 59, 39
 };
+#endif
 
 static const uint16_t default_hotkey_map[FXCG100_HOTKEY_COUNT] = {
   0, 0, 0, 0, 0
