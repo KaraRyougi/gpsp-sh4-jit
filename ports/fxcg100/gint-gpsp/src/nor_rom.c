@@ -510,6 +510,20 @@ int cgba_nor_rom_read(cgba_nor_rom *rom, void *dst, uint32_t offset, uint32_t le
 
 		if(chunk > len)
 			chunk = len;
+		/* Clamp at the true file end: everything past rom->size is open bus
+		 * (0xFF) — never read into an adjacent file's flash. Split a chunk
+		 * that straddles the end so the valid head is served normally. */
+		if(rom && rom->size) {
+			if(offset >= rom->size) {
+				memset(out, 0xff, chunk);
+				out += chunk;
+				offset += chunk;
+				len -= chunk;
+				continue;
+			}
+			if(offset + chunk > rom->size)
+				chunk = rom->size - offset;
+		}
 		src = (block < cgba_block_total) ? cgba_block_addr[block] : NULL;
 		if(src) {
 			memcpy(out, src + intra, chunk);
@@ -547,9 +561,21 @@ static int build_block_table(cgba_nor_rom *rom)
 	rom->direct_page_count = 0;
 	for(uint32_t b = 0; b < total; b++) {
 		unsigned char *raw = NULL;
-		int result = os_bfile_get_block_address(rom->fd,
+		int result;
+		const uint8_t *ptr;
+
+		/* Block entirely past the file end (the partial last page's
+		 * padding): no NOR pointer to query — leave it NULL so its page
+		 * is gather-served as open bus. Avoids relying on the OS's
+		 * behaviour for past-EOF block-address queries. */
+		if((uint32_t)b * CGBA_FLASH_BLOCK_SIZE >= rom->size) {
+			cgba_block_addr[b] = NULL;
+			continue;
+		}
+
+		result = os_bfile_get_block_address(rom->fd,
 			(int)(b * CGBA_FLASH_BLOCK_SIZE), &raw);
-		const uint8_t *ptr = result < 0 ? NULL : cached_nor_pointer(raw);
+		ptr = result < 0 ? NULL : cached_nor_pointer(raw);
 
 		if(b == 0) {
 			rom->block_result = result;
@@ -636,11 +662,10 @@ static int map_open_fd(cgba_nor_rom *rom, int fd)
 		close_fd_preserve_status(rom);
 		return -6;
 	}
-	if(rom->size != rom->padded_size) {
-		rom->last_error = -7;
-		close_fd_preserve_status(rom);
-		return -7;
-	}
+	/* A non-page-aligned size (partial last page) is fine — homebrew and
+	 * non-power-of-2 ROMs land here. The last page's past-file blocks carry
+	 * no NOR pointer and are gather-served as open bus (0xFF) by
+	 * cgba_nor_rom_read, which clamps at rom->size. */
 
 	if(build_block_table(rom) != 0) {
 		if(rom->page_count == 1 &&
