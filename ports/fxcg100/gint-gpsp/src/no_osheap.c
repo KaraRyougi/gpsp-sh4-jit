@@ -63,6 +63,10 @@ void __free(void *ptr)
 	(void)ptr;
 }
 
+/* fx-CG100 links no OS filesystem, so BFile_* are stubbed and storage goes
+ * through hardcoded firmware addresses instead. fx-CG50 uses gint's real
+ * BFile_* (Fugue), so the stubs must NOT shadow them there. */
+#ifndef CGBA_FXCG50
 int BFile_Remove(const uint16_t *path) { (void)path; return -1; }
 int BFile_Rename(const uint16_t *oldpath, const uint16_t *newpath)
 {
@@ -125,6 +129,7 @@ int BFile_FindNext(int shandle, uint16_t *foundfile,
 	return -1;
 }
 int BFile_FindClose(int shandle) { (void)shandle; return -1; }
+#endif /* !CGBA_FXCG50 */
 
 int __Timer_Install(int id, void (*handler)(void), int delay)
 {
