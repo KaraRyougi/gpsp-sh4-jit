@@ -88,8 +88,11 @@ checked=4889, bad=0 over a 2000-frame AW boot window.
 
 ## Tier 2: the parked/resumable CpuFastSet engine
 
-The oversized tail was the actual cost: per 2000 AW frames, 4,718 declined
-FastSets moving 864k words (mostly 224-word EWRAM→OAM sprite flushes,
+(CpuSet 0x0B shares the same engine — `cgba_swi_cpuset_materialize` /
+`cgba_swi_cpuset_engine`, word-copy loop-top 0x6AC, half-copy 0x668 —
+mirroring everything below; only the copy loop-top register layout and
+per-element chunking differ.) The oversized tail was the actual cost: per
+2000 AW frames, 4,718 declined FastSets moving 864k words (mostly 224-word EWRAM→OAM sprite flushes,
 ~3.7k guest cycles each ≈ 3 scanlines — IRQs *will* vector mid-copy).
 The engine executes them in budgeted 8-word chunks from a **canonical
 machine state**: at every pause point, registers, stacks, mode and PC are
@@ -147,13 +150,15 @@ instructions. Accepted; the parity batteries police it.
 
 ## Remaining interpreted tail (per 2000 AW frames)
 
-From the `jit swi-census` counters (SWIs the HLE declined):
-BgAffineSet (0x0E) n=429; LZ77UnCompWram (0x11) n=5 / 59,480 bytes;
-LZ77UnCompVram (0x12) n=7 / 71,680 bytes; CpuSet (0x0B) n=40. This tail is
-the ~260k cycles/frame gap between 39.8 fps (2.96M cyc/frame) and the
-~43.7 fps infidel-HLE ceiling (2.70M). The parked-engine pattern extends
-to each (see [performance-history.md](performance-history.md), Future
-directions).
+CpuSet (0x0B) copies now have their own parked engine too
+(`cgba_swi_cpuset_engine`), covering word- and half-copy to any region —
+the LttP rain intro rebuilds OAM every frame via ~256-word oversized
+CpuSets that this reclaims (Zelda render-off floor 24.5 -> 29.1 fps;
+Metroid dense parity stays bit-exact). Fills stay interpreted (rare).
+Remaining declined SWIs (per `jit swi-census`): BgAffineSet (0x0E),
+LZ77UnCompWram/Vram (0x11/0x12), and small fitting copies. The
+parked-engine pattern extends to the decompression SWIs next (see
+[performance-history.md](performance-history.md), Future directions).
 
 ## Bulk helpers and a hardware lesson
 
