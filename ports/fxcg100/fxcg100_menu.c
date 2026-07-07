@@ -577,11 +577,7 @@ static void menu_draw(fxcg100_menu_state *state, menu_page_id page,
            (unsigned)frame, (unsigned)last_hash);
   fxcg100_lcd_draw_text(246, 5, line, dim, panel);
   if (page == MENU_PAGE_MAIN) {
-    fxcg100_lcd_draw_text(8, 20, "g", RGB565(31, 4, 4), bg);
-    fxcg100_lcd_draw_text(14, 20, "p", RGB565(31, 26, 0), bg);
-    fxcg100_lcd_draw_text(20, 20, "S", RGB565(0, 26, 8), bg);
-    fxcg100_lcd_draw_text(26, 20, "P", RGB565(5, 14, 31), bg);
-    fxcg100_lcd_draw_text(8, 34,
+    fxcg100_lcd_draw_text(8, 20,
                           "a gpSP port for CASIO fx-CG calculators",
                           text, bg);
   } else {
