@@ -40,8 +40,9 @@ SH-4 diagnostics knobs (same CMakeLists): `CGBA_SH4_INTERP_STATS`
 (~4.5% overhead — per-region interpreted-instruction counters),
 `CGBA_SH4_DIAG_COUNTERS` (~0.5% — slice/helper/SWI-census counters),
 `CGBA_SH4_SWI_HLE_VERIFY` (predict-vs-interpret SWI comparison),
-`CGBA_SH4_ARM_DEAD_FLAGS=OFF` (A/B), `CGBA_SH4_HOT_THRESHOLD=0`
-(cold gate off).
+`CGBA_SH4_DIFF_CHECK_CYCLES=1` (live diff also reports per-block cycle
+mismatches), `CGBA_SH4_ARM_DEAD_FLAGS=OFF` (A/B),
+`CGBA_SH4_HOT_THRESHOLD=0` (cold gate off).
 
 ### Input generators
 
@@ -144,6 +145,10 @@ Env-gated; all combine freely with the headless builds:
   pattern with press width 2 still measured `fps emu=18 draw=3`, but Thumb
   load/store helpers dropped from `110760` to `14122`. The frame-300 slot-save
   repro completed with `@@CGBA_SLOTSAVE frame=300 ok=1` and `=== done ===`.
+  After the cycle-parity follow-up, the held-window requested pattern
+  (`ALT_FRAME=0 ALT_PERIOD=60 ALT_PRESS=60 ALT_LEFT=ON`) still completes but
+  remains at `fps emu=18 draw=3`; the current frame-300 slot-save repro again
+  completes with `@@CGBA_SLOTSAVE frame=300 ok=1` and no HLE panic signature.
 - **AW measure**: 2000 frames from boot, pulsed-A harness
   (`A_PERIOD=12 A_PRESS=2`), CACHESIM fine ticks (`EVERY=10`).
 - **fps model**: `fps = 118e6 / (window_cycles / frames)`, where the run

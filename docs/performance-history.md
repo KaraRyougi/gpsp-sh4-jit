@@ -257,6 +257,41 @@ page bases when `memory_map_read[]` has no VRAM entry. Validation:
 - Host emitter/oracle suite passed: `make -C tests`, including
   `SH4 exec oracle passed (143381 native cases)`.
 
+**Yoshi cycle-parity follow-up** (2026-07-08, `SUPERM0.SVS`):
+the frame-23 lockstep probe exposed two SH4 timing mismatches. The threaded
+ARM translator was still carrying gpSP's old fixed ARM multiply approximations
+(`MUL` +2, `MLA`/long multiplies +3), while the interpreter oracle charges no
+extra cycles for those instructions. After zeroing those extras on SH4, the
+next live mismatch was Yoshi's Thumb `SWI 6` divide veneer at `0812F6C4`: the
+JIT had been using the old flat divide HLE cost, then was one cycle high after
+modeling the open-BIOS Div body. The HLE now computes the dispatcher/body
+charge from the actual operands and debits it at runtime.
+
+Validation:
+
+- `make -C tests` passed; `sh4_cycle_audit` now covers ARM multiply no-extra
+  classes and Thumb HLE Div, and its self-test detects the old flat
+  64-cycle Div charge.
+- Yoshi frame-23 live cycle probe no longer reports the earlier ARM multiply
+  mismatch or the `0812F6C4` Div mismatch.
+- Yoshi 300-frame no-input oracle/JIT diff still diverges immediately in
+  IWRAM/IO and first diverges visibly at frame 25:
+  interpreter framebuffer `1EB97F2D`, JIT `A57ADB44`. The artifact is still
+  open.
+- Requested Yoshi 600-frame A/LEFT gameplay soak
+  (`ALT_FRAME=0 ALT_PERIOD=60 ALT_PRESS=60 ALT_LEFT=ON`, loaded from
+  `SUPERM0.SVS`) completed all 600 frames and `=== done ===`, but remains slow:
+  final frame 599 `hash=3ED0BFE4`, `fps emu=18 draw=3`,
+  `rom_flush=3 ram_flush=3 arm_tx=140 thumb_tx=2387 bios_n=9122 cold_n=37236`.
+- The same Yoshi A/LEFT soak with real slot-save at frame 300 completed with
+  `@@CGBA_SLOTSAVE frame=300 ok=1`, produced a 196,608-byte `GAME0.SVS`, and
+  reached `=== done ===` with no `WILD=FFFFFFFF`/panic signature under HLE.
+- Mario 600-frame A/LEFT boot soak with the same 60-frame held-window pattern
+  completed at `fps emu=29 draw=7`, final frame 599 `hash=AD79546F`,
+  `rom_flush=2 ram_flush=2 arm_tx=84 thumb_tx=739`. This is below the separate
+  45-fps Mario gameplay harness noted below, so it should not be quoted as the
+  achieved Mario target.
+
 ## State at HEAD
 
 Shipping default is the interpreter (`CGBA_DYNAREC=OFF`); the JIT is the

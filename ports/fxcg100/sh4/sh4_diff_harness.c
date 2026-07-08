@@ -48,6 +48,10 @@ extern int cgba_sh4_trace_update_limit;
 
 #define CGBA_HIGH_BSS_LOCAL __attribute__((section(".cgba.highbss"), aligned(32)))
 
+#ifndef CGBA_SH4_DIFF_CHECK_CYCLES
+#define CGBA_SH4_DIFF_CHECK_CYCLES 0
+#endif
+
 /* Full machine snapshot (CPU + scheduler + memory + sound), so the interpreter
  * and dynarec runs execute from byte-identical state INCLUDING hardware event
  * timing — a partial reg[]+RAM snapshot leaves the timer/video scheduler
@@ -473,7 +477,7 @@ static unsigned cgba_sh4_diff_blocks_core(unsigned max_blocks, char out[][48],
     memcpy(oracle_reg, reg, sizeof oracle_reg);
     dbg_tag('I', reg[REG_PC]);
 
-    if (0 && iused != dused && n < max_lines) {   /* DIAG: ignore benign cycle diffs */
+    if (CGBA_SH4_DIFF_CHECK_CYCLES && iused != dused && n < max_lines) {
       diverged = 1;
       snprintf(out[n++], 48, "B%u p%lX cyc i%lu d%lu", b,
         (unsigned long)pc0, (unsigned long)iused, (unsigned long)dused);
