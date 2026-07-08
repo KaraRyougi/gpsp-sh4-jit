@@ -166,6 +166,34 @@ operand order. Validation:
   `@@CGBA_SLOTSAVE frame=120 ok=1`, 300 FBSTAT frames, and no `WILD=FFFFFFFF`
   panic signature.
 
+**Yoshi save-state IRQ follow-up** (2026-07-08, `SUPERM0.SVS`):
+the save-state crash report pointed at a timing-sensitive IRQ return path.
+The SH4 store-alert helper now leaves a bare pending IRQ for the normal
+`update_gba` scheduler boundary instead of vectoring immediately at the store
+PC; SMC still exits immediately. This matches the interpreter's IRQ service
+point and avoids saving a different `LR_irq` before `SUBS PC,LR,#4` returns.
+The headless interpreter/JIT comparison harness front-end also now shares the
+backup-save cadence macro between JIT and runtime-interpreter comparison
+builds. Validation:
+
+- Yoshi 32-frame JIT/interpreter FBSTAT parity still matches through frame 24
+  and first diverges at frame 25 (`JIT hash=8FA4B031`, interpreter
+  `1EB97F2D`). Exact per-instruction cycle-boundary JIT also diverges at
+  frame 25 (`EDE03768`), so the visible artifact is not just grouped cycle
+  amortization.
+- Yoshi 300-frame no-input JIT run with checkpoint save at frame 120 completed
+  with `@@CGBA_CHECKPOINT save frame=120 ok=1`, frame 299 FBSTAT, and
+  `=== done ===`; no `WILD=FFFFFFFF` or panic signature appeared. Re-enabling
+  the IRQ wrapper HLE in the same scenario also completed with the checkpoint
+  save and `=== done ===` (`fps emu=19 draw=4` with stats off), so the fix is
+  the IRQ service boundary rather than disabling the fast IRQ wrapper.
+- Yoshi 600-frame A/LEFT soak (`ALT_LEFT=1`, period 60, final source with IRQ
+  wrapper HLE enabled) completed all 600 frames and `=== done ===`, no
+  `WILD=FFFFFFFF` or panic signature. Final frame 599 FBSTAT:
+  `hash=7FC8363F`; still at `fps emu=11 draw=11`
+  (`rom_flush=3 ram_flush=3 arm_tx=139 thumb_tx=2383`). This remains far short
+  of the 45 fps gameplay target.
+
 ## State at HEAD
 
 Shipping default is the interpreter (`CGBA_DYNAREC=OFF`); the JIT is the

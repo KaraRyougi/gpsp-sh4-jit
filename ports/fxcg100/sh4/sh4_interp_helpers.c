@@ -513,8 +513,16 @@ static int cgba_store_alert_break(u32 next_pc)
     return 0;
   if (a & CPU_ALERT_SMC)
     flush_translation_cache_ram();
-  reg[REG_PC] = next_pc;
-  return CGBA_SH4_HELPER_ALERT;
+  /* A bare IRQ alert (for example an IME/IE store that unmasks an already
+   * pending IRQ) must be serviced at the same scheduler boundary as the
+   * interpreter. Vectoring immediately here changes LR_irq and can return into
+   * the wrong game routine after the handler's SUBS PC,LR,#4. SMC still exits
+   * immediately because stale translated RAM must not continue running. */
+  if (a & ~(cpu_alert_type)CPU_ALERT_IRQ) {
+    reg[REG_PC] = next_pc;
+    return CGBA_SH4_HELPER_ALERT;
+  }
+  return 0;
 }
 
 /* CPSR flag bits (canonical packed form, matching the interpreter). */
