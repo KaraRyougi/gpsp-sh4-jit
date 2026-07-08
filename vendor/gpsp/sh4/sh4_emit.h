@@ -625,18 +625,29 @@ static inline void sh4g_prof_block_entry(u8 **tp, u32 pc, int thumb)
  * poll at full speed (SMA2 burned 2.5x Zelda's instructions per frame). */
 #define thumb_conditional_branch(condition)                                   \
   do { u32 _cb_target = block_exits[block_exit_position].branch_target;       \
-       generate_condition_##condition();                                      \
-       if(SH4_IDLE_BRANCH(_cb_target)) {                                      \
-         sh4g_cycle_debit(&translation_ptr, (int)cycle_count +                \
-           (int)ws_cyc_nseq[(_cb_target >> 24) & 0x0F][0]);                   \
+       if((u32)pc == idle_loop_target_pc && (u32)block_start_pc < (u32)pc) {  \
+         int _seq = (int)ws_cyc_seq[((u32)pc >> 24) & 0x0F][0];               \
+         int _debit = (int)cycle_count - _seq;                                \
+         if(_debit > 0)                                                       \
+           sh4g_cycle_debit(&translation_ptr, _debit);                        \
+         cycle_count = 0;                                                     \
+         block_exits[block_exit_position].branch_target = (u32)pc;            \
          generate_branch_idle_eliminate(                                      \
-           block_exits[block_exit_position].branch_source, _cb_target);       \
+           block_exits[block_exit_position].branch_source, (u32)pc);          \
        } else {                                                               \
-         generate_branch_taken(0,                                             \
-           block_exits[block_exit_position].branch_source, _cb_target);       \
+         generate_condition_##condition();                                    \
+         if(SH4_IDLE_BRANCH(_cb_target)) {                                    \
+           sh4g_cycle_debit(&translation_ptr, (int)cycle_count +              \
+             (int)ws_cyc_nseq[(_cb_target >> 24) & 0x0F][0]);                 \
+           generate_branch_idle_eliminate(                                    \
+             block_exits[block_exit_position].branch_source, _cb_target);     \
+         } else {                                                             \
+           generate_branch_taken(0,                                           \
+             block_exits[block_exit_position].branch_source, _cb_target);     \
+         }                                                                    \
+         generate_branch_patch_conditional(backpatch_address, translation_ptr);\
+         cycle_count += ws_cyc_nseq[((u32)(pc + 2) >> 24) & 0x0F][0];        \
        }                                                                      \
-       generate_branch_patch_conditional(backpatch_address, translation_ptr); \
-       cycle_count += ws_cyc_nseq[((u32)(pc + 2) >> 24) & 0x0F][0];          \
        block_exit_position++; } while(0)
 
 #define thumb_swi()                                                           \
@@ -741,12 +752,15 @@ static inline void sh4g_prof_block_entry(u8 **tp, u32 pc, int thumb)
 #define arm_swap(type)                             SH4_CALL_OP2_PC_MEM(cgba_sh4_arm_swap)
 
 /* hle_div is the one C helper called WITHOUT a CPSR sync: it touches only
- * reg[0..3] (quotient/remainder/abs), never reg[REG_CPSR], and the SH4 ABI
+ * reg[0..1] (quotient/remainder), never reg[REG_CPSR], and the SH4 ABI
  * preserves the R8 cache across the call. Keep it that way. */
 #define arm_hle_div(cpu_mode)                                                 \
   do { sh4g_const(&translation_ptr, 0u, SH4_REG_ARG0);                        \
        sh4g_const(&translation_ptr, (u32)pc, SH4_REG_ARG1);                   \
        sh4g_vec_call(&translation_ptr, SH4G_VEC_hle_div); } while(0)
-#define arm_hle_div_arm(cpu_mode)                  arm_hle_div(cpu_mode)
+#define arm_hle_div_arm(cpu_mode)                                             \
+  do { sh4g_const(&translation_ptr, 1u, SH4_REG_ARG0);                        \
+       sh4g_const(&translation_ptr, (u32)pc, SH4_REG_ARG1);                   \
+       sh4g_vec_call(&translation_ptr, SH4G_VEC_hle_div); } while(0)
 
 #endif /* SH4_EMIT_H */

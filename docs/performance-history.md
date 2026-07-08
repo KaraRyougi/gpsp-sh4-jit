@@ -140,6 +140,32 @@ ldst helper count to 47,578 in the 1997-frame run. Broad selected-hot-file
 `-O3` is part of this measurement: narrowing it back to `cpu.cc` and
 `video.cc` kept the same clean hash but fell to 42 fps in the same harness.
 
+**Yoshi/Mario A-LEFT follow-up** (2026-07-08 diagnostic harness):
+two correctness issues were fixed while chasing reported frame drops. First,
+Thumb conditional idle elimination now parks at the same `idle_loop_target_pc`
+as the interpreter, instead of advancing one loop leg to the back-edge target
+(Yoshi's `08002BA4 -> 08002B9C` poll exposed this). Second, SH4's Div/DivArm
+SWI fast path now matches the bundled open BIOS dispatcher: observable results
+are `r0/r1`, while caller `r3` is preserved; DivArm also uses the swapped
+operand order. Validation:
+
+- Yoshi (`SUPERM0.SVS`) frame-0 block lockstep changed from
+  `B2413 p8002B9C PC i8002BA4 d8002B9C` to `MATCH 4000 blocks`.
+- Yoshi 300-frame no-key visual parity is still not solved:
+  first FBSTAT mismatch remains frame 25 (`JIT hash=8FA4B031`,
+  interpreter `1EB97F2D`), so artifact work is still open.
+- Yoshi 600-frame A/LEFT soak (`ALT_LEFT=1`, period 60, from `SUPERM0.SVS`)
+  completed all 600 frames and `=== done ===`, but only measured
+  `fps emu=12 draw=12` in the diagnostic build
+  (`rom_flush=2 ram_flush=3 arm_tx=129 thumb_tx=1121`).
+- Mario 600-frame A/LEFT boot soak completed all 600 frames at
+  `fps emu=17 draw=17` in the same diagnostic style
+  (`rom_flush=2 ram_flush=2 arm_tx=81 thumb_tx=466`). No Mario savestate was
+  available, so this is a boot/menu soak, not the 1997-frame gameplay harness.
+- Yoshi slot-save repro at frame 120 completed with
+  `@@CGBA_SLOTSAVE frame=120 ok=1`, 300 FBSTAT frames, and no `WILD=FFFFFFFF`
+  panic signature.
+
 ## State at HEAD
 
 Shipping default is the interpreter (`CGBA_DYNAREC=OFF`); the JIT is the
