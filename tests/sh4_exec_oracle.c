@@ -84,7 +84,7 @@ u32 cgba_sh4_hle_div(u32 o, u32 p){(void)o;(void)p;return 0;}
  * the mini-interpreter's byte-wise MOV.L read returns the truncated host
  * address, matching the calculator layout. R9 points here; R10 holds
  * sh4_block_exit directly. Filled in orc_vec_init(). */
-static u8 orc_vec_table[12 * 4];
+static u8 orc_vec_table[13 * 4];
 static void orc_vec_put(unsigned idx, const void *pf)
 {
   u32 v = (u32)(uintptr_t)pf;
@@ -124,6 +124,7 @@ static void orc_vec_init(void)
   orc_vec_put(SH4G_VEC_hle_div, (const void *)cgba_sh4_hle_div);
   orc_vec_put(SH4G_VEC_ws_cyc_seq, (const void *)ws_cyc_seq);
   orc_vec_put(SH4G_VEC_ws_cyc_nseq, (const void *)ws_cyc_nseq);
+  orc_vec_put(SH4G_VEC_iwram_data, (const void *)(iwram + 0x8000));
 }
 
 /* ---- guest state used by the interpreter ---- */
@@ -1190,10 +1191,74 @@ int main(void)
                 }
   }
 
+  /* ---- ARM MOV/MVN with register-specified shifts: Mario hot helper miss ---- */
+  {
+    static const u32 vals3[] = {
+      0, 1, 0x80000000u, 0x7FFFFFFFu, 0xFFFFFFFFu, 0x12345678u, 0xA5A50000u
+    };
+    static const u32 amounts[] = { 0, 1, 4, 31, 32, 33, 64, 255, 256 };
+    for (u32 aop = 0xD; aop <= 0xF; aop += 2)
+      for (u32 type = 0; type < 4; type++)
+        for (unsigned vi = 0; vi < sizeof vals3 / sizeof *vals3; vi++)
+          for (unsigned ai = 0; ai < sizeof amounts / sizeof *amounts; ai++) {
+            u32 opcode = 0xE0000000u | (aop << 21) | (3u << 12)
+                       | (5u << 8) | (type << 5) | 0x10u | 4u;
+            static u8 abuf[1024]; u8 *ap = abuf;
+            u32 val = vals3[vi], amount = amounts[ai] & 0xFF;
+            u32 shifted;
+
+            if (!sh4g_arm_dp_native(&ap, opcode, pc, 0)) {
+              printf("FAIL adp-regshift op=%08X: native rejected\n", opcode);
+              fails++; continue;
+            }
+            cases++;
+
+            memset(g_reg, 0, sizeof g_reg);
+            for (int i = 0; i < 16; i++) g_reg[i] = 0xCD000000u + (u32)i;
+            g_reg[3] = 0x51515151u;
+            g_reg[4] = val;
+            g_reg[5] = amounts[ai];
+            g_reg[SH4_GREG_CPSR] = 0xA000001Fu;
+
+            if (!run_sh4x(abuf, (size_t)(ap - abuf))) {
+              printf("FAIL adp-regshift op=%08X: interpreter: %s\n",
+                     opcode, unmodeled);
+              fails++; continue;
+            }
+
+            if (amount == 0) {
+              shifted = val;
+            } else {
+              switch (type) {
+              case 0: shifted = (amount < 32) ? (val << amount) : 0; break;
+              case 1: shifted = (amount < 32) ? (val >> amount) : 0; break;
+              case 2: shifted = (amount < 32) ? (u32)((s32)val >> amount)
+                                              : (u32)((s32)val >> 31); break;
+              default: {
+                u32 rot = amount & 31;
+                shifted = rot ? ((val >> rot) | (val << (32 - rot))) : val;
+                break;
+              }
+              }
+            }
+
+            u32 want = (aop == 0xD) ? shifted : ~shifted;
+            if (g_reg[3] != want || g_reg[4] != val || g_reg[5] != amounts[ai] ||
+                g_reg[SH4_GREG_CPSR] != 0xA000001Fu) {
+              printf("FAIL adp-regshift op=%08X val=%08X amt=%08X: "
+                     "rd=%08X want %08X r4=%08X r5=%08X cpsr=%08X\n",
+                     opcode, val, amounts[ai], g_reg[3], want, g_reg[4],
+                     g_reg[5], g_reg[SH4_GREG_CPSR]);
+              fails++;
+            }
+          }
+  }
+
   /* ---- fastmem: real sites calling real routines over a modeled map ---- */
   {
     static u8 fm_buf[8192];
-    static u8 giwram[0x10000];   /* tags 0..0x7FFF, data 0x8000.. */
+    u8 *giwram = iwram;          /* tags 0..0x7FFF, data 0x8000.. */
+    const u32 giwram_size = 0x10000;
     static u8 ewram[0x48000];    /* data page 0, tag mirror at +0x40000 */
     static u8 vram[0x8000];
     static u8 rom[0x8000];
@@ -1210,6 +1275,7 @@ int main(void)
                 (size_t)(cgba_sh4_fastmem_routine[fm] - fm_buf));
 
     memset(memory_map_read, 0, sizeof memory_map_read);
+    memset(giwram, 0, 0x10000);
     memory_map_read[0x02000000u >> 15] = ewram;
     memory_map_read[0x03000000u >> 15] = giwram + 0x8000;
     memory_map_read[0x04000000u >> 15] = (u8 *)io_registers;
@@ -1304,7 +1370,7 @@ int main(void)
           orc_add_window(fm_buf, sizeof fm_buf, 0);
           orc_add_window(io_registers, sizeof io_registers, 0);
           orc_add_window(memory_map_read, 8192 * 4, 1);
-          orc_add_window(giwram, sizeof giwram, 0);
+          orc_add_window(giwram, giwram_size, 0);
           orc_add_window(ewram, sizeof ewram, 0);
           orc_add_window(vram, sizeof vram, 0);
           orc_add_window(rom, sizeof rom, 0);
@@ -1448,7 +1514,7 @@ int main(void)
         orc_add_window(fm_buf, sizeof fm_buf, 0);
         orc_add_window(io_registers, sizeof io_registers, 0);
         orc_add_window(memory_map_read, 8192 * 4, 1);
-        orc_add_window(giwram, sizeof giwram, 0);
+        orc_add_window(giwram, giwram_size, 0);
         orc_add_window(ewram, sizeof ewram, 0);
         orc_add_window(vram, sizeof vram, 0);
         orc_add_window(rom, sizeof rom, 0);
@@ -1526,7 +1592,7 @@ int main(void)
           orc_add_window(fm_buf, sizeof fm_buf, 0);
           orc_add_window(io_registers, sizeof io_registers, 0);
           orc_add_window(memory_map_read, 8192 * 4, 1);
-          orc_add_window(giwram, sizeof giwram, 0);
+          orc_add_window(giwram, giwram_size, 0);
           orc_add_window(ewram, sizeof ewram, 0);
           orc_add_window(ws_cyc_seq, sizeof ws_cyc_seq, 0);
           orc_add_window(ws_cyc_nseq, sizeof ws_cyc_nseq, 0);
@@ -1558,6 +1624,66 @@ int main(void)
                      iocs[ci].nm, g_ie, g_if, iocs[ci].want_ie, iocs[ci].want_if);
               fails++;
             }
+          }
+        }
+      }
+      /* Plain display-window/blend registers are direct write_ioreg stores in
+       * the shared halfword-store routine. Cover both ARM and Thumb sites. */
+      {
+        struct diod {
+          u32 addr; u32 value; int thumb; const char *nm;
+        } dios[] = {
+          { 0x04000040u, 0x1357u, 0, "arm-win0h" },
+          { 0x04000054u, 0x2468u, 1, "thumb-bldy" },
+        };
+        for (unsigned di = 0; di < sizeof dios / sizeof *dios; di++) {
+          static u8 sbuf[512];
+          u8 *sp = sbuf;
+          u8 *iop = (u8 *)io_registers + (dios[di].addr & 0x3FEu);
+
+          memset(io_registers, 0, sizeof io_registers);
+          memset(g_reg, 0, sizeof g_reg);
+          for (int i = 0; i < 16; i++) g_reg[i] = 0x61CD0000u + (u32)i;
+          g_reg[SH4_GREG_CPSR] = 0x2000001Fu;
+          if (dios[di].thumb) {
+            if (!sh4g_thumb_ldst_native(&sp, 0x8208u, pc, 0)) {
+              printf("FAIL ioreg-direct %s: thumb emit reject\n", dios[di].nm);
+              fails++; continue;
+            }
+            g_reg[0] = dios[di].value;
+            g_reg[1] = dios[di].addr - 16u;       /* STRH r0,[r1,#16] */
+          } else {
+            if (!sh4g_arm_ldst_native(&sp, 0xE1C230B0u, pc, 0)) {
+              printf("FAIL ioreg-direct %s: arm emit reject\n", dios[di].nm);
+              fails++; continue;
+            }
+            g_reg[2] = dios[di].addr;
+            g_reg[3] = dios[di].value;
+          }
+          cases++;
+
+          orc_reset_windows();
+          orc_add_window(sbuf, sizeof sbuf, 0);
+          orc_add_window(fm_buf, sizeof fm_buf, 0);
+          orc_add_window(io_registers, sizeof io_registers, 0);
+          orc_add_window(memory_map_read, 8192 * 4, 1);
+          orc_add_window(giwram, giwram_size, 0);
+          orc_add_window(ewram, sizeof ewram, 0);
+          orc_add_window(ws_cyc_seq, sizeof ws_cyc_seq, 0);
+          orc_add_window(ws_cyc_nseq, sizeof ws_cyc_nseq, 0);
+          orc_add_window(orc_vec_table, sizeof orc_vec_table, 0);
+          orc_slow_target = (u32)(uintptr_t)sh4_op2_pc_mem_tramp;
+          orc_slow_target2 = (u32)(uintptr_t)sh4_op2_pc_tramp;
+
+          int ran = run_at((u32)(uintptr_t)sbuf,
+                           (u32)(uintptr_t)sbuf + (u32)(sp - sbuf));
+          int slow = (!ran && orc_took_slow);
+          u16 got = (u16)(iop[0] | (iop[1] << 8));
+          if (!ran || slow || got != (u16)dios[di].value) {
+            printf("FAIL ioreg-direct %s: ran=%d slow=%d got=%04X want=%04X %s\n",
+                   dios[di].nm, ran, slow, got, (u16)dios[di].value,
+                   (!ran && !slow) ? unmodeled : "");
+            fails++;
           }
         }
       }
@@ -1630,7 +1756,7 @@ int main(void)
         orc_add_window(fm_buf, sizeof fm_buf, 0);
         orc_add_window(io_registers, sizeof io_registers, 0);
         orc_add_window(memory_map_read, 8192 * 4, 1);
-        orc_add_window(giwram, sizeof giwram, 0);
+        orc_add_window(giwram, giwram_size, 0);
         orc_add_window(ewram, sizeof ewram, 0);
         orc_add_window(vram, sizeof vram, 0);
         orc_add_window(rom, sizeof rom, 0);
@@ -1786,7 +1912,7 @@ int main(void)
         orc_add_window(fm_buf, sizeof fm_buf, 0);
         orc_add_window(io_registers, sizeof io_registers, 0);
         orc_add_window(memory_map_read, 8192 * 4, 1);
-        orc_add_window(giwram, sizeof giwram, 0);
+        orc_add_window(giwram, giwram_size, 0);
         orc_add_window(ewram, sizeof ewram, 0);
         orc_add_window(vram, sizeof vram, 0);
         orc_add_window(rom, sizeof rom, 0);

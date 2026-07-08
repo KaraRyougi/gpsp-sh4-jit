@@ -407,9 +407,10 @@ target_compile_options(cgba-gint-gpsp PRIVATE
 # run: -O3 on video.cc alone, whose tight pixel loops might benefit while the cpu.cc
 # dispatch clearly does not.) (-g is intentionally retained: no runtime/g3a-size
 # effect, preserves addr2line for crash triage.)
-option(CGBA_TUNE_HOTFILES_O3 "Compile cpu.cc + video.cc at -O3 (measured: slight regression, keep OFF)" OFF)
+option(CGBA_TUNE_HOTFILES_O3 "Compile selected gpSP/fxCG100 hot files at -O3 (benchmark before enabling by default)" OFF)
 if(CGBA_TUNE_HOTFILES_O3)
   set_source_files_properties(${GPSP}/cpu.cc ${GPSP}/video.cc
+    ${GPSP}/main.c ${FXCG100}/sh4/sh4_interp_helpers.c
     PROPERTIES COMPILE_OPTIONS "-O3")
 endif()
 

@@ -77,7 +77,78 @@ enum {
 
 extern u8 *memory_map_read[];
 extern u16 io_registers[512];          /* eswap16'd (LE-layout) halfwords */
+extern u8 iwram[];
 void sh4_op2_pc_mem_tramp(void);
+
+static inline void sh4g_fastmem_io16_direct_store(u8 **tp, u32 guest_address,
+                                                  u32 io_offset,
+                                                  u8 *store_tail)
+{
+  u8 *miss;
+
+  sh4g_const(tp, guest_address, SH4_REG_T1);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_cmpeq(&cg, SH4_REG_T1, SH4_REG_T0);
+    sh4g_close(tp, &cg); }
+  miss = sh4g_emit_bf_placeholder(tp);
+
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_reg(&cg, SH4_REG_ARG1, SH4_REG_RET);
+    sh4_emit_and_imm(&cg, 0xFF);
+    sh4_emit_mov_l_load_r0(&cg, SH4_REG_BASE, SH4_REG_T1);
+    sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
+    sh4g_close(tp, &cg); }
+  sh4g_const(tp, (u32)(uintptr_t)((u8 *)io_registers + io_offset),
+             SH4_REG_T2);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_w_store(&cg, SH4_REG_T1, SH4_REG_T2);
+    sh4g_close(tp, &cg); }
+  { u8 *b = sh4g_emit_bra_placeholder(tp);
+    sh4g_patch_bra(b, store_tail); }
+
+  sh4g_patch_cond(miss, *tp);
+}
+
+static inline void sh4g_fastmem_io16_pair_direct_store(u8 **tp,
+                                                       u32 guest_address,
+                                                       u32 io_offset,
+                                                       u8 *store_tail)
+{
+  u8 *miss_odd, *miss_hi;
+
+  sh4g_const(tp, guest_address, SH4_REG_T1);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_T2);
+    sh4_emit_sub(&cg, SH4_REG_T1, SH4_REG_T2);       /* delta = addr - base */
+    sh4_emit_mov_reg(&cg, SH4_REG_T2, SH4_REG_RET);
+    sh4_emit_tst_imm(&cg, 1);                        /* T = even */
+    sh4g_close(tp, &cg); }
+  miss_odd = sh4g_emit_bf_placeholder(tp);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_imm(&cg, 2, SH4_REG_T1);
+    sh4_emit_cmphi(&cg, SH4_REG_T1, SH4_REG_T2);     /* T = delta > 2 */
+    sh4g_close(tp, &cg); }
+  miss_hi = sh4g_emit_bt_placeholder(tp);
+
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_reg(&cg, SH4_REG_T2, SH4_REG_ARG3);
+    sh4_emit_mov_reg(&cg, SH4_REG_ARG1, SH4_REG_RET);
+    sh4_emit_and_imm(&cg, 0xFF);
+    sh4_emit_mov_l_load_r0(&cg, SH4_REG_BASE, SH4_REG_T1);
+    sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
+    sh4_emit_mov_reg(&cg, SH4_REG_ARG3, SH4_REG_RET);
+    sh4g_close(tp, &cg); }
+  sh4g_const(tp, (u32)(uintptr_t)((u8 *)io_registers + io_offset),
+             SH4_REG_T2);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_w_store_r0(&cg, SH4_REG_T1, SH4_REG_T2);
+    sh4g_close(tp, &cg); }
+  { u8 *b = sh4g_emit_bra_placeholder(tp);
+    sh4g_patch_bra(b, store_tail); }
+
+  sh4g_patch_cond(miss_odd, *tp);
+  sh4g_patch_cond(miss_hi, *tp);
+}
 
 static inline int cgba_fm_is_load(int fm)
 { return (fm % CGBA_FM_BASE_COUNT) <= CGBA_FM_LOAD_SB; }
@@ -112,6 +183,78 @@ static inline u8 *sh4g_fastmem_emit_routine(u8 **tp, int fm)
     sh4_emit_sts_pr(&cg, SH4_REG_ARG1);
     sh4_emit_mov_l_load_disp(&cg, SH4_REG_ARG1, SH4_REG_ARG1, 24 >> 2);
     sh4g_close(tp, &cg); }
+
+  if (is_load) {
+    u8 *iwram_miss[2];
+    int niwram = 0;
+
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
+      sh4_emit_shlr16(&cg, SH4_REG_RET);
+      sh4_emit_shlr8(&cg, SH4_REG_RET);
+      sh4_emit_cmpeq_imm(&cg, 3);                    /* T = IWRAM */
+      sh4g_close(tp, &cg); }
+    iwram_miss[niwram++] = sh4g_emit_bf_placeholder(tp);
+
+    if (align_mask) {
+      sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
+      sh4_emit_tst_imm(&cg, align_mask);             /* T = guest aligned */
+      sh4g_close(tp, &cg);
+      iwram_miss[niwram++] = sh4g_emit_bf_placeholder(tp);
+    }
+
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
+      sh4_emit_shll16(&cg, SH4_REG_RET); sh4_emit_shll(&cg, SH4_REG_RET);
+      sh4_emit_shlr16(&cg, SH4_REG_RET); sh4_emit_shlr(&cg, SH4_REG_RET);
+      sh4g_close(tp, &cg); }
+    sh4g_vec_load(tp, SH4G_VEC_iwram_data, SH4_REG_T2);
+    { sh4_codegen cg = sh4g_open(tp);
+      switch (kind) {
+      case CGBA_FM_LOAD_W:
+        sh4_emit_mov_l_load_r0(&cg, SH4_REG_T2, SH4_REG_T1);
+        sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_ARG0);
+        sh4_emit_swap_w(&cg, SH4_REG_ARG0, SH4_REG_ARG0);
+        sh4_emit_swap_b(&cg, SH4_REG_ARG0, SH4_REG_T1);
+        break;
+      case CGBA_FM_LOAD_B:
+        sh4_emit_mov_b_load_r0(&cg, SH4_REG_T2, SH4_REG_T1);
+        sh4_emit_extu_b(&cg, SH4_REG_T1, SH4_REG_T1);
+        break;
+      case CGBA_FM_LOAD_UH:
+        sh4_emit_mov_w_load_r0(&cg, SH4_REG_T2, SH4_REG_T1);
+        sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
+        sh4_emit_extu_w(&cg, SH4_REG_T1, SH4_REG_T1);
+        break;
+      case CGBA_FM_LOAD_SH:
+        sh4_emit_mov_w_load_r0(&cg, SH4_REG_T2, SH4_REG_T1);
+        sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
+        sh4_emit_exts_w(&cg, SH4_REG_T1, SH4_REG_T1);
+        break;
+      default: /* LOAD_SB: mov.b sign-extends */
+        sh4_emit_mov_b_load_r0(&cg, SH4_REG_T2, SH4_REG_T1);
+        break;
+      }
+      sh4_emit_mov_reg(&cg, SH4_REG_ARG1, SH4_REG_RET);
+      sh4_emit_and_imm(&cg, 0xFF);                   /* R0 = rd byte-offset */
+      sh4_emit_mov_l_store_r0(&cg, SH4_REG_T1, SH4_REG_BASE);
+      sh4g_close(tp, &cg); }
+    if (wb) {
+      sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_reg(&cg, SH4_REG_ARG1, SH4_REG_RET);
+      sh4_emit_shlr8(&cg, SH4_REG_RET);
+      sh4_emit_and_imm(&cg, 0xFF);                   /* R0 = rn byte-offset */
+      sh4_emit_mov_l_store_r0(&cg, SH4_REG_ARG2, SH4_REG_BASE);
+      sh4g_close(tp, &cg);
+    }
+    sh4g_cycle_debit(tp, 1);                         /* IWRAM nseq cost */
+    sh4g_u16(tp, 0x000B);                            /* RTS */
+    sh4g_u16(tp, 0x0009);                            /* delay NOP */
+
+    for (i = 0; i < niwram; i++)
+      sh4g_patch_cond(iwram_miss[i], *tp);
+  }
 
   /* map guard: memory_map_read[] covers 0x00000000..0x0fffffff only */
   sh4g_const(tp, 0x10000000u, SH4_REG_T1);
@@ -321,8 +464,18 @@ static inline u8 *sh4g_fastmem_emit_routine(u8 **tp, int fm)
   sh4g_u16(tp, 0x000B);                              /* RTS */
   sh4g_u16(tp, 0x0009);                              /* delay NOP */
 
+  /* Common guard failure. Keep this close to the early map/alignment/SMC
+   * guards: they are disp8 BT/BF placeholders, and the optional IO-specialized
+   * tail below can grow independently. */
+  for (i = 0; i < ng; i++)
+    sh4g_patch_cond(guards[i], *tp);
+  sh4g_far_jmp(tp, (const void *)sh4_op2_pc_mem_tramp);
+  ng = 0;
+
   /* Halfword-store interrupt-register fast path. Mirrors gpSP's
    * write_io_register16 exactly for the two hot ISR registers:
+   *   WIN0H/WIN0V/WININ/WINOUT/BLDCNT/BLDALPHA/BLDY: plain
+   *     write_ioreg, no alert.
    *   REG_IF (0x202): IF &= ~value — pure, no alert possible.
    *   REG_IE (0x200): IE = value, then check_interrupt() — the write is
    *     committed natively and, when it would unmask a pending IRQ
@@ -333,6 +486,15 @@ static inline u8 *sh4g_fastmem_emit_routine(u8 **tp, int fm)
   if (io_check) {
     u8 *not_if, *fail_ie;
     sh4g_patch_cond(io_check, *tp);
+    sh4g_fastmem_io16_pair_direct_store(tp, 0x0400001Cu, 0x01Cu, store_tail);
+    sh4g_fastmem_io16_direct_store(tp, 0x04000040u, 0x040u, store_tail);
+    sh4g_fastmem_io16_direct_store(tp, 0x04000044u, 0x044u, store_tail);
+    sh4g_fastmem_io16_direct_store(tp, 0x04000048u, 0x048u, store_tail);
+    sh4g_fastmem_io16_direct_store(tp, 0x0400004Au, 0x04Au, store_tail);
+    sh4g_fastmem_io16_direct_store(tp, 0x04000050u, 0x050u, store_tail);
+    sh4g_fastmem_io16_direct_store(tp, 0x04000052u, 0x052u, store_tail);
+    sh4g_fastmem_io16_direct_store(tp, 0x04000054u, 0x054u, store_tail);
+
     sh4g_const(tp, 0x04000202u, SH4_REG_T1);
     { sh4_codegen cg = sh4g_open(tp);
       sh4_emit_cmpeq(&cg, SH4_REG_T1, SH4_REG_T0);   /* T = REG_IF */
@@ -400,14 +562,14 @@ static inline u8 *sh4g_fastmem_emit_routine(u8 **tp, int fm)
       sh4g_patch_bra(b, store_tail); }
     sh4g_patch_cond(fail_ie, *tp);
     /* falls into the guard-failure tramp below */
-  }
 
-  /* guard failure: straight into the compact C-helper trampoline. PR still
-   * points at the site's BRA, so the tramp reads fn/opcode/pc/cycles from
-   * the same tuple this routine was called with. */
-  for (i = 0; i < ng; i++)
-    sh4g_patch_cond(guards[i], *tp);
-  sh4g_far_jmp(tp, (const void *)sh4_op2_pc_mem_tramp);
+    /* IO-tail guard failure: straight into the compact C-helper trampoline. PR
+     * still points at the site's BRA, so the tramp reads fn/opcode/pc/cycles
+     * from the same tuple this routine was called with. */
+    for (i = 0; i < ng; i++)
+      sh4g_patch_cond(guards[i], *tp);
+    sh4g_far_jmp(tp, (const void *)sh4_op2_pc_mem_tramp);
+  }
 
   return entry;
 }

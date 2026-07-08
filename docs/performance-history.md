@@ -122,6 +122,24 @@ packed-pair RGB565 blends composed into the strip banks under the LCD DMA;
 FILTER (SMOOTH / SHARP / CRISP-nearest) selects the horizontal row scaler
 and vertical tap composition; CRISP is the cheapest (no blends).
 
+**Mario JIT/memory-tail target** (this change set): the Mario harness
+(`~/Downloads/Mario.gba`, 1997 frames, START at frame 30, A held from
+frame 200, headless JIT, `HLE_TURBO=1`, `HLE_FORCE_R61524=1`) reaches
+**45 emulated fps** in calcemu with diagnostics off and
+`CGBA_TUNE_HOTFILES_O3=ON`. Correctness anchor is the pre-overlay frame
+1996 FBSTAT:
+`black=1120/38400 hash=8BEF0CBC p00=FFD3 p11=FFD3 pc=3186`; the final
+`fbhash` line is overlay-contaminated and should not be used as the clean
+visual hash. The speedup came from pushing more hot helper traffic into
+native SH4: direct IWRAM fastmem loads through a vector-table
+`iwram + 0x8000` entry, native halfword IO stores for safe window/blend
+registers plus IF/IE handling, dead-flag ARM MOV/MVN register-specified
+shifts, and a no-active-timer event-loop skip. The last measured step
+added native `WININ`/`WINOUT`/`BLDALPHA` stores, dropping Mario's Thumb
+ldst helper count to 47,578 in the 1997-frame run. Broad selected-hot-file
+`-O3` is part of this measurement: narrowing it back to `cpu.cc` and
+`video.cc` kept the same clean hash but fell to 42 fps in the same harness.
+
 ## State at HEAD
 
 Shipping default is the interpreter (`CGBA_DYNAREC=OFF`); the JIT is the
@@ -129,7 +147,9 @@ opt-in hardware artifact with cold gate T=64, heat leak 16, faithful
 CpuSet/FastSet HLE on, all infidel HLEs compiled out, IntrWait HLE off.
 Modeled numbers on the standing scenarios: AW 39.8 fps, Metroid movement
 32.4 fps, Metroid dense parity green, SMA2/Zelda from the 30fps-goal era
-35.1/58.5 (pre-demotion protocol — remeasure before quoting).
+35.1/58.5 (pre-demotion protocol — remeasure before quoting). The current
+Mario-specific calcemu harness reaches 45 emulated fps with the clean
+frame-1996 hash `8BEF0CBC`.
 
 ## Future directions
 
@@ -142,7 +162,7 @@ behind them.
    LZ77UnCompWram (0x11) n=5 / 59,480 B + LZ77UnCompVram (0x12)
    n=7 / 71,680 B (token-walking cycle model, same canonical parking for
    slice crossings), CpuSet n=40. This tail is the ~260 kcyc/frame gap
-   from 39.8 to the 43.7 infidel ceiling; the 45 fps target
+   from 39.8 to the 43.7 infidel ceiling; an AW 45 fps target
    (2.62 Mcyc/frame) needs another ~80 kcyc/frame beyond it.
 2. **IntrWait HLE** (`CGBA_SH4_INTRWAIT_HLE`): three hardening layers done,
    one precise wedge left — the ISR acks REG_IF but never writes BIOS_IF,

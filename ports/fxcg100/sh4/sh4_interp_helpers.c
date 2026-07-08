@@ -147,6 +147,9 @@ enum {
 };
 
 #if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
+#ifndef CGBA_SH4_LDST_DETAIL_COUNTERS
+#define CGBA_SH4_LDST_DETAIL_COUNTERS 0
+#endif
 u32 cgba_sh4_helper_thumb_ldst_count;
 u32 cgba_sh4_helper_thumb_block_count;
 u32 cgba_sh4_helper_thumb_shift_count;
@@ -190,6 +193,16 @@ u32 cgba_sh4_helper_thumb_ldst_imm_count;
 u32 cgba_sh4_native_thumb_const_io_count;
 u32 cgba_sh4_native_thumb_runtime_io_count;
 u32 cgba_sh4_native_thumb_push_iwram_count;
+u32 cgba_sh4_thumb_io16_store_count[512];
+u32 cgba_sh4_dma_ctl_count[4];
+u32 cgba_sh4_dma_ctl_enable_count[4];
+u32 cgba_sh4_dma_ctl_value[4][4];
+u32 cgba_sh4_dma_ctl_value_count[4][4];
+u32 cgba_sh4_hle_div_zero_count;
+u32 cgba_sh4_hle_div_one_count;
+u32 cgba_sh4_hle_div_neg_one_count;
+u32 cgba_sh4_hle_div_pow2_count;
+u32 cgba_sh4_hle_div_other_count;
 /* BIOS-fallback residency: calls into the interpreter fallback and the guest
  * cycles it consumed. When the ON-menu page shows all-zero JIT counters (e.g.
  * during the open-BIOS boot screen after a soft reset), these say explicitly
@@ -228,6 +241,7 @@ static u32 cgba_sh4_helper_thumb_tag_nonzero(u8 *map, u32 region,
 static void cgba_sh4_helper_thumb_ldst_detail(u32 is_load, u32 address,
   u32 bytes, u32 source)
 {
+#if CGBA_SH4_LDST_DETAIL_COUNTERS
   u32 region = address >> 24;
   u32 align_mask = bytes - 1;
   if (is_load) cgba_sh4_helper_thumb_ldst_load_count++;
@@ -240,6 +254,8 @@ static void cgba_sh4_helper_thumb_ldst_detail(u32 is_load, u32 address,
   if (bytes == 4)      cgba_sh4_helper_thumb_ldst_word_count++;
   else if (bytes == 2) cgba_sh4_helper_thumb_ldst_half_count++;
   else                 cgba_sh4_helper_thumb_ldst_byte_count++;
+  if (!is_load && region == 0x04 && bytes == 2)
+    cgba_sh4_thumb_io16_store_count[(address & 0x3FEu) >> 1]++;
   if (source == CGBA_SH4_TLD_SRC_PC)      cgba_sh4_helper_thumb_ldst_pc_count++;
   else if (source == CGBA_SH4_TLD_SRC_SP) cgba_sh4_helper_thumb_ldst_sp_count++;
   else if (source == CGBA_SH4_TLD_SRC_REG) cgba_sh4_helper_thumb_ldst_reg_count++;
@@ -267,12 +283,52 @@ static void cgba_sh4_helper_thumb_ldst_detail(u32 is_load, u32 address,
       cgba_sh4_helper_thumb_ldst_native_ready_count++;
     }
   }
+#else
+  (void)is_load;
+  (void)address;
+  (void)bytes;
+  (void)source;
+#endif
+}
+
+static void cgba_sh4_note_dma_ctl16(u32 address, u32 source)
+{
+#if CGBA_SH4_LDST_DETAIL_COUNTERS
+  u32 offset = address & 0x3FEu;
+  int dma = -1;
+  int slot;
+
+  switch (offset) {
+  case 0x0BAu: dma = 0; break;
+  case 0x0C6u: dma = 1; break;
+  case 0x0D2u: dma = 2; break;
+  case 0x0DEu: dma = 3; break;
+  default: return;
+  }
+
+  source &= 0xFFFFu;
+  cgba_sh4_dma_ctl_count[dma]++;
+  if (source & 0x8000u)
+    cgba_sh4_dma_ctl_enable_count[dma]++;
+  for (slot = 0; slot < 4; slot++) {
+    if (cgba_sh4_dma_ctl_value_count[dma][slot] == 0 ||
+        cgba_sh4_dma_ctl_value[dma][slot] == source) {
+      cgba_sh4_dma_ctl_value[dma][slot] = source;
+      cgba_sh4_dma_ctl_value_count[dma][slot]++;
+      return;
+    }
+  }
+#else
+  (void)address;
+  (void)source;
+#endif
 }
 #else
 #define CGBA_SH4_HELPER_HIT(name) ((void)0)
 #define cgba_sh4_helper_arm_ldst_detail(is_load, address) ((void)0)
 #define cgba_sh4_helper_arm_block_detail(is_load) ((void)0)
 #define cgba_sh4_helper_thumb_ldst_detail(is_load, address, bytes, source) ((void)0)
+#define cgba_sh4_note_dma_ctl16(address, source) ((void)0)
 #endif
 
 /* ---- guest memory accessors (backend-provided wrappers over gba_memory.c) --
@@ -327,6 +383,49 @@ static u32 cgba_sh4_align_store_address(u32 address, unsigned bytes)
   return address & ~(u32)(bytes - 1);
 }
 
+static int cgba_sh4_store_u16_io_fast(u32 address, u32 source)
+{
+  if ((address >> 24) != 0x04)
+    return 0;
+
+  switch (address & 0x3FEu) {
+  case 0x000u: { /* DISPCNT */
+    u32 value = source & 0xFFFFu;
+    reg[OAM_UPDATED] |= ((value & 0x07u) != (read_ioreg(REG_DISPCNT) & 0x07u));
+    address16(io_registers, 0x000u) = eswap16((u16)value);
+    return 1;
+  }
+  case 0x01Cu:  /* BG3HOFS */
+  case 0x01Eu:  /* BG3VOFS */
+  case 0x048u:  /* WININ */
+  case 0x04Au:  /* WINOUT */
+  case 0x052u:  /* BLDALPHA */
+    address16(io_registers, address & 0x3FEu) = eswap16((u16)source);
+    return 1;
+  case 0x208u:  /* IME */
+    address16(io_registers, 0x208u) = eswap16((u16)source);
+    if ((source & 0xFFFFu) && (read_ioreg(REG_IE) & read_ioreg(REG_IF)) &&
+        ((reg[REG_CPSR] & 0x80u) == 0))
+      cgba_store_alert |= CPU_ALERT_IRQ;
+    return 1;
+  case 0x0BAu:  /* DMA0CNT_H */
+  case 0x0C6u:  /* DMA1CNT_H */
+  case 0x0D2u:  /* DMA2CNT_H */
+  case 0x0DEu: { /* DMA3CNT_H */
+    u32 dma_number;
+    if (source & 0x8000u)
+      return 0;
+    dma_number = ((address & 0x3FEu) - 0x0BAu) / 12u;
+    dma[dma_number].start_type = DMA_INACTIVE;
+    dma[dma_number].direct_sound_channel = DMA_NO_DIRECT_SOUND;
+    address16(io_registers, address & 0x3FEu) = eswap16((u16)source);
+    return 1;
+  }
+  default:
+    return 0;
+  }
+}
+
 /* Self-modifying-code detection for RAM stores. gpSP marks every byte that
  * belongs to a translated block in a parallel "tag" mirror (IWRAM: iwram[off];
  * EWRAM: ewram[off + 0x40000]); a nonzero tag over the written range means the
@@ -365,6 +464,9 @@ void function_cc execute_store_u16(u32 address, u32 source)
 {
   u32 aligned = cgba_sh4_align_store_address(address, 2);
   cgba_sh4_charge_mem(aligned, 0);
+  cgba_sh4_note_dma_ctl16(aligned, source);
+  if (cgba_sh4_store_u16_io_fast(aligned, source))
+    return;
   cgba_store_alert |= write_memory16(aligned, (u16)source);
   cgba_store_alert |= cgba_sh4_smc_check(aligned, 2);
 }
@@ -1223,6 +1325,21 @@ void cgba_sh4_hle_div(u32 cpu_mode, u32 pc)
   s32 num = (s32)reg[0];
   s32 den = (s32)reg[1];
   (void)cpu_mode; (void)pc;
+#if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
+  if (den == 0) {
+    cgba_sh4_hle_div_zero_count++;
+  } else if (den == 1) {
+    cgba_sh4_hle_div_one_count++;
+  } else if (den == -1) {
+    cgba_sh4_hle_div_neg_one_count++;
+  } else {
+    u32 abs_den = (den < 0) ? (u32)(-den) : (u32)den;
+    if ((abs_den & (abs_den - 1u)) == 0)
+      cgba_sh4_hle_div_pow2_count++;
+    else
+      cgba_sh4_hle_div_other_count++;
+  }
+#endif
   if (den != 0) {
     s32 q = num / den, r = num % den;
     reg[0] = (u32)q;

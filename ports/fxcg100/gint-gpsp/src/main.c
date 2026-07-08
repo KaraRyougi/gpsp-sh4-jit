@@ -83,6 +83,24 @@ extern uint32_t cgba_sh4_helper_thumb_ldst_imm_count;
 extern uint32_t cgba_sh4_native_thumb_const_io_count;
 extern uint32_t cgba_sh4_native_thumb_runtime_io_count;
 extern uint32_t cgba_sh4_native_thumb_push_iwram_count;
+extern uint32_t cgba_sh4_thumb_io16_store_count[512];
+extern uint32_t cgba_sh4_dma_ctl_count[4];
+extern uint32_t cgba_sh4_dma_ctl_enable_count[4];
+extern uint32_t cgba_sh4_dma_ctl_value[4][4];
+extern uint32_t cgba_sh4_dma_ctl_value_count[4][4];
+extern uint32_t cgba_sh4_hle_div_zero_count;
+extern uint32_t cgba_sh4_hle_div_one_count;
+extern uint32_t cgba_sh4_hle_div_neg_one_count;
+extern uint32_t cgba_sh4_hle_div_pow2_count;
+extern uint32_t cgba_sh4_hle_div_other_count;
+extern uint32_t cgba_sh4_prof_entry_count;
+extern uint32_t cgba_sh4_prof_overflow_count;
+extern uint32_t read_memory16(uint32_t address);
+struct cgba_sh4_prof_row {
+	uint32_t key;
+	uint32_t count;
+};
+extern unsigned cgba_sh4_prof_top(struct cgba_sh4_prof_row *out, unsigned max);
 #endif
 #endif
 
@@ -280,6 +298,17 @@ static int start_gpsp(uint16_t *framebuffer, unsigned rom_id)
 	cgba_sh4_native_thumb_const_io_count = 0;
 	cgba_sh4_native_thumb_runtime_io_count = 0;
 	cgba_sh4_native_thumb_push_iwram_count = 0;
+	memset(cgba_sh4_thumb_io16_store_count, 0,
+		sizeof(uint32_t) * 512u);
+	memset(cgba_sh4_dma_ctl_count, 0, sizeof(uint32_t) * 4u);
+	memset(cgba_sh4_dma_ctl_enable_count, 0, sizeof(uint32_t) * 4u);
+	memset(cgba_sh4_dma_ctl_value, 0, sizeof(uint32_t) * 16u);
+	memset(cgba_sh4_dma_ctl_value_count, 0, sizeof(uint32_t) * 16u);
+	cgba_sh4_hle_div_zero_count = 0;
+	cgba_sh4_hle_div_one_count = 0;
+	cgba_sh4_hle_div_neg_one_count = 0;
+	cgba_sh4_hle_div_pow2_count = 0;
+	cgba_sh4_hle_div_other_count = 0;
 #endif
 	return 0;
 }
@@ -464,6 +493,73 @@ static void hputs_dbg(const char *s)
 		hputc_dbg(*s++);
 	hputc_dbg('\n');
 }
+
+#if defined(CGBA_DYNAREC) && \
+	(defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS))
+static void cgba_print_thumb_io16_top(void)
+{
+	int used[8];
+	char buf[96];
+
+	for(int slot = 0; slot < 8; slot++) {
+		uint32_t best = 0;
+		int best_i = -1;
+
+		used[slot] = -1;
+		for(int i = 0; i < 512; i++) {
+			int seen = 0;
+			for(int j = 0; j < slot; j++)
+				if(used[j] == i)
+					seen = 1;
+			if(!seen && cgba_sh4_thumb_io16_store_count[i] > best) {
+				best = cgba_sh4_thumb_io16_store_count[i];
+				best_i = i;
+			}
+		}
+		if(best_i < 0 || best == 0)
+			break;
+		used[slot] = best_i;
+		snprintf(buf, sizeof buf, "jit thumb io16 #%d reg=%03X n=%lu",
+			slot, best_i * 2, (unsigned long)best);
+		hputs_dbg(buf);
+	}
+}
+
+static void cgba_print_prof_top(void)
+{
+	struct cgba_sh4_prof_row rows[8];
+	char buf[96];
+	unsigned n;
+
+	snprintf(buf, sizeof buf, "jit prof entries=%lu ovf=%lu",
+		(unsigned long)cgba_sh4_prof_entry_count,
+		(unsigned long)cgba_sh4_prof_overflow_count);
+	hputs_dbg(buf);
+	n = cgba_sh4_prof_top(rows, 8);
+	for(unsigned i = 0; i < n; i++) {
+		uint32_t key = rows[i].key;
+		if(key == 0xffffffffu) {
+			snprintf(buf, sizeof buf, "jit prof #%u ovf n=%lu",
+				i, (unsigned long)rows[i].count);
+		}
+		else {
+			char mode = (key & 1u) ? 'T' : 'A';
+			uint32_t pc = key & 0x0fffffffu;
+			if(mode == 'T')
+				pc &= ~1u;
+			snprintf(buf, sizeof buf,
+				"jit prof #%u %c%08lX n=%lu op=%04lX %04lX %04lX %04lX",
+				i, mode, (unsigned long)pc,
+				(unsigned long)rows[i].count,
+				(unsigned long)(read_memory16(pc) & 0xffffu),
+				(unsigned long)(read_memory16(pc + 2) & 0xffffu),
+				(unsigned long)(read_memory16(pc + 4) & 0xffffu),
+				(unsigned long)(read_memory16(pc + 6) & 0xffffu));
+		}
+		hputs_dbg(buf);
+	}
+}
+#endif
 
 static void hput_hex4_dbg(uint16_t value)
 {
@@ -1108,6 +1204,17 @@ static int cgba_headless_test(uint16_t *framebuffer)
 	cgba_sh4_native_thumb_const_io_count = 0;
 	cgba_sh4_native_thumb_runtime_io_count = 0;
 	cgba_sh4_native_thumb_push_iwram_count = 0;
+	memset(cgba_sh4_thumb_io16_store_count, 0,
+		sizeof(uint32_t) * 512u);
+	memset(cgba_sh4_dma_ctl_count, 0, sizeof(uint32_t) * 4u);
+	memset(cgba_sh4_dma_ctl_enable_count, 0, sizeof(uint32_t) * 4u);
+	memset(cgba_sh4_dma_ctl_value, 0, sizeof(uint32_t) * 16u);
+	memset(cgba_sh4_dma_ctl_value_count, 0, sizeof(uint32_t) * 16u);
+	cgba_sh4_hle_div_zero_count = 0;
+	cgba_sh4_hle_div_one_count = 0;
+	cgba_sh4_hle_div_neg_one_count = 0;
+	cgba_sh4_hle_div_pow2_count = 0;
+	cgba_sh4_hle_div_other_count = 0;
 	#endif
 	snprintf(buf, sizeof buf, "input START f=%u h=%u A/SHIFT f=%u h=%u p=%u w=%u",
 		(unsigned)CGBA_GPSP_HEADLESS_START_FRAME,
@@ -1397,6 +1504,66 @@ static int cgba_headless_test(uint16_t *framebuffer)
 		(unsigned long)cgba_sh4_helper_hle_div_count);
 	hputs_dbg(buf);
 	snprintf(buf, sizeof buf,
+		"jit thumb ldst detail load=%lu store=%lu ram=%lu io=%lu vid=%lu rom=%lu other=%lu",
+		(unsigned long)cgba_sh4_helper_thumb_ldst_load_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_store_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_ram_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_io_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_video_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_rom_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_other_count);
+	hputs_dbg(buf);
+	snprintf(buf, sizeof buf,
+		"jit thumb ldst why unm=%lu ga=%lu ha=%lu unsafe=%lu smc=%lu ready=%lu",
+		(unsigned long)cgba_sh4_helper_thumb_ldst_unmapped_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_guest_unaligned_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_host_unaligned_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_unsafe_region_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_smc_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_native_ready_count);
+	hputs_dbg(buf);
+	snprintf(buf, sizeof buf,
+		"jit thumb ldst kind word=%lu byte=%lu half=%lu src pc=%lu sp=%lu reg=%lu imm=%lu fast cio=%lu rio=%lu push=%lu",
+		(unsigned long)cgba_sh4_helper_thumb_ldst_word_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_byte_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_half_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_pc_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_sp_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_reg_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_imm_count,
+		(unsigned long)cgba_sh4_native_thumb_const_io_count,
+		(unsigned long)cgba_sh4_native_thumb_runtime_io_count,
+		(unsigned long)cgba_sh4_native_thumb_push_iwram_count);
+	hputs_dbg(buf);
+	cgba_print_thumb_io16_top();
+	cgba_print_prof_top();
+	snprintf(buf, sizeof buf,
+		"jit div den zero=%lu one=%lu neg1=%lu pow2=%lu other=%lu",
+		(unsigned long)cgba_sh4_hle_div_zero_count,
+		(unsigned long)cgba_sh4_hle_div_one_count,
+		(unsigned long)cgba_sh4_hle_div_neg_one_count,
+		(unsigned long)cgba_sh4_hle_div_pow2_count,
+		(unsigned long)cgba_sh4_hle_div_other_count);
+	hputs_dbg(buf);
+	for(unsigned dma = 0; dma < 4; dma++) {
+		if(cgba_sh4_dma_ctl_count[dma] == 0)
+			continue;
+		snprintf(buf, sizeof buf,
+			"jit dma%u ctl n=%lu en=%lu v=%04lX:%lu %04lX:%lu %04lX:%lu %04lX:%lu",
+			dma,
+			(unsigned long)cgba_sh4_dma_ctl_count[dma],
+			(unsigned long)cgba_sh4_dma_ctl_enable_count[dma],
+			(unsigned long)cgba_sh4_dma_ctl_value[dma][0],
+			(unsigned long)cgba_sh4_dma_ctl_value_count[dma][0],
+			(unsigned long)cgba_sh4_dma_ctl_value[dma][1],
+			(unsigned long)cgba_sh4_dma_ctl_value_count[dma][1],
+			(unsigned long)cgba_sh4_dma_ctl_value[dma][2],
+			(unsigned long)cgba_sh4_dma_ctl_value_count[dma][2],
+			(unsigned long)cgba_sh4_dma_ctl_value[dma][3],
+			(unsigned long)cgba_sh4_dma_ctl_value_count[dma][3]);
+		hputs_dbg(buf);
+	}
+	snprintf(buf, sizeof buf,
 		"jit arm ldst detail load=%lu store=%lu ram=%lu io=%lu vid=%lu rom=%lu other=%lu",
 		(unsigned long)cgba_sh4_helper_arm_ldst_load_count,
 		(unsigned long)cgba_sh4_helper_arm_ldst_store_count,
@@ -1572,6 +1739,66 @@ static int cgba_headless_test(uint16_t *framebuffer)
 		(unsigned long)cgba_sh4_helper_thumb_dp_count,
 		(unsigned long)cgba_sh4_helper_hle_div_count);
 	hputs_dbg(buf);
+	snprintf(buf, sizeof buf,
+		"jit thumb ldst detail load=%lu store=%lu ram=%lu io=%lu vid=%lu rom=%lu other=%lu",
+		(unsigned long)cgba_sh4_helper_thumb_ldst_load_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_store_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_ram_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_io_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_video_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_rom_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_other_count);
+	hputs_dbg(buf);
+	snprintf(buf, sizeof buf,
+		"jit thumb ldst why unm=%lu ga=%lu ha=%lu unsafe=%lu smc=%lu ready=%lu",
+		(unsigned long)cgba_sh4_helper_thumb_ldst_unmapped_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_guest_unaligned_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_host_unaligned_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_unsafe_region_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_smc_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_native_ready_count);
+	hputs_dbg(buf);
+	snprintf(buf, sizeof buf,
+		"jit thumb ldst kind word=%lu byte=%lu half=%lu src pc=%lu sp=%lu reg=%lu imm=%lu fast cio=%lu rio=%lu push=%lu",
+		(unsigned long)cgba_sh4_helper_thumb_ldst_word_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_byte_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_half_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_pc_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_sp_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_reg_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_imm_count,
+		(unsigned long)cgba_sh4_native_thumb_const_io_count,
+		(unsigned long)cgba_sh4_native_thumb_runtime_io_count,
+		(unsigned long)cgba_sh4_native_thumb_push_iwram_count);
+	hputs_dbg(buf);
+	cgba_print_thumb_io16_top();
+	cgba_print_prof_top();
+	snprintf(buf, sizeof buf,
+		"jit div den zero=%lu one=%lu neg1=%lu pow2=%lu other=%lu",
+		(unsigned long)cgba_sh4_hle_div_zero_count,
+		(unsigned long)cgba_sh4_hle_div_one_count,
+		(unsigned long)cgba_sh4_hle_div_neg_one_count,
+		(unsigned long)cgba_sh4_hle_div_pow2_count,
+		(unsigned long)cgba_sh4_hle_div_other_count);
+	hputs_dbg(buf);
+	for(unsigned dma = 0; dma < 4; dma++) {
+		if(cgba_sh4_dma_ctl_count[dma] == 0)
+			continue;
+		snprintf(buf, sizeof buf,
+			"jit dma%u ctl n=%lu en=%lu v=%04lX:%lu %04lX:%lu %04lX:%lu %04lX:%lu",
+			dma,
+			(unsigned long)cgba_sh4_dma_ctl_count[dma],
+			(unsigned long)cgba_sh4_dma_ctl_enable_count[dma],
+			(unsigned long)cgba_sh4_dma_ctl_value[dma][0],
+			(unsigned long)cgba_sh4_dma_ctl_value_count[dma][0],
+			(unsigned long)cgba_sh4_dma_ctl_value[dma][1],
+			(unsigned long)cgba_sh4_dma_ctl_value_count[dma][1],
+			(unsigned long)cgba_sh4_dma_ctl_value[dma][2],
+			(unsigned long)cgba_sh4_dma_ctl_value_count[dma][2],
+			(unsigned long)cgba_sh4_dma_ctl_value[dma][3],
+			(unsigned long)cgba_sh4_dma_ctl_value_count[dma][3]);
+		hputs_dbg(buf);
+	}
 	snprintf(buf, sizeof buf,
 		"jit arm ldst detail load=%lu store=%lu ram=%lu io=%lu vid=%lu rom=%lu other=%lu",
 		(unsigned long)cgba_sh4_helper_arm_ldst_load_count,

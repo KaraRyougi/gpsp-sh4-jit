@@ -2400,4 +2400,3 @@ void update_scanline(void)
     }
   }
 }
-
