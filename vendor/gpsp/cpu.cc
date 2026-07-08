@@ -1646,7 +1646,7 @@ void execute_arm(u32 cycles)
   s32 cycles_remaining;
   u32 update_ret;
   cpu_alert_type cpu_alert;
-#ifdef CGBA_FXCG100
+#if defined(CGBA_FXCG100) || defined(CGBA_FXCG50)
   u32 cgba_detected_idle_pc;
 #endif
 #if defined(CGBA_DYNAREC)
@@ -1697,7 +1697,7 @@ arm_loop:
           process_cheats();
 
        /* Execute ARM instruction */
-#ifdef CGBA_FXCG100
+#if defined(CGBA_FXCG100) || defined(CGBA_FXCG50)
        cgba_detected_idle_pc = 0xFFFFFFFF;
 #endif
        using_instruction(arm);
@@ -3203,12 +3203,12 @@ arm_loop:
           case 0xA0 ... 0xAF:
              {
                 /* B offset */
-#ifdef CGBA_FXCG100
+#if defined(CGBA_FXCG100) || defined(CGBA_FXCG50)
                 u32 branch_pc = reg[REG_PC];
 #endif
                 arm_decode_branch();
                 reg[REG_PC] += offset + 8;
-#ifdef CGBA_FXCG100
+#if defined(CGBA_FXCG100) || defined(CGBA_FXCG50)
                 if(reg[REG_PC] == branch_pc)
                   cgba_detected_idle_pc = branch_pc;
 #endif
@@ -3267,7 +3267,7 @@ skip_instruction:
        CGBA_DIFF_STOP_CHECK();
 
        if ((reg[REG_PC] == idle_loop_target_pc
-#ifdef CGBA_FXCG100
+#if defined(CGBA_FXCG100) || defined(CGBA_FXCG50)
             || reg[REG_PC] == cgba_detected_idle_pc
 #endif
            ) && cycles_remaining > 0) cycles_remaining = 0;
@@ -3302,7 +3302,7 @@ thumb_loop:
 
        /* Execute THUMB instruction */
 
-#ifdef CGBA_FXCG100
+#if defined(CGBA_FXCG100) || defined(CGBA_FXCG50)
        cgba_detected_idle_pc = 0xFFFFFFFF;
 #endif
        using_instruction(thumb);
@@ -3742,13 +3742,13 @@ thumb_loop:
           case 0xE0 ... 0xE7:
              {
                 /* B label */
-#ifdef CGBA_FXCG100
+#if defined(CGBA_FXCG100) || defined(CGBA_FXCG50)
                 u32 branch_pc = reg[REG_PC];
 #endif
                 thumb_decode_branch();
                 s32 br_offset = ((s32)(offset << 21) >> 20) + 4;
                 reg[REG_PC] += br_offset;
-#ifdef CGBA_FXCG100
+#if defined(CGBA_FXCG100) || defined(CGBA_FXCG50)
                 if(reg[REG_PC] == branch_pc)
                   cgba_detected_idle_pc = branch_pc;
 #endif
@@ -3783,7 +3783,7 @@ thumb_loop:
        CGBA_DIFF_STOP_CHECK();
 
        if ((reg[REG_PC] == idle_loop_target_pc
-#ifdef CGBA_FXCG100
+#if defined(CGBA_FXCG100) || defined(CGBA_FXCG50)
             || reg[REG_PC] == cgba_detected_idle_pc
 #endif
            ) && cycles_remaining > 0) cycles_remaining = 0;
