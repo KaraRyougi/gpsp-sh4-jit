@@ -757,10 +757,12 @@ static inline void sh4g_prof_block_entry(u8 **tp, u32 pc, int thumb)
 #define arm_hle_div(cpu_mode)                                                 \
   do { sh4g_const(&translation_ptr, 0u, SH4_REG_ARG0);                        \
        sh4g_const(&translation_ptr, (u32)pc, SH4_REG_ARG1);                   \
-       sh4g_vec_call(&translation_ptr, SH4G_VEC_hle_div); } while(0)
+       sh4g_vec_call(&translation_ptr, SH4G_VEC_hle_div);                     \
+       sh4g_cycle_debit_from_global(&translation_ptr, &cgba_sh4_extra_cycles); } while(0)
 #define arm_hle_div_arm(cpu_mode)                                             \
   do { sh4g_const(&translation_ptr, 1u, SH4_REG_ARG0);                        \
        sh4g_const(&translation_ptr, (u32)pc, SH4_REG_ARG1);                   \
-       sh4g_vec_call(&translation_ptr, SH4G_VEC_hle_div); } while(0)
+       sh4g_vec_call(&translation_ptr, SH4G_VEC_hle_div);                     \
+       sh4g_cycle_debit_from_global(&translation_ptr, &cgba_sh4_extra_cycles); } while(0)
 
 #endif /* SH4_EMIT_H */

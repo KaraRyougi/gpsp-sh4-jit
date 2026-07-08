@@ -79,6 +79,7 @@ unsigned long cgba_em_blk_n, cgba_em_blk_bytes;
 #endif
 #endif
 extern int cgba_diff_stop_on_bios_exit;
+static u32 cgba_swi_dispatch_cycles(u32 sp_region, u32 lr_region, int thumb);
 
 #if defined(CGBA_GPSP_HEADLESS_TEST) && CGBA_GPSP_HEADLESS_TRACE_PC != 0
 static void sh4_headless_putc(char c)
@@ -1348,12 +1349,50 @@ int cgba_sh4_arm_swap(u32 opcode, u32 pc)
  * the observable Div/DivArm result is only r0/r1. Preserve r3 even though the
  * official BIOS contract exposes ABS(quotient) there; the interpreter runs the
  * same bundled BIOS and Yoshi depends on that exact scratch-register state. */
+static u32 cgba_sh4_abs_s32_bits(s32 v)
+{
+  return (v < 0) ? (0u - (u32)v) : (u32)v;
+}
+
+static u32 cgba_sh4_hle_div_cycles(u32 divarm, u32 pc, s32 num, s32 den)
+{
+  u32 s0 = (u32)ws_cyc_seq[0][1];
+  u32 n0 = (u32)ws_cyc_nseq[0][1];
+  int thumb = (reg[REG_CPSR] & 0x20u) != 0;
+  u32 lr = pc + (thumb ? 2u : 4u);
+  u32 cycles = cgba_swi_dispatch_cycles(reg[REG_SP] >> 24, lr >> 24, thumb);
+  u32 align = 0;
+  u32 n, d;
+
+  if (divarm)
+    cycles += 4u * s0 + n0;   /* 1798..17A4 operand swap + B Div */
+
+  if (den == 0)
+    return 64u;               /* legacy undefined-input charge */
+
+  n = cgba_sh4_abs_s32_bits(num);
+  d = cgba_sh4_abs_s32_bits(den);
+  while (d <= n && align < 31u) {
+    d <<= 1;
+    align++;
+  }
+
+  /* Open-BIOS Div body 17A8..17FC. Excludes the body's final BX LR because
+   * cgba_swi_dispatch_cycles() already accounts for the dispatcher return path
+   * around the routine call. The translated HLE SWI keeps its own instruction
+   * fetch charge, and the interpreter's dispatcher/body boundary is one cycle
+   * shorter than the straight instruction sum below. Conditional ALU ops still
+   * fetch; taken BLS/BCC add nseq BIOS refill cycles. */
+  cycles += (22u + 10u * align) * s0 + (2u * align) * n0;
+  return cycles - 1u;
+}
+
 void cgba_sh4_hle_div(u32 divarm, u32 pc)
 {
   CGBA_SH4_HELPER_HIT(hle_div);
   s32 num = divarm ? (s32)reg[1] : (s32)reg[0];
   s32 den = divarm ? (s32)reg[0] : (s32)reg[1];
-  (void)pc;
+  cgba_sh4_extra_cycles = (int)cgba_sh4_hle_div_cycles(divarm, pc, num, den);
 #if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
   if (den == 0) {
     cgba_sh4_hle_div_zero_count++;
