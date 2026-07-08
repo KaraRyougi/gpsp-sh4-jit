@@ -1006,16 +1006,23 @@ static int headless_a_down(unsigned frame)
 {
 	const unsigned start = (unsigned)CGBA_GPSP_HEADLESS_A_FRAME;
 	const unsigned hold = (unsigned)CGBA_GPSP_HEADLESS_A_HOLD;
+#if CGBA_GPSP_HEADLESS_A_PERIOD != 0
 	const unsigned period = (unsigned)CGBA_GPSP_HEADLESS_A_PERIOD;
+#endif
 	const unsigned press = (unsigned)CGBA_GPSP_HEADLESS_A_PRESS;
 	unsigned rel;
 
 	if(hold == 0 || press == 0 || frame < start || frame >= start + hold)
 		return 0;
 	rel = frame - start;
+#if CGBA_GPSP_HEADLESS_A_PERIOD == 0
+	(void)rel;
+	return 1;
+#else
 	if(period == 0)
 		return 1;
 	return (rel % period) < press;
+#endif
 }
 
 static int headless_a_edge(unsigned frame)
@@ -1091,7 +1098,9 @@ static uint32_t headless_buttons_for_frame(unsigned frame)
 	if(headless_a_down(frame))
 		buttons |= FXCG100_GBA_BUTTON_A;
 #if CGBA_GPSP_HEADLESS_ALT_PERIOD > 0
+#if CGBA_GPSP_HEADLESS_ALT_FRAME > 0
 	if(frame >= (unsigned)CGBA_GPSP_HEADLESS_ALT_FRAME) {
+#endif
 		unsigned rel = frame - (unsigned)CGBA_GPSP_HEADLESS_ALT_FRAME;
 		unsigned win = rel / (unsigned)CGBA_GPSP_HEADLESS_ALT_PERIOD;
 		if((rel % (unsigned)CGBA_GPSP_HEADLESS_ALT_PERIOD) <
@@ -1103,7 +1112,9 @@ static uint32_t headless_buttons_for_frame(unsigned frame)
 			buttons |= (win & 1) ? FXCG100_GBA_BUTTON_START
 				: FXCG100_GBA_BUTTON_A;
 #endif
+#if CGBA_GPSP_HEADLESS_ALT_FRAME > 0
 	}
+#endif
 #endif
 #if CGBA_GPSP_HEADLESS_RUN_FRAME > 0
 	if(frame >= (unsigned)CGBA_GPSP_HEADLESS_RUN_FRAME) {

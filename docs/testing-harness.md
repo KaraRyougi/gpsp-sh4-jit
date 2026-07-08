@@ -127,11 +127,16 @@ Env-gated; all combine freely with the headless builds:
   translation-churn stress. Metric: modeled fps (below).
 - **Yoshi A/LEFT soak**: 600 frames from `SUPERM0.SVS` copied in as
   `CGBACHK.SAV`, `LOAD_STATE=1`, `ALT_FRAME=0 ALT_PERIOD=60 ALT_PRESS=60
-  ALT_LEFT=ON`, `STAT_EVERY=1`, JIT on. July 8 2026 result after the
-  display-IO fast path: `fps emu=12 draw=12` in the fully-rendered/hash
-  diagnostic build, `irqin=101627`, `cap vid=539295`, and Thumb single
-  load/store helpers fell from 114226 to 111528 without changing any frame
-  hashes versus the pre-change JIT run. A save-slot repro build
+  ALT_LEFT=ON`, JIT on. July 8 2026 requested soak completed all 600 frames
+  under HLE (`=== done ===`) with the final hash-every-frame diagnostic build
+  at `fps emu=11 draw=11`, `irqin=101643`, `cap vid=520836`, `rom_flush=3`,
+  `ram_flush=3`. With `STAT_EVERY=0`, the cold-gate sweep was:
+  threshold 64 → `fps emu=18`, `rom_flush=4`, `thumb_tx=3437`, `cold_n=28262`;
+  threshold 96 → `fps emu=18`, `rom_flush=3`, `thumb_tx=2425`, `cold_n=31181`;
+  threshold 128 → `fps emu=18`, `rom_flush=3`, `thumb_tx=2379`, `cold_n=37709`;
+  threshold 192 → `fps emu=17`, `rom_flush=3`, `thumb_tx=2319`, `cold_n=48945`.
+  Default is 128: it reduces late ROM-cache churn without the host-FPS dip at
+  192. A save-slot repro build
   (`SAVE_SLOT_FRAME=120`, 300 frames) wrote `GAME0.SVS`
   (`@@CGBA_SLOTSAVE frame=120 ok=1`) and reached `=== done ===`; the
   hardware `WILD=FFFFFFFF` save crash was not reproduced under HLE.
