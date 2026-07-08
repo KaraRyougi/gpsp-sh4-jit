@@ -111,6 +111,7 @@ enum {
   SH4G_VEC_hle_div,
   SH4G_VEC_ws_cyc_seq,
   SH4G_VEC_ws_cyc_nseq,
+  SH4G_VEC_iwram_data,
   SH4G_VEC_COUNT                       /* MOV.L disp4 reach caps this at 16 */
 };
 

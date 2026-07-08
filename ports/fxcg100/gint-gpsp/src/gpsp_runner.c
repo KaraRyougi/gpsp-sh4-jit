@@ -681,12 +681,17 @@ unsigned cgba_gpsp_state_lines(unsigned frame, const char *phase,
 		snprintf(out[n++], CGBA_STATE_LINE_MAX,
 			"@@CGBA_IO frame=%u phase=%s dispcnt=%04X dispstat=%04X "
 			"vcount=%u p1=%04X ie=%04X if=%04X ime=%04X wait=%04X "
-			"siocnt=%04X irqcyc=%lu oamupd=%lu",
+			"siocnt=%04X win0h=%04X win0v=%04X winin=%04X winout=%04X "
+			"bldcnt=%04X bldalpha=%04X bldy=%04X irqcyc=%lu oamupd=%lu",
 			frame, phase, read_ioreg(REG_DISPCNT),
 			read_ioreg(REG_DISPSTAT), read_ioreg(REG_VCOUNT),
 			read_ioreg(REG_P1), read_ioreg(REG_IE), read_ioreg(REG_IF),
 			read_ioreg(REG_IME), read_ioreg(REG_WAITCNT),
-			read_ioreg(REG_SIOCNT), (unsigned long)serial_get_irq_cycles(),
+			read_ioreg(REG_SIOCNT), read_ioreg(REG_WIN0H),
+			read_ioreg(REG_WIN0V), read_ioreg(REG_WININ),
+			read_ioreg(REG_WINOUT), read_ioreg(REG_BLDCNT),
+			read_ioreg(REG_BLDALPHA), read_ioreg(REG_BLDY),
+			(unsigned long)serial_get_irq_cycles(),
 			(unsigned long)reg[OAM_UPDATED]);
 	if(n < max_lines)
 		snprintf(out[n++], CGBA_STATE_LINE_MAX,

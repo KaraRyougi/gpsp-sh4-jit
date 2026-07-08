@@ -156,6 +156,7 @@ defsymbl(cgba_sh4_vec_table)
   .long   _cgba_sh4_hle_div                     /*  9 SH4G_VEC_hle_div       */
   .long   _ws_cyc_seq                           /* 10 SH4G_VEC_ws_cyc_seq    */
   .long   _ws_cyc_nseq                          /* 11 SH4G_VEC_ws_cyc_nseq   */
+  .long   _iwram + 0x8000                       /* 12 SH4G_VEC_iwram_data    */
 
 /* ---- main entry: execute_arm_translate_internal(cycles, reg_ptr) ---- */
 /* R4 = cycle counter, R5 = pointer to reg[] */

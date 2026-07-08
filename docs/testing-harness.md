@@ -75,7 +75,7 @@ calculator can be copied in and used as the deep-gameplay checkpoint). The
 
 ## 2. Host unit tests (`tests/`)
 
-- **`sh4_exec_oracle.c`** — the JIT's semantic oracle, 142,875 cases at
+- **`sh4_exec_oracle.c`** — the JIT's semantic oracle, 143,381 cases at
   HEAD. It emits *real* native code through the production emitter headers
   and executes it in a built-in mini SH-4 interpreter (big-endian memory
   windows, JSR/RTS/delay slots, PC-relative literals, trampoline
@@ -83,10 +83,11 @@ calculator can be copied in and used as the deep-gameplay checkpoint). The
   contract, memory effects, and fast-vs-slow routing against C reference
   semantics. Coverage: Thumb shifts (register and immediate), Thumb DP
   formats 2/3/4/5, all 16 ARM DP opcodes × operand2 forms × S-bit,
-  MRS/MSR/SPSR with mode rebanking, PC-literal loads, IF/IE stores, and
-  the fastmem single/block routines and sites. Sound is stubbed in the
-  port, so MP2K audio ALU bugs never show in frame hashes — the oracle is
-  the layer that catches them.
+  dead-flag ARM MOV/MVN register-specified shifts, MRS/MSR/SPSR with mode
+  rebanking, PC-literal loads, direct IF/IE and safe display/blend IO
+  stores, IWRAM-vector fastmem loads, and the fastmem single/block
+  routines and sites. Sound is stubbed in the port, so MP2K audio ALU bugs
+  never show in frame hashes — the oracle is the layer that catches them.
 - **`sh4_codegen_audit.c`** — every encoder byte-for-byte against
   `sh-elf-as` output.
 - **`scale_test.c`** — the RGB565 upscaling cores against a per-channel

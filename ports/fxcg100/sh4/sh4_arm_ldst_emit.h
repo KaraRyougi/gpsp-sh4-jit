@@ -141,22 +141,73 @@ static inline int sh4g_arm_ldst_native(u8 **tp, u32 opcode, u32 pc,
   }
 
 have_address:
-  /* Out-of-line fast path: the shared fastmem routine performs guards,
-   * transfer, SMC tags, writeback and the cycle charge; guard failures jump
-   * into sh4_op2_pc_mem_tramp, which re-reads this site's tuple and runs
-   * cgba_sh4_arm_ldst. Site cost: ~36 bytes vs the ~90-130 byte inline body
-   * that overflowed the ROM translation cache in formal gameplay. */
   {
-    int fm = is_load ? (int)kind
-      : (kind == LDK_W ? CGBA_FM_STORE_W
-         : kind == LDK_UH ? CGBA_FM_STORE_UH : CGBA_FM_STORE_B);
-    if (effective_wb)
-      fm += CGBA_FM_WB;
-    sh4g_fastmem_site(tp, cgba_sh4_fastmem_routine[fm],
-                      (const void *)cgba_sh4_arm_ldst, (u32)opcode, (u32)pc,
-                      cycle_count, rd, effective_wb ? (int)rn : -1);
+    u8 *iwram_miss[2], *iwram_skip = NULL;
+    int niwram = 0;
+
+    if (is_load && (pc >> 24) == 0x03 &&
+        (kind == LDK_SB || kind == LDK_SH)) {
+      { sh4_codegen cg = sh4g_open(tp);
+        sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
+        sh4_emit_shlr16(&cg, SH4_REG_RET);
+        sh4_emit_shlr8(&cg, SH4_REG_RET);
+        sh4_emit_cmpeq_imm(&cg, 3);                  /* T = IWRAM */
+        sh4g_close(tp, &cg); }
+      iwram_miss[niwram++] = sh4g_emit_bf_placeholder(tp);
+
+      if (align_mask) {
+        sh4_codegen cg = sh4g_open(tp);
+        sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
+        sh4_emit_tst_imm(&cg, align_mask);           /* T = guest aligned */
+        sh4g_close(tp, &cg);
+        iwram_miss[niwram++] = sh4g_emit_bf_placeholder(tp);
+      }
+
+      { sh4_codegen cg = sh4g_open(tp);
+        sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
+        sh4_emit_shll16(&cg, SH4_REG_RET); sh4_emit_shll(&cg, SH4_REG_RET);
+        sh4_emit_shlr16(&cg, SH4_REG_RET); sh4_emit_shlr(&cg, SH4_REG_RET);
+        sh4g_close(tp, &cg); }
+      sh4g_vec_load(tp, SH4G_VEC_iwram_data, SH4_REG_T2);
+      { sh4_codegen cg = sh4g_open(tp);
+        if (kind == LDK_SH) {
+          sh4_emit_mov_w_load_r0(&cg, SH4_REG_T2, SH4_REG_T1);
+          sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
+          sh4_emit_exts_w(&cg, SH4_REG_T1, SH4_REG_T1);
+        } else {
+          sh4_emit_mov_b_load_r0(&cg, SH4_REG_T2, SH4_REG_T1);
+        }
+        sh4_emit_store_greg(&cg, SH4_REG_T1, rd);
+        if (effective_wb)
+          sh4_emit_store_greg(&cg, SH4_REG_ARG2, rn);
+        sh4g_close(tp, &cg); }
+      sh4g_cycle_debit(tp, 1);                       /* IWRAM nseq cost */
+      iwram_skip = sh4g_emit_bra_placeholder(tp);
+
+      while (niwram)
+        sh4g_patch_cond(iwram_miss[--niwram], *tp);
+    }
+
+    /* Out-of-line fast path: the shared fastmem routine performs guards,
+     * transfer, SMC tags, writeback and the cycle charge; guard failures jump
+     * into sh4_op2_pc_mem_tramp, which re-reads this site's tuple and runs
+     * cgba_sh4_arm_ldst. Site cost: ~36 bytes vs the ~90-130 byte inline body
+     * that overflowed the ROM translation cache in formal gameplay. */
+    {
+      int fm = is_load ? (int)kind
+        : (kind == LDK_W ? CGBA_FM_STORE_W
+           : kind == LDK_UH ? CGBA_FM_STORE_UH : CGBA_FM_STORE_B);
+      if (effective_wb)
+        fm += CGBA_FM_WB;
+      sh4g_fastmem_site(tp, cgba_sh4_fastmem_routine[fm],
+                        (const void *)cgba_sh4_arm_ldst, (u32)opcode, (u32)pc,
+                        cycle_count, rd, effective_wb ? (int)rn : -1);
+    }
+    if (iwram_skip)
+      sh4g_patch_bra(iwram_skip, *tp);
   }
   return 1;
+
 #endif
 }
 
