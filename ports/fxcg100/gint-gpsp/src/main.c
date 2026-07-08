@@ -7,12 +7,13 @@
 #include "fxcg100_platform.h"
 #include "frame_pacing.h"
 #include "gpsp_runner.h"
-#ifdef CGBA_DYNAREC
-#include "sh4/sh4_diff_harness.h"
 
 /* AUTOMATIC backup-save flush cadence (guest frames). ~10s at 60fps; only
  * writes NOR when the save is dirty, so idle play never touches flash. */
 #define CGBA_BACKUP_AUTO_FRAMES 600u
+
+#ifdef CGBA_DYNAREC
+#include "sh4/sh4_diff_harness.h"
 
 extern int dynarec_enable;   /* gpSP: 0 = interpreter, 1 = SH4 recompiler */
 extern uint32_t execute_cycles;
