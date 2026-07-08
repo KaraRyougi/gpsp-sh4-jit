@@ -181,6 +181,7 @@ u32 cgba_sh4_helper_thumb_ldst_store_count;
 u32 cgba_sh4_helper_thumb_ldst_ram_count;
 u32 cgba_sh4_helper_thumb_ldst_io_count;
 u32 cgba_sh4_helper_thumb_ldst_video_count;
+u32 cgba_sh4_helper_thumb_ldst_video_region_count[3];
 u32 cgba_sh4_helper_thumb_ldst_rom_count;
 u32 cgba_sh4_helper_thumb_ldst_other_count;
 u32 cgba_sh4_helper_thumb_ldst_unmapped_count;
@@ -254,7 +255,10 @@ static void cgba_sh4_helper_thumb_ldst_detail(u32 is_load, u32 address,
   else         cgba_sh4_helper_thumb_ldst_store_count++;
   if (region == 0x02 || region == 0x03) cgba_sh4_helper_thumb_ldst_ram_count++;
   else if (region == 0x04)              cgba_sh4_helper_thumb_ldst_io_count++;
-  else if (region >= 0x05 && region <= 0x07) cgba_sh4_helper_thumb_ldst_video_count++;
+  else if (region >= 0x05 && region <= 0x07) {
+    cgba_sh4_helper_thumb_ldst_video_count++;
+    cgba_sh4_helper_thumb_ldst_video_region_count[region - 0x05]++;
+  }
   else if (region >= 0x08 && region <= 0x0E) cgba_sh4_helper_thumb_ldst_rom_count++;
   else                                  cgba_sh4_helper_thumb_ldst_other_count++;
   if (bytes == 4)      cgba_sh4_helper_thumb_ldst_word_count++;

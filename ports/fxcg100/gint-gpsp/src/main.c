@@ -66,6 +66,7 @@ extern uint32_t cgba_sh4_helper_thumb_ldst_store_count;
 extern uint32_t cgba_sh4_helper_thumb_ldst_ram_count;
 extern uint32_t cgba_sh4_helper_thumb_ldst_io_count;
 extern uint32_t cgba_sh4_helper_thumb_ldst_video_count;
+extern uint32_t cgba_sh4_helper_thumb_ldst_video_region_count[3];
 extern uint32_t cgba_sh4_helper_thumb_ldst_rom_count;
 extern uint32_t cgba_sh4_helper_thumb_ldst_other_count;
 extern uint32_t cgba_sh4_helper_thumb_ldst_unmapped_count;
@@ -288,6 +289,8 @@ static int start_gpsp(uint16_t *framebuffer, unsigned rom_id)
 	cgba_sh4_helper_thumb_ldst_ram_count = 0;
 	cgba_sh4_helper_thumb_ldst_io_count = 0;
 	cgba_sh4_helper_thumb_ldst_video_count = 0;
+	memset(cgba_sh4_helper_thumb_ldst_video_region_count, 0,
+		sizeof(uint32_t) * 3u);
 	cgba_sh4_helper_thumb_ldst_rom_count = 0;
 	cgba_sh4_helper_thumb_ldst_other_count = 0;
 	cgba_sh4_helper_thumb_ldst_unmapped_count = 0;
@@ -1213,6 +1216,8 @@ static int cgba_headless_test(uint16_t *framebuffer)
 	cgba_sh4_helper_thumb_ldst_ram_count = 0;
 	cgba_sh4_helper_thumb_ldst_io_count = 0;
 	cgba_sh4_helper_thumb_ldst_video_count = 0;
+	memset(cgba_sh4_helper_thumb_ldst_video_region_count, 0,
+		sizeof(uint32_t) * 3u);
 	cgba_sh4_helper_thumb_ldst_rom_count = 0;
 	cgba_sh4_helper_thumb_ldst_other_count = 0;
 	cgba_sh4_helper_thumb_ldst_unmapped_count = 0;
@@ -1545,6 +1550,11 @@ static int cgba_headless_test(uint16_t *framebuffer)
 		(unsigned long)cgba_sh4_helper_thumb_ldst_rom_count,
 		(unsigned long)cgba_sh4_helper_thumb_ldst_other_count);
 	hputs_dbg(buf);
+	snprintf(buf, sizeof buf, "jit thumb ldst video pal=%lu vram=%lu oam=%lu",
+		(unsigned long)cgba_sh4_helper_thumb_ldst_video_region_count[0],
+		(unsigned long)cgba_sh4_helper_thumb_ldst_video_region_count[1],
+		(unsigned long)cgba_sh4_helper_thumb_ldst_video_region_count[2]);
+	hputs_dbg(buf);
 	snprintf(buf, sizeof buf,
 		"jit thumb ldst why unm=%lu ga=%lu ha=%lu unsafe=%lu smc=%lu ready=%lu",
 		(unsigned long)cgba_sh4_helper_thumb_ldst_unmapped_count,
@@ -1780,6 +1790,11 @@ static int cgba_headless_test(uint16_t *framebuffer)
 		(unsigned long)cgba_sh4_helper_thumb_ldst_video_count,
 		(unsigned long)cgba_sh4_helper_thumb_ldst_rom_count,
 		(unsigned long)cgba_sh4_helper_thumb_ldst_other_count);
+	hputs_dbg(buf);
+	snprintf(buf, sizeof buf, "jit thumb ldst video pal=%lu vram=%lu oam=%lu",
+		(unsigned long)cgba_sh4_helper_thumb_ldst_video_region_count[0],
+		(unsigned long)cgba_sh4_helper_thumb_ldst_video_region_count[1],
+		(unsigned long)cgba_sh4_helper_thumb_ldst_video_region_count[2]);
 	hputs_dbg(buf);
 	snprintf(buf, sizeof buf,
 		"jit thumb ldst why unm=%lu ga=%lu ha=%lu unsafe=%lu smc=%lu ready=%lu",

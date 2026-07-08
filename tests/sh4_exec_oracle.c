@@ -57,6 +57,9 @@ const u32 cpu_modes[16] =
 };
 u8 *memory_map_read[8192];
 u8 iwram[0x10000];                 /* gpSP global (push_iwram fast path) */
+u8 vram[1024 * 96];
+u16 palette_ram[512];
+u16 palette_ram_converted[512];
 u8 ws_cyc_seq[16][2], ws_cyc_nseq[16][2];
 u32 cgba_sh4_native_thumb_const_io_count, cgba_sh4_native_thumb_runtime_io_count;
 int cgba_sh4_extra_cycles;
@@ -1260,7 +1263,6 @@ int main(void)
     u8 *giwram = iwram;          /* tags 0..0x7FFF, data 0x8000.. */
     const u32 giwram_size = 0x10000;
     static u8 ewram[0x48000];    /* data page 0, tag mirror at +0x40000 */
-    static u8 vram[0x8000];
     static u8 rom[0x8000];
     u8 *tp = fm_buf;
     const u32 pc = 0x08000100;

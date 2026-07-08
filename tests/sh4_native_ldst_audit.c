@@ -28,7 +28,10 @@ typedef int64_t  s64;
 
 u8 *memory_map_read[0x2000];
 u8 iwram[1024 * 32 * 2];
+u8 vram[1024 * 96];
 u16 io_registers[512];
+u16 palette_ram[512];
+u16 palette_ram_converted[512];
 int cgba_sh4_extra_cycles;
 u8 ws_cyc_seq[16][2];
 u8 ws_cyc_nseq[16][2];
