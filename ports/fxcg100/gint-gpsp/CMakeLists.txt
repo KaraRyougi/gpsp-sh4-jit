@@ -72,6 +72,8 @@ option(CGBA_DEBUG_MENU
   "Show the in-menu DEBUG INFO submenu + F:/H frame/hash overlay (dev; hidden in release)" OFF)
 option(CGBA_SH4_SWI_HLE_VERIFY
   "Diag: predict faithful SWI HLE results, run the interpreted BIOS, compare" OFF)
+option(CGBA_SH4_SWI_OBJAFFINE_HLE
+  "Enable faithful SH4 HLE for BIOS ObjAffineSet (SWI 0x0F)" ON)
 set(CGBA_SH4_HEAT_QUIET_FRAMES "180" CACHE STRING
   "Cold-gate: frames after a ROM flush before heating switches to the fast increment")
 set(CGBA_SH4_HEAT_SLOW "1" CACHE STRING
@@ -82,6 +84,8 @@ option(CGBA_SH4_ARM_DEAD_FLAGS
   "ARM dead-flag elimination (OFF forces all-flags-live; A/B diagnostic)" ON)
 set(CGBA_SH4_HOT_THRESHOLD "128" CACHE STRING
   "Cold-code gate: translate ROM blocks after N dispatches (1-255; 0 = gate off)")
+set(CGBA_SH4_COLD_CHUNK_CYCLES "512" CACHE STRING
+  "Cold-code gate: max GBA cycles to interpret per cold fallback (0 = whole scheduler budget)")
 option(CGBA_SH4_EXACT_CYCLE_BOUNDARIES
   "Headless/debug: check the SH4 dynarec cycle budget at each translated instruction boundary" OFF)
 option(CGBA_SH4_DIFF_DUMP_OPS
@@ -209,6 +213,9 @@ if(CGBA_DYNAREC)
   if(CGBA_SH4_SWI_HLE_VERIFY)
     target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_SH4_SWI_HLE_VERIFY=1)
   endif()
+  if(CGBA_SH4_SWI_OBJAFFINE_HLE)
+    target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_SH4_SWI_OBJAFFINE_HLE=1)
+  endif()
   target_compile_definitions(cgba-gint-gpsp PRIVATE
     CGBA_SH4_HEAT_QUIET_FRAMES=${CGBA_SH4_HEAT_QUIET_FRAMES}
     CGBA_SH4_HEAT_SLOW=${CGBA_SH4_HEAT_SLOW}
@@ -220,6 +227,8 @@ if(CGBA_DYNAREC)
   # in-code default of 64, so the gate could never actually be disabled.
   target_compile_definitions(cgba-gint-gpsp PRIVATE
     CGBA_SH4_HOT_THRESHOLD=${CGBA_SH4_HOT_THRESHOLD})
+  target_compile_definitions(cgba-gint-gpsp PRIVATE
+    CGBA_SH4_COLD_CHUNK_CYCLES=${CGBA_SH4_COLD_CHUNK_CYCLES})
   # Re-sync the I-cache line for every INSTRUCTION patch (BT/BF/BRA rewrites).
   # All such patches are in not-yet-synced memory by construction, so this is
   # belt-and-suspenders — but it is translate-time-only (a few thousand patches

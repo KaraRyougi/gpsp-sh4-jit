@@ -194,6 +194,42 @@ builds. Validation:
   (`rom_flush=3 ram_flush=3 arm_tx=139 thumb_tx=2383`). This remains far short
   of the 45 fps gameplay target.
 
+**Yoshi ObjAffineSet/save-state hardening follow-up** (2026-07-08,
+`SUPERM0.SVS`): a later 600-frame gameplay report alternated GBA `A` and
+`Left` every 60 frames and showed significant frame drops after a short soak.
+The profiler counters pointed at one remaining interpreted BIOS hotspot:
+Yoshi calls ObjAffineSet (SWI 0x0F) hundreds of times in this scene. The SH4
+BIOS fallback now has a faithful, budget-gated ObjAffineSet HLE that uses the
+bundled BIOS sine table, preserves the open-BIOS caller-visible register
+contract, charges the dispatcher/routine cycles, and declines back to the
+interpreter when the call would cross an event-slice boundary. The cold-code
+fallback chunk is also a CMake knob (`CGBA_SH4_COLD_CHUNK_CYCLES`) for future
+profiling; sweeps from 512 to whole-slice chunks reduced cold fallback entries
+by about 10% but did not move the HLE fps counter. Finally, state saving now
+flushes both ROM and RAM translation caches after borrowing executable cache
+memory for the save buffer; this treats savestate writes as a full JIT cache
+coherency boundary, matching the hardware crash signature of a wild in-arena
+host PC after saving.
+
+Validation:
+
+- Yoshi 300-frame no-input, interp-stat build: before ObjAffineSet HLE,
+  `jit interp-instr bios=1920258` and `jit swi-miss 0F=473`; after it,
+  `jit swi-miss` is empty in the same scenario. The final fps counter stayed
+  `fps emu=19 draw=4`, so this removes interpreter work without solving the
+  late frame-drop target.
+- Yoshi 600-frame A/Left soak (`ALT_LEFT=1`, period 60, press width 2,
+  frameskip 3) completed all 600 frames and `=== done ===`, with no
+  `WILD=FFFFFFFF` or panic signature. Final frame 599 FBSTAT:
+  `hash=47DA13A6`; `fps emu=19 draw=4`,
+  `rom_flush=2 ram_flush=3 arm_tx=124 thumb_tx=1111 bios_n=8641 cold_n=29697`,
+  and `jit interp-instr bios=0 rom=0 ram=0`.
+- Yoshi 600-frame A/Left slot-save repro at frame 300 completed with
+  `@@CGBA_SLOTSAVE frame=300 ok=1`, wrote a 196,608-byte `GAME0.SVS`
+  beginning with `CZS1`, continued to frame 599, and reached `=== done ===`.
+  HLE still cannot prove the hardware-only save crash is fixed, but the cache
+  boundary has been tightened at the reported failure point.
+
 ## State at HEAD
 
 Shipping default is the interpreter (`CGBA_DYNAREC=OFF`); the JIT is the
