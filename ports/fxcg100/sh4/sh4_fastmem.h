@@ -109,6 +109,81 @@ static inline void sh4g_fastmem_io16_direct_store(u8 **tp, u32 guest_address,
   sh4g_patch_cond(miss, *tp);
 }
 
+static inline void sh4g_fastmem_io16_dispstat_store(u8 **tp, u8 *store_tail)
+{
+  u8 *miss;
+
+  sh4g_const(tp, 0x04000004u, SH4_REG_T1);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_cmpeq(&cg, SH4_REG_T1, SH4_REG_T0);
+    sh4g_close(tp, &cg); }
+  miss = sh4g_emit_bf_placeholder(tp);
+
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_reg(&cg, SH4_REG_ARG1, SH4_REG_RET);
+    sh4_emit_and_imm(&cg, 0xFF);
+    sh4_emit_mov_l_load_r0(&cg, SH4_REG_BASE, SH4_REG_T1);
+    sh4_emit_mov_imm(&cg, -8, SH4_REG_ARG0);
+    sh4_emit_and(&cg, SH4_REG_ARG0, SH4_REG_T1);   /* value & ~0x07 */
+    sh4g_close(tp, &cg); }
+  sh4g_const(tp, (u32)(uintptr_t)((u8 *)io_registers + 0x004), SH4_REG_T2);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_w_load(&cg, SH4_REG_T2, SH4_REG_RET);
+    sh4_emit_swap_b(&cg, SH4_REG_RET, SH4_REG_RET);
+    sh4_emit_and_imm(&cg, 0x07);                   /* keep LCD status bits */
+    sh4_emit_or(&cg, SH4_REG_RET, SH4_REG_T1);
+    sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
+    sh4_emit_mov_w_store(&cg, SH4_REG_T1, SH4_REG_T2);
+    sh4g_close(tp, &cg); }
+  { u8 *b = sh4g_emit_bra_placeholder(tp);
+    sh4g_patch_bra(b, store_tail); }
+
+  sh4g_patch_cond(miss, *tp);
+}
+
+static inline void sh4g_fastmem_io16_dispcnt_store(u8 **tp, u8 *store_tail)
+{
+  u8 *miss, *same_mode;
+
+  sh4g_const(tp, 0x04000000u, SH4_REG_T1);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_cmpeq(&cg, SH4_REG_T1, SH4_REG_T0);
+    sh4g_close(tp, &cg); }
+  miss = sh4g_emit_bf_placeholder(tp);
+
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_reg(&cg, SH4_REG_ARG1, SH4_REG_RET);
+    sh4_emit_and_imm(&cg, 0xFF);
+    sh4_emit_mov_l_load_r0(&cg, SH4_REG_BASE, SH4_REG_T1);
+    sh4_emit_mov_reg(&cg, SH4_REG_T1, SH4_REG_RET);
+    sh4_emit_and_imm(&cg, 0x07);
+    sh4_emit_mov_reg(&cg, SH4_REG_RET, SH4_REG_ARG0);
+    sh4g_close(tp, &cg); }
+  sh4g_const(tp, (u32)(uintptr_t)((u8 *)io_registers + 0x000), SH4_REG_T2);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_w_load(&cg, SH4_REG_T2, SH4_REG_RET);
+    sh4_emit_swap_b(&cg, SH4_REG_RET, SH4_REG_RET);
+    sh4_emit_and_imm(&cg, 0x07);
+    sh4_emit_cmpeq(&cg, SH4_REG_ARG0, SH4_REG_RET);
+    sh4g_close(tp, &cg); }
+  same_mode = sh4g_emit_bt_placeholder(tp);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_imm(&cg, 25 * 4, SH4_REG_RET);       /* reg[OAM_UPDATED] */
+    sh4_emit_mov_imm(&cg, 1, SH4_REG_ARG0);
+    sh4_emit_mov_l_store_r0(&cg, SH4_REG_ARG0, SH4_REG_BASE);
+    sh4g_close(tp, &cg); }
+  sh4g_patch_cond(same_mode, *tp);
+
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
+    sh4_emit_mov_w_store(&cg, SH4_REG_T1, SH4_REG_T2);
+    sh4g_close(tp, &cg); }
+  { u8 *b = sh4g_emit_bra_placeholder(tp);
+    sh4g_patch_bra(b, store_tail); }
+
+  sh4g_patch_cond(miss, *tp);
+}
+
 static inline void sh4g_fastmem_io16_pair_direct_store(u8 **tp,
                                                        u32 guest_address,
                                                        u32 io_offset,
@@ -486,11 +561,15 @@ static inline u8 *sh4g_fastmem_emit_routine(u8 **tp, int fm)
   if (io_check) {
     u8 *not_if, *fail_ie;
     sh4g_patch_cond(io_check, *tp);
+    sh4g_fastmem_io16_dispcnt_store(tp, store_tail);
+    sh4g_fastmem_io16_dispstat_store(tp, store_tail);
+    sh4g_fastmem_io16_direct_store(tp, 0x04000016u, 0x016u, store_tail);
     sh4g_fastmem_io16_pair_direct_store(tp, 0x0400001Cu, 0x01Cu, store_tail);
     sh4g_fastmem_io16_direct_store(tp, 0x04000040u, 0x040u, store_tail);
     sh4g_fastmem_io16_direct_store(tp, 0x04000044u, 0x044u, store_tail);
     sh4g_fastmem_io16_direct_store(tp, 0x04000048u, 0x048u, store_tail);
     sh4g_fastmem_io16_direct_store(tp, 0x0400004Au, 0x04Au, store_tail);
+    sh4g_fastmem_io16_direct_store(tp, 0x0400004Cu, 0x04Cu, store_tail);
     sh4g_fastmem_io16_direct_store(tp, 0x04000050u, 0x050u, store_tail);
     sh4g_fastmem_io16_direct_store(tp, 0x04000052u, 0x052u, store_tail);
     sh4g_fastmem_io16_direct_store(tp, 0x04000054u, 0x054u, store_tail);
