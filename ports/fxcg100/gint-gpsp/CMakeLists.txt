@@ -80,7 +80,7 @@ set(CGBA_SH4_HEAT_FLUSH_LEAK "16" CACHE STRING
   "Cold-gate hot-table decay subtracted per ROM flush (leaky bucket)")
 option(CGBA_SH4_ARM_DEAD_FLAGS
   "ARM dead-flag elimination (OFF forces all-flags-live; A/B diagnostic)" ON)
-set(CGBA_SH4_HOT_THRESHOLD "64" CACHE STRING
+set(CGBA_SH4_HOT_THRESHOLD "128" CACHE STRING
   "Cold-code gate: translate ROM blocks after N dispatches (1-255; 0 = gate off)")
 option(CGBA_SH4_EXACT_CYCLE_BOUNDARIES
   "Headless/debug: check the SH4 dynarec cycle budget at each translated instruction boundary" OFF)
@@ -101,6 +101,9 @@ option(CGBA_FXCG100_STORAGE
 # post-BIOS-fix hot translated set at ~739 KB+ (right at the old 768 KB cap →
 # constant wholesale flush-retranslate thrash) while the RAM-code cache used
 # only ~83 KB of its 256 KB. 896/128 relieves the ROM side at no layout risk.
+# The 128-dispatch cold gate is the July 2026 Yoshi A/LEFT soak default:
+# it reduced ROM-cache flushes and translated block churn versus 64 without
+# the host-FPS regression seen at 192.
 set(CGBA_GPSP_ROM_TRANSLATION_CACHE_SIZE "917504" CACHE STRING
   "SH4 dynarec ROM translation cache size in bytes")
 set(CGBA_GPSP_RAM_TRANSLATION_CACHE_SIZE "131072" CACHE STRING
