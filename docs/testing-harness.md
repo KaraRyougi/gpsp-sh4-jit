@@ -140,6 +140,10 @@ Env-gated; all combine freely with the headless builds:
   (`SAVE_SLOT_FRAME=120`, 300 frames) wrote `GAME0.SVS`
   (`@@CGBA_SLOTSAVE frame=120 ok=1`) and reached `=== done ===`; the
   hardware `WILD=FFFFFFFF` save crash was not reproduced under HLE.
+  After the palette-store fastmem fix, the same requested 600-frame A/LEFT
+  pattern with press width 2 still measured `fps emu=18 draw=3`, but Thumb
+  load/store helpers dropped from `110760` to `14122`. The frame-300 slot-save
+  repro completed with `@@CGBA_SLOTSAVE frame=300 ok=1` and `=== done ===`.
 - **AW measure**: 2000 frames from boot, pulsed-A harness
   (`A_PERIOD=12 A_PRESS=2`), CACHESIM fine ticks (`EVERY=10`).
 - **fps model**: `fps = 118e6 / (window_cycles / frames)`, where the run

@@ -230,6 +230,33 @@ Validation:
   HLE still cannot prove the hardware-only save crash is fixed, but the cache
   boundary has been tightened at the reported failure point.
 
+**Yoshi palette-store fastmem follow-up** (2026-07-08, `SUPERM0.SVS`):
+the requested A/LEFT soak exposed a JIT memory tail that was hidden after the
+BIOS HLE fixes. A detail-counter build showed the remaining Thumb load/store
+helper storm was nearly all palette RAM writes:
+`thumb ldst=65398`, `vid=57996`, `video pal=57996 vram=0 oam=0`, all caused
+by unmapped video-region stores. The SH4 fastmem routines now handle aligned
+16/32-bit palette stores natively, updating both `palette_ram[]` and
+`palette_ram_converted[]`, and also synthesize side-effect-free VRAM store
+page bases when `memory_map_read[]` has no VRAM entry. Validation:
+
+- Yoshi 360-frame detail build, A/LEFT every 60 frames: after the palette
+  path, `jit helpers thumb ldst=7402` and `jit thumb ldst video pal=0 vram=0
+  oam=0`; pre-patch was `thumb ldst=65398` with `video pal=57996`. The frame
+  hashes at frames 0/120/240 stayed `0D552414`/`A67C95C0`/`A1DD1CB7`.
+- Yoshi 600-frame A/LEFT soak (`ALT_LEFT=1`, period 60, press width 2,
+  frameskip 3) completed all 600 frames and `=== done ===`; Thumb load/store
+  helpers dropped from `110760` to `14122`. The HLE wall-clock counter stayed
+  `fps emu=18 draw=3`, so this removes calculator-side helper work but does
+  not by itself prove a 45 fps Yoshi result in calcemu.
+- Yoshi 360-frame slot-save repro at frame 300 completed with
+  `@@CGBA_SLOTSAVE frame=300 ok=1`, final frame 359 FBSTAT `hash=36130106`,
+  and `=== done ===`. The user-reported hardware/menu `WILD=FFFFFFFF` crash
+  still needs an on-device or exact-menu reproduction; this HLE path did not
+  reproduce it.
+- Host emitter/oracle suite passed: `make -C tests`, including
+  `SH4 exec oracle passed (143381 native cases)`.
+
 ## State at HEAD
 
 Shipping default is the interpreter (`CGBA_DYNAREC=OFF`); the JIT is the
