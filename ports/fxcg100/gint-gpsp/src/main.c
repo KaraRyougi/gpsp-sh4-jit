@@ -254,6 +254,13 @@ static int start_gpsp(uint16_t *framebuffer, unsigned rom_id)
 	cgba_dynarec_ibh_dual_slow_count = 0;
 	cgba_dynarec_ibh_dual_hot_arm_count = 0;
 	cgba_dynarec_ibh_dual_hot_thumb_count = 0;
+	{
+		extern u32 cgba_bios_hle_irq_in, cgba_bios_hle_irq_out;
+		extern u32 cgba_bios_hle_swi_count;
+		cgba_bios_hle_irq_in = 0;
+		cgba_bios_hle_irq_out = 0;
+		cgba_bios_hle_swi_count = 0;
+	}
 	cgba_sh4_prof_reset();
 	cgba_sh4_helper_thumb_ldst_count = 0;
 	cgba_sh4_helper_thumb_block_count = 0;
@@ -455,8 +462,8 @@ static void show_diag_overlay(void)
 #define CGBA_GPSP_HEADLESS_SAVE_STATE_FRAME -1
 #endif
 /* Alternating input: from ALT_FRAME on, tap A at the start of even 60-frame
- * windows and START at the start of odd ones (window length = ALT_PERIOD,
- * tap length = ALT_PRESS). 0 = off. */
+ * windows and START (or LEFT with CGBA_GPSP_HEADLESS_ALT_LEFT) at the start of
+ * odd ones (window length = ALT_PERIOD, tap length = ALT_PRESS). 0 = off. */
 #ifndef CGBA_GPSP_HEADLESS_ALT_PERIOD
 #define CGBA_GPSP_HEADLESS_ALT_PERIOD 0u
 #endif
@@ -465,6 +472,9 @@ static void show_diag_overlay(void)
 #endif
 #ifndef CGBA_GPSP_HEADLESS_ALT_FRAME
 #define CGBA_GPSP_HEADLESS_ALT_FRAME 60u
+#endif
+#ifndef CGBA_GPSP_HEADLESS_ALT_LEFT
+#define CGBA_GPSP_HEADLESS_ALT_LEFT 0
 #endif
 #ifndef CGBA_GPSP_HEADLESS_SAVE_SLOT_FRAME
 #define CGBA_GPSP_HEADLESS_SAVE_SLOT_FRAME -1
@@ -1086,8 +1096,13 @@ static uint32_t headless_buttons_for_frame(unsigned frame)
 		unsigned win = rel / (unsigned)CGBA_GPSP_HEADLESS_ALT_PERIOD;
 		if((rel % (unsigned)CGBA_GPSP_HEADLESS_ALT_PERIOD) <
 		   (unsigned)CGBA_GPSP_HEADLESS_ALT_PRESS)
+#if CGBA_GPSP_HEADLESS_ALT_LEFT
+			buttons |= (win & 1) ? FXCG100_GBA_BUTTON_LEFT
+				: FXCG100_GBA_BUTTON_A;
+#else
 			buttons |= (win & 1) ? FXCG100_GBA_BUTTON_START
 				: FXCG100_GBA_BUTTON_A;
+#endif
 	}
 #endif
 #if CGBA_GPSP_HEADLESS_RUN_FRAME > 0
@@ -1216,13 +1231,18 @@ static int cgba_headless_test(uint16_t *framebuffer)
 	cgba_sh4_hle_div_pow2_count = 0;
 	cgba_sh4_hle_div_other_count = 0;
 	#endif
-	snprintf(buf, sizeof buf, "input START f=%u h=%u A/SHIFT f=%u h=%u p=%u w=%u",
+	snprintf(buf, sizeof buf,
+		"input START f=%u h=%u A f=%u h=%u p=%u w=%u ALT f=%u p=%u w=%u L=%u",
 		(unsigned)CGBA_GPSP_HEADLESS_START_FRAME,
 		(unsigned)CGBA_GPSP_HEADLESS_START_HOLD,
 		(unsigned)CGBA_GPSP_HEADLESS_A_FRAME,
 		(unsigned)CGBA_GPSP_HEADLESS_A_HOLD,
 		(unsigned)CGBA_GPSP_HEADLESS_A_PERIOD,
-		(unsigned)CGBA_GPSP_HEADLESS_A_PRESS);
+		(unsigned)CGBA_GPSP_HEADLESS_A_PRESS,
+		(unsigned)CGBA_GPSP_HEADLESS_ALT_FRAME,
+		(unsigned)CGBA_GPSP_HEADLESS_ALT_PERIOD,
+		(unsigned)CGBA_GPSP_HEADLESS_ALT_PRESS,
+		(unsigned)CGBA_GPSP_HEADLESS_ALT_LEFT);
 	hputs_dbg(buf);
 
 	frame_base = headless_frame_base();

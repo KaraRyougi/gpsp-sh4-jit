@@ -395,10 +395,17 @@ static int cgba_sh4_store_u16_io_fast(u32 address, u32 source)
     address16(io_registers, 0x000u) = eswap16((u16)value);
     return 1;
   }
+  case 0x004u: { /* DISPSTAT */
+    u32 value = (read_ioreg(REG_DISPSTAT) & 0x07u) | (source & ~0x07u);
+    address16(io_registers, 0x004u) = eswap16((u16)value);
+    return 1;
+  }
+  case 0x016u:  /* BG1VOFS */
   case 0x01Cu:  /* BG3HOFS */
   case 0x01Eu:  /* BG3VOFS */
   case 0x048u:  /* WININ */
   case 0x04Au:  /* WINOUT */
+  case 0x04Cu:  /* MOSAIC */
   case 0x052u:  /* BLDALPHA */
     address16(io_registers, address & 0x3FEu) = eswap16((u16)source);
     return 1;

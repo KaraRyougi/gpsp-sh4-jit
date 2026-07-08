@@ -9,6 +9,7 @@ ports/fxcg100/gint-gpsp/build-cg*/
 ports/fxcg100/gint-gpsp/build-calc-jit*/
 # all g3a build outputs (shipping, -profile/-release variants, Finder "N.g3a" dupes)
 ports/fxcg100/gint-gpsp/*.g3a
+release/
 
 # macOS + accidental Finder "Keep both" duplicate dirs (e.g. "mips 2/")
 .DS_Store

@@ -49,7 +49,7 @@ int main(void)
         "duplicate nonzero hotkey is invalid");
   fxcg100_hotkey_defaults(hotkeys);
 
-  hotkeys[FXCG100_HOTKEY_FAST_FORWARD] = 48;
+  hotkeys[FXCG100_HOTKEY_FAST_FORWARD] = 69;
   check(fxcg100_hotkey_map_valid(hotkeys), "single hotkey is valid");
   check(fxcg100_input_maps_valid(keymap, hotkeys),
         "non-overlapping hotkey is valid with GBA map");

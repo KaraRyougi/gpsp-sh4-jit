@@ -29,7 +29,7 @@ defines. The important ones:
 | `LOAD_STATE` | 0 | restore `CGBACHK.SAV` before the loop |
 | `SAVE_STATE_FRAME` | −1 | write the checkpoint after that frame |
 | `SAVE_SLOT_FRAME` | −1 | exercise the *real* per-ROM slot-save path |
-| `START_*`, `A_*`, `ALT_*`, `RUN_*` | — | fixed input generators (below) |
+| `START_*`, `A_*`, `ALT_*`, `ALT_LEFT`, `RUN_*` | — | fixed input generators (below) |
 | `FUZZ_SEED` | 0 | seeded input monkey (below) |
 | `SCALE` | 0 | force a display scale mode |
 | `DIFF_FRAME`/`DIFF_BLOCKS`, `WINDOW_DIFF_FRAME` | −1/0/−1 | live block diff / one-window interp-vs-JIT diff |
@@ -48,8 +48,10 @@ SH-4 diagnostics knobs (same CMakeLists): `CGBA_SH4_INTERP_STATS`
 Fixed generators, all compile-time: START hold/mash
 (`START_FRAME/HOLD/PERIOD/PRESS`), A-tap trains (`A_FRAME/HOLD/PERIOD/PRESS`
 — the "pulsed A" menu-advancer), alternating A/START windows (`ALT_*` —
-the standard boot-to-gameplay recipe), and hold-LEFT-flip-RIGHT movement
-(`RUN_FRAME/RUN_FLIP` — the Metroid movement soak). The fuzz monkey
+the standard boot-to-gameplay recipe), alternating A/LEFT windows
+(`ALT_LEFT=ON` with `ALT_PERIOD=60 ALT_PRESS=60` — the Yoshi gameplay
+stress), and hold-LEFT-flip-RIGHT movement (`RUN_FRAME/RUN_FLIP` — the
+Metroid movement soak). The fuzz monkey
 (`FUZZ_SEED > 0`, xorshift32) replaces them all: hold one direction 12–43
 frames, re-roll a tap every 6–21 frames (A 25%, B 12.5%, START ~3%).
 
@@ -123,6 +125,16 @@ Env-gated; all combine freely with the headless builds:
 - **Movement soak**: 3000 frames from the deep-gameplay checkpoint
   (`LOAD_STATE=1` + CGBACHK.SAV), hold-LEFT with flips — the cold-gate /
   translation-churn stress. Metric: modeled fps (below).
+- **Yoshi A/LEFT soak**: 600 frames from `SUPERM0.SVS` copied in as
+  `CGBACHK.SAV`, `LOAD_STATE=1`, `ALT_FRAME=0 ALT_PERIOD=60 ALT_PRESS=60
+  ALT_LEFT=ON`, `STAT_EVERY=1`, JIT on. July 8 2026 result after the
+  display-IO fast path: `fps emu=12 draw=12` in the fully-rendered/hash
+  diagnostic build, `irqin=101627`, `cap vid=539295`, and Thumb single
+  load/store helpers fell from 114226 to 111528 without changing any frame
+  hashes versus the pre-change JIT run. A save-slot repro build
+  (`SAVE_SLOT_FRAME=120`, 300 frames) wrote `GAME0.SVS`
+  (`@@CGBA_SLOTSAVE frame=120 ok=1`) and reached `=== done ===`; the
+  hardware `WILD=FFFFFFFF` save crash was not reproduced under HLE.
 - **AW measure**: 2000 frames from boot, pulsed-A harness
   (`A_PERIOD=12 A_PRESS=2`), CACHESIM fine ticks (`EVERY=10`).
 - **fps model**: `fps = 118e6 / (window_cycles / frames)`, where the run

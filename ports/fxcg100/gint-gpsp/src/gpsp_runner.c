@@ -958,6 +958,13 @@ int cgba_gpsp_state_save(unsigned slot)
 	int ok;
 
 	cgba_state_path(path, slot);
+#ifdef CGBA_DYNAREC
+	/* JIT saves stage through the ROM translation cache. Drop every cached
+	 * host entry before borrowing it so menu/save transitions cannot keep a
+	 * direct branch into memory that is about to become a data buffer. */
+	flush_translation_cache_rom();
+	flush_translation_cache_ram();
+#endif
 	gba_save_state(buf);
 #ifdef CGBA_DYNAREC
 	{
