@@ -801,6 +801,7 @@ _Static_assert(GBA_STATE_MEM_SIZE <= ROM_TRANSLATION_CACHE_SIZE,
 	"savestate staging borrows the ROM translation cache");
 void flush_translation_cache_rom(void);
 void flush_translation_cache_ram(void);
+void flush_dynarec_caches(void);
 
 static u8 *cgba_state_buffer(void)
 {
@@ -984,7 +985,7 @@ int cgba_gpsp_state_save(unsigned slot)
 				GBA_STATE_MEM_SIZE);
 		}
 	}
-	flush_translation_cache_rom();      /* the buffer was the code cache */
+	flush_dynarec_caches();            /* the buffer was executable cache */
 #else
 	ok = fxcg100_storage_write_blob(path, buf, GBA_STATE_MEM_SIZE);
 #endif

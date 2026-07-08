@@ -35,6 +35,9 @@ u32 execute_arm_translate_internal(u32 cycles, void *reg_base);  /* sh4_stub.S *
 #ifndef CGBA_SH4_SWI_HLE_VERIFY
 #define CGBA_SH4_SWI_HLE_VERIFY 0   /* predict, then interp + compare (diag) */
 #endif
+#ifndef CGBA_SH4_SWI_OBJAFFINE_HLE
+#define CGBA_SH4_SWI_OBJAFFINE_HLE 0 /* faithful ObjAffineSet (SWI 0x0F) */
+#endif
 
 extern u32 cgba_diff_stop_pc;
 extern int cgba_diff_stop_active;
@@ -52,6 +55,9 @@ extern int cgba_diff_stop_on_budget;
  * pre-heat a block — harmless. */
 #ifndef CGBA_SH4_HOT_THRESHOLD
 #define CGBA_SH4_HOT_THRESHOLD 64
+#endif
+#ifndef CGBA_SH4_COLD_CHUNK_CYCLES
+#define CGBA_SH4_COLD_CHUNK_CYCLES 512
 #endif
 u8  cgba_hot_count[16384];
 int cgba_cold_pending;
@@ -2445,6 +2451,77 @@ static int cgba_swi_apply_faithful(u32 src, u32 dst, u32 cnt, int fastset,
   return 1;
 }
 
+#if CGBA_SH4_SWI_OBJAFFINE_HLE
+static int cgba_swi_objaffineset(u32 src, u32 dst, u32 count, u32 offset,
+                                 u32 budget)
+{
+  u32 spsr_v = REG_SPSR(MODE_SUPERVISOR);
+  u32 sp_r = reg[REG_SP] >> 24;
+  u32 lr_r = (reg[REG_LR] & ~1u) >> 24;
+  u32 S0 = CGBA_WS_S(0, 1), N0 = CGBA_WS_N(0, 1);
+  u32 routine, data_est, cycles;
+  u32 final_dst = dst;
+
+  if ((spsr_v & 0x20) == 0)
+    return 0;                         /* ARM callers need MOVS-pc modeling */
+  if (count > 1024u || ((src | dst | offset) & 1u) || offset > 256u)
+    return 0;
+  if (count) {
+    u32 src_len = count * 8u;
+    u32 max_delta = offset * (4u * count - 1u);
+    final_dst = dst + max_delta;
+    if (final_dst < dst || ((final_dst >> 24) != (dst >> 24)) ||
+        !cgba_swi_exact_src_host(src, src_len))
+      return 0;
+  }
+
+  /* Routine 0x8E0..0x97C from open_gba_bios.bin. Data loads/stores inside
+   * the loop are performed below via execute_* helpers, so only dispatcher,
+   * instruction fetches, literal-table load, and the private push/pop are
+   * added to cgba_sh4_extra_cycles here. */
+  routine = 7u * CGBA_WS_S(sp_r, 1);   /* PUSH {r4-r10} */
+  if (count == 0) {
+    routine += 4u * S0 + N0;           /* CMP, PUSH, SUB, BEQ taken */
+  } else {
+    routine += 9u * S0 + CGBA_WS_N(0, 1); /* setup + sine-table literal */
+    routine += count * 29u * S0;
+    routine += (count - 1u) * N0;
+  }
+  routine += 2u * S0 + 7u * CGBA_WS_S(sp_r, 1) + N0; /* POP + BX */
+
+  data_est = count *
+    (3u * CGBA_WS_N(src >> 24, 0) + 2u * CGBA_WS_N(0, 0) +
+     4u * CGBA_WS_N(dst >> 24, 0));
+  cycles = cgba_swi_dispatch_cycles(sp_r, lr_r, 1) + routine + data_est;
+  if (cycles + 64u > budget)
+    return 0;
+
+  for (u32 i = 0; i < count; i++) {
+    u32 theta = execute_load_u16(src + 4u) >> 8;
+    s32 rx = (s16)execute_load_u16(src + 0u);
+    s32 ry = (s16)execute_load_u16(src + 2u);
+    s32 a = (s16)execute_load_u16(0x00002150u + (((theta + 0x40u) & 255u) << 1));
+    s32 b = (s16)execute_load_u16(0x00002150u + ((theta & 255u) << 1));
+    s32 dmx = (rx * b) >> 14;
+    s32 dx  = (rx * a) >> 14;
+    s32 dy  = (ry * b) >> 14;
+    s32 dmy = (ry * a) >> 14;
+
+    execute_store_u16(dst, (u32)(u16)dx);
+    execute_store_u16(dst + offset, (u32)(u16)(-dmx));
+    execute_store_u16(dst + offset * 2u, (u32)(u16)dy);
+    execute_store_u16(dst + offset * 3u, (u32)(u16)dmy);
+    src += 8u;
+    dst += offset * 4u;
+  }
+
+  reg[0] = src;
+  reg[1] = dst;
+  cgba_sh4_extra_cycles += (int)(cycles - data_est);
+  return 1;
+}
+#endif
+
 static void cgba_swi_cpuset(u32 source, u32 dest, u32 cnt)
 {
   u32 count = cnt & 0x1FFFFF;
@@ -2862,6 +2939,12 @@ static int cgba_hle_bios_swi_num(u32 num, u32 budget)
     return 2;                            /* handled, but NOT a swi-return */
   }
 #endif
+#if CGBA_SH4_SWI_OBJAFFINE_HLE
+  case 0x0F:
+    if (!cgba_swi_objaffineset(reg[0], reg[1], reg[2], reg[3], budget))
+      return 0;
+    break;
+#endif
 #if CGBA_SH4_SWI_CPUSET_FAITHFUL
   case 0x0B:
   case 0x0C: {
@@ -3203,7 +3286,8 @@ u32 cgba_sh4_bios_fallback(u32 cycles)
 u32 cgba_sh4_cold_interp(u32 cycles)
 {
   s32 budget = (s32)cycles;
-  s32 chunk = budget < 512 ? budget : 512;
+  s32 limit = (s32)CGBA_SH4_COLD_CHUNK_CYCLES;
+  s32 chunk = (limit > 0 && budget > limit) ? limit : budget;
   s32 sentinel = (s32)0x7FFFFFFF;
   s32 used;
 

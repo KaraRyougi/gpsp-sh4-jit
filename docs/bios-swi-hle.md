@@ -86,6 +86,21 @@ Verified: `CGBA_SH4_SWI_HLE_VERIFY` builds run predict → real interpreted
 BIOS → compare r0/r1 and consumed cycles at the return PC. Final score
 checked=4889, bad=0 over a 2000-frame AW boot window.
 
+## ObjAffineSet fast path
+
+`CGBA_SH4_SWI_OBJAFFINE_HLE` (default 1 for dynarec builds) services
+ObjAffineSet (SWI 0x0F) when the call fits inside the current event slice.
+Yoshi's Island uses this SWI heavily during gameplay, so leaving it
+interpreted made the 600-frame A/Left soak spend about 1.9M BIOS
+instructions in 300 frames. The HLE mirrors the open BIOS routine at 0x8E0:
+it reads each `rx/ry/theta` triple, uses the BIOS sine table at 0x2150,
+writes the four OBJ matrix halfwords with the caller-provided stride,
+advances only caller-visible `r0/r1`, and lets the common SWI return tail
+restore the mode/CPSR/PC. The path is deliberately narrow: Thumb callers
+only, aligned source/destination, bounded count/stride, resolvable source,
+no destination region wrap, and `cycles + 64 <= budget`. Anything outside
+that shape falls back to the real BIOS interpreter.
+
 ## Tier 2: the parked/resumable CpuFastSet engine
 
 (CpuSet 0x0B shares the same engine — `cgba_swi_cpuset_materialize` /
@@ -156,7 +171,8 @@ the LttP rain intro rebuilds OAM every frame via ~256-word oversized
 CpuSets that this reclaims (Zelda render-off floor 24.5 -> 29.1 fps;
 Metroid dense parity stays bit-exact). Fills stay interpreted (rare).
 Remaining declined SWIs (per `jit swi-census`): BgAffineSet (0x0E),
-LZ77UnCompWram/Vram (0x11/0x12), and small fitting copies. The
+LZ77UnCompWram/Vram (0x11/0x12), oversized ObjAffineSet calls that cross an
+event slice, and small fitting copies. The
 parked-engine pattern extends to the decompression SWIs next (see
 [performance-history.md](performance-history.md), Future directions).
 
