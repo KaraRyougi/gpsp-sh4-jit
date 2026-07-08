@@ -1325,13 +1325,17 @@ int cgba_sh4_arm_swap(u32 opcode, u32 pc)
   return cgba_store_alert_break(pc + 4);
 }
 
-/* SWI 0x06/0x07 divide HLE (operands in r0/r1). */
-void cgba_sh4_hle_div(u32 cpu_mode, u32 pc)
+/* SWI 0x06/0x07 divide HLE.
+ * The bundled open BIOS dispatcher saves/restores r2/r3 around every SWI, so
+ * the observable Div/DivArm result is only r0/r1. Preserve r3 even though the
+ * official BIOS contract exposes ABS(quotient) there; the interpreter runs the
+ * same bundled BIOS and Yoshi depends on that exact scratch-register state. */
+void cgba_sh4_hle_div(u32 divarm, u32 pc)
 {
   CGBA_SH4_HELPER_HIT(hle_div);
-  s32 num = (s32)reg[0];
-  s32 den = (s32)reg[1];
-  (void)cpu_mode; (void)pc;
+  s32 num = divarm ? (s32)reg[1] : (s32)reg[0];
+  s32 den = divarm ? (s32)reg[0] : (s32)reg[1];
+  (void)pc;
 #if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
   if (den == 0) {
     cgba_sh4_hle_div_zero_count++;
@@ -1351,7 +1355,6 @@ void cgba_sh4_hle_div(u32 cpu_mode, u32 pc)
     s32 q = num / den, r = num % den;
     reg[0] = (u32)q;
     reg[1] = (u32)r;
-    reg[3] = (u32)(q < 0 ? -q : q);
   }
 }
 
