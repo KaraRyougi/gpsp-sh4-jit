@@ -292,10 +292,32 @@ Validation:
   45-fps Mario gameplay harness noted below, so it should not be quoted as the
   achieved Mario target.
 
+**Yoshi save-staging/cold-gate follow-up** (2026-07-08, `SUPERM0.SVS`):
+the requested held-window A/LEFT run was profiled with calcemu's PC histogram.
+The largest text buckets still map to `execute_arm`, reached through
+cold-code/BIOS fallback rather than native translated blocks; the final
+diagnostic line confirmed `jit interp-instr bios=0 rom=0 ram=0` was not enabled
+in that build, so the reliable live counter is `cold_n`. The default cold gate
+is now 96 instead of 128 because the existing sweep kept the same
+`fps emu=18` and `rom_flush=3` result while reducing cold fallback entries from
+`37709` to `31181`. The patched default-96 build completed the exact
+600-frame held-window run with final `hash=D48DE1EA`, `fps emu=18 draw=3`,
+`rom_flush=3 ram_flush=3 arm_tx=122 thumb_tx=2398 cold_n=30729`.
+
+The save crash photo (`WILD=FFFFFFFF`, host PC in the JIT arena) also motivated
+hardening the savestate staging path. JIT saves now capture the raw 416 KiB
+state into the already-linked high-RAM checkpoint buffer instead of overwriting
+the ROM translation cache with the raw BSON image. The compressed output stream
+still borrows the ROM cache as scratch, but it is bracketed by full dynarec
+flushes. This does not prove the hardware-only save crash is gone, but it
+removes the largest avoidable executable-cache mutation from the save path. The
+patched frame-300 slot-save repro reached frame 359 and `=== done ===` under
+HLE, with `@@CGBA_SLOTSAVE frame=300 ok=1`.
+
 ## State at HEAD
 
 Shipping default is the interpreter (`CGBA_DYNAREC=OFF`); the JIT is the
-opt-in hardware artifact with cold gate T=64, heat leak 16, faithful
+opt-in hardware artifact with cold gate T=96, heat leak 16, faithful
 CpuSet/FastSet HLE on, all infidel HLEs compiled out, IntrWait HLE off.
 Modeled numbers on the standing scenarios: AW 39.8 fps, Metroid movement
 32.4 fps, Metroid dense parity green, SMA2/Zelda from the 30fps-goal era

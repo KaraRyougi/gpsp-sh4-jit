@@ -13,6 +13,9 @@
 #include "vendor/gpsp/common.h"
 #include "vendor/gpsp/gba_memory.h"
 #include "vendor/gpsp/savestate.h"
+#ifdef CGBA_DYNAREC
+#include "ports/fxcg100/sh4/sh4_diff_harness.h"
+#endif
 
 #ifndef CGBA_GPSP_HEADLESS_TRACE_JIT
 #define CGBA_GPSP_HEADLESS_TRACE_JIT 0
@@ -790,20 +793,22 @@ static void copy_mode3_vram_to_framebuffer(void)
  * blob, so a state saved on the calculator loads directly in the emulator
  * harness (copy it over USB into the HLE_FLS0 dir as CGBACHK.SAV).
  *
- * Staging buffer: the 416KB image cannot live in the high arena statically
- * (the arena end is pinned at the hardware-proven 0x8c655300 — growing it
- * hard-resets the machine), so JIT builds BORROW the ROM translation cache:
- * it is larger than the image, at a proven-safe address, and save/load must
- * invalidate translated code anyway. Interpreter builds have an empty arena
- * and use a static buffer there instead. */
+ * Staging buffer: JIT builds reuse the already-linked diff/checkpoint snapshot
+ * buffer instead of writing the raw image into executable cache memory. The
+ * compressed stream still borrows the ROM translation cache as scratch, so
+ * save/load treat compression as a full dynarec coherency boundary. Interpreter
+ * builds have an empty arena and use a static buffer there instead. */
 #ifdef CGBA_DYNAREC
-_Static_assert(GBA_STATE_MEM_SIZE <= ROM_TRANSLATION_CACHE_SIZE,
-	"savestate staging borrows the ROM translation cache");
 void flush_translation_cache_rom(void);
 void flush_translation_cache_ram(void);
 void flush_dynarec_caches(void);
 
 static u8 *cgba_state_buffer(void)
+{
+	return (u8 *)cgba_sh4_checkpoint_buffer();
+}
+
+static u8 *cgba_state_comp_buffer(void)
 {
 	return rom_translation_cache;
 }
@@ -942,12 +947,8 @@ static void cgba_state_path_legacy(uint16_t *path, unsigned slot)
 }
 
 #ifdef CGBA_DYNAREC
-/* Compressed staging lives in the upper half of the borrowed ROM cache. */
-#define CGBA_STATE_COMP_OFF 458752u
-_Static_assert(CGBA_STATE_COMP_OFF >= GBA_STATE_MEM_SIZE,
-	"comp area must not overlap the raw image");
-_Static_assert(CGBA_STATE_COMP_OFF + GBA_STATE_MEM_SIZE + 64 <=
-	       ROM_TRANSLATION_CACHE_SIZE,
+/* Compressed staging borrows the ROM cache, separate from the raw snapshot. */
+_Static_assert(GBA_STATE_MEM_SIZE + 64 <= ROM_TRANSLATION_CACHE_SIZE,
 	"comp area must fit the worst case (all-literal) stream");
 #endif
 
@@ -960,16 +961,14 @@ int cgba_gpsp_state_save(unsigned slot)
 
 	cgba_state_path(path, slot);
 #ifdef CGBA_DYNAREC
-	/* JIT saves stage through the ROM translation cache. Drop every cached
-	 * host entry before borrowing it so menu/save transitions cannot keep a
-	 * direct branch into memory that is about to become a data buffer. */
-	flush_translation_cache_rom();
-	flush_translation_cache_ram();
+	/* Clear RAM SMC tags before serializing, and drop direct chains before the
+	 * compression buffer borrows executable cache memory. */
+	flush_dynarec_caches();
 #endif
 	gba_save_state(buf);
 #ifdef CGBA_DYNAREC
 	{
-		u8 *comp = buf + CGBA_STATE_COMP_OFF;
+		u8 *comp = cgba_state_comp_buffer();
 		unsigned csz = cgba_state_compress(buf, GBA_STATE_MEM_SIZE,
 			comp, GBA_STATE_MEM_SIZE + 64);
 		if (csz && csz < GBA_STATE_MEM_SIZE) {
@@ -985,7 +984,7 @@ int cgba_gpsp_state_save(unsigned slot)
 				GBA_STATE_MEM_SIZE);
 		}
 	}
-	flush_dynarec_caches();            /* the buffer was executable cache */
+	flush_dynarec_caches();            /* comp buffer was executable cache */
 #else
 	ok = fxcg100_storage_write_blob(path, buf, GBA_STATE_MEM_SIZE);
 #endif
@@ -1002,7 +1001,8 @@ static int cgba_state_load_from(const uint16_t *path)
 			GBA_STATE_MEM_SIZE) && gba_load_state(buf);
 #ifdef CGBA_DYNAREC
 	if (fsz > 8 && fsz <= (int)GBA_STATE_MEM_SIZE + 64) {
-		u8 *comp = buf + CGBA_STATE_COMP_OFF;
+		u8 *comp = cgba_state_comp_buffer();
+		flush_dynarec_caches();        /* comp buffer borrows ROM cache */
 		return fxcg100_storage_read_blob(path, comp, (unsigned)fsz) &&
 			cgba_state_decompress(comp, (unsigned)fsz, buf,
 					      GBA_STATE_MEM_SIZE) &&
