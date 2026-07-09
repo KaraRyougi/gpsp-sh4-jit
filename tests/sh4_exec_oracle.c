@@ -207,6 +207,23 @@ static int orc_took_slow;
 static int orc_is_slow_target(u32 a)
 { return a == orc_slow_target || a == orc_slow_target2; }
 
+static int orc_fastmem_io16_direct_store(u32 addr)
+{
+  if ((addr & 0xFF000000u) != 0x04000000u)
+    return 0;
+
+  switch (addr & 0x3FEu) {
+  case 0x000u: case 0x004u:
+  case 0x010u: case 0x012u: case 0x014u: case 0x016u:
+  case 0x018u: case 0x01Au: case 0x01Cu: case 0x01Eu:
+  case 0x040u: case 0x044u: case 0x048u: case 0x04Au:
+  case 0x04Cu: case 0x050u: case 0x052u: case 0x054u:
+    return 1;
+  default:
+    return 0;
+  }
+}
+
 static int run_at(u32 pc, u32 pc_end)
 {
   u32 R[16] = {0};
@@ -1400,6 +1417,8 @@ int main(void)
             want_slow = tgts[ti].slow_st;
             if (want_slow == -1) want_slow = (kind == LDK_B);   /* vram byte */
             else if (want_slow == 2) want_slow = 1;             /* smc tag */
+            else if (kind == LDK_UH && orc_fastmem_io16_direct_store(eff))
+              want_slow = 0;
           }
           if (want_slow != slow) {
             printf("FAIL fm %s @%s%s: slow=%d want %d\n",
@@ -1629,12 +1648,15 @@ int main(void)
           }
         }
       }
-      /* Plain display-window/blend registers are direct write_ioreg stores in
-       * the shared halfword-store routine. Cover both ARM and Thumb sites. */
+      /* Plain BG scroll/display-window/blend registers are direct write_ioreg
+       * stores in the shared halfword-store routine. Cover both ARM and Thumb
+       * sites. */
       {
         struct diod {
           u32 addr; u32 value; int thumb; const char *nm;
         } dios[] = {
+          { 0x04000010u, 0x1122u, 0, "arm-bg0hofs" },
+          { 0x04000016u, 0x3344u, 1, "thumb-bg1vofs" },
           { 0x04000040u, 0x1357u, 0, "arm-win0h" },
           { 0x04000054u, 0x2468u, 1, "thumb-bldy" },
         };
