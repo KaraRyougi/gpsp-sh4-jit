@@ -1324,41 +1324,42 @@ u32 rtc_data_bits;
 u32 rtc_status = 0x40;
 s32 rtc_bit_count;
 
-/* Baseline UNIX time captured at content load. The emulated RTC reports
- * (rtc_base_time + frame_counter * GBA_FRAME_SECONDS), so the visible
- * clock keeps its real-time feel (one in-game second per second of
- * native emulation, faster when fast-forwarding - matching real GBA
- * behaviour where the RTC oscillator is independent of the CPU) while
- * being fully determined by frame_counter and rtc_base_time. Both
- * round-trip through the savestate, so a replay from any saved state
- * reproduces the same in-game clock. Without this, the RTC fed
- * wall-clock time straight into the game's bit-stream on every read,
- * making record/replay and cross-machine state sharing impossible for
- * RTC-using titles (Pokemon Ruby/Sapphire/Emerald, Boktai series,
- * Sennen Kazoku, Rockman EXE 4.5, etc.).
- *
- * frame_counter is chosen over cpu_ticks as the time source because
- * cpu_ticks is u32 and wraps every ~256 seconds at the native cycle
- * rate, which would rewind the in-game clock every few minutes.
- * frame_counter wraps after ~2.27 years of continuous emulation. */
-static s64 rtc_base_time = 0;
+/* Last valid wall-clock sample. CGBA_RTC_WALLCLOCK is enabled by the active
+ * fx-CG100/fx-CG50 build: a cartridge RTC runs independently of the GBA CPU,
+ * so tying it to frame_counter would make it run slow below 60 fps and stop in
+ * the emulator menu. fxlibc implements time() using the calculator RTC through
+ * gint. Keep the baseline/frame path for other frontends that require
+ * deterministic replay, and keep the sample in savestates as a fallback. */
+static s64 rtc_base_time = 946684800; /* 2000-01-01 00:00:00 */
 
-/* Cycles per frame at the native rate; same divisor at the 60FPS
- * overclock since GBC_BASE_RATE scales correspondingly. */
+#ifndef CGBA_RTC_WALLCLOCK
 #define GBA_CYCLES_PER_FRAME 280896
-#define GBA_FRAME_SECONDS    ((double)GBA_CYCLES_PER_FRAME / (double)GBC_BASE_RATE)
+#endif
 
 static void rtc_init_base_time(void)
 {
-  time_t t;
-  time(&t);
-  rtc_base_time = (s64)t;
+  time_t t = time(NULL);
+  if (t != (time_t)-1)
+    rtc_base_time = (s64)t;
 }
 
 static time_t rtc_current_time(void)
 {
+#ifdef CGBA_RTC_WALLCLOCK
+  time_t t = time(NULL);
+  if (t != (time_t)-1)
+  {
+    rtc_base_time = (s64)t;
+    return t;
+  }
+
+  return (time_t)rtc_base_time;
+#else
+  /* Integer arithmetic avoids pulling software floating point into the
+   * calculator build if this fallback is selected. */
   return (time_t)(rtc_base_time +
-                  (s64)((double)frame_counter * GBA_FRAME_SECONDS));
+    ((s64)frame_counter * GBA_CYCLES_PER_FRAME) / GBC_BASE_RATE);
+#endif
 }
 
 
@@ -1375,6 +1376,32 @@ static u8 encode_bcd(u8 value)
   h = value / 10;
 
   return h * 16 + l;
+}
+
+static u8 encode_rtc_hour(u8 hour)
+{
+  u8 value = (rtc_status & 0x40) ? hour : (hour % 12);
+
+  /* S-3511A bit 7 reports PM in both modes; in 12-hour mode 00 means
+   * twelve o'clock. Pokemon masks this bit before validating the hour. */
+  return encode_bcd(value) | ((hour >= 12) ? 0x80 : 0);
+}
+
+static void rtc_latch_calendar(struct tm *result)
+{
+  time_t flat = rtc_current_time();
+  struct tm *current = localtime(&flat);
+
+  if (current)
+  {
+    *result = *current;
+    return;
+  }
+
+  /* A failed platform conversion must still return a valid S-3511A date. */
+  memset(result, 0, sizeof(*result));
+  result->tm_mday = 1;
+  result->tm_year = 100;
 }
 
 void update_gpio_romregs() {
@@ -1403,7 +1430,8 @@ void update_gpio_romregs() {
 
 static void write_rtc(u8 old, u8 new)
 {
-  // RTC works using a high CS and falling edge capture for the clock signal.
+  /* CS is active high. Commands/data written to the RTC are sampled on SCK's
+   * rising edge; data read from it advances on SCK's falling edge. */
   if (!(new & GPIO_RTC_CSS)) {
     // Chip select is down, reset the RTC protocol. And do not process input.
     rtc_state = RTC_IDLE;
@@ -1416,9 +1444,30 @@ static void write_rtc(u8 old, u8 new)
   if (!(old & GPIO_RTC_CSS))
     rtc_state = RTC_COMMAND;
 
+  if (rtc_state == RTC_OUTPUT_DATA)
+  {
+    /* The peripheral changes SIO on SCK's falling edge and the game samples
+     * it after the following rising edge. */
+    if ((old & GPIO_RTC_CLK) && !(new & GPIO_RTC_CLK))
+    {
+      if (!(gpio_regs[1] & GPIO_RTC_DAT))
+      {
+        /* Only drive SIO while the GBA has configured that pin as input. */
+        u32 bit = rtc_data & 1;
+        gpio_regs[0] = (new & ~GPIO_RTC_DAT) | (bit << 1);
+      }
+      rtc_data >>= 1;
+      rtc_data_bits--;
+
+      if (!rtc_data_bits)
+        rtc_state = RTC_IDLE;
+    }
+    return;
+  }
+
   // Capture data on raising edge
   if (!(old & GPIO_RTC_CLK) && (new & GPIO_RTC_CLK)) {
-    // Advance clock state, input/ouput data.
+    // Advance command or input data.
     switch (rtc_state) {
     case RTC_COMMAND:
       rtc_command <<= 1;
@@ -1427,6 +1476,13 @@ static void write_rtc(u8 old, u8 new)
       if (++rtc_bit_count == 8) {
         switch (rtc_command) {
         case RTC_COMMAND_RESET:
+          /* The S-3511A reset command has no payload. Pokemon Emerald sends
+           * 0x60, drops CS, then starts a separate status write. */
+          rtc_status = 0;
+          rtc_data = 0;
+          rtc_data_bits = 0;
+          rtc_state = RTC_IDLE;
+          break;
         case RTC_COMMAND_WRITE_STATUS:
           rtc_state = RTC_INPUT_DATA;
           rtc_data = 0;
@@ -1437,36 +1493,38 @@ static void write_rtc(u8 old, u8 new)
           rtc_state = RTC_OUTPUT_DATA;
           rtc_data_bits = 8;
           rtc_data = rtc_status;
+          rtc_status &= ~0x80; /* Reading acknowledges the power-failure bit. */
           break;
         case RTC_COMMAND_OUTPUT_TIME_FULL:
           {
-            struct tm *current_time;
-            time_t current_time_flat = rtc_current_time();
-            current_time = localtime(&current_time_flat);
+            struct tm current_time;
+            rtc_latch_calendar(&current_time);
 
             rtc_state = RTC_OUTPUT_DATA;
             rtc_data_bits = 56;
-            rtc_data = ((u64)encode_bcd(current_time->tm_year)) |
-                       ((u64)encode_bcd(current_time->tm_mon+1)<< 8) |
-                       ((u64)encode_bcd(current_time->tm_mday) << 16) |
-                       ((u64)encode_bcd(current_time->tm_wday) << 24) |
-                       ((u64)encode_bcd(current_time->tm_hour) << 32) |
-                       ((u64)encode_bcd(current_time->tm_min)  << 40) |
-                       ((u64)encode_bcd(current_time->tm_sec)  << 48);
+            rtc_data = ((u64)encode_bcd(current_time.tm_year % 100)) |
+                       ((u64)encode_bcd(current_time.tm_mon + 1) << 8) |
+                       ((u64)encode_bcd(current_time.tm_mday) << 16) |
+                       ((u64)encode_bcd(current_time.tm_wday) << 24) |
+                       ((u64)encode_rtc_hour(current_time.tm_hour) << 32) |
+                       ((u64)encode_bcd(current_time.tm_min) << 40) |
+                       ((u64)encode_bcd(current_time.tm_sec) << 48);
           }
           break;
         case RTC_COMMAND_OUTPUT_TIME:
           {
-            struct tm *current_time;
-            time_t current_time_flat = rtc_current_time();
-            current_time = localtime(&current_time_flat);
+            struct tm current_time;
+            rtc_latch_calendar(&current_time);
 
             rtc_state = RTC_OUTPUT_DATA;
             rtc_data_bits = 24;
-            rtc_data = (encode_bcd(current_time->tm_hour)) |
-                       (encode_bcd(current_time->tm_min) << 8) |
-                       (encode_bcd(current_time->tm_sec) << 16);
+            rtc_data = (encode_rtc_hour(current_time.tm_hour)) |
+                       (encode_bcd(current_time.tm_min) << 8) |
+                       (encode_bcd(current_time.tm_sec) << 16);
           }
+          break;
+        default:
+          rtc_state = RTC_IDLE;
           break;
         };
         rtc_bit_count = 0;
@@ -1474,29 +1532,23 @@ static void write_rtc(u8 old, u8 new)
       break;
 
     case RTC_INPUT_DATA:
-      rtc_data <<= 1;
-      rtc_data |= ((new >> 1) & 1);
+      /* Command bytes are sent MSB-first, but command payloads are sent
+       * LSB-first. Emerald writes status 0x40 as 0,0,0,0,0,0,1,0; shifting
+       * left here used to turn that into 0x02 and made the game reject the
+       * RTC as a 12-hour clock. */
+      rtc_data |= (u64)((new >> 1) & 1) << rtc_bit_count;
+      rtc_bit_count++;
       rtc_data_bits--;
       if (!rtc_data_bits) {
-        rtc_status = rtc_data; // HACK: assuming write status here.
+        if (rtc_write_mode == RTC_WRITE_STATUS)
+          rtc_status = (rtc_status & 0x80) | ((u8)rtc_data & 0x6A);
         rtc_state = RTC_IDLE;
+        rtc_bit_count = 0;
       }
       break;
 
     case RTC_OUTPUT_DATA:
-      // Output the next bit from rtc_data
-      if (!(gpio_regs[1] & 0x2)) {
-        // Only output if the port is set to OUT!
-        u32 bit = rtc_data & 1;
-        gpio_regs[0] = (new & ~0x2) | ((bit) << 1);
-      }
-      rtc_data >>= 1;
-      rtc_data_bits--;
-
-      if (!rtc_data_bits)
-        rtc_state = RTC_IDLE;   // Finish transmission!
-
-      break;
+      break; /* Handled on the falling edge above. */
     };
   }
 }
@@ -2618,6 +2670,7 @@ bool memory_read_savestate(const u8 *src)
   }
 
   rtc_data = rtc_data_array[0] | (((u64)rtc_data_array[1]) << 32);
+  update_gpio_romregs();
 
   return true;
 }
@@ -2891,6 +2944,7 @@ u32 load_gamepak_from_memory(const u8 *rom, u32 rom_size,
   flash_device_id = FLASH_DEVICE_MACRONIX_64KB;
   flash_bank_cnt = FLASH_SIZE_64KB;
   rtc_enabled = false;
+  rtc_status = 0x40;
   rumble_enabled = false;
   backup_type_reset = BACKUP_UNKN;
   serial_mode = force_serial;
@@ -2915,7 +2969,7 @@ u32 load_gamepak_from_memory(const u8 *rom, u32 rom_size,
   if (force_rumble != FEAT_AUTODETECT)
     rumble_enabled = (force_rumble == FEAT_ENABLE);
 
-  rtc_base_time = 0;
+  rtc_init_base_time();
 
   return 0;
 }
@@ -2989,6 +3043,7 @@ u32 load_gamepak_from_pages(const u8 * const *pages, u32 rom_size,
   flash_device_id = FLASH_DEVICE_MACRONIX_64KB;
   flash_bank_cnt = FLASH_SIZE_64KB;
   rtc_enabled = false;
+  rtc_status = 0x40;
   rumble_enabled = false;
   backup_type_reset = BACKUP_UNKN;
   serial_mode = force_serial;
@@ -3036,7 +3091,7 @@ u32 load_gamepak_from_pages(const u8 * const *pages, u32 rom_size,
   if (force_rumble != FEAT_AUTODETECT)
     rumble_enabled = (force_rumble == FEAT_ENABLE);
 
-  rtc_base_time = 0;
+  rtc_init_base_time();
 
   return 0;
 }
@@ -3243,6 +3298,7 @@ u32 load_gamepak(const struct retro_game_info* info, const char *name,
    flash_device_id = FLASH_DEVICE_MACRONIX_64KB;
    flash_bank_cnt = FLASH_SIZE_64KB;
    rtc_enabled = false;
+   rtc_status = 0x40;
    rumble_enabled = false;
    backup_type_reset = BACKUP_UNKN;
    serial_mode = force_serial;

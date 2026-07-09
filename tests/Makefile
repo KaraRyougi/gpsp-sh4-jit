@@ -1,7 +1,8 @@
-# Host-side tests for the cgba SH4 code emitter.
+# Host-side tests for the cgba core and SH4 code emitter.
 #
 #   make -C tests          # build + run all
 #   make -C tests audit    # only the sh-elf-as differential audit
+#   make -C tests rtc      # Pokemon-style cartridge GPIO/RTC protocol
 #
 # Run from the repository root context; the test sources include the encoder via
 # its repo-relative path, so the include root is the parent directory.
@@ -11,9 +12,15 @@ CFLAGS  ?= -std=c11 -Wall -Wextra
 ROOT    := ..
 BIN     := /tmp/cgba-sh4
 
-.PHONY: all smoke audit core thumb cond native-ldst input cycle exec clean
+ifeq ($(shell uname -s),Darwin)
+RTC_GC_LDFLAGS := -Wl,-dead_strip
+else
+RTC_GC_LDFLAGS := -Wl,--gc-sections
+endif
 
-all: smoke core thumb cond native-ldst input cycle exec audit
+.PHONY: all smoke audit core thumb cond native-ldst input rtc cycle exec clean
+
+all: smoke core thumb cond native-ldst rtc input cycle exec audit
 
 # Execution oracle: run emitted native code in a mini SH4 interpreter against
 # the C-helper semantics (closes the pixel-soak blind spot on the audio path).
@@ -45,6 +52,18 @@ input: $(ROOT)/tests/fxcg100_input_maps_test.c \
 	$(CC) $(CFLAGS) -I$(ROOT) $(ROOT)/tests/fxcg100_input_maps_test.c -o $(BIN)-input
 	$(BIN)-input
 
+# Production gpSP cartridge GPIO/RTC and calculator-specific ROM loaders. Dead
+# section elimination keeps the otherwise monolithic gba_memory.c host-linkable.
+rtc: $(ROOT)/tests/rtc_test.c $(ROOT)/vendor/gpsp/gba_memory.c \
+     $(ROOT)/vendor/gpsp/gba_memory.h $(ROOT)/vendor/gpsp/gba_over.h
+	$(CC) $(CFLAGS) -Wno-unused-parameter -Wno-sign-compare \
+	  -ffunction-sections -fdata-sections -DROM_BUFFER_SIZE=1 \
+	  -DCGBA_RTC_WALLCLOCK=1 \
+	  -I$(ROOT) -I$(ROOT)/vendor/gpsp -I$(ROOT)/vendor/gpsp/libretro \
+	  -I$(ROOT)/vendor/gpsp/libretro/libretro-common/include \
+	  $(ROOT)/tests/rtc_test.c $(RTC_GC_LDFLAGS) -o $(BIN)-rtc
+	$(BIN)-rtc
+
 # ARM condition-code -> SH4 T-bit emission, every cond x every NZCV (host-only).
 cond: $(ROOT)/tests/sh4_cond_audit.c $(ROOT)/ports/fxcg100/sh4/sh4_emit_glue.h \
       $(ROOT)/ports/fxcg100/sh4/sh4_emit_core.h $(ROOT)/ports/fxcg100/sh4/sh4_codegen.h
@@ -73,4 +92,4 @@ audit: $(ROOT)/tests/sh4_codegen_audit.c $(ROOT)/ports/fxcg100/sh4/sh4_codegen.h
 	$(BIN)-audit
 
 clean:
-	rm -f $(BIN)-smoke $(BIN)-core $(BIN)-thumb $(BIN)-cond $(BIN)-native-ldst $(BIN)-input $(BIN)-cycle $(BIN)-audit
+	rm -f $(BIN)-smoke $(BIN)-core $(BIN)-thumb $(BIN)-cond $(BIN)-native-ldst $(BIN)-input $(BIN)-rtc $(BIN)-cycle $(BIN)-audit
