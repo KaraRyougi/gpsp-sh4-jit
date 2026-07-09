@@ -184,6 +184,15 @@ Env-gated; all combine freely with the headless builds:
   experiment measured about 28.3 modeled fps, but failed the 300-frame
   no-input visual oracle (`A57ADB44` interpreter vs `64D6CA64` JIT at frame
   299), so it was not kept.
+  The July 8 late-follow-up rebuilt from clean source after removing that
+  overlap experiment and ran the exact held-window input (`ALT_FRAME=0
+  ALT_PERIOD=60 ALT_PRESS=60 ALT_LEFT=ON`) for 600 frames. It completed with
+  no crash signature, `fps emu=18 draw=4`, `rom_flush=4 ram_flush=2
+  arm_tx=41 thumb_tx=3836 bios_n=9816 bios_kc=796 cold_n=7552`, and still
+  showed the known late visual drift (`frame 540 hash=05C2726A` vs interpreter
+  `9939617C`). A patched save-slot repro at frame 540 ran 620 frames, wrote
+  `GAME0.SVS` (`@@CGBA_SLOTSAVE frame=540 ok=1`, 196,608 bytes), reached
+  `=== done ===`, and printed no `HOST PC`/`WILD` panic markers.
 - **AW measure**: 2000 frames from boot, pulsed-A harness
   (`A_PERIOD=12 A_PRESS=2`), CACHESIM fine ticks (`EVERY=10`).
 - **fps model**: `fps = 118e6 / (window_cycles / frames)`, where the run
