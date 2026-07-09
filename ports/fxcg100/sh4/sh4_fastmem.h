@@ -728,7 +728,12 @@ static inline u8 *sh4g_fastmem_emit_routine(u8 **tp, int fm)
     sh4g_patch_cond(io_check, *tp);
     sh4g_fastmem_io16_dispcnt_store(tp, store_tail);
     sh4g_fastmem_io16_dispstat_store(tp, store_tail);
-    sh4g_fastmem_io16_direct_store(tp, 0x04000016u, 0x016u, store_tail);
+    /* BG scroll registers are plain io_registers writes; grouping them here
+     * keeps Yoshi's per-frame scroll traffic out of the C helper without
+     * growing every translated Thumb STRH site. */
+    sh4g_fastmem_io16_pair_direct_store(tp, 0x04000010u, 0x010u, store_tail);
+    sh4g_fastmem_io16_pair_direct_store(tp, 0x04000014u, 0x014u, store_tail);
+    sh4g_fastmem_io16_pair_direct_store(tp, 0x04000018u, 0x018u, store_tail);
     sh4g_fastmem_io16_pair_direct_store(tp, 0x0400001Cu, 0x01Cu, store_tail);
     sh4g_fastmem_io16_direct_store(tp, 0x04000040u, 0x040u, store_tail);
     sh4g_fastmem_io16_direct_store(tp, 0x04000044u, 0x044u, store_tail);

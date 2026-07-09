@@ -369,6 +369,33 @@ The opt-in JIT default is now T=8/leak=4: a conservative 4% Yoshi gain over
 T=96/leak=16 while preserving leaky-bucket decay and avoiding the
 translate-everything cliff.
 
+**Yoshi BG-scroll fastmem follow-up** (2026-07-08, `SUPERM0.SVS`):
+the shared fastmem IO16 store tail now handles regular BG0/BG1/BG2/BG3
+HOFS/VOFS halfword stores directly. These registers are plain `io_registers`
+writes, unlike the affine reference registers later in the IO page, so this
+keeps Yoshi's per-frame scroll traffic out of the C helper without expanding
+every translated Thumb `STRH` site.
+
+Correctness/perf evidence:
+
+- 300-frame no-input interpreter/JIT visual check: frame-299 post-render
+  framebuffer hash matched at `A57ADB44`.
+- Requested 600-frame A/LEFT soak (`ALT_FRAME=0 ALT_PERIOD=60 ALT_PRESS=60
+  ALT_LEFT=ON`) completed under cache-sim with no crash signature, final
+  `fbhash=BF3F6442`, `rom_flush=3 ram_flush=3 arm_tx=122 thumb_tx=2398
+  cold_n=30729`, and Thumb helpers `ldst=11806 blk=2064 div=272`.
+- Modeled gameplay speed for that window was 21.00 fps
+  (`cycles=67601636 -> 3439594101`). The previous T=8/leak=4 sweep measured
+  21.35 fps on a slightly different binary, so the BG-scroll fast path is
+  helper-count cleanup rather than a meaningful speed win.
+- Frame-300 save-slot repro completed with `@@CGBA_SLOTSAVE frame=300 ok=1`,
+  reached frame 599, and printed `=== done ===`; the reported
+  `WILD=FFFFFFFF` save crash did not reproduce in HLE.
+- An overlapping CpuFastSet widening experiment reached about 28.3 modeled
+  fps, but failed the 300-frame no-input visual oracle (`A57ADB44` interpreter
+  vs `64D6CA64` JIT at frame 299, with a transient `PC=000007A4`), so it was
+  reverted and is not part of HEAD.
+
 ## State at HEAD
 
 Shipping default is the interpreter (`CGBA_DYNAREC=OFF`); the JIT is the
@@ -377,9 +404,13 @@ CpuSet/FastSet HLE on, experimental ObjAffine HLE off by default, all other
 infidel HLEs compiled out, IntrWait HLE off.
 Modeled numbers on the standing scenarios: AW 39.8 fps, Metroid movement
 32.4 fps, Metroid dense parity green, SMA2/Zelda from the 30fps-goal era
-35.1/58.5 (pre-demotion protocol — remeasure before quoting). The current
-Mario-specific calcemu harness reaches 45 emulated fps with the clean
-frame-1996 hash `8BEF0CBC`.
+35.1/58.5 (pre-demotion protocol — remeasure before quoting), Yoshi A/LEFT
+about 21.0 modeled fps. The current Mario-specific calcemu harness reaches
+45 emulated fps with the clean frame-1996 hash `8BEF0CBC`. A playable current
+JIT `.g3a` built from fresh CMake defaults is available at
+`release/gpSP.g3a`, SHA-256
+`7f2b789a0fbae5d328bbf154fe184b94b35b3322b81df12f932b630a282adbb8`; it is
+not a final 45-fps Yoshi release.
 
 ## Future directions
 

@@ -1649,6 +1649,11 @@ static int cgba_bulk_tags_smc(const u8 *tags, u32 len)
   return 0;
 }
 
+static int cgba_bulk_ranges_overlap(const u8 *a, const u8 *b, u32 len)
+{
+  return (a < b + len) && (b < a + len);
+}
+
 /* Word/halfword copy or fill, bulk when both sides resolve. Returns 1 when
  * handled (cycles charged, SMC alert accumulated), 0 to run the per-word
  * loop. size_index/width: 1/4 for 32-bit ops, 0/2 for 16-bit. */
@@ -1677,7 +1682,7 @@ static int cgba_bulk_cpuset(u32 source, u32 dest, u32 count, int fill,
        classic GBA pattern-fill idiom); memmove would preserve the original
        source bytes instead. Compare HOST pointers (mirrors alias) and keep
        any overlap on the exact per-word path. */
-    if ((sp < d + len) && (d < sp + len))
+    if (cgba_bulk_ranges_overlap(sp, d, len))
       return 0;
   }
 
@@ -2466,7 +2471,7 @@ static int cgba_swi_apply_faithful(u32 src, u32 dst, u32 cnt, int fastset,
       sp = cgba_bulk_src_host(eff_src, len);
       if (!sp)
         return 0;
-      if ((sp < d + len) && (d < sp + len))
+      if (cgba_bulk_ranges_overlap(sp, d, len))
         return 0;                              /* overlap: interp semantics */
       memmove(d, sp, len);
     } else {

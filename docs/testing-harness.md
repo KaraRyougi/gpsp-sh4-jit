@@ -169,6 +169,21 @@ Env-gated; all combine freely with the headless builds:
   into translation churn and failed to complete within the same cap; leak=0 was
   not chosen despite 21.42 modeled fps because it keeps stale hot counts across
   flush generations and raised translations to `thumb_tx=7146`.
+  A BG-scroll fastmem tail follow-up then routed regular BG0/BG1/BG2/BG3
+  HOFS/VOFS halfword stores directly instead of through the C helper. The
+  300-frame no-input JIT screen check still converged with the interpreter at
+  frame 299 (`FBSTAT hash=A57ADB44`). The requested 600-frame A/LEFT cache-sim
+  soak completed (`=== done ===`) with no `WILD`/bad-jump crash signature,
+  final `fbhash=BF3F6442`, `rom_flush=3 ram_flush=3 arm_tx=122
+  thumb_tx=2398 cold_n=30729`, and Thumb helpers `ldst=11806 blk=2064
+  div=272`. The gameplay-window model was 21.00 fps
+  (`cycles=67601636 -> 3439594101`), so this reduces helper traffic but does
+  not materially fix Yoshi's frame drops. The current frame-300 save-slot
+  repro also completed with `@@CGBA_SLOTSAVE frame=300 ok=1`, reached frame
+  599, and printed `=== done ===`. A wider overlapping CpuFastSet fast-path
+  experiment measured about 28.3 modeled fps, but failed the 300-frame
+  no-input visual oracle (`A57ADB44` interpreter vs `64D6CA64` JIT at frame
+  299), so it was not kept.
 - **AW measure**: 2000 frames from boot, pulsed-A harness
   (`A_PERIOD=12 A_PRESS=2`), CACHESIM fine ticks (`EVERY=10`).
 - **fps model**: `fps = 118e6 / (window_cycles / frames)`, where the run
