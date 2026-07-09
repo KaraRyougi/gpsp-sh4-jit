@@ -337,10 +337,42 @@ removes the largest avoidable executable-cache mutation from the save path. The
 patched frame-300 slot-save repro reached frame 359 and `=== done ===` under
 HLE, with `@@CGBA_SLOTSAVE frame=300 ok=1`.
 
+**Yoshi cold-gate cache-sim sweep** (2026-07-08, `SUPERM0.SVS`):
+the current A/LEFT scene was remeasured with `HLE_CACHESIM_EVERY=10` and the
+same 600-frame held-window input. The PC histogram showed `.text` samples still
+dominated by `execute_arm`; JIT-arena samples were only about 2.4%, so the next
+safe knob was reducing repeated cold fallback without falling into translation
+thrash.
+
+Measured modeled fps:
+
+- T=96/leak=16 default: 20.52 fps, `rom_flush=3`, `thumb_tx=2388`,
+  `cold_n=30618`.
+- T=64/leak=16: 20.65 fps, `rom_flush=4`, `thumb_tx=2648`,
+  `cold_n=25379`.
+- T=32/leak=16: 20.79 fps, `rom_flush=4`, `thumb_tx=3447`,
+  `cold_n=20103`.
+- T=16/leak=16: 20.92 fps, `rom_flush=4`, `thumb_tx=3640`,
+  `cold_n=16037`.
+- T=8/leak=16: 21.20 fps, `rom_flush=5`, `thumb_tx=4020`,
+  `cold_n=10248`.
+- T=4/leak=16: 21.13 fps, `rom_flush=6`, `thumb_tx=5321`,
+  `cold_n=7995`.
+- T=0 was rejected: it did not reach `=== done ===` inside the same cap and
+  modeled only about 7.5 fps from the partial cache-sim window.
+- T=8/leak=4: 21.35 fps, `rom_flush=4`, `thumb_tx=3836`, `cold_n=7552`.
+- T=8/leak=0 was slightly faster (21.42 fps) but paid `rom_flush=6` and
+  `thumb_tx=7146`; no-decay heat is deliberately not the default because stale
+  hot counts survive across generations.
+
+The opt-in JIT default is now T=8/leak=4: a conservative 4% Yoshi gain over
+T=96/leak=16 while preserving leaky-bucket decay and avoiding the
+translate-everything cliff.
+
 ## State at HEAD
 
 Shipping default is the interpreter (`CGBA_DYNAREC=OFF`); the JIT is the
-opt-in hardware artifact with cold gate T=96, heat leak 16, faithful
+opt-in hardware artifact with cold gate T=8, heat leak 4, faithful
 CpuSet/FastSet HLE on, experimental ObjAffine HLE off by default, all other
 infidel HLEs compiled out, IntrWait HLE off.
 Modeled numbers on the standing scenarios: AW 39.8 fps, Metroid movement
