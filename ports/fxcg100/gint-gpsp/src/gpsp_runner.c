@@ -795,13 +795,15 @@ static void copy_mode3_vram_to_framebuffer(void)
  *
  * Staging buffer: JIT builds reuse the already-linked diff/checkpoint snapshot
  * buffer instead of writing the raw image into executable cache memory. The
- * compressed stream still borrows the ROM translation cache as scratch, so
- * save/load treat compression as a full dynarec coherency boundary. Interpreter
- * builds have an empty arena and use a static buffer there instead. */
+ * compressed stream still borrows the ROM translation cache above its resident
+ * BIOS/SWI watermark as scratch, so save/load treat compression as a full
+ * dynarec coherency boundary. Interpreter builds have an empty arena and use a
+ * static buffer there instead. */
 #ifdef CGBA_DYNAREC
 void flush_translation_cache_rom(void);
 void flush_translation_cache_ram(void);
 void flush_dynarec_caches(void);
+extern u32 rom_cache_watermark;
 
 static u8 *cgba_state_buffer(void)
 {
@@ -810,7 +812,14 @@ static u8 *cgba_state_buffer(void)
 
 static u8 *cgba_state_comp_buffer(void)
 {
-	return rom_translation_cache;
+	return rom_translation_cache + rom_cache_watermark;
+}
+
+static unsigned cgba_state_comp_capacity(void)
+{
+	if (rom_cache_watermark >= ROM_TRANSLATION_CACHE_SIZE)
+		return 0;
+	return ROM_TRANSLATION_CACHE_SIZE - rom_cache_watermark;
 }
 #else
 static u8 *cgba_state_buffer(void)
@@ -969,14 +978,17 @@ int cgba_gpsp_state_save(unsigned slot)
 #ifdef CGBA_DYNAREC
 	{
 		u8 *comp = cgba_state_comp_buffer();
+		unsigned cap = cgba_state_comp_capacity();
 		unsigned csz = cgba_state_compress(buf, GBA_STATE_MEM_SIZE,
-			comp, GBA_STATE_MEM_SIZE + 64);
+			comp, cap);
 		if (csz && csz < GBA_STATE_MEM_SIZE) {
 			/* Round the FILE up to 64KB buckets: repeat saves of
 			 * similar size hit write_blob's fast overwrite path
 			 * instead of delete+create; the decoder stops at
 			 * raw_size so the slack tail is ignored. */
 			unsigned fsz = (csz + 0xFFFFu) & ~0xFFFFu;
+			if (fsz > cap)
+				return 0;
 			memset(comp + csz, 0, fsz - csz);
 			ok = fxcg100_storage_write_blob(path, comp, fsz);
 		} else {
@@ -1002,6 +1014,9 @@ static int cgba_state_load_from(const uint16_t *path)
 #ifdef CGBA_DYNAREC
 	if (fsz > 8 && fsz <= (int)GBA_STATE_MEM_SIZE + 64) {
 		u8 *comp = cgba_state_comp_buffer();
+		unsigned cap = cgba_state_comp_capacity();
+		if ((unsigned)fsz > cap)
+			return 0;
 		flush_dynarec_caches();        /* comp buffer borrows ROM cache */
 		return fxcg100_storage_read_blob(path, comp, (unsigned)fsz) &&
 			cgba_state_decompress(comp, (unsigned)fsz, buf,

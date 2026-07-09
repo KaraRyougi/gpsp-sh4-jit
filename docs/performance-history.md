@@ -396,6 +396,26 @@ Correctness/perf evidence:
   vs `64D6CA64` JIT at frame 299, with a transient `PC=000007A4`), so it was
   reverted and is not part of HEAD.
 
+**Yoshi late A/LEFT save-crash follow-up** (2026-07-08, `SUPERM0.SVS`):
+the exact held-window request was rerun from clean source: `ALT_FRAME=0
+ALT_PERIOD=60 ALT_PRESS=60 ALT_LEFT=ON`, 600 frames, `STAT_EVERY=60`, JIT on.
+The run completed with no crash signature and reported `fps emu=18 draw=4`,
+`rom_flush=4 ram_flush=2 arm_tx=41 thumb_tx=3836 bios_n=9816 bios_kc=796
+cold_n=7552`. It still diverges visually late in the window (`frame 540
+hash=05C2726A`; interpreter oracle for the same sample is `9939617C`), so the
+frame-drop/correctness work remains open.
+
+The reported hardware save crash pointed at a `WILD=FFFFFFFF` JIT-era failure
+after a warmed-up Yoshi scene. The compressed savestate stream had been using
+`rom_translation_cache` from byte 0 as scratch; that can overwrite the resident
+BIOS/SWI entry below `rom_cache_watermark`, while a normal dynarec flush
+intentionally preserves the watermark. The save/load staging scratch now starts
+above `rom_cache_watermark` and guards against a rounded compressed file
+exceeding the remaining ROM-cache space. The patched repro build saved at frame
+540, wrote `GAME0.SVS` at 196,608 bytes, reached frame 619 and `=== done ===`,
+with no `HOST PC`/`WILD` panic markers under HLE. This is a targeted cache
+coherency fix for the save path; it does not make Yoshi a 45-fps release.
+
 ## State at HEAD
 
 Shipping default is the interpreter (`CGBA_DYNAREC=OFF`); the JIT is the
