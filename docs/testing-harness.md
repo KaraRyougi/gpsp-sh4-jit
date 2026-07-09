@@ -162,6 +162,13 @@ Env-gated; all combine freely with the headless builds:
   held-window A/LEFT soak still completed at `fps emu=18 draw=4`; the matching
   frame-300 slot-save repro completed with `@@CGBA_SLOTSAVE frame=300 ok=1`,
   wrote a 196,608-byte `GAME0.SVS`, and reached `=== done ===`.
+  The July 8 cache-sim cold-gate follow-up moved the JIT default from
+  T=96/leak=16 to T=8/leak=4: the held-window run improved from 20.52 modeled
+  fps (`rom_flush=3 thumb_tx=2388 cold_n=30618`) to 21.35 modeled fps
+  (`rom_flush=4 thumb_tx=3836 cold_n=7552`). T=0 was rejected because it fell
+  into translation churn and failed to complete within the same cap; leak=0 was
+  not chosen despite 21.42 modeled fps because it keeps stale hot counts across
+  flush generations and raised translations to `thumb_tx=7146`.
 - **AW measure**: 2000 frames from boot, pulsed-A harness
   (`A_PERIOD=12 A_PRESS=2`), CACHESIM fine ticks (`EVERY=10`).
 - **fps model**: `fps = 118e6 / (window_cycles / frames)`, where the run

@@ -1575,7 +1575,7 @@ extern u32 cgba_interp_instr_bios, cgba_interp_instr_rom, cgba_interp_instr_ram;
            /* Adaptive increment: +4 while the ROM cache is quiet (working
             * set fits — promote scene-cycling once-per-frame code fast),
             * +1 within 180 frames of a wholesale flush (thrash regime: the
-            * halve-on-flush decay must outpace accumulation). */             \
+            * leaky-bucket flush decay must outpace accumulation). */         \
            u32 _inc = (frame_counter - cgba_last_rom_flush_frame >           \
                        CGBA_SH4_HEAT_QUIET_FRAMES)                            \
              ? CGBA_SH4_HEAT_FAST : CGBA_SH4_HEAT_SLOW;                       \
