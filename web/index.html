@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#fbf4ff" />
+    <meta
+      name="description"
+      content="Conservatively remove trailing 0xFF or 0x00 padding from GBA ROMs, entirely in your browser."
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="GBA ROM Trimmer" />
+    <meta
+      property="og:description"
+      content="Remove blank padding from a GBA ROM. Your file stays on your device."
+    />
+    <meta property="og:url" content="https://kararyougi.github.io/gpsp-sh4-jit/" />
+    <title>GBA ROM Trimmer</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <script defer src="./rom.js"></script>
+    <script defer src="./app.js"></script>
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="intro">
+        <h1>GBA ROM Trimmer</h1>
+        <p>Drop in a ROM to remove large blocks of blank padding.</p>
+      </header>
+
+      <section id="drop-surface" class="drop-frame" aria-label="GBA ROM trimmer">
+        <section id="idle-state" class="state idle-state">
+          <div class="upload-icon" aria-hidden="true">↓</div>
+          <h2>Drop a <code>.gba</code> file here</h2>
+          <p>or choose one from your device</p>
+          <input
+            id="rom-input"
+            class="visually-hidden"
+            type="file"
+            accept=".gba,.agb,.bin,application/octet-stream"
+          />
+          <label class="button button-primary" for="rom-input">Choose ROM</label>
+          <span class="file-limit">One file · Up to 32 MiB</span>
+        </section>
+
+        <section id="processing-state" class="state processing-state" hidden>
+          <span class="spinner" aria-hidden="true"></span>
+          <h2>Inspecting ROM…</h2>
+          <p id="processing-filename" class="filename"></p>
+        </section>
+
+        <section id="result-state" class="state result-state" hidden>
+          <div class="result-heading">
+            <span id="result-icon" class="result-icon" aria-hidden="true">✓</span>
+            <div>
+              <p id="result-kicker" class="eyebrow">Blank tail found</p>
+              <h2 id="result-title" tabindex="-1">Ready to trim</h2>
+            </div>
+          </div>
+
+          <div class="file-row">
+            <div>
+              <span>File</span>
+              <strong id="result-filename" class="filename"></strong>
+            </div>
+            <div class="rom-name">
+              <span>ROM</span>
+              <strong id="result-rom-title"></strong>
+              <small id="result-game-code"></small>
+            </div>
+          </div>
+
+          <p id="result-summary" class="result-summary"></p>
+
+          <div class="capacity-row">
+            <div
+              id="capacity-meter"
+              class="capacity-meter"
+              role="img"
+              aria-label=""
+            >
+              <span id="capacity-fill" class="capacity-fill"></span>
+            </div>
+            <strong id="capacity-percent"></strong>
+          </div>
+
+          <dl class="stats">
+            <div><dt>Original</dt><dd id="original-size"></dd></div>
+            <div><dt>Trimmed</dt><dd id="trimmed-size"></dd></div>
+            <div><dt>Saved</dt><dd id="saved-size"></dd></div>
+          </dl>
+
+          <details id="technical-details" class="details">
+            <summary>Details</summary>
+            <dl>
+              <div><dt>Padding</dt><dd id="detail-padding-byte"></dd></div>
+              <div><dt>Tail size</dt><dd id="detail-padding-size"></dd></div>
+              <div><dt>Output end</dt><dd id="detail-output-end"></dd></div>
+              <div><dt>Header</dt><dd id="detail-header"></dd></div>
+            </dl>
+          </details>
+
+          <div class="actions">
+            <button id="download-button" class="button button-primary" type="button">
+              Download trimmed ROM
+            </button>
+            <button id="choose-another-button" class="button button-secondary" type="button">
+              Choose another
+            </button>
+          </div>
+          <p id="download-status" class="download-status" aria-live="polite"></p>
+        </section>
+
+        <section id="error-state" class="state error-state" hidden>
+          <span class="error-icon" aria-hidden="true">!</span>
+          <p class="eyebrow">No changes made</p>
+          <h2 id="error-title" tabindex="-1">That file could not be checked</h2>
+          <p id="error-message"></p>
+          <div class="actions">
+            <button id="override-button" class="button button-warning" type="button" hidden>
+              Inspect anyway
+            </button>
+            <button id="retry-button" class="button button-secondary" type="button">
+              Choose another ROM
+            </button>
+          </div>
+        </section>
+      </section>
+
+      <p class="privacy-note">
+        <span aria-hidden="true">●</span> Your ROM is processed locally and never uploaded.
+      </p>
+      <p class="example-note">Example: Emerald.gba · 16.00 MiB → 14.24 MiB · 1.76 MiB saved</p>
+    </main>
+
+    <footer>
+      <p>
+        Keep your original ROM. Trimming is a conservative heuristic and may not suit every
+        flash cart or preservation tool.
+      </p>
+      <a href="https://problemkaputt.de/gbatek-gba-cartridge-header.htm">How it works</a>
+    </footer>
+
+    <div id="live-status" class="visually-hidden" aria-live="polite"></div>
+    <noscript>
+      <p class="noscript">JavaScript is required to inspect ROM files locally.</p>
+    </noscript>
+  </body>
+</html>
