@@ -148,6 +148,7 @@ target_include_directories(cgba-gint-gpsp PRIVATE
 target_compile_definitions(cgba-gint-gpsp PRIVATE
   MSB_FIRST=1
   CGBA_FULL_GPSP=1
+  CGBA_RTC_WALLCLOCK=1
   ROM_BUFFER_SIZE=1
   dma_transfer=gpsp_dma_transfer
 )
@@ -425,5 +426,5 @@ target_link_options(cgba-gint-gpsp PRIVATE
 )
 
 generate_g3a(TARGET cgba-gint-gpsp OUTPUT "gpSP.g3a"
-  NAME "gpSP" VERSION "00.02.0707"
+  NAME "gpSP" VERSION "00.02.0709"
   ICONS icon-uns.png icon-sel.png)

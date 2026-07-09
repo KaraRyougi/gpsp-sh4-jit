@@ -589,7 +589,7 @@ int cgba_gpsp_init(uint16_t *framebuffer, unsigned rom_id)
 		gamepak_file_large = filestream_open(NULL, 0, 0);
 		if(load_gamepak_from_pages(cgba_current_nor_rom.pages,
 				cgba_current_nor_rom.padded_size,
-				FEAT_DISABLE, FEAT_DISABLE,
+				FEAT_AUTODETECT, FEAT_DISABLE,
 				SERIAL_MODE_DISABLED) != 0) {
 			snprintf(cgba_last_error, sizeof(cgba_last_error),
 				"NOR gpSP map s%u ps%u p%u",
@@ -602,7 +602,7 @@ int cgba_gpsp_init(uint16_t *framebuffer, unsigned rom_id)
 	}
 	else if(load_gamepak_from_memory(rom->data,
 			rom->size,
-			FEAT_DISABLE, FEAT_DISABLE,
+			FEAT_AUTODETECT, FEAT_DISABLE,
 			SERIAL_MODE_DISABLED) != 0)
 		return -2;
 

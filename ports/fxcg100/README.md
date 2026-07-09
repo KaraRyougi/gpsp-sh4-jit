@@ -131,6 +131,9 @@ Runtime shape:
   inert, JIT probe opt-in only
 - gpSP gameplay video uses a CGBC-style direct R61524 frame window instead of
   full-screen `dupdate()`; menus and status screens still use gint VRAM.
+- Cartridge RTC support is autodetected from the game database. RTC reads use
+  the calculator's hardware-backed wall clock, including while emulation is
+  paused, so time-based events in Pokemon Ruby/Sapphire/Emerald keep working.
 
 ## Smoke Tests
 
