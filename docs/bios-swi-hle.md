@@ -88,18 +88,25 @@ checked=4889, bad=0 over a 2000-frame AW boot window.
 
 ## ObjAffineSet fast path
 
-`CGBA_SH4_SWI_OBJAFFINE_HLE` (default 1 for dynarec builds) services
-ObjAffineSet (SWI 0x0F) when the call fits inside the current event slice.
-Yoshi's Island uses this SWI heavily during gameplay, so leaving it
-interpreted made the 600-frame A/Left soak spend about 1.9M BIOS
-instructions in 300 frames. The HLE mirrors the open BIOS routine at 0x8E0:
-it reads each `rx/ry/theta` triple, uses the BIOS sine table at 0x2150,
-writes the four OBJ matrix halfwords with the caller-provided stride,
-advances only caller-visible `r0/r1`, and lets the common SWI return tail
-restore the mode/CPSR/PC. The path is deliberately narrow: Thumb callers
-only, aligned source/destination, bounded count/stride, resolvable source,
-no destination region wrap, and `cycles + 64 <= budget`. Anything outside
-that shape falls back to the real BIOS interpreter.
+`CGBA_SH4_SWI_OBJAFFINE_HLE` is an experimental dynarec build option for
+ObjAffineSet (SWI 0x0F), disabled by default. Yoshi's Island uses this SWI
+heavily during gameplay, but the current fast path is still atomic: even with
+the budget guard, it can advance OAM/VRAM/EWRAM earlier than the real BIOS
+routine when the call sits near an IRQ/video event boundary. The July 2026
+Yoshi oracle run showed the old default HLE first diverging visibly at frame
+25; a stricter 512-cycle guard only delayed the visible mismatch to frame
+119, and still failed the 300-frame screen hash check. Default builds now
+leave SWI 0x0F on the real BIOS interpreter until ObjAffine gets a parked,
+resumable engine like CpuSet/CpuFastSet.
+
+When enabled manually, the HLE mirrors the open BIOS routine at 0x8E0: it
+reads each `rx/ry/theta` triple, uses the BIOS sine table at 0x2150, writes
+the four OBJ matrix halfwords with the caller-provided stride, advances only
+caller-visible `r0/r1`, and lets the common SWI return tail restore the
+mode/CPSR/PC. The path is deliberately narrow: Thumb callers only, aligned
+source/destination, bounded count/stride, resolvable source, no destination
+region wrap, and `cycles + 64 <= budget`. Anything outside that shape falls
+back to the real BIOS interpreter.
 
 ## Tier 2: the parked/resumable CpuFastSet engine
 
@@ -171,8 +178,8 @@ the LttP rain intro rebuilds OAM every frame via ~256-word oversized
 CpuSets that this reclaims (Zelda render-off floor 24.5 -> 29.1 fps;
 Metroid dense parity stays bit-exact). Fills stay interpreted (rare).
 Remaining declined SWIs (per `jit swi-census`): BgAffineSet (0x0E),
-LZ77UnCompWram/Vram (0x11/0x12), oversized ObjAffineSet calls that cross an
-event slice, and small fitting copies. The
+ObjAffineSet (0x0F, default interpreted for event-slice correctness),
+LZ77UnCompWram/Vram (0x11/0x12), and small fitting copies. The
 parked-engine pattern extends to the decompression SWIs next (see
 [performance-history.md](performance-history.md), Future directions).
 

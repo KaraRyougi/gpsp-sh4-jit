@@ -155,6 +155,13 @@ Env-gated; all combine freely with the headless builds:
   600 frames with final `hash=D48DE1EA`, `fps emu=18 draw=3`,
   `rom_flush=3 ram_flush=3 arm_tx=122 thumb_tx=2398 cold_n=30729`; its
   frame-300 slot-save repro reached frame 359 and `=== done ===`.
+  The ObjAffineSet HLE experiment is now default-off: the old default first
+  diverged visibly from the interpreter at frame 25, a stricter 512-cycle guard
+  only delayed the 300-frame no-input mismatch to frame 119, and the default-off
+  build delayed it to frame 148 while converging by frame 299. The requested
+  held-window A/LEFT soak still completed at `fps emu=18 draw=4`; the matching
+  frame-300 slot-save repro completed with `@@CGBA_SLOTSAVE frame=300 ok=1`,
+  wrote a 196,608-byte `GAME0.SVS`, and reached `=== done ===`.
 - **AW measure**: 2000 frames from boot, pulsed-A harness
   (`A_PERIOD=12 A_PRESS=2`), CACHESIM fine ticks (`EVERY=10`).
 - **fps model**: `fps = 118e6 / (window_cycles / frames)`, where the run
