@@ -36,7 +36,7 @@ u32 execute_arm_translate_internal(u32 cycles, void *reg_base);  /* sh4_stub.S *
 #define CGBA_SH4_SWI_HLE_VERIFY 0   /* predict, then interp + compare (diag) */
 #endif
 #ifndef CGBA_SH4_SWI_OBJAFFINE_HLE
-#define CGBA_SH4_SWI_OBJAFFINE_HLE 0 /* faithful ObjAffineSet (SWI 0x0F) */
+#define CGBA_SH4_SWI_OBJAFFINE_HLE 0 /* experimental ObjAffineSet (SWI 0x0F) */
 #endif
 
 extern u32 cgba_diff_stop_pc;

@@ -292,6 +292,29 @@ Validation:
   45-fps Mario gameplay harness noted below, so it should not be quoted as the
   achieved Mario target.
 
+**Yoshi ObjAffine default-off follow-up** (2026-07-08, `SUPERM0.SVS`):
+the 300-frame no-input oracle check showed that the ObjAffineSet HLE was not
+event-slice faithful enough for release. The old default first diverged visibly
+at frame 25; a stricter 512-cycle budget guard passed the 30-frame smoke but
+still diverged at frame 119 and ended frame 299 with a different framebuffer
+hash. Disabling ObjAffine HLE by default moves the first visible mismatch to
+frame 148 and converges by frame 299 (`fb=A57ADB44`, VRAM/OAM also matching),
+while leaving the remaining mid-window Yoshi timing drift documented as open.
+`jit swi-miss 0F=505` confirms ObjAffineSet is interpreted in the 300-frame
+diagnostic build.
+
+The requested held-window A/LEFT soak was rerun with the default-off build:
+`ALT_FRAME=0 ALT_PERIOD=60 ALT_PRESS=60 ALT_LEFT=ON`, 600 frames from
+`SUPERM0.SVS`, completed at frame 599 and reached `=== done ===` with
+`fps emu=18 draw=4`, `rom_flush=3 ram_flush=3 arm_tx=123 thumb_tx=2387
+cold_n=30545`. A cache-sim run of the same binary gave a modeled gameplay
+window of about 20.8 fps and did not show a worsening per-tick cycle trend
+after warmup. The matching save-slot repro (`SAVE_SLOT_FRAME=300`) completed
+with `@@CGBA_SLOTSAVE frame=300 ok=1`, wrote a 196,608-byte `GAME0.SVS`,
+continued to frame 599, and had no `WILD=FFFFFFFF`/panic/TLB signature under
+HLE. The hardware-only save crash is therefore still not reproduced, but the
+HLE-tested save path survives the reported gameplay point.
+
 **Yoshi save-staging/cold-gate follow-up** (2026-07-08, `SUPERM0.SVS`):
 the requested held-window A/LEFT run was profiled with calcemu's PC histogram.
 The largest text buckets still map to `execute_arm`, reached through
@@ -318,7 +341,8 @@ HLE, with `@@CGBA_SLOTSAVE frame=300 ok=1`.
 
 Shipping default is the interpreter (`CGBA_DYNAREC=OFF`); the JIT is the
 opt-in hardware artifact with cold gate T=96, heat leak 16, faithful
-CpuSet/FastSet HLE on, all infidel HLEs compiled out, IntrWait HLE off.
+CpuSet/FastSet HLE on, experimental ObjAffine HLE off by default, all other
+infidel HLEs compiled out, IntrWait HLE off.
 Modeled numbers on the standing scenarios: AW 39.8 fps, Metroid movement
 32.4 fps, Metroid dense parity green, SMA2/Zelda from the 30fps-goal era
 35.1/58.5 (pre-demotion protocol — remeasure before quoting). The current

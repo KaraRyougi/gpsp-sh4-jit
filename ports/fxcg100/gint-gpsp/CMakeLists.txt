@@ -73,7 +73,7 @@ option(CGBA_DEBUG_MENU
 option(CGBA_SH4_SWI_HLE_VERIFY
   "Diag: predict faithful SWI HLE results, run the interpreted BIOS, compare" OFF)
 option(CGBA_SH4_SWI_OBJAFFINE_HLE
-  "Enable faithful SH4 HLE for BIOS ObjAffineSet (SWI 0x0F)" ON)
+  "Experimental SH4 HLE for BIOS ObjAffineSet (SWI 0x0F); default off until event-slice parity is fixed" OFF)
 set(CGBA_SH4_HEAT_QUIET_FRAMES "180" CACHE STRING
   "Cold-gate: frames after a ROM flush before heating switches to the fast increment")
 set(CGBA_SH4_HEAT_SLOW "1" CACHE STRING
