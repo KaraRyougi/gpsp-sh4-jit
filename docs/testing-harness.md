@@ -136,8 +136,8 @@ Env-gated; all combine freely with the headless builds:
   threshold 96 → `fps emu=18`, `rom_flush=3`, `thumb_tx=2425`, `cold_n=31181`;
   threshold 128 → `fps emu=18`, `rom_flush=3`, `thumb_tx=2379`, `cold_n=37709`;
   threshold 192 → `fps emu=17`, `rom_flush=3`, `thumb_tx=2319`, `cold_n=48945`.
-  Default is 128: it reduces late ROM-cache churn without the host-FPS dip at
-  192. A save-slot repro build
+  Default is 96: it keeps the 128-flush/HLE-FPS result while reducing cold
+  fallback entries by ~17%. A save-slot repro build
   (`SAVE_SLOT_FRAME=120`, 300 frames) wrote `GAME0.SVS`
   (`@@CGBA_SLOTSAVE frame=120 ok=1`) and reached `=== done ===`; the
   hardware `WILD=FFFFFFFF` save crash was not reproduced under HLE.
@@ -149,6 +149,12 @@ Env-gated; all combine freely with the headless builds:
   (`ALT_FRAME=0 ALT_PERIOD=60 ALT_PRESS=60 ALT_LEFT=ON`) still completes but
   remains at `fps emu=18 draw=3`; the current frame-300 slot-save repro again
   completes with `@@CGBA_SLOTSAVE frame=300 ok=1` and no HLE panic signature.
+  The raw savestate image is now staged in the existing high-RAM checkpoint
+  buffer; only the compressed output stream borrows the executable ROM cache,
+  bracketed by full dynarec flushes. The patched default-96 run completed all
+  600 frames with final `hash=D48DE1EA`, `fps emu=18 draw=3`,
+  `rom_flush=3 ram_flush=3 arm_tx=122 thumb_tx=2398 cold_n=30729`; its
+  frame-300 slot-save repro reached frame 359 and `=== done ===`.
 - **AW measure**: 2000 frames from boot, pulsed-A harness
   (`A_PERIOD=12 A_PRESS=2`), CACHESIM fine ticks (`EVERY=10`).
 - **fps model**: `fps = 118e6 / (window_cycles / frames)`, where the run
