@@ -1,7 +1,7 @@
-# gpSP
+# gpSP with JIT for CASIO fx-CG50 / fx-CG100 graphing calculators
 
-`gpSP` is an experimental Game Boy Advance emulator for the Casio fx-CG100
-(SH7305 / SH-4A, big-endian, no FPU). It is built on gpSP, imported under
+This is an experimental Game Boy Advance emulator for the Casio fx-CG50 / fx-CG100
+(SH7305 / SH-4A, big-endian, no FPU) graphing calculators. It is built on gpSP, imported under
 `vendor/gpsp`, and adds an SH-4 dynamic recompiler (the "JIT") so GBA games run
 at playable speeds on the calculator's CPU.
 
