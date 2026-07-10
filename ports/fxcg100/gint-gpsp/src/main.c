@@ -281,6 +281,7 @@ static int start_gpsp(uint16_t *framebuffer, unsigned rom_id)
 	cgba_dynarec_ibh_dual_slow_count = 0;
 	cgba_dynarec_ibh_dual_hot_arm_count = 0;
 	cgba_dynarec_ibh_dual_hot_thumb_count = 0;
+#ifdef CGBA_GPSP_HEADLESS_TEST
 	{
 		extern u32 cgba_bios_hle_irq_in, cgba_bios_hle_irq_out;
 		extern u32 cgba_bios_hle_swi_count;
@@ -288,6 +289,7 @@ static int start_gpsp(uint16_t *framebuffer, unsigned rom_id)
 		cgba_bios_hle_irq_out = 0;
 		cgba_bios_hle_swi_count = 0;
 	}
+#endif
 	cgba_sh4_prof_reset();
 	cgba_sh4_helper_thumb_ldst_count = 0;
 	cgba_sh4_helper_thumb_block_count = 0;
