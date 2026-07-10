@@ -13,7 +13,7 @@
 #include "vendor/gpsp/common.h"
 #include "vendor/gpsp/gba_memory.h"
 #include "vendor/gpsp/savestate.h"
-#ifdef CGBA_DYNAREC
+#if defined(CGBA_DYNAREC) && defined(CGBA_SH4_DIFF_HARNESS)
 #include "ports/fxcg100/sh4/sh4_diff_harness.h"
 #endif
 
@@ -592,7 +592,7 @@ int cgba_gpsp_init(uint16_t *framebuffer, unsigned rom_id)
 		gamepak_file_large = filestream_open(NULL, 0, 0);
 		if(load_gamepak_from_pages(cgba_current_nor_rom.pages,
 				cgba_current_nor_rom.padded_size,
-				FEAT_DISABLE, FEAT_DISABLE,
+				FEAT_AUTODETECT, FEAT_DISABLE,
 				SERIAL_MODE_DISABLED) != 0) {
 			snprintf(cgba_last_error, sizeof(cgba_last_error),
 				"NOR gpSP map s%u ps%u p%u",
@@ -605,7 +605,7 @@ int cgba_gpsp_init(uint16_t *framebuffer, unsigned rom_id)
 	}
 	else if(load_gamepak_from_memory(rom->data,
 			rom->size,
-			FEAT_DISABLE, FEAT_DISABLE,
+			FEAT_AUTODETECT, FEAT_DISABLE,
 			SERIAL_MODE_DISABLED) != 0)
 		return -2;
 
@@ -793,22 +793,27 @@ static void copy_mode3_vram_to_framebuffer(void)
  * blob, so a state saved on the calculator loads directly in the emulator
  * harness (copy it over USB into the HLE_FLS0 dir as CGBACHK.SAV).
  *
- * Staging buffer: JIT builds reuse the already-linked diff/checkpoint snapshot
- * buffer instead of writing the raw image into executable cache memory. The
- * compressed stream still borrows the ROM translation cache above its resident
- * BIOS/SWI watermark as scratch, so save/load treat compression as a full
- * dynarec coherency boundary. Interpreter builds have an empty arena and use a
- * static buffer there instead. */
+ * Staging buffer: borrow the already-reserved fragmented-ROM page cache while
+ * guest execution is stopped.  Acquiring/releasing it invalidates only pages
+ * backed by that cache; direct NOR mappings remain intact.  This keeps the
+ * production high-RAM arena at the hardware-proven 0x8c655300 endpoint instead
+ * of retaining the emulator-only 492 KiB differential snapshot.  JIT builds
+ * use the ROM translation cache separately for the compressed stream. */
+static u8 *cgba_state_buffer(void)
+{
+	return cgba_gamepak_scratch_acquire(GBA_STATE_MEM_SIZE);
+}
+
+static void cgba_state_buffer_release(void)
+{
+	cgba_gamepak_scratch_release();
+}
+
 #ifdef CGBA_DYNAREC
 void flush_translation_cache_rom(void);
 void flush_translation_cache_ram(void);
 void flush_dynarec_caches(void);
 extern u32 rom_cache_watermark;
-
-static u8 *cgba_state_buffer(void)
-{
-	return (u8 *)cgba_sh4_checkpoint_buffer();
-}
 
 static u8 *cgba_state_comp_buffer(void)
 {
@@ -820,13 +825,6 @@ static unsigned cgba_state_comp_capacity(void)
 	if (rom_cache_watermark >= ROM_TRANSLATION_CACHE_SIZE)
 		return 0;
 	return ROM_TRANSLATION_CACHE_SIZE - rom_cache_watermark;
-}
-#else
-static u8 *cgba_state_buffer(void)
-{
-	static u8 state_buf[GBA_STATE_MEM_SIZE]
-		__attribute__((section(".cgba.highbss"), aligned(32)));
-	return state_buf;
 }
 #endif
 
@@ -966,7 +964,10 @@ int cgba_gpsp_state_save(unsigned slot)
 {
 	u8 *buf = cgba_state_buffer();
 	uint16_t path[24];
-	int ok;
+	int ok = 0;
+
+	if (!buf)
+		return 0;
 
 	cgba_state_path(path, slot);
 #ifdef CGBA_DYNAREC
@@ -987,10 +988,10 @@ int cgba_gpsp_state_save(unsigned slot)
 			 * instead of delete+create; the decoder stops at
 			 * raw_size so the slack tail is ignored. */
 			unsigned fsz = (csz + 0xFFFFu) & ~0xFFFFu;
-			if (fsz > cap)
-				return 0;
-			memset(comp + csz, 0, fsz - csz);
-			ok = fxcg100_storage_write_blob(path, comp, fsz);
+			if (fsz <= cap) {
+				memset(comp + csz, 0, fsz - csz);
+				ok = fxcg100_storage_write_blob(path, comp, fsz);
+			}
 		} else {
 			ok = fxcg100_storage_write_blob(path, buf,
 				GBA_STATE_MEM_SIZE);
@@ -1000,6 +1001,7 @@ int cgba_gpsp_state_save(unsigned slot)
 #else
 	ok = fxcg100_storage_write_blob(path, buf, GBA_STATE_MEM_SIZE);
 #endif
+	cgba_state_buffer_release();
 	return ok;
 }
 
@@ -1007,24 +1009,30 @@ static int cgba_state_load_from(const uint16_t *path)
 {
 	u8 *buf = cgba_state_buffer();
 	int fsz = fxcg100_storage_blob_size(path);
+	int ok = 0;
 
-	if (fsz == (int)GBA_STATE_MEM_SIZE)     /* raw (legacy / harness) */
-		return fxcg100_storage_read_blob(path, buf,
+	if (!buf)
+		return 0;
+
+	if (fsz == (int)GBA_STATE_MEM_SIZE) {   /* raw (legacy / harness) */
+		ok = fxcg100_storage_read_blob(path, buf,
 			GBA_STATE_MEM_SIZE) && gba_load_state(buf);
+	}
 #ifdef CGBA_DYNAREC
-	if (fsz > 8 && fsz <= (int)GBA_STATE_MEM_SIZE + 64) {
+	else if (fsz > 8 && fsz <= (int)GBA_STATE_MEM_SIZE + 64) {
 		u8 *comp = cgba_state_comp_buffer();
 		unsigned cap = cgba_state_comp_capacity();
-		if ((unsigned)fsz > cap)
-			return 0;
-		flush_dynarec_caches();        /* comp buffer borrows ROM cache */
-		return fxcg100_storage_read_blob(path, comp, (unsigned)fsz) &&
-			cgba_state_decompress(comp, (unsigned)fsz, buf,
-					      GBA_STATE_MEM_SIZE) &&
-			gba_load_state(buf);
+		if ((unsigned)fsz <= cap) {
+			flush_dynarec_caches();    /* comp buffer borrows ROM cache */
+			ok = fxcg100_storage_read_blob(path, comp, (unsigned)fsz) &&
+				cgba_state_decompress(comp, (unsigned)fsz, buf,
+						      GBA_STATE_MEM_SIZE) &&
+				gba_load_state(buf);
+		}
 	}
 #endif
-	return 0;
+	cgba_state_buffer_release();
+	return ok;
 }
 
 int cgba_gpsp_state_load(unsigned slot)
@@ -1157,7 +1165,7 @@ void cgba_gpsp_run_frame(uint32_t gba_buttons, int render_video)
 		copy_mode3_vram_to_framebuffer();
 }
 
-#ifdef CGBA_DYNAREC
+#if defined(CGBA_DYNAREC) && defined(CGBA_SH4_DIFF_HARNESS)
 #include "sh4/sh4_diff_harness.h"
 
 /* Run the differential interp-vs-dynarec harness for a short window and format
@@ -1472,7 +1480,7 @@ unsigned cgba_gpsp_diag(char out[][CGBA_DIAG_LINE_MAX], unsigned max_lines)
 			"fbhash=%08lX center=%04X",
 			(unsigned long)(fb ? cgba_gpsp_frame_hash(fb) : 0u),
 			fb ? fb[80 * CGBA_GBA_PITCH + 120] : 0);
-#ifdef CGBA_DYNAREC
+#if defined(CGBA_DYNAREC) && defined(CGBA_SH4_DIFF_HARNESS)
 	/* One-frame interp-vs-dynarec diff so the diag overlay surfaces dynarec health
 	 * on hardware/casio-emu: PCs + first divergent reg, then per-region (IWRAM /
 	 * EWRAM / VRAM / IO) so a benign sound-buffer-only IWRAM diff is distinguishable

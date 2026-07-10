@@ -112,6 +112,10 @@ enum {
   SH4G_VEC_ws_cyc_seq,
   SH4G_VEC_ws_cyc_nseq,
   SH4G_VEC_iwram_data,
+#if defined(CGBA_VIDEO_BLEND_PALETTE_CACHE) || \
+    defined(CGBA_VIDEO_BACKDROP_SHADOW_PALETTE)
+  SH4G_VEC_palette_dirty,
+#endif
   SH4G_VEC_COUNT                       /* MOV.L disp4 reach caps this at 16 */
 };
 

@@ -29,7 +29,7 @@ defines. The important ones:
 | `LOAD_STATE` | 0 | restore `CGBACHK.SAV` before the loop |
 | `SAVE_STATE_FRAME` | −1 | write the checkpoint after that frame |
 | `SAVE_SLOT_FRAME` | −1 | exercise the *real* per-ROM slot-save path |
-| `START_*`, `A_*`, `ALT_*`, `ALT_LEFT`, `RUN_*` | — | fixed input generators (below) |
+| `START_*`, `A_*`, `DOWN_*`, `ALT_*`, `ALT_LEFT`, `RUN_*` | — | fixed input generators (below) |
 | `FUZZ_SEED` | 0 | seeded input monkey (below) |
 | `SCALE` | 0 | force a display scale mode |
 | `DIFF_FRAME`/`DIFF_BLOCKS`, `WINDOW_DIFF_FRAME` | −1/0/−1 | live block diff / one-window interp-vs-JIT diff |
@@ -51,8 +51,9 @@ Fixed generators, all compile-time: START hold/mash
 — the "pulsed A" menu-advancer), alternating A/START windows (`ALT_*` —
 the standard boot-to-gameplay recipe), alternating A/LEFT windows
 (`ALT_LEFT=ON` with `ALT_PERIOD=60 ALT_PRESS=60` — the Yoshi gameplay
-stress), and hold-LEFT-flip-RIGHT movement (`RUN_FRAME/RUN_FLIP` — the
-Metroid movement soak). The fuzz monkey
+stress), a fixed GBA Down hold (`DOWN_FRAME/DOWN_HOLD`), and
+hold-LEFT-flip-RIGHT movement (`RUN_FRAME/RUN_FLIP` — the Metroid movement
+soak). The fuzz monkey
 (`FUZZ_SEED > 0`, xorshift32) replaces them all: hold one direction 12–43
 frames, re-roll a tap every 6–21 frames (A 25%, B 12.5%, START ~3%).
 

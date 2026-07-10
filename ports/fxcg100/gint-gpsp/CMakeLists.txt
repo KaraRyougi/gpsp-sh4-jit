@@ -72,6 +72,14 @@ option(CGBA_DEBUG_MENU
   "Show the in-menu DEBUG INFO submenu + F:/H frame/hash overlay (dev; hidden in release)" OFF)
 option(CGBA_SH4_SWI_HLE_VERIFY
   "Diag: predict faithful SWI HLE results, run the interpreted BIOS, compare" OFF)
+option(CGBA_SH4_SWI_FORWARD_OVERLAP
+  "Experimental faithful HLE for increasing-address overlapping CpuSet/FastSet" OFF)
+option(CGBA_SH4_SWI_OAM_BULK
+  "Experimental faithful bulk path for CpuSet halfword copies into OAM" OFF)
+option(CGBA_SH4_THUMB_UDIV_FASTPATH
+  "Experimental exact fast path for the Zelda/libgcc Thumb unsigned divide suffix" OFF)
+option(CGBA_SH4_ARM_MIXER_FASTPATH
+  "Experimental exact fast path for the Zelda/m4a ARM four-sample mixer loop" OFF)
 option(CGBA_SH4_SWI_OBJAFFINE_HLE
   "Experimental SH4 HLE for BIOS ObjAffineSet (SWI 0x0F); default off until event-slice parity is fixed" OFF)
 set(CGBA_SH4_HEAT_QUIET_FRAMES "180" CACHE STRING
@@ -88,6 +96,8 @@ set(CGBA_SH4_COLD_CHUNK_CYCLES "512" CACHE STRING
   "Cold-code gate: max GBA cycles to interpret per cold fallback (0 = whole scheduler budget)")
 option(CGBA_SH4_EXACT_CYCLE_BOUNDARIES
   "Headless/debug: check the SH4 dynarec cycle budget at each translated instruction boundary" OFF)
+option(CGBA_SH4_DIFF_HARNESS
+  "Emulator-only interp/JIT differential harness (uses 492 KiB beyond the fx-CG100 hardware-safe arena)" OFF)
 option(CGBA_SH4_DIFF_DUMP_OPS
   "Headless/debug: dump block-diff op/cycle diagnostics" OFF)
 option(CGBA_SH4_PROFILE_COUNTERS
@@ -155,6 +165,7 @@ target_include_directories(cgba-gint-gpsp PRIVATE
 target_compile_definitions(cgba-gint-gpsp PRIVATE
   MSB_FIRST=1
   CGBA_FULL_GPSP=1
+  CGBA_RTC_WALLCLOCK=1
   ROM_BUFFER_SIZE=1
   dma_transfer=gpsp_dma_transfer
 )
@@ -213,6 +224,24 @@ if(CGBA_DYNAREC)
   if(CGBA_SH4_SWI_HLE_VERIFY)
     target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_SH4_SWI_HLE_VERIFY=1)
   endif()
+  if(CGBA_SH4_SWI_FORWARD_OVERLAP)
+    target_compile_definitions(cgba-gint-gpsp PRIVATE
+      CGBA_SH4_SWI_FORWARD_OVERLAP=1)
+  endif()
+  if(CGBA_SH4_SWI_OAM_BULK)
+    target_compile_definitions(cgba-gint-gpsp PRIVATE
+      CGBA_SH4_SWI_OAM_BULK=1)
+  endif()
+  # Exact-boundary diagnostics intentionally return to update_gba after every
+  # guest instruction; multi-instruction fusions cannot preserve that mode.
+  if(CGBA_SH4_THUMB_UDIV_FASTPATH AND NOT CGBA_SH4_EXACT_CYCLE_BOUNDARIES)
+    target_compile_definitions(cgba-gint-gpsp PRIVATE
+      CGBA_SH4_THUMB_UDIV_FASTPATH=1)
+  endif()
+  if(CGBA_SH4_ARM_MIXER_FASTPATH AND NOT CGBA_SH4_EXACT_CYCLE_BOUNDARIES)
+    target_compile_definitions(cgba-gint-gpsp PRIVATE
+      CGBA_SH4_ARM_MIXER_FASTPATH=1)
+  endif()
   if(CGBA_SH4_SWI_OBJAFFINE_HLE)
     target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_SH4_SWI_OBJAFFINE_HLE=1)
   endif()
@@ -238,6 +267,9 @@ if(CGBA_DYNAREC)
   if(CGBA_SH4_EXACT_CYCLE_BOUNDARIES)
     target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_SH4_EXACT_CYCLE_BOUNDARIES=1)
   endif()
+  if(CGBA_SH4_DIFF_HARNESS)
+    target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_SH4_DIFF_HARNESS=1)
+  endif()
   if(CGBA_SH4_DIFF_DUMP_OPS)
     target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_SH4_DIFF_DUMP_OPS=1)
   endif()
@@ -251,6 +283,53 @@ endif()
 option(CGBA_GPSP_DIAG "On-screen pipeline diagnostic overlay" OFF)
 if(CGBA_GPSP_DIAG)
   target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_GPSP_DIAG=1)
+endif()
+
+# Cache palette colors multiplied by the two alpha-blend factors.  This
+# removes two multiplies and two RGB565 expansion sequences per blended pixel
+# when the palette/factors are stable, while an adaptive fallback avoids table
+# rebuilds for raster effects which change them every scanline.
+option(CGBA_VIDEO_BLEND_PALETTE_CACHE
+  "Cache stable palette alpha-blend terms (experimental performance A/B)" OFF)
+if(CGBA_VIDEO_BLEND_PALETTE_CACHE)
+  target_compile_definitions(cgba-gint-gpsp PRIVATE
+    CGBA_VIDEO_BLEND_PALETTE_CACHE=1)
+endif()
+
+# Base-layer 4-bpp text backgrounds can replace each sub-palette's transparent
+# slot with the backdrop in a lazily rebuilt shadow, removing the per-pixel
+# transparency branch from the common Mode 0 FULLCOLOR path.
+option(CGBA_VIDEO_BACKDROP_SHADOW_PALETTE
+  "Branchless base-layer 4-bpp backdrop lookup (experimental performance A/B)" OFF)
+if(CGBA_VIDEO_BACKDROP_SHADOW_PALETTE)
+  target_compile_definitions(cgba-gint-gpsp PRIVATE
+    CGBA_VIDEO_BACKDROP_SHADOW_PALETTE=1)
+endif()
+
+# Fully opaque 4-bpp tile rows need neither transparency tests nor per-pixel
+# branches.  Keep the specialized renderer opt-in until representative-game
+# and device cache behavior have both been measured.
+option(CGBA_VIDEO_OPAQUE_TILE_FASTPATH
+  "Specialize fully opaque 4-bpp tile rows (experimental performance A/B)" OFF)
+if(CGBA_VIDEO_OPAQUE_TILE_FASTPATH)
+  target_compile_definitions(cgba-gint-gpsp PRIVATE
+    CGBA_VIDEO_OPAQUE_TILE_FASTPATH=1)
+endif()
+
+option(CGBA_VIDEO_OPAQUE_ROW_UNROLL
+  "Unroll hot opaque 4-bpp tile rows (experimental performance A/B)" OFF)
+if(CGBA_VIDEO_OPAQUE_ROW_UNROLL)
+  target_compile_definitions(cgba-gint-gpsp PRIVATE
+    CGBA_VIDEO_OPAQUE_ROW_UNROLL=1)
+endif()
+
+# Game-specific idle-loop metadata is isolated behind an option so the timing
+# shortcut can be parity-checked before becoming part of the normal database.
+option(CGBA_GBA_OVER_AZLE_IDLE
+  "Enable Zelda: A Link to the Past/Four Swords (AZLE) idle-loop hint (experimental A/B)" OFF)
+if(CGBA_GBA_OVER_AZLE_IDLE)
+  target_compile_definitions(cgba-gint-gpsp PRIVATE
+    CGBA_GBA_OVER_AZLE_IDLE=1)
 endif()
 
 # Hardware-only diagnostic: bypass the menu/storage scan and boot the built-in
@@ -275,6 +354,8 @@ endif()
 # Emulator-only: auto-boot the first storage ROM and stream cgba_gpsp_diag() to
 # the host debug-putchar port (run-headless.sh). Keep OFF for hardware builds.
 option(CGBA_GPSP_HEADLESS_TEST "Headless auto-boot + stdout diag (emulator)" OFF)
+option(CGBA_GPSP_HEADLESS_PROFILE_STOP
+  "Headless profiling: stop HLE_PROFILE immediately after the measured frame loop" OFF)
 set(CGBA_GPSP_HEADLESS_FRAMES "48" CACHE STRING
   "Number of frames to run in CGBA_GPSP_HEADLESS_TEST")
 set(CGBA_GPSP_HEADLESS_FRAME_BASE "0" CACHE STRING
@@ -293,6 +374,10 @@ set(CGBA_GPSP_HEADLESS_A_PERIOD "12" CACHE STRING
   "A/SHIFT tap period in frames; 0 holds continuously")
 set(CGBA_GPSP_HEADLESS_A_PRESS "2" CACHE STRING
   "Number of pressed frames per A/SHIFT tap period")
+set(CGBA_GPSP_HEADLESS_DOWN_FRAME "0" CACHE STRING
+  "Frame at which CGBA_GPSP_HEADLESS_TEST starts holding GBA Down")
+set(CGBA_GPSP_HEADLESS_DOWN_HOLD "0" CACHE STRING
+  "Number of frames to hold GBA Down; 0 disables")
 set(CGBA_GPSP_HEADLESS_DUMP_EVERY "0" CACHE STRING
   "Headless debug: dump raw GBA framebuffer every N frames as RGB565 hex; 0 disables")
 set(CGBA_GPSP_HEADLESS_FRAMESKIP "3" CACHE STRING
@@ -362,6 +447,17 @@ set(CGBA_GPSP_HEADLESS_WJ_START "0" CACHE STRING
   "Headless debug: first frame to log wild-jump resolver trace")
 set(CGBA_GPSP_HEADLESS_WJ_END "4294967295" CACHE STRING
   "Headless debug: last frame to log wild-jump resolver trace")
+if(CGBA_SH4_DIFF_HARNESS AND NOT CGBA_GPSP_HEADLESS_TEST)
+  message(FATAL_ERROR
+    "CGBA_SH4_DIFF_HARNESS exceeds the fx-CG100 hardware-safe RAM arena and is permitted only with CGBA_GPSP_HEADLESS_TEST=ON")
+endif()
+if(CGBA_GPSP_HEADLESS_TEST AND NOT CGBA_SH4_DIFF_HARNESS AND
+   (CGBA_GPSP_HEADLESS_DIFF_BLOCKS GREATER 0 OR
+    CGBA_GPSP_HEADLESS_WINDOW_DIFF_FRAME GREATER_EQUAL 0 OR
+    CGBA_GPSP_HEADLESS_BENCH_FRAMES GREATER 0))
+  message(FATAL_ERROR
+    "Headless diff/throughput diagnostics require -DCGBA_SH4_DIFF_HARNESS=ON (emulator only)")
+endif()
 if(CGBA_GPSP_HEADLESS_TEST)
   target_compile_definitions(cgba-gint-gpsp PRIVATE
     CGBA_GPSP_HEADLESS_TEST=1
@@ -374,6 +470,8 @@ if(CGBA_GPSP_HEADLESS_TEST)
     CGBA_GPSP_HEADLESS_A_HOLD=${CGBA_GPSP_HEADLESS_A_HOLD}
     CGBA_GPSP_HEADLESS_A_PERIOD=${CGBA_GPSP_HEADLESS_A_PERIOD}
     CGBA_GPSP_HEADLESS_A_PRESS=${CGBA_GPSP_HEADLESS_A_PRESS}
+    CGBA_GPSP_HEADLESS_DOWN_FRAME=${CGBA_GPSP_HEADLESS_DOWN_FRAME}
+    CGBA_GPSP_HEADLESS_DOWN_HOLD=${CGBA_GPSP_HEADLESS_DOWN_HOLD}
     CGBA_GPSP_HEADLESS_DUMP_EVERY=${CGBA_GPSP_HEADLESS_DUMP_EVERY}
     CGBA_GPSP_HEADLESS_STAT_EVERY=${CGBA_GPSP_HEADLESS_STAT_EVERY}
     CGBA_GPSP_HEADLESS_SCALE=${CGBA_GPSP_HEADLESS_SCALE}
@@ -407,6 +505,10 @@ if(CGBA_GPSP_HEADLESS_TEST)
     CGBA_GPSP_HEADLESS_BENCH_FRAMES=${CGBA_GPSP_HEADLESS_BENCH_FRAMES}
     CGBA_GPSP_HEADLESS_WJ_START=${CGBA_GPSP_HEADLESS_WJ_START}
     CGBA_GPSP_HEADLESS_WJ_END=${CGBA_GPSP_HEADLESS_WJ_END})
+  if(CGBA_GPSP_HEADLESS_PROFILE_STOP)
+    target_compile_definitions(cgba-gint-gpsp PRIVATE
+      CGBA_GPSP_HEADLESS_PROFILE_STOP=1)
+  endif()
 endif()
 
 target_compile_options(cgba-gint-gpsp PRIVATE
@@ -423,14 +525,22 @@ target_compile_options(cgba-gint-gpsp PRIVATE
 # interpreter and the scanline renderer -- at -O3 instead of the global -O2.
 # MEASURED on fx-CG100 hardware: -O3 on both files slightly REGRESSED worst-case
 # fps and added ~40 KB -- the predicted I-cache bloat on the giant dispatch switch.
-# So the default stays -O2 (option OFF); leave it OFF. (A finer experiment not yet
-# run: -O3 on video.cc alone, whose tight pixel loops might benefit while the cpu.cc
-# dispatch clearly does not.) (-g is intentionally retained: no runtime/g3a-size
-# effect, preserves addr2line for crash triage.)
+# So the default stays -O2 (option OFF); leave it OFF. (-g is intentionally
+# retained: no runtime/g3a-size effect, preserves addr2line for crash triage.)
 option(CGBA_TUNE_HOTFILES_O3 "Compile selected gpSP/fxCG100 hot files at -O3 (benchmark before enabling by default)" OFF)
 if(CGBA_TUNE_HOTFILES_O3)
   set_source_files_properties(${GPSP}/cpu.cc ${GPSP}/video.cc
     ${GPSP}/main.c ${FXCG100}/sh4/sh4_interp_helpers.c
+    PROPERTIES COMPILE_OPTIONS "-O3")
+endif()
+
+# A narrower compiler A/B.  On the Zelda checkpoint this added 41,248 bytes of
+# text and very slightly regressed the cache-sim model (36.081 -> 36.079 fps),
+# so it remains a diagnostic knob rather than a release setting.
+option(CGBA_TUNE_VIDEO_O3
+  "Compile only the scanline renderer at -O3 (benchmark before enabling)" OFF)
+if(CGBA_TUNE_VIDEO_O3 AND NOT CGBA_TUNE_HOTFILES_O3)
+  set_source_files_properties(${GPSP}/video.cc
     PROPERTIES COMPILE_OPTIONS "-O3")
 endif()
 
@@ -445,6 +555,14 @@ target_link_options(cgba-gint-gpsp PRIVATE
   -Wl,--allow-multiple-definition
 )
 
+# Headless profiling retains extra counters, and the differential harness adds
+# a full-state snapshot plus oracle copies. Both modes are emulator-only;
+# production links use the hardware-proven 0x8c655300 ceiling.
+if(CGBA_GPSP_HEADLESS_TEST OR CGBA_SH4_DIFF_HARNESS)
+  target_link_options(cgba-gint-gpsp PRIVATE
+    -Wl,--defsym=cgba_highram_limit=0x8c6F0000)
+endif()
+
 generate_g3a(TARGET cgba-gint-gpsp OUTPUT "gpSP.g3a"
-  NAME "gpSP" VERSION "00.02.0707"
+  NAME "gpSP" VERSION "00.03.0709"
   ICONS icon-uns.png icon-sel.png)

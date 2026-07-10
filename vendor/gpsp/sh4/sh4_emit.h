@@ -29,6 +29,15 @@
 #include "ports/fxcg100/sh4/sh4_arm_ldst_emit.h"
 #include "ports/fxcg100/sh4/sh4_arm_mul_emit.h"
 #include "ports/fxcg100/sh4/sh4_arm_block_emit.h"
+#ifdef CGBA_SH4_THUMB_UDIV_FASTPATH
+#include "ports/fxcg100/sh4/sh4_thumb_udiv.h"
+#endif
+#ifdef CGBA_SH4_ARM_MIXER_FASTPATH
+#include "ports/fxcg100/sh4/sh4_arm_mixer.h"
+#endif
+#ifdef CGBA_GBA_OVER_AZLE_IDLE
+#include "ports/fxcg100/sh4/sh4_idle_signature.h"
+#endif
 
 /* ------------------------------------------------------------------ */
 /* Runtime symbols (sh4/sh4_stub.S, cpu.cc, cpu_threaded.c, helpers).  */
@@ -95,6 +104,15 @@ int  cgba_sh4_thumb_dp(u32 opcode, u32 pc);
 void cgba_sh4_thumb_shift_reg(u32 opcode, u32 pc);
 void cgba_sh4_thumb_shift_imm(u32 opcode, u32 pc);
 
+#ifdef CGBA_SH4_THUMB_UDIV_FASTPATH
+extern volatile s32 cgba_sh4_thumb_udiv_budget;
+int cgba_sh4_thumb_udiv_loop_try(u32 unused, u32 pc);
+#endif
+#ifdef CGBA_SH4_ARM_MIXER_FASTPATH
+extern volatile s32 cgba_sh4_arm_mixer_budget;
+int cgba_sh4_arm_mixer_loop_try(u32 unused, u32 pc);
+#endif
+
 extern void *tmemld[11][16];
 extern void *tmemst[4][16];
 
@@ -121,11 +139,166 @@ extern void *tmemst[4][16];
  * self-contained inline literal (sh4_emit_glue.h), so block entry is the first
  * real instruction. */
 #define block_prologue_size 0
-#define generate_block_prologue()         do {} while(0)
-#define generate_block_extra_vars_arm()
-#define generate_block_extra_vars_thumb()                                      \
-  u32 sh4_thumb_const_mask = 0;                                                \
+
+#ifdef CGBA_SH4_THUMB_UDIV_FASTPATH
+/* Match guest opcodes through readaddress16(): the ROM mapping is host-endian
+ * and may be NOR-backed, so raw memcmp would be wrong on big-endian SH4. */
+static inline int sh4g_thumb_udiv_loop_match_map(const u8 *map, u32 pc)
+{
+  u32 off = pc & 0x7FFFu;
+  u32 i;
+  if (off + CGBA_SH4_THUMB_UDIV_LOOP_BYTES > 0x8000u)
+    return 0;
+  for (i = 0; i < CGBA_SH4_THUMB_UDIV_LOOP_HALFWORDS; i++) {
+    if (readaddress16(map, off + i * 2u) !=
+        cgba_sh4_thumb_udiv_loop_pattern[i])
+      return 0;
+  }
+  return 1;
+}
+
+static inline int sh4g_thumb_udiv_loop_has_observer(u32 pc)
+{
+  u32 end = pc + CGBA_SH4_THUMB_UDIV_LOOP_BYTES;
+  u32 i;
+  if ((cheat_master_hook >= pc && cheat_master_hook < end) ||
+      (idle_loop_target_pc >= pc && idle_loop_target_pc < end))
+    return 1;
+  for (i = 0; i < translation_gate_targets; i++) {
+    if (translation_gate_target_pc[i] >= pc &&
+        translation_gate_target_pc[i] < end)
+      return 1;
+  }
+  return 0;
+}
+
+/* Emit an entry-only speculative prefix.  The ROM block's published host
+ * pointer includes this prefix, while block_data[0].block_offset is assigned
+ * later and therefore makes internal loop-backs skip it.  On a budget miss the
+ * helper has committed nothing and BT falls directly into the normal block.
+ * On a hit R13 remains positive by construction; debit the exact dynamic cost
+ * and redispatch at the untouched mov/pop/return tail. */
+static inline void sh4g_thumb_udiv_loop_entry(u8 **tp, const u8 *map, u32 pc)
+{
+  u8 *fallback;
+  if (!sh4g_thumb_udiv_loop_match_map(map, pc) ||
+      sh4g_thumb_udiv_loop_has_observer(pc))
+    return;
+
+  sh4g_const(tp, (u32)(uintptr_t)&cgba_sh4_thumb_udiv_budget, SH4_REG_T0);
+  {
+    sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_l_store(&cg, SH4_REG_CYCLES, SH4_REG_T0);
+    sh4g_close(tp, &cg);
+  }
+  sh4g_op2_tramp_call(tp, (const void *)sh4_op2_tramp,
+                      (const void *)cgba_sh4_thumb_udiv_loop_try,
+                      (u32)cgba_sh4_thumb_udiv_loop_pattern[0], pc, 0, 0);
+  {
+    sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_tst(&cg, SH4_REG_RET, SH4_REG_RET); /* T = helper declined */
+    sh4g_close(tp, &cg);
+  }
+  fallback = sh4g_emit_bt_placeholder(tp);
+  sh4g_cycle_debit_from_global(tp, &cgba_sh4_extra_cycles);
+  sh4g_const(tp, pc + CGBA_SH4_THUMB_UDIV_LOOP_BYTES, SH4_REG_ARG0);
+  sh4g_vec_jmp(tp, SH4G_VEC_pc_redispatch);
+  sh4g_patch_cond_skip(fallback, *tp);
+}
+
+#endif /* CGBA_SH4_THUMB_UDIV_FASTPATH */
+
+#ifdef CGBA_SH4_ARM_MIXER_FASTPATH
+/* Match through readaddress32(): RAM/gamepak mappings use guest byte order and
+ * cannot be compared with a host-endian raw memcmp on SH4. */
+static inline int sh4g_arm_mixer_match_map(const u8 *map, u32 pc)
+{
+  u32 off = pc & 0x7FFFu;
+  u32 i;
+  if (!map || off + CGBA_SH4_ARM_MIXER_BYTES > 0x8000u)
+    return 0;
+  for (i = 0; i < CGBA_SH4_ARM_MIXER_WORDS; i++) {
+    if (readaddress32(map, off + i * 4u) !=
+        cgba_sh4_arm_mixer_pattern[i])
+      return 0;
+  }
+  return 1;
+}
+
+static inline int sh4g_arm_mixer_has_observer(u32 pc)
+{
+  u32 end = pc + CGBA_SH4_ARM_MIXER_BYTES;
+  u32 i;
+  if ((cheat_master_hook >= pc && cheat_master_hook < end) ||
+      (idle_loop_target_pc >= pc && idle_loop_target_pc < end))
+    return 1;
+  for (i = 0; i < translation_gate_targets; i++) {
+    if (translation_gate_target_pc[i] >= pc &&
+        translation_gate_target_pc[i] < end)
+      return 1;
+  }
+  return 0;
+}
+
+/* Entry-only speculative prefix.  A declined helper has committed nothing and
+ * falls into the ordinary generated body.  A hit debits its exact dynamic
+ * body/folded-tail cost and redispatches at the untouched CMP/BCC tail, whose
+ * separately translated block starts with a fresh compile-time cycle count. */
+static inline void sh4g_arm_mixer_entry(u8 **tp, const u8 *map, u32 pc)
+{
+  u8 *fallback;
+  if (!sh4g_arm_mixer_match_map(map, pc) ||
+      sh4g_arm_mixer_has_observer(pc))
+    return;
+
+  sh4g_const(tp, (u32)(uintptr_t)&cgba_sh4_arm_mixer_budget, SH4_REG_T0);
+  {
+    sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_l_store(&cg, SH4_REG_CYCLES, SH4_REG_T0);
+    sh4g_close(tp, &cg);
+  }
+  sh4g_op2_tramp_call(tp, (const void *)sh4_op2_tramp,
+                      (const void *)cgba_sh4_arm_mixer_loop_try,
+                      cgba_sh4_arm_mixer_pattern[0], pc, 0, 0);
+  {
+    sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_tst(&cg, SH4_REG_RET, SH4_REG_RET); /* T = helper declined */
+    sh4g_close(tp, &cg);
+  }
+  fallback = sh4g_emit_bt_placeholder(tp);
+  sh4g_cycle_debit_from_global(tp, &cgba_sh4_extra_cycles);
+  sh4g_const(tp, pc + CGBA_SH4_ARM_MIXER_BODY_BYTES, SH4_REG_ARG0);
+  sh4g_vec_jmp(tp, SH4G_VEC_pc_redispatch);
+  sh4g_patch_cond_skip(fallback, *tp);
+}
+#endif /* CGBA_SH4_ARM_MIXER_FASTPATH */
+
+static inline void sh4g_block_entry_fastpaths(u8 **tp, const u8 *map,
+                                               u32 pc, int thumb)
+{
+#ifdef CGBA_SH4_THUMB_UDIV_FASTPATH
+  if (thumb)
+    sh4g_thumb_udiv_loop_entry(tp, map, pc);
+#endif
+#ifdef CGBA_SH4_ARM_MIXER_FASTPATH
+  if (!thumb)
+    sh4g_arm_mixer_entry(tp, map, pc);
+#endif
+#if !defined(CGBA_SH4_THUMB_UDIV_FASTPATH) && \
+    !defined(CGBA_SH4_ARM_MIXER_FASTPATH)
+  (void)tp; (void)map; (void)pc; (void)thumb;
+#endif
+}
+
+#define generate_block_extra_vars_arm()                                      \
+  int sh4_block_is_thumb = 0
+#define generate_block_extra_vars_thumb()                                    \
+  int sh4_block_is_thumb = 1;                                                \
+  u32 sh4_thumb_const_mask = 0;                                              \
   u32 sh4_thumb_const_val[16] = {0}
+#define generate_block_prologue()                                            \
+  sh4g_block_entry_fastpaths(&translation_ptr, pc_address_block, pc,         \
+                              sh4_block_is_thumb)
 
 #define sh4_thumb_const_clear_all()                                            \
   do { sh4_thumb_const_mask = 0; } while(0)
@@ -260,9 +433,39 @@ static inline void sh4g_prof_block_entry(u8 **tp, u32 pc, int thumb)
  * translate time on direct branches: self-branch, a branch AT the DB address
  * (arm_emit.h semantics), or a backward branch INTO the DB address (loop-head
  * style entries). `pc` is the branch instruction's own address here. */
-#define SH4_IDLE_BRANCH(new_pc)                                               \
-  ((u32)(new_pc) == (u32)pc || (u32)pc == idle_loop_target_pc ||              \
+#ifdef CGBA_GBA_OVER_AZLE_IDLE
+static inline int sh4g_registered_idle_signature_ok(const u8 *map,
+                                                     u32 map_region,
+                                                     u32 target)
+{
+  u32 off;
+
+  if (target != CGBA_SH4_AZLE_IDLE_PC)
+    return 1;
+  if (!map || map_region != (target >> 15))
+    return 0;                              /* cross-page/unmapped: stay normal */
+  off = target & 0x7FFFu;
+  if (off + CGBA_SH4_AZLE_IDLE_BYTES > 0x8000u)
+    return 0;
+  return cgba_sh4_azle_idle_signature_match(
+    readaddress16(map, off + 0u), readaddress16(map, off + 2u),
+    readaddress16(map, off + 4u), readaddress16(map, off + 6u),
+    readaddress16(map, off + 8u));
+}
+#define SH4_REGISTERED_IDLE_SIGNATURE_OK(target)                              \
+  sh4g_registered_idle_signature_ok(pc_address_block, pc_region, (u32)(target))
+#else
+#define SH4_REGISTERED_IDLE_SIGNATURE_OK(target) ((void)(target), 1)
+#endif
+
+#define SH4_REGISTERED_IDLE_BRANCH(new_pc)                                    \
+  ((u32)pc == idle_loop_target_pc ||                                          \
    ((u32)(new_pc) == idle_loop_target_pc && (u32)(new_pc) < (u32)pc))
+
+#define SH4_IDLE_BRANCH(new_pc)                                               \
+  ((u32)(new_pc) == (u32)pc ||                                                \
+   (SH4_REGISTERED_IDLE_BRANCH(new_pc) &&                                     \
+    SH4_REGISTERED_IDLE_SIGNATURE_OK(idle_loop_target_pc)))
 
 #define generate_branch_idle_eliminate(writeback_location, new_pc)            \
   (writeback_location) = sh4g_branch_exit_idle(&translation_ptr,              \
@@ -625,7 +828,8 @@ static inline void sh4g_prof_block_entry(u8 **tp, u32 pc, int thumb)
  * poll at full speed (SMA2 burned 2.5x Zelda's instructions per frame). */
 #define thumb_conditional_branch(condition)                                   \
   do { u32 _cb_target = block_exits[block_exit_position].branch_target;       \
-       if((u32)pc == idle_loop_target_pc && (u32)block_start_pc < (u32)pc) {  \
+       if((u32)pc == idle_loop_target_pc && (u32)block_start_pc < (u32)pc &&  \
+          SH4_REGISTERED_IDLE_SIGNATURE_OK(idle_loop_target_pc)) {            \
          int _seq = (int)ws_cyc_seq[((u32)pc >> 24) & 0x0F][0];               \
          int _debit = (int)cycle_count - _seq;                                \
          if(_debit > 0)                                                       \
