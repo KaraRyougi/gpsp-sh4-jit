@@ -141,6 +141,29 @@ void video_reload_counters()
   affine_reference_y[1] = signext28(read_ioreg32(REG_BG3Y_L));
 }
 
+#ifdef CGBA_VIDEO_BACKDROP_SHADOW_PALETTE
+/* Base-layer 4-bpp FULLCOLOR text backgrounds normally branch on every
+ * transparent color-zero nibble to select the global backdrop color.  Mirror
+ * the BG palette and replace color zero in each 16-color sub-palette with the
+ * backdrop, making that selection an unconditional indexed load instead.
+ *
+ * palette_ram_dirty is a bitmask shared with the independent blend cache.  We
+ * consume only our bit so either cache may observe a palette write first. */
+static u16 backdrop_shadow_palette[256] __attribute__((aligned(4)));
+
+static const u16 *get_backdrop_shadow_palette(void)
+{
+  if (palette_ram_dirty & CGBA_PALETTE_DIRTY_BACKDROP) {
+    memcpy(backdrop_shadow_palette, palette_ram_converted,
+      sizeof(backdrop_shadow_palette));
+    for (u32 i = 0; i < 256; i += 16)
+      backdrop_shadow_palette[i] = palette_ram_converted[0];
+    palette_ram_dirty &= ~CGBA_PALETTE_DIRTY_BACKDROP;
+  }
+  return backdrop_shadow_palette;
+}
+#endif
+
 // Renders non-affine tiled background layer.
 // Will process a full or partial tile (start and end within 0..8) and draw
 // it in either 8 or 4 bpp mode. Honors vertical and horizontal flip.
@@ -199,6 +222,14 @@ static inline void rend_part_tile_Nbpp(u32 bg_comb, u32 px_comb,
     // Only 32 bits (8 pixels * 4 bits)
     for (u32 i = start; i < end; i++, dest_ptr++) {
       u8 pval = hflip ? tilepix >> 28 : tilepix & 0xF;
+#ifdef CGBA_VIDEO_BACKDROP_SHADOW_PALETTE
+      if (rdtype == FULLCOLOR && isbase) {
+        /* render_scanline_text_fast substitutes the shadow palette for this
+         * exact instantiation, so subpal[0] is already the backdrop. */
+        *dest_ptr = subpal[pval];
+      }
+      else
+#endif
       if (pval) {
         if (rdtype == FULLCOLOR)
           *dest_ptr = subpal[pval];
@@ -221,6 +252,84 @@ static inline void rend_part_tile_Nbpp(u32 bg_comb, u32 px_comb,
 }
 
 // Same as above, but optimized for full tiles. Skip comments here.
+#if defined(CGBA_VIDEO_OPAQUE_TILE_FASTPATH) || \
+    defined(CGBA_VIDEO_OPAQUE_ROW_UNROLL)
+static inline bool cgba_4bpp_row_is_opaque(u32 tilepix)
+{
+  return ((tilepix - 0x11111111u) & ~tilepix & 0x88888888u) == 0;
+}
+#endif
+
+#ifdef CGBA_VIDEO_OPAQUE_ROW_UNROLL
+/* The SH4 -O2 loop for a stacked opaque row executes a pointer increment,
+ * loop counter, and conditional branch for every pixel (GCC partly duplicates
+ * the loop body, but does not remove that bookkeeping).  Full text tiles are
+ * always eight pixels wide, so spell out the common u32 indexed/stacked case.
+ * Keeping tilepix as a shift register is cheaper on SH4 than eight unrelated
+ * variable shifts, while constant destination indices select MOV.L @(disp,Rn)
+ * loads/stores and avoid pointer updates. */
+template<rendtype rdtype, bool isbase, bool hflip>
+static inline void cgba_render_opaque_4bpp_row_u32(
+  u32 tilepix, u32 bg_comb, u32 pxflg, u32 *dest_ptr)
+{
+#define CGBA_OPAQUE_ROW_PIXEL(index_)                                      \
+  do {                                                                     \
+    u32 pval = hflip ? (tilepix >> 28) : (tilepix & 0x0Fu);                \
+    if (rdtype == INDXCOLOR)                                               \
+      dest_ptr[index_] = pxflg | pval;                                     \
+    else if (isbase)                                                       \
+      dest_ptr[index_] = (bg_comb << 16) | pxflg | pval;                  \
+    else                                                                   \
+      dest_ptr[index_] = (dest_ptr[index_] << 16) | pxflg | pval;         \
+    if ((index_) != 7) {                                                   \
+      if (hflip) tilepix <<= 4; else tilepix >>= 4;                        \
+    }                                                                      \
+  } while (0)
+
+  CGBA_OPAQUE_ROW_PIXEL(0);
+  CGBA_OPAQUE_ROW_PIXEL(1);
+  CGBA_OPAQUE_ROW_PIXEL(2);
+  CGBA_OPAQUE_ROW_PIXEL(3);
+  CGBA_OPAQUE_ROW_PIXEL(4);
+  CGBA_OPAQUE_ROW_PIXEL(5);
+  CGBA_OPAQUE_ROW_PIXEL(6);
+  CGBA_OPAQUE_ROW_PIXEL(7);
+
+#undef CGBA_OPAQUE_ROW_PIXEL
+}
+#endif
+
+#ifdef CGBA_VIDEO_OPAQUE_ROW_UNROLL
+/* Emerald's measured Mode 0 path renders almost every base text row directly
+ * into the u16 FULLCOLOR scanline.  Spell out those eight palette loads and
+ * stores as well. Callers use this when a row is known opaque, or for any row
+ * when the backdrop-shadow palette has already encoded color-zero semantics. */
+template<bool hflip>
+static inline void cgba_render_4bpp_row_fullcolor_u16(
+  u32 tilepix, const u16 *subpal, u16 *dest_ptr)
+{
+#define CGBA_OPAQUE_FULLCOLOR_PIXEL(index_)                                \
+  do {                                                                     \
+    u32 pval = hflip ? (tilepix >> 28) : (tilepix & 0x0Fu);                \
+    dest_ptr[index_] = subpal[pval];                                       \
+    if ((index_) != 7) {                                                   \
+      if (hflip) tilepix <<= 4; else tilepix >>= 4;                        \
+    }                                                                      \
+  } while (0)
+
+  CGBA_OPAQUE_FULLCOLOR_PIXEL(0);
+  CGBA_OPAQUE_FULLCOLOR_PIXEL(1);
+  CGBA_OPAQUE_FULLCOLOR_PIXEL(2);
+  CGBA_OPAQUE_FULLCOLOR_PIXEL(3);
+  CGBA_OPAQUE_FULLCOLOR_PIXEL(4);
+  CGBA_OPAQUE_FULLCOLOR_PIXEL(5);
+  CGBA_OPAQUE_FULLCOLOR_PIXEL(6);
+  CGBA_OPAQUE_FULLCOLOR_PIXEL(7);
+
+#undef CGBA_OPAQUE_FULLCOLOR_PIXEL
+}
+#endif
+
 template<typename dtype, rendtype rdtype, bool is8bpp, bool isbase, bool hflip>
 static inline void render_tile_Nbpp(
   u32 bg_comb, u32 px_comb, dtype *dest_ptr, u16 tile,
@@ -259,13 +368,76 @@ static inline void render_tile_Nbpp(
     }
   } else {
     u32 tilepix = eswap32(*(u32*)tile_ptr);
+#if defined(CGBA_VIDEO_BACKDROP_SHADOW_PALETTE) && \
+    defined(CGBA_VIDEO_OPAQUE_ROW_UNROLL)
+    /* The base FULLCOLOR instantiation receives the backdrop-shadow palette,
+     * so every nibble -- including color zero -- is an unconditional palette
+     * lookup.  Dispatch before both the all-zero split and opacity classifier:
+     * Emerald's measured Mode 0 base rows are all opaque, and classifying each
+     * row would otherwise erase much of the unrolled writer's gain. */
+    if (sizeof(dtype) == sizeof(u16) && rdtype == FULLCOLOR && isbase) {
+      u16 tilepal = (tile >> 12) << 4;
+      cgba_render_4bpp_row_fullcolor_u16<hflip>(
+        tilepix, &paltbl[tilepal], (u16 *)dest_ptr);
+      return;
+    }
+#endif
     if (tilepix) {  // We can skip it all if the row is transparent
       u16 tilepal = (tile >> 12) << 4;
       u16 pxflg = px_comb | tilepal;
       const u16 *subpal = &paltbl[tilepal];
+#if defined(CGBA_VIDEO_OPAQUE_TILE_FASTPATH) || \
+    defined(CGBA_VIDEO_OPAQUE_ROW_UNROLL)
+      /* A 4-bpp color index of zero is the only transparent value.  Hoist the
+       * eight per-pixel transparency branches when every nibble is nonzero.
+       * The subtraction is lane-wise in base 16 whenever all nibbles are at
+       * least one; if any lane is zero, its high bit (and possibly later
+       * borrow-affected lanes) is caught by the mask. */
+      bool opaque = cgba_4bpp_row_is_opaque(tilepix);
+#ifdef CGBA_VIDEO_OPAQUE_ROW_UNROLL
+      if (opaque) {
+        /* Keep specialization to the two measured buffer shapes so other
+         * renderer instantiations do not inflate the SH4 I-cache footprint. */
+        if (sizeof(dtype) == sizeof(u32) &&
+            (rdtype == INDXCOLOR || rdtype == STCKCOLOR)) {
+          cgba_render_opaque_4bpp_row_u32<rdtype, isbase, hflip>(
+            tilepix, bg_comb, pxflg, (u32 *)dest_ptr);
+          return;
+        }
+        if (sizeof(dtype) == sizeof(u16) && rdtype == FULLCOLOR) {
+          cgba_render_4bpp_row_fullcolor_u16<hflip>(
+            tilepix, subpal, (u16 *)dest_ptr);
+          return;
+        }
+      }
+#endif
+#ifdef CGBA_VIDEO_OPAQUE_TILE_FASTPATH
+      if (opaque) {
+        for (u32 i = 0; i < 8; i++, dest_ptr++) {
+          u8 pval = (hflip ? (tilepix >> 28) : tilepix) & 0xF;
+          if (hflip) tilepix <<= 4; else tilepix >>= 4;
+          if (rdtype == FULLCOLOR)
+            *dest_ptr = subpal[pval];
+          else if (rdtype == INDXCOLOR)
+            *dest_ptr = pxflg | pval;
+          else if (rdtype == STCKCOLOR)
+            *dest_ptr = pxflg | pval |
+              ((isbase ? bg_comb : *dest_ptr) << 16);
+        }
+        return;
+      }
+#endif
+#endif
       for (u32 i = 0; i < 8; i++, dest_ptr++) {
         u8 pval = (hflip ? (tilepix >> 28) : tilepix) & 0xF;
         if (hflip) tilepix <<= 4; else tilepix >>= 4;
+#ifdef CGBA_VIDEO_BACKDROP_SHADOW_PALETTE
+        if (rdtype == FULLCOLOR && isbase) {
+          /* paltbl is the backdrop-shadow palette for this instantiation. */
+          *dest_ptr = subpal[pval];
+        }
+        else
+#endif
         if (pval) {
           if (rdtype == FULLCOLOR)
             *dest_ptr = subpal[pval];
@@ -302,6 +474,14 @@ static void render_scanline_text_fast(u32 layer,
   // Calculate combine masks. These store 2 bits of info: 1st and 2nd target.
   // If set, the current pixel belongs to a layer that is 1st or 2nd target.
   u32 bg_comb = color_flags(5), px_comb = color_flags(layer);
+
+#ifdef CGBA_VIDEO_BACKDROP_SHADOW_PALETTE
+  /* tile_render_layers calls this with palette_ram_converted.  The shadow
+   * differs only at each 4-bpp sub-palette's color-zero slot, where it holds
+   * the backdrop selected by the old transparent-pixel branch. */
+  if (rdtype == FULLCOLOR && isbase && !is8bpp)
+    paltbl = get_backdrop_shadow_palette();
+#endif
 
   // Background map data is in vram, at an offset specified in 2K blocks.
   // (each map data block is 32x32 tiles, at 16bpp, so 2KB)
@@ -562,7 +742,7 @@ static void render_scanline_text(u32 layer,
 {
   // Tile mode has 4 and 8 bpp modes.
   u32 bg_control = read_ioreg(REG_BGxCNT(layer));
-  bool is8bpp = (read_ioreg(REG_BGxCNT(layer)) & 0x80);
+  bool is8bpp = (bg_control & 0x80);
   const u32 mosamount = read_ioreg(REG_MOSAIC) & 0xFF;
   bool has_mosaic = (bg_control & 0x40) && (mosamount != 0);
 
@@ -1744,6 +1924,67 @@ typedef enum
   BLEND_DARK,   // Same but with darken effecg
 } blendtype;
 
+#ifdef CGBA_VIDEO_BLEND_PALETTE_CACHE
+/* Cache the full, unshifted expanded-color product.  The two products must be
+ * added before the >> 4 so rounding and the overflow bits used by saturation
+ * remain identical to the original expression. */
+typedef struct {
+  u32 term[512];
+  u32 factor;
+  u32 pending_factor;
+  bool valid;
+  bool pending;
+} blend_palette_term_cache;
+
+static blend_palette_term_cache blend_palette_cache_a
+  __attribute__((aligned(32)));
+static blend_palette_term_cache blend_palette_cache_b
+  __attribute__((aligned(32)));
+
+static inline void blend_palette_cache_observe_writes(void)
+{
+  if (palette_ram_dirty & CGBA_PALETTE_DIRTY_BLEND) {
+    /* A changed palette gets one direct-render grace call.  If it remains
+     * stable, the following call builds the tables.  Raster effects which
+     * write the palette every scanline therefore stay on the direct path. */
+    blend_palette_cache_a.valid = false;
+    blend_palette_cache_a.pending = false;
+    blend_palette_cache_b.valid = false;
+    blend_palette_cache_b.pending = false;
+    palette_ram_dirty &= ~CGBA_PALETTE_DIRTY_BLEND;
+  }
+}
+
+static bool blend_palette_cache_get(blend_palette_term_cache *cache,
+                                    u32 factor, const u32 **term)
+{
+  if (cache->valid && cache->factor == factor) {
+    *term = cache->term;
+    return true;
+  }
+
+  /* Likewise, require a new factor to be observed twice before paying for a
+   * 512-entry rebuild.  This prevents scanline-varying BLDALPHA from turning
+   * the optimization into a regression. */
+  if (!cache->pending || cache->pending_factor != factor) {
+    cache->pending = true;
+    cache->pending_factor = factor;
+    return false;
+  }
+
+  for (u32 i = 0; i < 512; i++) {
+    u32 pixel = palette_ram_converted[i];
+    u32 expanded = (pixel | (pixel << 16)) & BLND_MSK;
+    cache->term[i] = expanded * factor;
+  }
+  cache->factor = factor;
+  cache->valid = true;
+  cache->pending = false;
+  *term = cache->term;
+  return true;
+}
+#endif
+
 // Applies blending (and optional brighten/darken) effect to a bunch of
 // color-indexed pixel pairs. Depending on the mode and the pixel target
 // number, blending, darken/brighten or no effect will be applied.
@@ -1760,6 +2001,17 @@ static void merge_blend(u32 start, u32 end, u16 *dst, u32 *src) {
 
   bool can_saturate = blend_a + blend_b > 16;
 
+#ifdef CGBA_VIDEO_BLEND_PALETTE_CACHE
+  const u32 *blend_term_a = NULL;
+  const u32 *blend_term_b = NULL;
+  blend_palette_cache_observe_writes();
+  bool cached_a =
+    blend_palette_cache_get(&blend_palette_cache_a, blend_a, &blend_term_a);
+  bool cached_b =
+    blend_palette_cache_get(&blend_palette_cache_b, blend_b, &blend_term_b);
+  bool cached_terms = cached_a && cached_b;
+#endif
+
   if (can_saturate) {
     // If blending can result in saturation, we need to clamp output values.
     while (start < end) {
@@ -1771,11 +2023,25 @@ static void merge_blend(u32 start, u32 end, u16 *dst, u32 *src) {
       bool do_blend    = (pixpair & 0x04000200) == 0x04000200;
       if ((st_objs && force_blend) || (do_blend && bldtype == BLEND_ONLY)) {
         // Top pixel is 1st target, pixel below is 2nd target. Blend!
+#ifdef CGBA_VIDEO_BLEND_PALETTE_CACHE
+        u32 pfe;
+        if (cached_terms) {
+          pfe = (blend_term_a[(pixpair >> 0) & 0x1FF] +
+                 blend_term_b[(pixpair >> 16) & 0x1FF]) >> 4;
+        } else {
+#endif
         u16 p1 = palette_ram_converted[(pixpair >>  0) & 0x1FF];
         u16 p2 = palette_ram_converted[(pixpair >> 16) & 0x1FF];
         u32 p1e = (p1 | (p1 << 16)) & BLND_MSK;
         u32 p2e = (p2 | (p2 << 16)) & BLND_MSK;
+#ifdef CGBA_VIDEO_BLEND_PALETTE_CACHE
+        pfe = (((p1e * blend_a) + (p2e * blend_b)) >> 4);
+#else
         u32 pfe = (((p1e * blend_a) + (p2e * blend_b)) >> 4);
+#endif
+#ifdef CGBA_VIDEO_BLEND_PALETTE_CACHE
+        }
+#endif
 
         // If the overflow bit is set, saturate (set) all bits to one.
         if (pfe & (OVFR_MSK | OVFG_MSK | OVFB_MSK)) {
@@ -1810,11 +2076,26 @@ static void merge_blend(u32 start, u32 end, u16 *dst, u32 *src) {
       bool force_blend = (pixpair & 0x04000800) == 0x04000800;
       if ((st_objs && force_blend) || (do_blend && bldtype == BLEND_ONLY)) {
         // Top pixel is 1st target, pixel below is 2nd target. Blend!
+#ifdef CGBA_VIDEO_BLEND_PALETTE_CACHE
+        u32 pfe;
+        if (cached_terms) {
+          pfe = (blend_term_a[(pixpair >> 0) & 0x1FF] +
+                 blend_term_b[(pixpair >> 16) & 0x1FF]) >> 4;
+        } else {
+#endif
         u16 p1 = palette_ram_converted[(pixpair >>  0) & 0x1FF];
         u16 p2 = palette_ram_converted[(pixpair >> 16) & 0x1FF];
         u32 p1e = (p1 | (p1 << 16)) & BLND_MSK;
         u32 p2e = (p2 | (p2 << 16)) & BLND_MSK;
+#ifdef CGBA_VIDEO_BLEND_PALETTE_CACHE
+        pfe = (((p1e * blend_a) + (p2e * blend_b)) >> 4) & BLND_MSK;
+#else
         u32 pfe = (((p1e * blend_a) + (p2e * blend_b)) >> 4) & BLND_MSK;
+#endif
+#ifdef CGBA_VIDEO_BLEND_PALETTE_CACHE
+        }
+        pfe &= BLND_MSK;
+#endif
         dst[start++] = (pfe >> 16) | pfe;
       }
       else if ((bldtype == BLEND_DARK || bldtype == BLEND_BRIGHT) &&
@@ -2400,4 +2681,3 @@ void update_scanline(void)
     }
   }
 }
-

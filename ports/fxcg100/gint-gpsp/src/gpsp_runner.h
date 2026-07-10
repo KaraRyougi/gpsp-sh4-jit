@@ -53,7 +53,7 @@ unsigned cgba_gpsp_state_lines(unsigned frame, const char *phase,
 	const uint16_t *framebuffer, char out[][CGBA_STATE_LINE_MAX],
 	unsigned max_lines);
 
-#ifdef CGBA_DYNAREC
+#if defined(CGBA_DYNAREC) && defined(CGBA_SH4_DIFF_HARNESS)
 /* Differential interp-vs-dynarec harness (subtask 2): run `cycles` of guest
  * code through both cores from one snapshot and format the first divergence
  * (or "MATCH") into out. Returns 1 if they diverged. */

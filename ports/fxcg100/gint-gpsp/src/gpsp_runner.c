@@ -13,6 +13,9 @@
 #include "vendor/gpsp/common.h"
 #include "vendor/gpsp/gba_memory.h"
 #include "vendor/gpsp/savestate.h"
+#if defined(CGBA_DYNAREC) && defined(CGBA_SH4_DIFF_HARNESS)
+#include "ports/fxcg100/sh4/sh4_diff_harness.h"
+#endif
 
 #ifndef CGBA_GPSP_HEADLESS_TRACE_JIT
 #define CGBA_GPSP_HEADLESS_TRACE_JIT 0
@@ -681,12 +684,17 @@ unsigned cgba_gpsp_state_lines(unsigned frame, const char *phase,
 		snprintf(out[n++], CGBA_STATE_LINE_MAX,
 			"@@CGBA_IO frame=%u phase=%s dispcnt=%04X dispstat=%04X "
 			"vcount=%u p1=%04X ie=%04X if=%04X ime=%04X wait=%04X "
-			"siocnt=%04X irqcyc=%lu oamupd=%lu",
+			"siocnt=%04X win0h=%04X win0v=%04X winin=%04X winout=%04X "
+			"bldcnt=%04X bldalpha=%04X bldy=%04X irqcyc=%lu oamupd=%lu",
 			frame, phase, read_ioreg(REG_DISPCNT),
 			read_ioreg(REG_DISPSTAT), read_ioreg(REG_VCOUNT),
 			read_ioreg(REG_P1), read_ioreg(REG_IE), read_ioreg(REG_IF),
 			read_ioreg(REG_IME), read_ioreg(REG_WAITCNT),
-			read_ioreg(REG_SIOCNT), (unsigned long)serial_get_irq_cycles(),
+			read_ioreg(REG_SIOCNT), read_ioreg(REG_WIN0H),
+			read_ioreg(REG_WIN0V), read_ioreg(REG_WININ),
+			read_ioreg(REG_WINOUT), read_ioreg(REG_BLDCNT),
+			read_ioreg(REG_BLDALPHA), read_ioreg(REG_BLDY),
+			(unsigned long)serial_get_irq_cycles(),
 			(unsigned long)reg[OAM_UPDATED]);
 	if(n < max_lines)
 		snprintf(out[n++], CGBA_STATE_LINE_MAX,
@@ -785,28 +793,38 @@ static void copy_mode3_vram_to_framebuffer(void)
  * blob, so a state saved on the calculator loads directly in the emulator
  * harness (copy it over USB into the HLE_FLS0 dir as CGBACHK.SAV).
  *
- * Staging buffer: the 416KB image cannot live in the high arena statically
- * (the arena end is pinned at the hardware-proven 0x8c655300 — growing it
- * hard-resets the machine), so JIT builds BORROW the ROM translation cache:
- * it is larger than the image, at a proven-safe address, and save/load must
- * invalidate translated code anyway. Interpreter builds have an empty arena
- * and use a static buffer there instead. */
+ * Staging buffer: borrow the already-reserved fragmented-ROM page cache while
+ * guest execution is stopped.  Acquiring/releasing it invalidates only pages
+ * backed by that cache; direct NOR mappings remain intact.  This keeps the
+ * production high-RAM arena at the hardware-proven 0x8c655300 endpoint instead
+ * of retaining the emulator-only 492 KiB differential snapshot.  JIT builds
+ * use the ROM translation cache separately for the compressed stream. */
+static u8 *cgba_state_buffer(void)
+{
+	return cgba_gamepak_scratch_acquire(GBA_STATE_MEM_SIZE);
+}
+
+static void cgba_state_buffer_release(void)
+{
+	cgba_gamepak_scratch_release();
+}
+
 #ifdef CGBA_DYNAREC
-_Static_assert(GBA_STATE_MEM_SIZE <= ROM_TRANSLATION_CACHE_SIZE,
-	"savestate staging borrows the ROM translation cache");
 void flush_translation_cache_rom(void);
 void flush_translation_cache_ram(void);
+void flush_dynarec_caches(void);
+extern u32 rom_cache_watermark;
 
-static u8 *cgba_state_buffer(void)
+static u8 *cgba_state_comp_buffer(void)
 {
-	return rom_translation_cache;
+	return rom_translation_cache + rom_cache_watermark;
 }
-#else
-static u8 *cgba_state_buffer(void)
+
+static unsigned cgba_state_comp_capacity(void)
 {
-	static u8 state_buf[GBA_STATE_MEM_SIZE]
-		__attribute__((section(".cgba.highbss"), aligned(32)));
-	return state_buf;
+	if (rom_cache_watermark >= ROM_TRANSLATION_CACHE_SIZE)
+		return 0;
+	return ROM_TRANSLATION_CACHE_SIZE - rom_cache_watermark;
 }
 #endif
 
@@ -936,12 +954,8 @@ static void cgba_state_path_legacy(uint16_t *path, unsigned slot)
 }
 
 #ifdef CGBA_DYNAREC
-/* Compressed staging lives in the upper half of the borrowed ROM cache. */
-#define CGBA_STATE_COMP_OFF 458752u
-_Static_assert(CGBA_STATE_COMP_OFF >= GBA_STATE_MEM_SIZE,
-	"comp area must not overlap the raw image");
-_Static_assert(CGBA_STATE_COMP_OFF + GBA_STATE_MEM_SIZE + 64 <=
-	       ROM_TRANSLATION_CACHE_SIZE,
+/* Compressed staging borrows the ROM cache, separate from the raw snapshot. */
+_Static_assert(GBA_STATE_MEM_SIZE + 64 <= ROM_TRANSLATION_CACHE_SIZE,
 	"comp area must fit the worst case (all-literal) stream");
 #endif
 
@@ -950,32 +964,44 @@ int cgba_gpsp_state_save(unsigned slot)
 {
 	u8 *buf = cgba_state_buffer();
 	uint16_t path[24];
-	int ok;
+	int ok = 0;
+
+	if (!buf)
+		return 0;
 
 	cgba_state_path(path, slot);
+#ifdef CGBA_DYNAREC
+	/* Clear RAM SMC tags before serializing, and drop direct chains before the
+	 * compression buffer borrows executable cache memory. */
+	flush_dynarec_caches();
+#endif
 	gba_save_state(buf);
 #ifdef CGBA_DYNAREC
 	{
-		u8 *comp = buf + CGBA_STATE_COMP_OFF;
+		u8 *comp = cgba_state_comp_buffer();
+		unsigned cap = cgba_state_comp_capacity();
 		unsigned csz = cgba_state_compress(buf, GBA_STATE_MEM_SIZE,
-			comp, GBA_STATE_MEM_SIZE + 64);
+			comp, cap);
 		if (csz && csz < GBA_STATE_MEM_SIZE) {
 			/* Round the FILE up to 64KB buckets: repeat saves of
 			 * similar size hit write_blob's fast overwrite path
 			 * instead of delete+create; the decoder stops at
 			 * raw_size so the slack tail is ignored. */
 			unsigned fsz = (csz + 0xFFFFu) & ~0xFFFFu;
-			memset(comp + csz, 0, fsz - csz);
-			ok = fxcg100_storage_write_blob(path, comp, fsz);
+			if (fsz <= cap) {
+				memset(comp + csz, 0, fsz - csz);
+				ok = fxcg100_storage_write_blob(path, comp, fsz);
+			}
 		} else {
 			ok = fxcg100_storage_write_blob(path, buf,
 				GBA_STATE_MEM_SIZE);
 		}
 	}
-	flush_translation_cache_rom();      /* the buffer was the code cache */
+	flush_dynarec_caches();            /* comp buffer was executable cache */
 #else
 	ok = fxcg100_storage_write_blob(path, buf, GBA_STATE_MEM_SIZE);
 #endif
+	cgba_state_buffer_release();
 	return ok;
 }
 
@@ -983,20 +1009,30 @@ static int cgba_state_load_from(const uint16_t *path)
 {
 	u8 *buf = cgba_state_buffer();
 	int fsz = fxcg100_storage_blob_size(path);
+	int ok = 0;
 
-	if (fsz == (int)GBA_STATE_MEM_SIZE)     /* raw (legacy / harness) */
-		return fxcg100_storage_read_blob(path, buf,
+	if (!buf)
+		return 0;
+
+	if (fsz == (int)GBA_STATE_MEM_SIZE) {   /* raw (legacy / harness) */
+		ok = fxcg100_storage_read_blob(path, buf,
 			GBA_STATE_MEM_SIZE) && gba_load_state(buf);
+	}
 #ifdef CGBA_DYNAREC
-	if (fsz > 8 && fsz <= (int)GBA_STATE_MEM_SIZE + 64) {
-		u8 *comp = buf + CGBA_STATE_COMP_OFF;
-		return fxcg100_storage_read_blob(path, comp, (unsigned)fsz) &&
-			cgba_state_decompress(comp, (unsigned)fsz, buf,
-					      GBA_STATE_MEM_SIZE) &&
-			gba_load_state(buf);
+	else if (fsz > 8 && fsz <= (int)GBA_STATE_MEM_SIZE + 64) {
+		u8 *comp = cgba_state_comp_buffer();
+		unsigned cap = cgba_state_comp_capacity();
+		if ((unsigned)fsz <= cap) {
+			flush_dynarec_caches();    /* comp buffer borrows ROM cache */
+			ok = fxcg100_storage_read_blob(path, comp, (unsigned)fsz) &&
+				cgba_state_decompress(comp, (unsigned)fsz, buf,
+						      GBA_STATE_MEM_SIZE) &&
+				gba_load_state(buf);
+		}
 	}
 #endif
-	return 0;
+	cgba_state_buffer_release();
+	return ok;
 }
 
 int cgba_gpsp_state_load(unsigned slot)
@@ -1129,7 +1165,7 @@ void cgba_gpsp_run_frame(uint32_t gba_buttons, int render_video)
 		copy_mode3_vram_to_framebuffer();
 }
 
-#ifdef CGBA_DYNAREC
+#if defined(CGBA_DYNAREC) && defined(CGBA_SH4_DIFF_HARNESS)
 #include "sh4/sh4_diff_harness.h"
 
 /* Run the differential interp-vs-dynarec harness for a short window and format
@@ -1444,7 +1480,7 @@ unsigned cgba_gpsp_diag(char out[][CGBA_DIAG_LINE_MAX], unsigned max_lines)
 			"fbhash=%08lX center=%04X",
 			(unsigned long)(fb ? cgba_gpsp_frame_hash(fb) : 0u),
 			fb ? fb[80 * CGBA_GBA_PITCH + 120] : 0);
-#ifdef CGBA_DYNAREC
+#if defined(CGBA_DYNAREC) && defined(CGBA_SH4_DIFF_HARNESS)
 	/* One-frame interp-vs-dynarec diff so the diag overlay surfaces dynarec health
 	 * on hardware/casio-emu: PCs + first divergent reg, then per-region (IWRAM /
 	 * EWRAM / VRAM / IO) so a benign sound-buffer-only IWRAM diff is distinguishable
