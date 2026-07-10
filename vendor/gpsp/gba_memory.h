@@ -262,6 +262,12 @@ bool gamepak_must_swap(void);
 void memory_term(void);
 u8 *load_gamepak_page(u32 physical_index);
 
+/* Calculator-only transient storage backed by the existing fragmented-ROM
+ * page cache. Acquiring/releasing invalidates cached page mappings so callers
+ * may safely overwrite the buffer while guest execution is stopped. */
+u8 *cgba_gamepak_scratch_acquire(u32 min_size);
+void cgba_gamepak_scratch_release(void);
+
 extern u32 oam_update;
 extern u32 gbc_sound_wave_update;
 extern dma_transfer_type dma[DMA_CHAN_CNT];
@@ -270,6 +276,24 @@ extern u8 open_gba_bios_rom[1024*16];
 extern u16 palette_ram[512];
 extern u16 oam_ram[512];
 extern u16 palette_ram_converted[512];
+#define CGBA_PALETTE_DIRTY_BLEND    0x01u
+#define CGBA_PALETTE_DIRTY_BACKDROP 0x02u
+#if defined(CGBA_VIDEO_BLEND_PALETTE_CACHE) && \
+    defined(CGBA_VIDEO_BACKDROP_SHADOW_PALETTE)
+#define CGBA_PALETTE_DIRTY_ACTIVE \
+  (CGBA_PALETTE_DIRTY_BLEND | CGBA_PALETTE_DIRTY_BACKDROP)
+#elif defined(CGBA_VIDEO_BLEND_PALETTE_CACHE)
+#define CGBA_PALETTE_DIRTY_ACTIVE CGBA_PALETTE_DIRTY_BLEND
+#elif defined(CGBA_VIDEO_BACKDROP_SHADOW_PALETTE)
+#define CGBA_PALETTE_DIRTY_ACTIVE CGBA_PALETTE_DIRTY_BACKDROP
+#endif
+#ifdef CGBA_PALETTE_DIRTY_ACTIVE
+/* Bitmask set by every path which mutates palette_ram_converted, including
+ * generated SH4 fastmem code.  Each renderer cache clears only its own bit
+ * after rebuilding, so independent consumers cannot hide invalidation from
+ * one another. */
+extern volatile u32 palette_ram_dirty;
+#endif
 extern u16 io_registers[512];
 extern u8 vram[1024 * 96];
 extern u8 bios_rom[1024 * 16];

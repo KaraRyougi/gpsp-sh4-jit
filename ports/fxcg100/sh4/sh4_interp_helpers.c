@@ -18,6 +18,16 @@
 
 #include "vendor/gpsp/common.h"
 #include "vendor/gpsp/cpu.h"
+#include "ports/fxcg100/sh4/sh4_swi_overlap.h"
+#ifdef CGBA_SH4_SWI_OAM_BULK
+#include "ports/fxcg100/sh4/sh4_swi_oam.h"
+#endif
+#ifdef CGBA_SH4_THUMB_UDIV_FASTPATH
+#include "ports/fxcg100/sh4/sh4_thumb_udiv.h"
+#endif
+#ifdef CGBA_SH4_ARM_MIXER_FASTPATH
+#include "ports/fxcg100/sh4/sh4_arm_mixer.h"
+#endif
 
 u32 execute_arm_translate_internal(u32 cycles, void *reg_base);  /* sh4_stub.S */
 
@@ -31,6 +41,9 @@ u32 execute_arm_translate_internal(u32 cycles, void *reg_base);  /* sh4_stub.S *
 #ifndef CGBA_SH4_SWI_CPUSET_FAITHFUL
 #define CGBA_SH4_SWI_CPUSET_FAITHFUL 1  /* exact-model CpuSet/CpuFastSet HLE */
 #endif
+#endif
+#ifndef CGBA_SH4_SWI_FORWARD_OVERLAP
+#define CGBA_SH4_SWI_FORWARD_OVERLAP 0  /* opt-in forward pattern-copy HLE */
 #endif
 #ifndef CGBA_SH4_SWI_HLE_VERIFY
 #define CGBA_SH4_SWI_HLE_VERIFY 0   /* predict, then interp + compare (diag) */
@@ -1387,6 +1400,383 @@ static u32 cgba_sh4_hle_div_cycles(u32 divarm, u32 pc, s32 num, s32 den)
   return cycles - 1u;
 }
 
+#ifdef CGBA_SH4_ARM_MIXER_FASTPATH
+/* Runtime half of the signature-gated m4a/Sappy IWRAM mixer fast path.  Every
+ * access and SMC tag is validated before the first write.  The helper folds a
+ * taken CMP/BCC only while it leaves the snapshotted JIT budget positive; the
+ * final CMP/BCC always remains on the ordinary translated path. */
+volatile s32 cgba_sh4_arm_mixer_budget;
+#if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
+u32 cgba_sh4_arm_mixer_try_count;
+u32 cgba_sh4_arm_mixer_hit_count;
+u32 cgba_sh4_arm_mixer_batch_count;
+u32 cgba_sh4_arm_mixer_guard_fallback_count;
+u32 cgba_sh4_arm_mixer_budget_stop_count;
+u32 cgba_sh4_arm_mixer_first_pc;
+u32 cgba_sh4_arm_mixer_first_reg[10];
+#endif
+
+typedef struct cgba_sh4_arm_mixer_prepared {
+  u8 *source_page[4];
+  u16 source_offset[4];
+  u8 source_cost[4];
+  u32 body_cycles;
+} cgba_sh4_arm_mixer_prepared;
+
+static int cgba_sh4_arm_mixer_prepare(
+  const cgba_sh4_arm_mixer_state *s, u32 seq_word_cost,
+  cgba_sh4_arm_mixer_prepared *p)
+{
+  u32 phase = s->r4;
+  u32 i;
+
+  for (i = 0; i < 4; i++) {
+    u32 source = s->r0 + (phase >> 8);
+    u32 left = s->r1 + i * 2u;
+    u32 right = s->r2 + i * 2u;
+    u32 left_off, right_off;
+    u8 *page;
+
+    if (!cgba_sh4_arm_mixer_source_fast_ok(source) ||
+        (((source >> 24) >= 8u) &&
+         ((source & 0x01FFFFFFu) >= gamepak_size)) ||
+        !cgba_sh4_arm_mixer_output_fast_ok(left) ||
+        !cgba_sh4_arm_mixer_output_fast_ok(right))
+      return 0;
+    page = memory_map_read[source >> 15];
+    if (!page)
+      return 0;
+
+    left_off = left & 0x7FFFu;
+    right_off = right & 0x7FFFu;
+    if (iwram[left_off] || iwram[left_off + 1u] ||
+        iwram[right_off] || iwram[right_off + 1u])
+      return 0;
+
+    p->source_page[i] = page;
+    p->source_offset[i] = (u16)(source & 0x7FFFu);
+    p->source_cost[i] = ws_cyc_nseq[(source >> 24) & 0x0Fu][0];
+    phase += s->r5;
+  }
+  p->body_cycles = cgba_sh4_arm_mixer_body_cycles(
+    seq_word_cost, p->source_cost, ws_cyc_nseq[3][0]);
+  return 1;
+}
+
+static void cgba_sh4_arm_mixer_run_prepared(
+  cgba_sh4_arm_mixer_state *s, const cgba_sh4_arm_mixer_prepared *p)
+{
+  u8 *data = iwram + 0x8000;
+  u32 i;
+
+  for (i = 0; i < 4; i++) {
+    int8_t sample = (int8_t)address8(p->source_page[i], p->source_offset[i]);
+    u32 left_off = s->r1 & 0x7FFFu;
+    int16_t left = (int16_t)readaddress16(data, left_off);
+    uint16_t left_store;
+    u32 right_off;
+    int16_t right;
+    uint16_t right_store;
+
+    cgba_sh4_arm_mixer_step_begin(s, sample);
+    left_store = cgba_sh4_arm_mixer_step_left(s, left);
+    address16(data, left_off) = eswap16(left_store);
+
+    /* Preserve load-left/store-left/load-right/store-right when buffers alias. */
+    right_off = s->r2 & 0x7FFFu;
+    right = (int16_t)readaddress16(data, right_off);
+    right_store = cgba_sh4_arm_mixer_step_right(s, right);
+    address16(data, right_off) = eswap16(right_store);
+  }
+}
+
+/* All output tags are metadata bytes, so their byte order is immaterial.  The
+ * array is 32-byte aligned and output offsets are halfword aligned; peel one
+ * halfword when needed, then check four words per iteration. */
+static int cgba_sh4_arm_mixer_tags_zero(u32 offset, u32 bytes)
+{
+  const u32 *words;
+
+  if (offset & 2u) {
+    if (address16(iwram, offset))
+      return 0;
+    offset += 2u;
+    bytes -= 2u;
+  }
+
+  words = (const u32 *)(const void *)(iwram + offset);
+  while (bytes >= 16u) {
+    if (words[0] | words[1] | words[2] | words[3])
+      return 0;
+    words += 4;
+    bytes -= 16u;
+  }
+  while (bytes >= 4u) {
+    if (*words++)
+      return 0;
+    bytes -= 4u;
+  }
+  if (bytes && *(const u16 *)(const void *)words)
+    return 0;
+  return 1;
+}
+
+/* Zelda's m4a invocation fits eight batches in one scheduler slice.  Prove
+ * that complete prefix up front: both outputs are contiguous/tag-free IWRAM
+ * and every monotonically increasing sample address stays in one mapped ROM
+ * page.  Samples are still loaded at their exact instruction-order position,
+ * so even a source mapping that aliases an output buffer observes feedback.
+ * Any unusual wrap, mirror, page, ROM-size or tag boundary declines before
+ * the first write and uses the conservative per-batch path below. */
+static int __attribute__((noinline)) cgba_sh4_arm_mixer_run_whole(
+  cgba_sh4_arm_mixer_state *s, u32 seq_word_cost, u32 tail_cycles,
+  s32 budget, u32 *spent_out, u32 *batches_out, int *budget_stop_out)
+{
+  u32 source = cgba_sh4_arm_mixer_source_address(s);
+  u32 source_region = source >> 24;
+  u32 source_cost;
+  u32 body_cycles;
+  uint32_t spent;
+  u32 batches;
+  u32 samples;
+  u32 bytes;
+  u32 last_phase;
+  u32 last_source;
+  u32 left_last, right_last;
+  u32 left_off, right_off;
+  u8 *source_page;
+  u16 *left_ptr, *right_ptr;
+  u32 phase;
+  u32 sample32 = 0;
+  u32 mixed = 0;
+  u32 i;
+
+  if (!cgba_sh4_arm_mixer_output_fast_ok(s->r1) ||
+      !cgba_sh4_arm_mixer_output_fast_ok(s->r2) ||
+      source < s->r0 ||
+      !cgba_sh4_arm_mixer_source_fast_ok(source) ||
+      (source_region >= 8u &&
+       (source & 0x01FFFFFFu) >= gamepak_size))
+    return 0;
+
+  source_cost = ws_cyc_nseq[source_region & 0x0Fu][0];
+  body_cycles = CGBA_SH4_ARM_MIXER_BODY_WORDS * seq_word_cost +
+                4u * source_cost + 16u * (u32)ws_cyc_nseq[3][0];
+  batches = cgba_sh4_arm_mixer_plan_constant(
+    s->r1, s->r3, budget, body_cycles, tail_cycles,
+    &spent, budget_stop_out);
+  samples = batches * 4u;
+  bytes = samples * 2u;
+
+  /* samples <= 32.  This deliberately conservative shift proves that even
+   * the maximum 31 increments cannot wrap without a runtime divide. */
+  if (s->r5 > ((~s->r4) >> 5))
+    return 0;
+  last_phase = s->r4 + (samples - 1u) * s->r5;
+  last_source = s->r0 + (last_phase >> 8);
+  if (last_source < s->r0 ||
+      (source >> 15) != (last_source >> 15) ||
+      (source_region >= 8u &&
+       (last_source & 0x01FFFFFFu) >= gamepak_size))
+    return 0;
+
+  source_page = memory_map_read[source >> 15];
+  if (!source_page)
+    return 0;
+
+  left_last = s->r1 + bytes - 2u;
+  right_last = s->r2 + bytes - 2u;
+  left_off = s->r1 & 0x7FFFu;
+  right_off = s->r2 & 0x7FFFu;
+  if (!cgba_sh4_arm_mixer_output_fast_ok(left_last) ||
+      !cgba_sh4_arm_mixer_output_fast_ok(right_last) ||
+      left_off + bytes > 0x8000u || right_off + bytes > 0x8000u ||
+      !cgba_sh4_arm_mixer_tags_zero(left_off, bytes) ||
+      !cgba_sh4_arm_mixer_tags_zero(right_off, bytes))
+    return 0;
+
+  left_ptr = (u16 *)(void *)(iwram + 0x8000u + left_off);
+  right_ptr = (u16 *)(void *)(iwram + 0x8000u + right_off);
+  phase = s->r4;
+  for (i = 0; i < samples; i++) {
+    u32 sample_address = s->r0 + (phase >> 8);
+    s16 left;
+    s16 right;
+
+    sample32 = (u32)(s32)(s8)address8(source_page,
+                                      sample_address & 0x7FFFu);
+    left = (s16)eswap16(*left_ptr);
+    mixed = s->r6 * sample32 + (u32)(s32)left;
+    *left_ptr++ = eswap16((u16)mixed);
+
+    /* Preserve load-left/store-left/load-right/store-right for aliasing
+     * stereo buffers and for an IWRAM source page feeding back from them. */
+    right = (s16)eswap16(*right_ptr);
+    mixed = s->r7 * sample32 + (u32)(s32)right;
+    *right_ptr++ = eswap16((u16)mixed);
+    phase += s->r5;
+  }
+
+  s->r1 += bytes;
+  s->r2 += bytes;
+  s->r4 = phase;
+  s->r8 = sample32;
+  s->r12 = mixed;
+  *spent_out = spent;
+  *batches_out = batches;
+  return 1;
+}
+
+int cgba_sh4_arm_mixer_loop_try(u32 unused, u32 pc)
+{
+  cgba_sh4_arm_mixer_state s;
+  cgba_sh4_arm_mixer_prepared cur;
+  u32 region = (pc >> 24) & 0x0Fu;
+  u32 seq_word_cost = ws_cyc_seq[region][1];
+  u32 tail_cycles = cgba_sh4_arm_mixer_taken_tail_cycles(
+    seq_word_cost, ws_cyc_nseq[region][1]);
+  u32 spent = 0;
+  u32 batches = 0;
+  int whole_budget_stop = 0;
+  int whole_hit;
+#if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
+  cgba_sh4_arm_mixer_state initial_s;
+#endif
+  (void)unused;
+
+#if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
+  cgba_sh4_arm_mixer_try_count++;
+#endif
+  if (cgba_dynarec_single_block || (reg[REG_CPSR] & 0x20u) ||
+      cgba_sh4_arm_mixer_budget <= 0)
+    return 0;
+
+  s.r0 = reg[0]; s.r1 = reg[1]; s.r2 = reg[2]; s.r3 = reg[3];
+  s.r4 = reg[4]; s.r5 = reg[5]; s.r6 = reg[6]; s.r7 = reg[7];
+  s.r8 = reg[8]; s.r12 = reg[12]; s.cpsr = reg[REG_CPSR];
+
+#if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
+  initial_s = s;
+#endif
+
+  whole_hit = cgba_sh4_arm_mixer_run_whole(
+    &s, seq_word_cost, tail_cycles, cgba_sh4_arm_mixer_budget,
+    &spent, &batches, &whole_budget_stop);
+
+  if (!whole_hit && !cgba_sh4_arm_mixer_prepare(&s, seq_word_cost, &cur)) {
+#if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
+    cgba_sh4_arm_mixer_guard_fallback_count++;
+#endif
+    return 0;
+  }
+
+#if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
+  if (!cgba_sh4_arm_mixer_hit_count) {
+    cgba_sh4_arm_mixer_first_pc = pc;
+    cgba_sh4_arm_mixer_first_reg[0] = initial_s.r0;
+    cgba_sh4_arm_mixer_first_reg[1] = initial_s.r1;
+    cgba_sh4_arm_mixer_first_reg[2] = initial_s.r2;
+    cgba_sh4_arm_mixer_first_reg[3] = initial_s.r3;
+    cgba_sh4_arm_mixer_first_reg[4] = initial_s.r4;
+    cgba_sh4_arm_mixer_first_reg[5] = initial_s.r5;
+    cgba_sh4_arm_mixer_first_reg[6] = initial_s.r6;
+    cgba_sh4_arm_mixer_first_reg[7] = initial_s.r7;
+    cgba_sh4_arm_mixer_first_reg[8] = initial_s.r8;
+    cgba_sh4_arm_mixer_first_reg[9] = initial_s.r12;
+  }
+  if (whole_hit && whole_budget_stop)
+    cgba_sh4_arm_mixer_budget_stop_count++;
+#endif
+
+  while (!whole_hit) {
+    cgba_sh4_arm_mixer_run_prepared(&s, &cur);
+    spent += cur.body_cycles;
+    batches++;
+
+    if (s.r1 >= s.r3 ||
+        !cgba_sh4_arm_mixer_can_fold_taken(
+          cgba_sh4_arm_mixer_budget, spent, tail_cycles)) {
+#if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
+      if (s.r1 < s.r3)
+        cgba_sh4_arm_mixer_budget_stop_count++;
+#endif
+      break;
+    }
+
+    /* Prove the next batch safe before consuming this taken tail.  A failed
+     * proof returns at the current CMP with no partial next-batch state. */
+    if (!cgba_sh4_arm_mixer_prepare(&s, seq_word_cost, &cur))
+      break;
+    spent += tail_cycles;
+  }
+
+  reg[1] = s.r1;
+  reg[2] = s.r2;
+  reg[4] = s.r4;
+  reg[8] = s.r8;
+  reg[12] = s.r12;
+  cgba_sh4_extra_cycles = (int)spent;
+#if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
+  cgba_sh4_arm_mixer_hit_count++;
+  cgba_sh4_arm_mixer_batch_count += batches;
+#endif
+  return 1;
+}
+#endif
+
+#ifdef CGBA_SH4_THUMB_UDIV_FASTPATH
+/*
+ * Runtime half of the signature-gated Thumb libgcc divide-loop fast path.
+ * Generated code snapshots the live R13 budget here before using the ordinary
+ * op2 trampoline, which also makes reg[REG_CPSR] authoritative around the C
+ * call.  The model commits nothing unless the whole pure-register loop fits
+ * before the next scheduler boundary.  A failed try therefore falls through
+ * to the byte-for-byte ordinary translation with unchanged guest state.
+ */
+volatile s32 cgba_sh4_thumb_udiv_budget;
+#if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
+u32 cgba_sh4_thumb_udiv_try_count;
+u32 cgba_sh4_thumb_udiv_hit_count;
+u32 cgba_sh4_thumb_udiv_budget_fallback_count;
+#endif
+
+int cgba_sh4_thumb_udiv_loop_try(u32 unused, u32 pc)
+{
+  cgba_sh4_thumb_udiv_loop_result out;
+  u32 region = (pc >> 24) & 0x0Fu;
+  (void)unused;
+
+#if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
+  cgba_sh4_thumb_udiv_try_count++;
+#endif
+  if (cgba_dynarec_single_block || !(reg[REG_CPSR] & 0x20u))
+    return 0;
+
+  out = cgba_sh4_thumb_udiv_loop_run(
+    reg[0], reg[1], reg[2], reg[3], reg[4], reg[REG_CPSR],
+    (u32)ws_cyc_seq[region][0], (u32)ws_cyc_nseq[region][0]);
+  if (!cgba_sh4_thumb_udiv_loop_budget_ok(cgba_sh4_thumb_udiv_budget,
+                                           out.cycles)) {
+#if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
+    cgba_sh4_thumb_udiv_budget_fallback_count++;
+#endif
+    return 0;
+  }
+
+  reg[0] = out.r0;
+  reg[1] = out.r1;
+  reg[2] = out.r2;
+  reg[3] = out.r3;
+  reg[4] = out.r4;
+  reg[REG_CPSR] = out.cpsr;
+  cgba_sh4_extra_cycles = (int)out.cycles;
+#if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
+  cgba_sh4_thumb_udiv_hit_count++;
+#endif
+  return 1;
+}
+#endif
+
 void cgba_sh4_hle_div(u32 divarm, u32 pc)
 {
   CGBA_SH4_HELPER_HIT(hle_div);
@@ -1651,7 +2041,24 @@ static int cgba_bulk_tags_smc(const u8 *tags, u32 len)
 
 static int cgba_bulk_ranges_overlap(const u8 *a, const u8 *b, u32 len)
 {
-  return (a < b + len) && (b < a + len);
+  uintptr_t aa = (uintptr_t)a;
+  uintptr_t bb = (uintptr_t)b;
+  return aa <= bb ? bb - aa < (uintptr_t)len
+                  : aa - bb < (uintptr_t)len;
+}
+
+/* The ordinary faithful HLE intentionally declines all overlap.  The opt-in
+ * extension accepts only dst>src overlap, which can be reproduced exactly by
+ * re-reading each source element after earlier destination writes. */
+static int cgba_swi_copy_overlap_ok(u32 src, u32 dst, u32 len)
+{
+  if (dst - src >= len && src - dst >= len)
+    return 1;                                  /* disjoint guest ranges */
+#if CGBA_SH4_SWI_FORWARD_OVERLAP
+  return dst > src;                            /* forward overlap only */
+#else
+  return 0;
+#endif
 }
 
 /* Word/halfword copy or fill, bulk when both sides resolve. Returns 1 when
@@ -1850,8 +2257,8 @@ static int cgba_swi_cpuset_predict(u32 src, u32 dst, u32 cnt,
       if (((dst + count * 2 - 1) >> 24) != (dst >> 24) ||
           dst + count * 2 > 0x0F000000u)
         return 0;
-      if (dst - src < count * 2 || src - dst < count * 2)
-        return 0;                              /* guest-range overlap */
+      if (!cgba_swi_copy_overlap_ok(src, dst, count * 2))
+        return 0;
       c += 21 * S0;                            /* prologue through 664 */
       c += count * (7 * S0 + CGBA_WS_N(src >> 24, 0) + CGBA_WS_N(dst >> 24, 0));
       c += (count - 1) * N0;
@@ -1895,7 +2302,7 @@ static int cgba_swi_cpuset_predict(u32 src, u32 dst, u32 cnt,
       if (((wdst + count * 4 - 1) >> 24) != (wdst >> 24) ||
           wdst + count * 4 > 0x0F000000u)
         return 0;
-      if (wdst - wsrc < count * 4 || wsrc - wdst < count * 4)
+      if (!cgba_swi_copy_overlap_ok(wsrc, wdst, count * 4))
         return 0;
       c += 22 * S0 + N0;                       /* through 6A8(nt) + 6C8 B + 644 */
       c += count * (7 * S0 + CGBA_WS_N(wsrc >> 24, 1) + CGBA_WS_N(wdst >> 24, 1));
@@ -1983,7 +2390,7 @@ static int cgba_swi_cpufastset_predict(u32 src, u32 dst, u32 cnt,
   if (((wdst + K * 32 - 1) >> 24) != (wdst >> 24) ||
       wdst + K * 32 > 0x0F000000u)
     return 0;
-  if (wdst - wsrc < K * 32 || wsrc - wdst < K * 32)
+  if (!cgba_swi_copy_overlap_ok(wsrc, wdst, K * 32))
     return 0;
   c += 20 * S0 + N0;                           /* through 7A0(nt) + 7D0 B fetch, 758 taken */
   /* chunk = 0x7A4 ADD + 8 x (CMP,LDR,cond-LDR,STR,ADD,CMP,BNE) + SUB,CMP,BGT
@@ -2196,7 +2603,12 @@ static u32 cgba_swi_fastset_engine(s32 remaining)
         if (!sh)
           return CGBA_FS_DECLINE;              /* state stays canonical */
         if (dh) {
-          memmove(dh, sh, bytes);
+#if CGBA_SH4_SWI_FORWARD_OVERLAP
+          if (cgba_sh4_swi_is_forward_overlap(dh, sh, bytes))
+            cgba_sh4_swi_copy_forward(dh, sh, bytes, 4);
+          else
+#endif
+            memmove(dh, sh, bytes);
           /* The copy just overwrote tagged RAM code. The engine's return and
              park points do NOT run the common HLE tail, so flush the RAM
              translation cache HERE — otherwise a stale block could execute
@@ -2383,12 +2795,25 @@ static u32 cgba_swi_cpuset_engine(s32 remaining)
         return CGBA_FS_DECLINE;
       dh = cgba_bulk_ram_host(dst, bytes, &tags);
       if (dh) {
-        memmove(dh, sh, bytes);
+#if CGBA_SH4_SWI_FORWARD_OVERLAP
+        if (cgba_sh4_swi_is_forward_overlap(dh, sh, bytes))
+          cgba_sh4_swi_copy_forward(dh, sh, bytes, width);
+        else
+#endif
+          memmove(dh, sh, bytes);
         if (cgba_bulk_tags_smc(tags, bytes))
           flush_translation_cache_ram();       /* SMC: flush now, not via the
                                                   skipped common tail (see the
                                                   FastSet copy-site note) */
-      } else {
+      }
+#ifdef CGBA_SH4_SWI_OAM_BULK
+      else if (!(half &&
+                 cgba_sh4_swi_copy_u16_to_oam(
+                   (u8 *)(void *)oam_ram, sh, dst, k,
+                   &reg[OAM_UPDATED]))) {
+#else
+      else {
+#endif
         int saved = cgba_sh4_extra_cycles;
         u32 i;
         for (i = 0; i < bytes; i += width) {
@@ -2471,9 +2896,17 @@ static int cgba_swi_apply_faithful(u32 src, u32 dst, u32 cnt, int fastset,
       sp = cgba_bulk_src_host(eff_src, len);
       if (!sp)
         return 0;
-      if (cgba_bulk_ranges_overlap(sp, d, len))
-        return 0;                              /* overlap: interp semantics */
-      memmove(d, sp, len);
+      if (cgba_bulk_ranges_overlap(sp, d, len)) {
+#if CGBA_SH4_SWI_FORWARD_OVERLAP
+        if (!cgba_sh4_swi_is_forward_overlap(d, sp, len))
+          return 0;                            /* equal/backward: interpreter */
+        cgba_sh4_swi_copy_forward(d, sp, len, width);
+#else
+        return 0;                              /* overlap: interpreter semantics */
+#endif
+      } else {
+        memmove(d, sp, len);
+      }
     } else {
       const u8 *vp = cgba_bulk_src_host(eff_src, width);
       u32 i;
@@ -3031,10 +3464,22 @@ static int cgba_hle_bios_swi_num(u32 num, u32 budget)
 #if CGBA_SH4_SWI_HLE_VERIFY
     if (pred.r0_from_last_word) {
       u32 wsrc = reg[0] & ~3u, cn = reg[2] & 0x1FFFFFu;
+      u32 wi = cn - 1u;
       const u8 *sp2 = cgba_bulk_src_host(wsrc, cn * 4);
       if (!sp2)
         return 0;
-      pred.r0 = cgba_le32_read(sp2 + cn * 4 - 4);
+#if CGBA_SH4_SWI_FORWARD_OVERLAP
+      {
+        u32 wdst = reg[1] & ~3u;
+        if (wdst > wsrc && wdst - wsrc < cn * 4u) {
+          u32 delta_words = (wdst - wsrc) >> 2;
+          if (!delta_words)
+            return 0;
+          wi %= delta_words;                   /* earlier stores feed this load */
+        }
+      }
+#endif
+      pred.r0 = cgba_le32_read(sp2 + wi * 4u);
       pred.r0_from_last_word = 0;
     }
     cgba_swi_verify.pending = 1;

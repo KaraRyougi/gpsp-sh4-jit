@@ -7,14 +7,23 @@
 #include "fxcg100_platform.h"
 #include "frame_pacing.h"
 #include "gpsp_runner.h"
+#ifdef CGBA_GPSP_HEADLESS_TEST
+#define CGBA_HEADLESS_STATE_SIZE (416u * 1024u)
+extern unsigned char *cgba_gamepak_scratch_acquire(unsigned int min_size);
+extern void cgba_gamepak_scratch_release(void);
+extern void gba_save_state(void *dst);
+extern _Bool gba_load_state(const void *src);
+#endif
 
 /* AUTOMATIC backup-save flush cadence (guest frames). ~10s at 60fps; only
  * writes NOR when the save is dirty, so idle play never touches flash. */
 #define CGBA_BACKUP_AUTO_FRAMES 600u
 
-#ifdef CGBA_DYNAREC
+#if defined(CGBA_DYNAREC) && defined(CGBA_SH4_DIFF_HARNESS)
 #include "sh4/sh4_diff_harness.h"
+#endif
 
+#ifdef CGBA_DYNAREC
 extern int dynarec_enable;   /* gpSP: 0 = interpreter, 1 = SH4 recompiler */
 extern uint32_t execute_cycles;
 extern uint32_t reg[64];
@@ -103,6 +112,15 @@ struct cgba_sh4_prof_row {
 	uint32_t count;
 };
 extern unsigned cgba_sh4_prof_top(struct cgba_sh4_prof_row *out, unsigned max);
+#ifdef CGBA_SH4_ARM_MIXER_FASTPATH
+extern uint32_t cgba_sh4_arm_mixer_try_count;
+extern uint32_t cgba_sh4_arm_mixer_hit_count;
+extern uint32_t cgba_sh4_arm_mixer_batch_count;
+extern uint32_t cgba_sh4_arm_mixer_guard_fallback_count;
+extern uint32_t cgba_sh4_arm_mixer_budget_stop_count;
+extern uint32_t cgba_sh4_arm_mixer_first_pc;
+extern uint32_t cgba_sh4_arm_mixer_first_reg[10];
+#endif
 #endif
 #endif
 
@@ -112,7 +130,14 @@ extern unsigned cgba_sh4_prof_top(struct cgba_sh4_prof_row *out, unsigned max);
 
 #define CGBA_HIGH_BSS __attribute__((section(".cgba.highbss"), aligned(32)))
 #define CGBA_HIGHRAM_SAFE_START ((uintptr_t)0x8c200000u)
-#define CGBA_HIGHRAM_SAFE_END   ((uintptr_t)0x8c780000u)
+#if defined(CGBA_FXCG100) && !defined(CGBA_GPSP_HEADLESS_TEST) && \
+	!defined(CGBA_SH4_DIFF_HARNESS)
+/* This is the only end address proven safe on physical fx-CG100 hardware.
+ * A 0x8c6b5300 arena already caused an OS reset while loading a ROM. */
+#define CGBA_HIGHRAM_SAFE_END   ((uintptr_t)0x8c655300u)
+#else
+#define CGBA_HIGHRAM_SAFE_END   ((uintptr_t)0x8c6f0000u)
+#endif
 
 extern char cgba_highbss_start[];
 extern char cgba_highbss_end[];
@@ -397,6 +422,14 @@ static void show_diag_overlay(void)
 
 #ifndef CGBA_GPSP_HEADLESS_A_PRESS
 #define CGBA_GPSP_HEADLESS_A_PRESS 2u
+#endif
+
+#ifndef CGBA_GPSP_HEADLESS_DOWN_FRAME
+#define CGBA_GPSP_HEADLESS_DOWN_FRAME 0u
+#endif
+
+#ifndef CGBA_GPSP_HEADLESS_DOWN_HOLD
+#define CGBA_GPSP_HEADLESS_DOWN_HOLD 0u
 #endif
 
 #ifndef CGBA_GPSP_HEADLESS_DUMP_EVERY
@@ -743,13 +776,15 @@ static int headless_create_blob(const uint16_t *path, unsigned size)
 
 static int headless_save_checkpoint(unsigned frame)
 {
-	void *state = cgba_sh4_checkpoint_buffer();
-	unsigned size = cgba_sh4_checkpoint_size();
+	unsigned size = CGBA_HEADLESS_STATE_SIZE;
+	void *state = cgba_gamepak_scratch_acquire(size);
 	int existing_size = headless_storage_blob_size(headless_checkpoint_path);
 	int ok = 0;
 	char buf[128];
 
-	cgba_sh4_checkpoint_capture();
+	if(!state)
+		return 0;
+	gba_save_state(state);
 	if(existing_size == (int)size) {
 		ok = headless_write_blob_contents(headless_checkpoint_path, state, size);
 	} else {
@@ -783,8 +818,9 @@ static int headless_save_checkpoint(unsigned frame)
 			hputc_dbg('\n');
 		snprintf(buf, sizeof buf,
 			"@@CGBA_CHECKPOINT_HEX_END frame=%u", frame);
-		hputs_dbg(buf);
+			hputs_dbg(buf);
 	}
+	cgba_gamepak_scratch_release();
 	return ok;
 }
 
@@ -831,16 +867,18 @@ static int headless_read_checkpoint(void *state, unsigned size)
 
 static int headless_load_checkpoint(void)
 {
-	void *state = cgba_sh4_checkpoint_buffer();
-	unsigned size = cgba_sh4_checkpoint_size();
-	int read_ok = headless_read_checkpoint(state, size);
-	int load_ok = read_ok ? cgba_sh4_checkpoint_restore() : 0;
+	unsigned size = CGBA_HEADLESS_STATE_SIZE;
+	void *state = cgba_gamepak_scratch_acquire(size);
+	int read_ok = state ? headless_read_checkpoint(state, size) : 0;
+	int load_ok = read_ok ? gba_load_state(state) : 0;
 	char buf[128];
 
 	snprintf(buf, sizeof buf,
 		"@@CGBA_CHECKPOINT load ok=%d read=%d size=%u",
-		load_ok, read_ok, size);
+			load_ok, read_ok, size);
 	hputs_dbg(buf);
+	if(state)
+		cgba_gamepak_scratch_release();
 	return load_ok;
 }
 #endif
@@ -942,7 +980,7 @@ static void headless_log_state(unsigned frame, const char *phase,
 		hputs_dbg(lines[i]);
 }
 
-#ifdef CGBA_DYNAREC
+#if defined(CGBA_DYNAREC) && defined(CGBA_SH4_DIFF_HARNESS)
 enum {
 	CGBA_HEADLESS_REG_PC = 15,
 	CGBA_HEADLESS_CPU_HALT_STATE = 18,
@@ -1084,6 +1122,8 @@ static uint32_t headless_buttons_for_frame(unsigned frame)
 {
 	const unsigned start = (unsigned)CGBA_GPSP_HEADLESS_START_FRAME;
 	const unsigned hold = (unsigned)CGBA_GPSP_HEADLESS_START_HOLD;
+	const unsigned down_start = (unsigned)CGBA_GPSP_HEADLESS_DOWN_FRAME;
+	const unsigned down_hold = (unsigned)CGBA_GPSP_HEADLESS_DOWN_HOLD;
 	uint32_t buttons = FXCG100_GBA_BUTTON_NONE;
 
 #if CGBA_HEADLESS_FUZZ_ON
@@ -1101,6 +1141,9 @@ static uint32_t headless_buttons_for_frame(unsigned frame)
 	}
 	if(headless_a_down(frame))
 		buttons |= FXCG100_GBA_BUTTON_A;
+	if(down_hold != 0 && frame >= down_start &&
+			frame - down_start < down_hold)
+		buttons |= FXCG100_GBA_BUTTON_DOWN;
 #if CGBA_GPSP_HEADLESS_ALT_PERIOD > 0
 #if CGBA_GPSP_HEADLESS_ALT_FRAME > 0
 	if(frame >= (unsigned)CGBA_GPSP_HEADLESS_ALT_FRAME) {
@@ -1249,13 +1292,15 @@ static int cgba_headless_test(uint16_t *framebuffer)
 	cgba_sh4_hle_div_other_count = 0;
 	#endif
 	snprintf(buf, sizeof buf,
-		"input START f=%u h=%u A f=%u h=%u p=%u w=%u ALT f=%u p=%u w=%u L=%u",
+		"input START f=%u h=%u A f=%u h=%u p=%u w=%u DOWN f=%u h=%u ALT f=%u p=%u w=%u L=%u",
 		(unsigned)CGBA_GPSP_HEADLESS_START_FRAME,
 		(unsigned)CGBA_GPSP_HEADLESS_START_HOLD,
 		(unsigned)CGBA_GPSP_HEADLESS_A_FRAME,
 		(unsigned)CGBA_GPSP_HEADLESS_A_HOLD,
 		(unsigned)CGBA_GPSP_HEADLESS_A_PERIOD,
 		(unsigned)CGBA_GPSP_HEADLESS_A_PRESS,
+		(unsigned)CGBA_GPSP_HEADLESS_DOWN_FRAME,
+		(unsigned)CGBA_GPSP_HEADLESS_DOWN_HOLD,
 		(unsigned)CGBA_GPSP_HEADLESS_ALT_FRAME,
 		(unsigned)CGBA_GPSP_HEADLESS_ALT_PERIOD,
 		(unsigned)CGBA_GPSP_HEADLESS_ALT_PRESS,
@@ -1299,7 +1344,7 @@ static int cgba_headless_test(uint16_t *framebuffer)
 			snprintf(buf, sizeof buf, "frame %u A/SHIFT", frame);
 			hputs_dbg(buf);
 		}
-#ifdef CGBA_DYNAREC
+#if defined(CGBA_DYNAREC) && defined(CGBA_SH4_DIFF_HARNESS)
 #if CGBA_GPSP_HEADLESS_DIFF_BLOCKS > 0
 		if((int)frame == CGBA_GPSP_HEADLESS_DIFF_FRAME) {
 			unsigned j;
@@ -1318,7 +1363,7 @@ static int cgba_headless_test(uint16_t *framebuffer)
 #endif
 		headless_log_phase(frame, "pre-run");
 		headless_log_state(frame, "pre", framebuffer);
-#ifdef CGBA_DYNAREC
+#if defined(CGBA_DYNAREC) && defined(CGBA_SH4_DIFF_HARNESS)
 		headless_window_diff(frame);
 #endif
 		cgba_gpsp_run_frame(buttons, rendered);
@@ -1367,6 +1412,13 @@ static int cgba_headless_test(uint16_t *framebuffer)
 		headless_log_phase(frame, "loop-end");
 	}
 
+#ifdef CGBA_GPSP_HEADLESS_PROFILE_STOP
+	/* casio-emu's PC profiler stops on the "=== done ===" suffix. Emit an
+	 * opt-in marker here so post-run diagnostics (notably the one-frame
+	 * interpreter-vs-JIT region diff) cannot dominate gameplay profiles. */
+	hputs_dbg("@@CGBA_PROFILE_STOP === done ===");
+#endif
+
 	snprintf(buf, sizeof buf, "fps emu=%u draw=%u",
 		(unsigned)cgba_fps.emu_fps, (unsigned)cgba_fps.draw_fps);
 	hputs_dbg(buf);
@@ -1382,7 +1434,7 @@ static int cgba_headless_test(uint16_t *framebuffer)
 	extern unsigned long cgba_em_pj_n, cgba_em_pj_bytes;
 	extern unsigned long cgba_em_fm_n, cgba_em_fm_bytes;
 	extern unsigned long cgba_em_blk_n, cgba_em_blk_bytes;
-	#if CGBA_GPSP_HEADLESS_BENCH_FRAMES > 0
+	#if CGBA_GPSP_HEADLESS_BENCH_FRAMES > 0 && defined(CGBA_SH4_DIFF_HARNESS)
 	snprintf(buf, sizeof buf,
 		"jit stats rom_flush=%lu ram_flush=%lu arm_tx=%lu thumb_tx=%lu "
 		"bios_n=%lu bios_kc=%lu cold_n=%lu",
@@ -1859,6 +1911,33 @@ static int cgba_headless_test(uint16_t *framebuffer)
 	snprintf(buf, sizeof buf, "jit arm block detail load=%lu store=%lu",
 		(unsigned long)cgba_sh4_helper_arm_block_load_count,
 		(unsigned long)cgba_sh4_helper_arm_block_store_count);
+	hputs_dbg(buf);
+	#endif
+	#ifdef CGBA_SH4_ARM_MIXER_FASTPATH
+	snprintf(buf, sizeof buf,
+		"jit mixer try=%lu hit=%lu batch=%lu guard=%lu budget=%lu",
+		(unsigned long)cgba_sh4_arm_mixer_try_count,
+		(unsigned long)cgba_sh4_arm_mixer_hit_count,
+		(unsigned long)cgba_sh4_arm_mixer_batch_count,
+		(unsigned long)cgba_sh4_arm_mixer_guard_fallback_count,
+		(unsigned long)cgba_sh4_arm_mixer_budget_stop_count);
+	hputs_dbg(buf);
+	snprintf(buf, sizeof buf,
+		"jit mixer first pc=%08lX r0=%08lX r1=%08lX r2=%08lX r3=%08lX r4=%08lX",
+		(unsigned long)cgba_sh4_arm_mixer_first_pc,
+		(unsigned long)cgba_sh4_arm_mixer_first_reg[0],
+		(unsigned long)cgba_sh4_arm_mixer_first_reg[1],
+		(unsigned long)cgba_sh4_arm_mixer_first_reg[2],
+		(unsigned long)cgba_sh4_arm_mixer_first_reg[3],
+		(unsigned long)cgba_sh4_arm_mixer_first_reg[4]);
+	hputs_dbg(buf);
+	snprintf(buf, sizeof buf,
+		"jit mixer first r5=%08lX r6=%08lX r7=%08lX r8=%08lX r12=%08lX",
+		(unsigned long)cgba_sh4_arm_mixer_first_reg[5],
+		(unsigned long)cgba_sh4_arm_mixer_first_reg[6],
+		(unsigned long)cgba_sh4_arm_mixer_first_reg[7],
+		(unsigned long)cgba_sh4_arm_mixer_first_reg[8],
+		(unsigned long)cgba_sh4_arm_mixer_first_reg[9]);
 	hputs_dbg(buf);
 	#endif
 	}

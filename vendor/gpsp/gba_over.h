@@ -1804,6 +1804,17 @@ static const ini_t gbaover[] = {
       0,                           /* translation_gate_target_2 */
       0,                           /* translation_gate_target_3 */
    },
+#ifdef CGBA_GBA_OVER_AZLE_IDLE
+   {
+      // Legend of Zelda, The - A Link to the Past & Four Swords (U, rev 0)
+      "AZLE",                      /* gamepak_code         */
+      0,                           /* flags                */
+      0x080683A8,                  /* idle_loop_target_pc  */
+      0,                           /* translation_gate_target_1 */
+      0,                           /* translation_gate_target_2 */
+      0,                           /* translation_gate_target_3 */
+   },
+#endif
 #if 0
    {
       // Sample

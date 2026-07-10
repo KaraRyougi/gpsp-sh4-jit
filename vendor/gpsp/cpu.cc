@@ -22,6 +22,28 @@ extern "C" {
   #include "cpu_instrument.h"
 }
 
+#ifdef CGBA_GBA_OVER_AZLE_IDLE
+#include "ports/fxcg100/sh4/sh4_idle_signature.h"
+
+static inline int cgba_registered_idle_signature_ok(u32 pc, const u8 *map)
+{
+  u32 off;
+
+  if (pc != CGBA_SH4_AZLE_IDLE_PC)
+    return 1;
+  if (!map || map != memory_map_read[pc >> 15])
+    return 0;
+  off = pc & 0x7FFFu;
+  return cgba_sh4_azle_idle_signature_match(
+    readaddress16(map, off + 0u), readaddress16(map, off + 2u),
+    readaddress16(map, off + 4u), readaddress16(map, off + 6u),
+    readaddress16(map, off + 8u));
+}
+#else
+#define cgba_registered_idle_signature_ok(pc, map)                            \
+  ((void)(pc), (void)(map), 1)
+#endif
+
 const u8 bit_count[256] =
 {
   0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4, 1, 2, 2, 3, 2, 3, 3,
@@ -3266,11 +3288,12 @@ skip_instruction:
 #endif
        CGBA_DIFF_STOP_CHECK();
 
-       if ((reg[REG_PC] == idle_loop_target_pc
+       if (((reg[REG_PC] == idle_loop_target_pc &&
+             cgba_registered_idle_signature_ok(reg[REG_PC], pc_address_block))
 #if defined(CGBA_FXCG100) || defined(CGBA_FXCG50)
             || reg[REG_PC] == cgba_detected_idle_pc
 #endif
-           ) && cycles_remaining > 0) cycles_remaining = 0;
+            ) && cycles_remaining > 0) cycles_remaining = 0;
 
        if (cpu_alert & (CPU_ALERT_HALT | CPU_ALERT_IRQ))
          goto alert;
@@ -3782,11 +3805,12 @@ thumb_loop:
        cycles_remaining -= ws_cyc_seq[(reg[REG_PC] >> 24) & 0xF][0];
        CGBA_DIFF_STOP_CHECK();
 
-       if ((reg[REG_PC] == idle_loop_target_pc
+       if (((reg[REG_PC] == idle_loop_target_pc &&
+             cgba_registered_idle_signature_ok(reg[REG_PC], pc_address_block))
 #if defined(CGBA_FXCG100) || defined(CGBA_FXCG50)
             || reg[REG_PC] == cgba_detected_idle_pc
 #endif
-           ) && cycles_remaining > 0) cycles_remaining = 0;
+            ) && cycles_remaining > 0) cycles_remaining = 0;
 
        if (cpu_alert & (CPU_ALERT_HALT | CPU_ALERT_IRQ))
           goto alert;

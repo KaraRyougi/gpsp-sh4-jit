@@ -95,8 +95,9 @@ Runtime shape:
 - Builds with storage access enabled by default. BFile calls are wrapped in
   `gint_world_switch()` so ROM scanning/config I/O do not run inside gint's
   hardware world.
-- Reserves only `ON` during gameplay; all other fx-CG100 keys are bindable as
-  GBA inputs or gpSP hotkeys through the settings menu
+- Reserves only the model's menu key (`ON` on fx-CG100, `AC/ON` on fx-CG50);
+  every other physical key is bindable as a GBA input or gpSP hotkey, including
+  the fx-CG50 arithmetic, punctuation, power, and parenthesis keys
 - Keeps gpSP's large GBA memories, framebuffer, and embedded smoke ROM buffer in
   `.cgba.highbss` at `0x8c200000`
 - Refuses to clear/run the gpSP high arena if the linked range falls outside
@@ -121,7 +122,9 @@ Runtime shape:
   gpSP-style per-action key mapping, config save/load, cheats/misc,
   load/restart/return/quit. Defaults are `A=OK`, `B=CATALOG`, `SELECT=PageUp`,
   `START=PageDown`, D-pad arrows, `L=BEGIN`, and `R=END`; gpSP hotkeys default to
-  `NONE`; saved settings live at `\\fls0\\CGBA.CFG`. Manual frameskip is wired
+  `NONE`. The fx-CG50 defaults are `A=MENU`, `B=EXIT`, `SELECT=^`, `START=VARS`,
+  D-pad arrows, `L=F5`, and `R=F6`. Saved settings live at
+  `\\fls0\\CGBA.CFG`. Manual frameskip is wired
   to skip LCD blits; game save/state storage-backed items currently show TODO
   markers.
 - Full gpSP path: embedded `test_rom/mode3_smoke.h` and
@@ -131,6 +134,9 @@ Runtime shape:
   inert, JIT probe opt-in only
 - gpSP gameplay video uses a CGBC-style direct R61524 frame window instead of
   full-screen `dupdate()`; menus and status screens still use gint VRAM.
+- Cartridge RTC support is autodetected from the game database. RTC reads use
+  the calculator's hardware-backed wall clock, including while emulation is
+  paused, so time-based events in Pokemon Ruby/Sapphire/Emerald keep working.
 
 ## Smoke Tests
 

@@ -79,6 +79,9 @@ extern u8 *memory_map_read[];
 extern u16 io_registers[512];          /* eswap16'd (LE-layout) halfwords */
 extern u16 palette_ram[512];
 extern u16 palette_ram_converted[512];
+#ifdef CGBA_PALETTE_DIRTY_ACTIVE
+extern volatile u32 palette_ram_dirty;
+#endif
 extern u8 iwram[];
 extern u8 vram[1024 * 96];
 void sh4_op2_pc_mem_tramp(void);
@@ -372,6 +375,17 @@ static inline u8 *sh4g_fastmem_emit_routine(u8 **tp, int fm)
         sh4_emit_mov_w_store_r0(&cg, SH4_REG_T1, SH4_REG_T2);
         sh4g_close(tp, &cg); }
     }
+
+#ifdef CGBA_PALETTE_DIRTY_ACTIVE
+    /* Native aligned palette stores bypass gba_memory.c's write macros.
+     * Invalidate once after both converted halfwords (for STR) are visible.
+     * Preserve R1/T0, which sh4g_charge_mem_run still needs below. */
+    sh4g_vec_load(tp, SH4G_VEC_palette_dirty, SH4_REG_T2);
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_imm(&cg, CGBA_PALETTE_DIRTY_ACTIVE, SH4_REG_RET);
+      sh4_emit_mov_l_store(&cg, SH4_REG_RET, SH4_REG_T2);
+      sh4g_close(tp, &cg); }
+#endif
 
     if (wb) {
       sh4_codegen cg = sh4g_open(tp);

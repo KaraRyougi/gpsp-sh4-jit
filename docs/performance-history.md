@@ -416,6 +416,127 @@ exceeding the remaining ROM-cache space. The patched repro build saved at frame
 with no `HOST PC`/`WILD` panic markers under HLE. This is a targeted cache
 coherency fix for the save path; it does not make Yoshi a 45-fps release.
 
+## Zelda checkpoint: full-render result and withdrawn milestones (2026-07-09)
+
+The requested `ZELDA0.SVS` run uses `Zelda.gba` (`AZLE`, A Link to the
+Past/Four Swords) for 600 deterministic frames. The exact cache-sim window is
+the first tick after `loaded OK; running` through the last tick before frame
+599. The experimental build combines faithful forward-overlap CpuSet, the
+Thumb divide suffix, stable-palette blend terms, opaque 4-bpp row
+specialization, the signature-checked AZLE idle hint, bulk CpuSet-to-OAM
+writes, and a signature-gated m4a/Sappy four-sample mixer fusion. These remain
+opt-in CMake options.
+
+The honest comparison renders every frame (`frameskip=0`):
+
+| Build | Modeled cycles/frame | Modeled fps |
+|---|---:|---:|
+| New Zelda options off | 8,055,579.530 | 14.648232 |
+| New Zelda options on | 5,819,081.298 | 20.278115 |
+
+This is a real 38.43% modeled-fps improvement (27.76% fewer modeled cycles),
+but it is not close to 45 fps. Earlier figures of 45.421191 fps at one rendered
+frame in six and 60.168423 fps with rendering suppressed are diagnostic
+ceilings only. Frameskip is an existing gpSP feature and does not count as an
+emulation-speed improvement; rendering suppression does not measure playable
+full-render speed. The previous 45/60-fps milestone claim is withdrawn.
+
+The final mixer/OAM ON and OFF builds produced 110 byte-identical checkpoints
+(pre/post state every 60 frames): all registers/CPSR, scheduler clocks,
+interrupt and IO state, timers, DMA, IWRAM/EWRAM/VRAM/palette/OAM hashes, and
+framebuffer hashes matched. The host suite also covers 300,000 mixer
+state/memory/cycle cases, 645,990 OAM cases, the emitted udiv prefix, renderer
+differentials, and the 143,383-case SH4 execution oracle; ASan/UBSan is clean
+for the new mixer and OAM models.
+
+The first production package from this work is also withdrawn: it accidentally
+retained `sh4_diff_harness.c`'s emulator-only 0x78400-byte snapshots in
+`.cgba.highbss`, ending at 0x8c6cd700 rather than the hardware-proven ceiling
+0x8c655300. `start_gpsp()` cleared that invalid range while loading a ROM,
+which explains the reported OS reset on `Emerald.trimmed.gba`. Production now
+compiles the differential harness out, the linker and runtime both enforce
+0x8c655300, and savestate staging borrows the existing GamePak page cache. The
+corrected production image ends exactly at 0x8c655300 and passes the host suite
+and headless save/load test. Physical fx-CG100 testing then confirmed that both
+`gpSP-hw-layout-baseline-test.g3a` (new Zelda options off) and
+`gpSP-hw-layout-zelda-opt-test.g3a` load and run `Emerald.trimmed.gba` without
+an OS reset. The optimized build was qualitatively a little faster on hardware;
+the subsequent Oldale Town A/B below provides the first numeric hardware result.
+
+RTC follow-up: those first hardware-layout candidates predated main commit
+`f1c1549` (`gba: enable cartridge RTC support`) and launched ROMs with RTC
+explicitly disabled. The RTC change is now ported into this branch without the
+unrelated web-ROM-trimmer changes: cartridge RTC is autodetected, fx-CG100
+builds use the calculator wall clock, and the S-3511A reset/status/edge protocol
+matches Pokemon Emerald. The focused loader/GPIO test and full host suite pass;
+the rebuilt baseline and optimized images still end `.cgba.highbss` exactly at
+0x8c655300. Physical validation of Emerald's clock-dependent behavior remains
+pending for the new RTC-enabled images.
+
+**Emerald hardware A/B** (Oldale Town walking, same calculator/setup): the
+original safe-layout baseline reported 44 emulated fps and the eight-option
+optimized build 47 emulated fps. That is a nominal 6.82% throughput gain, or
+6.38% less time per emulated frame (22.73 ms to 21.28 ms). The on-device meter
+uses integer, roughly one-second windows, so this is a combined directional A/B
+rather than precise per-feature attribution. The bundle enables forward-overlap
+CpuSet/FastSet, halfword CpuSet-to-OAM bulk, the Thumb libgcc divide suffix, the
+exact m4a mixer loop, three renderer paths (stable blend terms, opaque 4-bpp
+tiles, unrolled opaque rows), and the AZLE idle hint. AZLE is definitively
+irrelevant to Emerald; static ROM inspection finds the divide signature twice
+at 0x082e7582 and 0x082e7b98 but no exact mixer signature. The most plausible
+contributors in Oldale are therefore the divide suffix and opaque 4-bpp
+renderer paths. Renderer-only and divide-only hardware builds are needed to
+split the measured gain.
+
+**Emerald held-Down renderer pass** (2026-07-09): the deterministic follow-up
+loads `EMERAL0.SVS` with `Emerald.trimmed.gba`, disables frameskip, and holds
+GBA Down for all 300 frames (`DOWN_FRAME=0`, `DOWN_HOLD=300`). The checkpoint
+is a four-background Mode 0 scene whose final-frame SH profile put 54.2% of all
+sampled host instructions in the two `u16` FULLCOLOR text-background
+renderers. Cache flushes were zero, the ARM mixer had zero tries, and all 581
+missed ObjAffineSet calls used the tiny `count=1, offset=2` form, so another
+game-specific idle hint or BIOS shortcut was not the right lever.
+
+The exact renderer change has two parts. Opaque 4-bpp FULLCOLOR rows now use an
+eight-pixel `u16` specialization with constant destination offsets, removing
+the pointer/counter/branch loop bookkeeping. Base rows use a 256-entry shadow
+of the converted BG palette whose color-zero slot in every sub-palette is the
+backdrop color; this makes zero and nonzero nibbles the same unconditional
+lookup and lets the base specialization bypass the opacity classifier. The
+shadow is invalidated independently of the blend cache by every CPU/DMA,
+native-JIT, reset, and savestate palette mutation. This is a general Mode 0
+renderer optimization, not a Pokemon PC hint.
+
+Fine-tick cache-sim results for the same full-render 300-frame window:
+
+| Renderer build | Modeled cycles/frame | Modeled fps |
+|---|---:|---:|
+| Existing optimized build | 4,568,522.610 | 25.828919 |
+| + FULLCOLOR `u16` row unroll | 4,232,726.960 | 27.878009 |
+| + base backdrop-shadow palette | 4,083,763.963 | 28.894912 |
+
+The retained result removes 10.61% of modeled cycles and raises modeled fps by
+11.87%. A proposed 128-entry expanded-row cache was measured and removed: once
+the direct row writer was unrolled, cache tag/hash/copy work plus D-cache
+pressure regressed the result to 4,531,654.687 cycles/frame (26.039054 fps).
+
+The 300 post-frame region hashes and FBSTAT records are byte-identical before
+and after (stream SHA-256
+`2c7368243cb6a1331a79935298a159b51f7308c6d12c519b2dcf3ce223b947b6`).
+Frame 299 remains `iw=AB58DF3A`, `ew=C1CF3CD1`, `vr=8FD659AD`,
+`pal=919B865B`, `oam=9EBEB785`, `io=22D10517`, `fb=9D0B6330`.
+Focused renderer tests cover 1,407,616 opaque-row cases and 1,356,940
+backdrop-shadow pixel comparisons; the full host suite and production SH4
+cross-link pass. The calculator candidate keeps RTC enabled and ends
+`.cgba.highbss` exactly at the hardware-proven `0x8c655300` ceiling. Its
+on-device speed and the 45/60 fps milestones remain pending hardware
+measurement; no frameskip result is counted here.
+
+Compiler tuning was not the lever here. GCC 14.1 `-O2` remains the measured
+winner: compiling `video.cc` alone at `-O3` added 41,248 bytes and changed this
+checkpoint from 36.080742 to 36.079399 fps in the earlier A/B.  The wins came
+from reducing exact hot-path work, not switching compiler families.
+
 ## State at HEAD
 
 Shipping default is the interpreter (`CGBA_DYNAREC=OFF`); the JIT is the
@@ -423,52 +544,72 @@ opt-in hardware artifact with cold gate T=8, heat leak 4, faithful
 CpuSet/FastSet HLE on, experimental ObjAffine HLE off by default, all other
 infidel HLEs compiled out, IntrWait HLE off.
 Modeled numbers on the standing scenarios: AW 39.8 fps, Metroid movement
-32.4 fps, Metroid dense parity green, SMA2/Zelda from the 30fps-goal era
-35.1/58.5 (pre-demotion protocol — remeasure before quoting), Yoshi A/LEFT
-about 21.0 modeled fps. The current Mario-specific calcemu harness reaches
-45 emulated fps with the clean frame-1996 hash `8BEF0CBC`. A playable current
-JIT `.g3a` built from fresh CMake defaults is available at
-`release/gpSP.g3a`, SHA-256
-`7f2b789a0fbae5d328bbf154fe184b94b35b3322b81df12f932b630a282adbb8`; it is
-not a final 45-fps Yoshi release.
+32.4 fps, Metroid dense parity green, SMA2 from the 30fps-goal era 35.1
+(pre-demotion protocol — remeasure before quoting), the full-render Zelda
+checkpoint 14.65 fps with the new options off and 20.28 fps with them on, and
+Yoshi A/LEFT about 21.0 modeled fps. The Emerald held-Down checkpoint is 28.89
+modeled fps with the retained renderer options. The current Mario-specific
+calcemu harness
+reaches 45 emulated fps with the clean frame-1996 hash `8BEF0CBC`. The Zelda
+45/60 targets have not been reached. Both corrected hardware-layout candidates
+boot `Emerald.trimmed.gba` on a physical fx-CG100; the optimized candidate is
+qualitatively a little faster than the baseline there.
 
 ## Future directions
 
-Ordered by expected value; the first two have concrete measurements
-behind them.
+These are open or partial items, not a list completed by the Zelda work.
 
-1. **Extend the parked-HLE treatment to the SWI tail** (tracked as the
-   active follow-up). Census per 2000 AW frames: BgAffineSet n=429
-   (pure math — model ARM7TDMI early-termination multiply cycles),
+1. **Extend the parked-HLE treatment to the SWI tail — partial.** CpuSet has
+   faithful atomic handling and parked word/halfword copies, but fills and
+   some small non-RAM destinations still fall back. BgAffineSet has no HLE.
+   LZ77 WRAM/VRAM only have the old default-off, memory-only implementations;
+   they are not canonical parked state machines. The historical census per
+   2000 AW frames was BgAffineSet n=429,
    LZ77UnCompWram (0x11) n=5 / 59,480 B + LZ77UnCompVram (0x12)
-   n=7 / 71,680 B (token-walking cycle model, same canonical parking for
-   slice crossings), CpuSet n=40. This tail is the ~260 kcyc/frame gap
-   from 39.8 to the 43.7 infidel ceiling; an AW 45 fps target
-   (2.62 Mcyc/frame) needs another ~80 kcyc/frame beyond it.
-2. **IntrWait HLE** (`CGBA_SH4_INTRWAIT_HLE`): three hardening layers done,
-   one precise wedge left — the ISR acks REG_IF but never writes BIOS_IF,
-   so the faithful poll never satisfies. Whatever resolves it must decide
-   what the real BIOS observes in that state (hardware test).
-3. **AW JIT-vs-interp divergence** (pre-existing, ~51/81 FBSTAT frames
-   from boot, present with all SWI HLEs off): not a regression, but until
-   it's root-caused AW can't serve as a second bit-exactness anchor.
-   Suspects: affine paths, timing-sensitive intro IRQs, open-bus reads.
-4. **Renderer**: with the JIT tail shrinking, `render_scanline_text` /
+   n=7 / 71,680 B and CpuSet n=40. The associated ~260 kcycles/frame estimate
+   was not remeasured on this dirty tree, and Zelda's final trace had no
+   `jit swi-miss` entries. BgAffine timing must not introduce ARM7TDMI
+   early-termination multiply charges only in HLE while interpreter and JIT
+   deliberately use zero extra multiply cycles.
+2. **IntrWait HLE — open and disabled.** `CGBA_SH4_INTRWAIT_HLE` is hardcoded
+   to zero. The authentic BIOS and open BIOS both poll/clear BIOS_IF at
+   0x03fffff8; the IRQ wrapper does not synthesize it, so copying REG_IF into
+   BIOS_IF would be invented behavior. The current prototype also parks at a
+   magic PC using hidden, unserialized state instead of materializing the BIOS
+   stack/register state. The next step is a signature-validated canonical
+   wait-loop hook and interpreted-vs-HLE wake-state comparison; hardware is
+   final validation, not the present blocker.
+3. **AW JIT-vs-interp divergence — open.** The first A/B should now be the BIOS
+   IRQ-wrapper HLE. Its own comment says about ten fetch cycles per IRQ are
+   uncharged, and accumulated extra cycles from the bulk push/pop are not
+   debited by its current callers. AW takes about 119 IRQs/frame, while the
+   single-block oracle deliberately bypasses these hooks. Gate the whole
+   wrapper off for an exact JIT/interpreter run before pursuing affine,
+   open-bus, or renderer suspects.
+4. **Renderer — partial.** With the JIT tail shrinking, `render_scanline_text` /
    `render_w_effects` / affine renderers total ~15% of host instructions
-   in the AW profile and `update_gba` ~7%. gpSP's renderer is untouched
-   so far — palette-conversion caching, per-scanline dirty tracking, or
-   SH-4-tuned inner loops are unexplored.
-5. **Cold-gate tuning by regime**: the gate's constants (T=64, chunk 512,
-   leak 16) were tuned on Metroid movement + AW; a per-game or
-   feedback-driven adaptation (e.g. leak scaled by flush period) may buy
-   a few fps in other flush-thrash titles. Sweeps showed single-constant
-   changes are a wash — the wins historically came from *dynamics* fixes
-   (stop-on-hot, probe-only), not constants.
-6. **Density round 3 candidates**: per-block register caching of the top
-   1-2 guest registers (the load→op→store model leaves obvious wins on
-   the table but costs allocator complexity); Thumb const-tracker
-   extensions (const stores, const compare folding); block-local CPSR
-   liveness across conditional runs.
+   in the historical AW profile and `update_gba` ~7%. The Zelda work added
+   opt-in stable-palette blend-term caching, an opaque 4-bpp tile fast path,
+   and an SH-4-oriented unrolled opaque row, with host differential tests.
+   Per-scanline dirty tracking, affine inner loops, and broader renderer work
+   remain unexplored; the renderer contribution has not yet been isolated in
+   the corrected full-render benchmark.
+5. **Cold-gate tuning by regime — partial.** The current global defaults are
+   T=8, chunk 512, leak 4 after later Yoshi tuning, not the historical
+   T=64/leak 16 quoted here previously. Existing feedback also heats by four
+   after 180 flush-quiet frames and by one shortly after a flush. Yoshi sweeps
+   changed the retained constants (T96/leak16 at 20.52 fps to T8/leak4 at
+   21.35 fps); Mario threshold/chunk variants were also tested. There is no
+   isolated adaptive-versus-fixed A/B, per-game policy, or feedback-driven
+   leak controller. Compare the current +4/+1 heat rule with fixed +1 under
+   otherwise identical settings before adding more control dynamics.
+6. **Density round 3 candidates — open; one rejected experiment.** Per-block
+   caching of the top 1-2 guest registers was not implemented. A local Thumb
+   constant-store experiment reduced helper calls but regressed the Mario
+   checkpoint to 37 fps and was not retained. Constant-compare folding was not
+   implemented. The existing CPSR cache and linear dead-flag pass predate this
+   TODO; no new block-local liveness across conditional runs was added. None of
+   the round-3 candidates is present in the Zelda build.
 7. **Audio**: sound is fully stubbed. Any future audio needs the
    sound-timer batching revisited (sample-accurate FIFO DMA re-caps the
    event slice) — budget for a real-time mixer is ~unknown on this CPU.

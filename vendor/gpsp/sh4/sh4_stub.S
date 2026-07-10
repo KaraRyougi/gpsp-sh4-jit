@@ -157,6 +157,10 @@ defsymbl(cgba_sh4_vec_table)
   .long   _ws_cyc_seq                           /* 10 SH4G_VEC_ws_cyc_seq    */
   .long   _ws_cyc_nseq                          /* 11 SH4G_VEC_ws_cyc_nseq   */
   .long   _iwram + 0x8000                       /* 12 SH4G_VEC_iwram_data    */
+#if defined(CGBA_VIDEO_BLEND_PALETTE_CACHE) || \
+    defined(CGBA_VIDEO_BACKDROP_SHADOW_PALETTE)
+  .long   _palette_ram_dirty                    /* 13 SH4G_VEC_palette_dirty */
+#endif
 
 /* ---- main entry: execute_arm_translate_internal(cycles, reg_ptr) ---- */
 /* R4 = cycle counter, R5 = pointer to reg[] */
