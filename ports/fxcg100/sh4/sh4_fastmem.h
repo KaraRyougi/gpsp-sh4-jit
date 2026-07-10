@@ -77,7 +77,193 @@ enum {
 
 extern u8 *memory_map_read[];
 extern u16 io_registers[512];          /* eswap16'd (LE-layout) halfwords */
+extern u16 palette_ram[512];
+extern u16 palette_ram_converted[512];
+#ifdef CGBA_PALETTE_DIRTY_ACTIVE
+extern volatile u32 palette_ram_dirty;
+#endif
+extern u8 iwram[];
+extern u8 vram[1024 * 96];
 void sh4_op2_pc_mem_tramp(void);
+
+static inline void sh4g_fastmem_convert_palette(u8 **tp, unsigned src,
+                                                unsigned dst, unsigned tmp1,
+                                                unsigned tmp2)
+{
+#ifdef USE_XBGR1555_FORMAT
+  sh4g_const(tp, 0x7FFFu, tmp1);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_reg(&cg, src, dst);
+    sh4_emit_and(&cg, tmp1, dst);
+    sh4g_close(tp, &cg); }
+#else
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_reg(&cg, src, dst);
+    sh4_emit_mov_imm(&cg, 0x1F, tmp1);
+    sh4_emit_and(&cg, tmp1, dst);
+    sh4_emit_mov_imm(&cg, 11, tmp1);
+    sh4_emit_shld(&cg, tmp1, dst);
+    sh4g_close(tp, &cg); }
+  sh4g_const(tp, 0x03E0u, tmp2);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_reg(&cg, src, tmp1);
+    sh4_emit_and(&cg, tmp2, tmp1);
+    sh4_emit_shll(&cg, tmp1);
+    sh4_emit_or(&cg, tmp1, dst);
+    sh4_emit_mov_reg(&cg, src, tmp1);
+    sh4_emit_mov_imm(&cg, -10, tmp2);
+    sh4_emit_shld(&cg, tmp2, tmp1);
+    sh4_emit_mov_imm(&cg, 0x1F, tmp2);
+    sh4_emit_and(&cg, tmp2, tmp1);
+    sh4_emit_or(&cg, tmp1, dst);
+    sh4g_close(tp, &cg); }
+#endif
+}
+
+static inline void sh4g_fastmem_io16_direct_store(u8 **tp, u32 guest_address,
+                                                  u32 io_offset,
+                                                  u8 *store_tail)
+{
+  u8 *miss;
+
+  sh4g_const(tp, guest_address, SH4_REG_T1);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_cmpeq(&cg, SH4_REG_T1, SH4_REG_T0);
+    sh4g_close(tp, &cg); }
+  miss = sh4g_emit_bf_placeholder(tp);
+
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_reg(&cg, SH4_REG_ARG1, SH4_REG_RET);
+    sh4_emit_and_imm(&cg, 0xFF);
+    sh4_emit_mov_l_load_r0(&cg, SH4_REG_BASE, SH4_REG_T1);
+    sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
+    sh4g_close(tp, &cg); }
+  sh4g_const(tp, (u32)(uintptr_t)((u8 *)io_registers + io_offset),
+             SH4_REG_T2);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_w_store(&cg, SH4_REG_T1, SH4_REG_T2);
+    sh4g_close(tp, &cg); }
+  { u8 *b = sh4g_emit_bra_placeholder(tp);
+    sh4g_patch_bra(b, store_tail); }
+
+  sh4g_patch_cond(miss, *tp);
+}
+
+static inline void sh4g_fastmem_io16_dispstat_store(u8 **tp, u8 *store_tail)
+{
+  u8 *miss;
+
+  sh4g_const(tp, 0x04000004u, SH4_REG_T1);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_cmpeq(&cg, SH4_REG_T1, SH4_REG_T0);
+    sh4g_close(tp, &cg); }
+  miss = sh4g_emit_bf_placeholder(tp);
+
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_reg(&cg, SH4_REG_ARG1, SH4_REG_RET);
+    sh4_emit_and_imm(&cg, 0xFF);
+    sh4_emit_mov_l_load_r0(&cg, SH4_REG_BASE, SH4_REG_T1);
+    sh4_emit_mov_imm(&cg, -8, SH4_REG_ARG0);
+    sh4_emit_and(&cg, SH4_REG_ARG0, SH4_REG_T1);   /* value & ~0x07 */
+    sh4g_close(tp, &cg); }
+  sh4g_const(tp, (u32)(uintptr_t)((u8 *)io_registers + 0x004), SH4_REG_T2);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_w_load(&cg, SH4_REG_T2, SH4_REG_RET);
+    sh4_emit_swap_b(&cg, SH4_REG_RET, SH4_REG_RET);
+    sh4_emit_and_imm(&cg, 0x07);                   /* keep LCD status bits */
+    sh4_emit_or(&cg, SH4_REG_RET, SH4_REG_T1);
+    sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
+    sh4_emit_mov_w_store(&cg, SH4_REG_T1, SH4_REG_T2);
+    sh4g_close(tp, &cg); }
+  { u8 *b = sh4g_emit_bra_placeholder(tp);
+    sh4g_patch_bra(b, store_tail); }
+
+  sh4g_patch_cond(miss, *tp);
+}
+
+static inline void sh4g_fastmem_io16_dispcnt_store(u8 **tp, u8 *store_tail)
+{
+  u8 *miss, *same_mode;
+
+  sh4g_const(tp, 0x04000000u, SH4_REG_T1);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_cmpeq(&cg, SH4_REG_T1, SH4_REG_T0);
+    sh4g_close(tp, &cg); }
+  miss = sh4g_emit_bf_placeholder(tp);
+
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_reg(&cg, SH4_REG_ARG1, SH4_REG_RET);
+    sh4_emit_and_imm(&cg, 0xFF);
+    sh4_emit_mov_l_load_r0(&cg, SH4_REG_BASE, SH4_REG_T1);
+    sh4_emit_mov_reg(&cg, SH4_REG_T1, SH4_REG_RET);
+    sh4_emit_and_imm(&cg, 0x07);
+    sh4_emit_mov_reg(&cg, SH4_REG_RET, SH4_REG_ARG0);
+    sh4g_close(tp, &cg); }
+  sh4g_const(tp, (u32)(uintptr_t)((u8 *)io_registers + 0x000), SH4_REG_T2);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_w_load(&cg, SH4_REG_T2, SH4_REG_RET);
+    sh4_emit_swap_b(&cg, SH4_REG_RET, SH4_REG_RET);
+    sh4_emit_and_imm(&cg, 0x07);
+    sh4_emit_cmpeq(&cg, SH4_REG_ARG0, SH4_REG_RET);
+    sh4g_close(tp, &cg); }
+  same_mode = sh4g_emit_bt_placeholder(tp);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_imm(&cg, 25 * 4, SH4_REG_RET);       /* reg[OAM_UPDATED] */
+    sh4_emit_mov_imm(&cg, 1, SH4_REG_ARG0);
+    sh4_emit_mov_l_store_r0(&cg, SH4_REG_ARG0, SH4_REG_BASE);
+    sh4g_close(tp, &cg); }
+  sh4g_patch_cond(same_mode, *tp);
+
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
+    sh4_emit_mov_w_store(&cg, SH4_REG_T1, SH4_REG_T2);
+    sh4g_close(tp, &cg); }
+  { u8 *b = sh4g_emit_bra_placeholder(tp);
+    sh4g_patch_bra(b, store_tail); }
+
+  sh4g_patch_cond(miss, *tp);
+}
+
+static inline void sh4g_fastmem_io16_pair_direct_store(u8 **tp,
+                                                       u32 guest_address,
+                                                       u32 io_offset,
+                                                       u8 *store_tail)
+{
+  u8 *miss_odd, *miss_hi;
+
+  sh4g_const(tp, guest_address, SH4_REG_T1);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_T2);
+    sh4_emit_sub(&cg, SH4_REG_T1, SH4_REG_T2);       /* delta = addr - base */
+    sh4_emit_mov_reg(&cg, SH4_REG_T2, SH4_REG_RET);
+    sh4_emit_tst_imm(&cg, 1);                        /* T = even */
+    sh4g_close(tp, &cg); }
+  miss_odd = sh4g_emit_bf_placeholder(tp);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_imm(&cg, 2, SH4_REG_T1);
+    sh4_emit_cmphi(&cg, SH4_REG_T1, SH4_REG_T2);     /* T = delta > 2 */
+    sh4g_close(tp, &cg); }
+  miss_hi = sh4g_emit_bt_placeholder(tp);
+
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_reg(&cg, SH4_REG_T2, SH4_REG_ARG3);
+    sh4_emit_mov_reg(&cg, SH4_REG_ARG1, SH4_REG_RET);
+    sh4_emit_and_imm(&cg, 0xFF);
+    sh4_emit_mov_l_load_r0(&cg, SH4_REG_BASE, SH4_REG_T1);
+    sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
+    sh4_emit_mov_reg(&cg, SH4_REG_ARG3, SH4_REG_RET);
+    sh4g_close(tp, &cg); }
+  sh4g_const(tp, (u32)(uintptr_t)((u8 *)io_registers + io_offset),
+             SH4_REG_T2);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_w_store_r0(&cg, SH4_REG_T1, SH4_REG_T2);
+    sh4g_close(tp, &cg); }
+  { u8 *b = sh4g_emit_bra_placeholder(tp);
+    sh4g_patch_bra(b, store_tail); }
+
+  sh4g_patch_cond(miss_odd, *tp);
+  sh4g_patch_cond(miss_hi, *tp);
+}
 
 static inline int cgba_fm_is_load(int fm)
 { return (fm % CGBA_FM_BASE_COUNT) <= CGBA_FM_LOAD_SB; }
@@ -105,6 +291,7 @@ static inline u8 *sh4g_fastmem_emit_routine(u8 **tp, int fm)
   int wb = fm >= CGBA_FM_WB;
   u8 *guards[8]; int ng = 0;
   u8 *io_check = NULL, *store_tail = NULL;
+  u8 *store_vram_page_done = NULL;
   int i;
 
   /* params -> R5 early (R5 is untouched by everything below). */
@@ -112,6 +299,182 @@ static inline u8 *sh4g_fastmem_emit_routine(u8 **tp, int fm)
     sh4_emit_sts_pr(&cg, SH4_REG_ARG1);
     sh4_emit_mov_l_load_disp(&cg, SH4_REG_ARG1, SH4_REG_ARG1, 24 >> 2);
     sh4g_close(tp, &cg); }
+
+  if (!is_load && (kind == CGBA_FM_STORE_UH || kind == CGBA_FM_STORE_W)) {
+    u8 *miss[5];
+    int nmiss = 0;
+
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
+      sh4_emit_shlr16(&cg, SH4_REG_RET);
+      sh4_emit_shlr8(&cg, SH4_REG_RET);
+      sh4_emit_cmpeq_imm(&cg, 5);                  /* T = palette RAM */
+      sh4g_close(tp, &cg); }
+    miss[nmiss++] = sh4g_emit_bf_placeholder(tp);
+
+    if (align_mask) {
+      sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
+      sh4_emit_tst_imm(&cg, align_mask);           /* T = guest aligned */
+      sh4g_close(tp, &cg);
+      miss[nmiss++] = sh4g_emit_bf_placeholder(tp);
+    }
+
+    sh4g_const(tp, 0x03FFu, SH4_REG_ARG0);
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_ARG3);
+      sh4_emit_and(&cg, SH4_REG_ARG0, SH4_REG_ARG3); /* R7 = palette offset */
+      sh4g_close(tp, &cg); }
+    if (kind == CGBA_FM_STORE_W) {
+      sh4g_const(tp, 0x03FCu, SH4_REG_ARG0);
+      { sh4_codegen cg = sh4g_open(tp);
+        sh4_emit_cmphi(&cg, SH4_REG_ARG0, SH4_REG_ARG3); /* T = offset > 0x3fc */
+        sh4g_close(tp, &cg); }
+      miss[nmiss++] = sh4g_emit_bt_placeholder(tp);
+    }
+
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_reg(&cg, SH4_REG_ARG1, SH4_REG_RET);
+      sh4_emit_and_imm(&cg, 0xFF);
+      sh4_emit_mov_l_load_r0(&cg, SH4_REG_BASE, SH4_REG_T1);
+      sh4g_close(tp, &cg); }
+
+    sh4g_const(tp, (u32)(uintptr_t)palette_ram, SH4_REG_T2);
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_reg(&cg, SH4_REG_ARG3, SH4_REG_RET);
+      if (kind == CGBA_FM_STORE_W) {
+        sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_ARG0);
+        sh4_emit_swap_w(&cg, SH4_REG_ARG0, SH4_REG_ARG0);
+        sh4_emit_swap_b(&cg, SH4_REG_ARG0, SH4_REG_ARG0);
+        sh4_emit_mov_l_store_r0(&cg, SH4_REG_ARG0, SH4_REG_T2);
+      } else {
+        sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_ARG0);
+        sh4_emit_mov_w_store_r0(&cg, SH4_REG_ARG0, SH4_REG_T2);
+      }
+      sh4g_close(tp, &cg); }
+
+    sh4g_fastmem_convert_palette(tp, SH4_REG_T1, SH4_REG_ARG0,
+                                 SH4_REG_RET, SH4_REG_T2);
+    sh4g_const(tp, (u32)(uintptr_t)palette_ram_converted, SH4_REG_T2);
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_reg(&cg, SH4_REG_ARG3, SH4_REG_RET);
+      sh4_emit_mov_w_store_r0(&cg, SH4_REG_ARG0, SH4_REG_T2);
+      sh4g_close(tp, &cg); }
+
+    if (kind == CGBA_FM_STORE_W) {
+      { sh4_codegen cg = sh4g_open(tp);
+        sh4_emit_mov_reg(&cg, SH4_REG_T1, SH4_REG_ARG0);
+        sh4_emit_shlr16(&cg, SH4_REG_ARG0);
+        sh4g_close(tp, &cg); }
+      sh4g_fastmem_convert_palette(tp, SH4_REG_ARG0, SH4_REG_T1,
+                                   SH4_REG_RET, SH4_REG_T2);
+      sh4g_const(tp, (u32)(uintptr_t)palette_ram_converted, SH4_REG_T2);
+      { sh4_codegen cg = sh4g_open(tp);
+        sh4_emit_mov_reg(&cg, SH4_REG_ARG3, SH4_REG_RET);
+        sh4_emit_add_imm(&cg, 2, SH4_REG_RET);
+        sh4_emit_mov_w_store_r0(&cg, SH4_REG_T1, SH4_REG_T2);
+        sh4g_close(tp, &cg); }
+    }
+
+#ifdef CGBA_PALETTE_DIRTY_ACTIVE
+    /* Native aligned palette stores bypass gba_memory.c's write macros.
+     * Invalidate once after both converted halfwords (for STR) are visible.
+     * Preserve R1/T0, which sh4g_charge_mem_run still needs below. */
+    sh4g_vec_load(tp, SH4G_VEC_palette_dirty, SH4_REG_T2);
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_imm(&cg, CGBA_PALETTE_DIRTY_ACTIVE, SH4_REG_RET);
+      sh4_emit_mov_l_store(&cg, SH4_REG_RET, SH4_REG_T2);
+      sh4g_close(tp, &cg); }
+#endif
+
+    if (wb) {
+      sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_reg(&cg, SH4_REG_ARG1, SH4_REG_RET);
+      sh4_emit_shlr8(&cg, SH4_REG_RET);
+      sh4_emit_and_imm(&cg, 0xFF);
+      sh4_emit_mov_l_store_r0(&cg, SH4_REG_ARG2, SH4_REG_BASE);
+      sh4g_close(tp, &cg);
+    }
+    sh4g_charge_mem_run(tp, SH4_REG_T0, /*seq=*/0,
+                        /*is_word=*/(kind == CGBA_FM_STORE_W), 1);
+    sh4g_u16(tp, 0x000B);                          /* RTS */
+    sh4g_u16(tp, 0x0009);                          /* delay NOP */
+
+    for (i = 0; i < nmiss; i++)
+      sh4g_patch_cond(miss[i], *tp);
+  }
+
+  if (is_load) {
+    u8 *iwram_miss[2];
+    int niwram = 0;
+
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
+      sh4_emit_shlr16(&cg, SH4_REG_RET);
+      sh4_emit_shlr8(&cg, SH4_REG_RET);
+      sh4_emit_cmpeq_imm(&cg, 3);                    /* T = IWRAM */
+      sh4g_close(tp, &cg); }
+    iwram_miss[niwram++] = sh4g_emit_bf_placeholder(tp);
+
+    if (align_mask) {
+      sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
+      sh4_emit_tst_imm(&cg, align_mask);             /* T = guest aligned */
+      sh4g_close(tp, &cg);
+      iwram_miss[niwram++] = sh4g_emit_bf_placeholder(tp);
+    }
+
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
+      sh4_emit_shll16(&cg, SH4_REG_RET); sh4_emit_shll(&cg, SH4_REG_RET);
+      sh4_emit_shlr16(&cg, SH4_REG_RET); sh4_emit_shlr(&cg, SH4_REG_RET);
+      sh4g_close(tp, &cg); }
+    sh4g_vec_load(tp, SH4G_VEC_iwram_data, SH4_REG_T2);
+    { sh4_codegen cg = sh4g_open(tp);
+      switch (kind) {
+      case CGBA_FM_LOAD_W:
+        sh4_emit_mov_l_load_r0(&cg, SH4_REG_T2, SH4_REG_T1);
+        sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_ARG0);
+        sh4_emit_swap_w(&cg, SH4_REG_ARG0, SH4_REG_ARG0);
+        sh4_emit_swap_b(&cg, SH4_REG_ARG0, SH4_REG_T1);
+        break;
+      case CGBA_FM_LOAD_B:
+        sh4_emit_mov_b_load_r0(&cg, SH4_REG_T2, SH4_REG_T1);
+        sh4_emit_extu_b(&cg, SH4_REG_T1, SH4_REG_T1);
+        break;
+      case CGBA_FM_LOAD_UH:
+        sh4_emit_mov_w_load_r0(&cg, SH4_REG_T2, SH4_REG_T1);
+        sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
+        sh4_emit_extu_w(&cg, SH4_REG_T1, SH4_REG_T1);
+        break;
+      case CGBA_FM_LOAD_SH:
+        sh4_emit_mov_w_load_r0(&cg, SH4_REG_T2, SH4_REG_T1);
+        sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
+        sh4_emit_exts_w(&cg, SH4_REG_T1, SH4_REG_T1);
+        break;
+      default: /* LOAD_SB: mov.b sign-extends */
+        sh4_emit_mov_b_load_r0(&cg, SH4_REG_T2, SH4_REG_T1);
+        break;
+      }
+      sh4_emit_mov_reg(&cg, SH4_REG_ARG1, SH4_REG_RET);
+      sh4_emit_and_imm(&cg, 0xFF);                   /* R0 = rd byte-offset */
+      sh4_emit_mov_l_store_r0(&cg, SH4_REG_T1, SH4_REG_BASE);
+      sh4g_close(tp, &cg); }
+    if (wb) {
+      sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_reg(&cg, SH4_REG_ARG1, SH4_REG_RET);
+      sh4_emit_shlr8(&cg, SH4_REG_RET);
+      sh4_emit_and_imm(&cg, 0xFF);                   /* R0 = rn byte-offset */
+      sh4_emit_mov_l_store_r0(&cg, SH4_REG_ARG2, SH4_REG_BASE);
+      sh4g_close(tp, &cg);
+    }
+    sh4g_cycle_debit(tp, 1);                         /* IWRAM nseq cost */
+    sh4g_u16(tp, 0x000B);                            /* RTS */
+    sh4g_u16(tp, 0x0009);                            /* delay NOP */
+
+    for (i = 0; i < niwram; i++)
+      sh4g_patch_cond(iwram_miss[i], *tp);
+  }
 
   /* map guard: memory_map_read[] covers 0x00000000..0x0fffffff only */
   sh4g_const(tp, 0x10000000u, SH4_REG_T1);
@@ -131,7 +494,41 @@ static inline u8 *sh4g_fastmem_emit_routine(u8 **tp, int fm)
     sh4_emit_mov_l_load_r0(&cg, SH4_REG_T2, SH4_REG_T2);
     sh4_emit_tst(&cg, SH4_REG_T2, SH4_REG_T2);       /* T = (page == NULL) */
     sh4g_close(tp, &cg); }
+  if (!is_load && kind != CGBA_FM_STORE_B) {
+    /* VRAM is not always present in memory_map_read[], but halfword/word VRAM
+     * stores are side-effect-free plain writes in gpSP. Synthesize the 32 KiB
+     * page base directly and keep R0 as the later addr&0x7fff page offset. */
+    u8 *not_vram, *not_mirror;
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
+      sh4_emit_shlr16(&cg, SH4_REG_RET);
+      sh4_emit_shlr8(&cg, SH4_REG_RET);
+      sh4_emit_cmpeq_imm(&cg, 6);                    /* T = VRAM */
+      sh4g_close(tp, &cg); }
+    not_vram = sh4g_emit_bf_placeholder(tp);
+
+    sh4g_const(tp, (u32)(uintptr_t)vram, SH4_REG_T2);
+    sh4g_const(tp, 0x18000u, SH4_REG_ARG0);
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
+      sh4_emit_and(&cg, SH4_REG_ARG0, SH4_REG_RET);  /* page base: 0/80k/100k/180k */
+      sh4_emit_cmpeq(&cg, SH4_REG_ARG0, SH4_REG_RET);
+      sh4g_close(tp, &cg); }
+    not_mirror = sh4g_emit_bf_placeholder(tp);
+    sh4g_const(tp, (u32)-0x8000, SH4_REG_ARG0);
+    sh4g_add_reg(tp, SH4_REG_ARG0, SH4_REG_RET);     /* 0x18000 mirrors to 0x10000 */
+    sh4g_patch_cond(not_mirror, *tp);
+    sh4g_add_reg(tp, SH4_REG_RET, SH4_REG_T2);
+    store_vram_page_done = sh4g_emit_bra_placeholder(tp);
+
+    sh4g_patch_cond(not_vram, *tp);
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_tst(&cg, SH4_REG_T2, SH4_REG_T2);     /* restore NULL-page test */
+      sh4g_close(tp, &cg); }
+  }
   guards[ng++] = sh4g_emit_bt_placeholder(tp);
+  if (store_vram_page_done)
+    sh4g_patch_bra(store_vram_page_done, *tp);
 
   if (is_load) {
     /* regions 2..12 (RAM/IO/video/gamepak); BIOS + backup stay on C */
@@ -321,8 +718,18 @@ static inline u8 *sh4g_fastmem_emit_routine(u8 **tp, int fm)
   sh4g_u16(tp, 0x000B);                              /* RTS */
   sh4g_u16(tp, 0x0009);                              /* delay NOP */
 
+  /* Common guard failure. Keep this close to the early map/alignment/SMC
+   * guards: they are disp8 BT/BF placeholders, and the optional IO-specialized
+   * tail below can grow independently. */
+  for (i = 0; i < ng; i++)
+    sh4g_patch_cond(guards[i], *tp);
+  sh4g_far_jmp(tp, (const void *)sh4_op2_pc_mem_tramp);
+  ng = 0;
+
   /* Halfword-store interrupt-register fast path. Mirrors gpSP's
    * write_io_register16 exactly for the two hot ISR registers:
+   *   WIN0H/WIN0V/WININ/WINOUT/BLDCNT/BLDALPHA/BLDY: plain
+   *     write_ioreg, no alert.
    *   REG_IF (0x202): IF &= ~value — pure, no alert possible.
    *   REG_IE (0x200): IE = value, then check_interrupt() — the write is
    *     committed natively and, when it would unmask a pending IRQ
@@ -333,6 +740,24 @@ static inline u8 *sh4g_fastmem_emit_routine(u8 **tp, int fm)
   if (io_check) {
     u8 *not_if, *fail_ie;
     sh4g_patch_cond(io_check, *tp);
+    sh4g_fastmem_io16_dispcnt_store(tp, store_tail);
+    sh4g_fastmem_io16_dispstat_store(tp, store_tail);
+    /* BG scroll registers are plain io_registers writes; grouping them here
+     * keeps Yoshi's per-frame scroll traffic out of the C helper without
+     * growing every translated Thumb STRH site. */
+    sh4g_fastmem_io16_pair_direct_store(tp, 0x04000010u, 0x010u, store_tail);
+    sh4g_fastmem_io16_pair_direct_store(tp, 0x04000014u, 0x014u, store_tail);
+    sh4g_fastmem_io16_pair_direct_store(tp, 0x04000018u, 0x018u, store_tail);
+    sh4g_fastmem_io16_pair_direct_store(tp, 0x0400001Cu, 0x01Cu, store_tail);
+    sh4g_fastmem_io16_direct_store(tp, 0x04000040u, 0x040u, store_tail);
+    sh4g_fastmem_io16_direct_store(tp, 0x04000044u, 0x044u, store_tail);
+    sh4g_fastmem_io16_direct_store(tp, 0x04000048u, 0x048u, store_tail);
+    sh4g_fastmem_io16_direct_store(tp, 0x0400004Au, 0x04Au, store_tail);
+    sh4g_fastmem_io16_direct_store(tp, 0x0400004Cu, 0x04Cu, store_tail);
+    sh4g_fastmem_io16_direct_store(tp, 0x04000050u, 0x050u, store_tail);
+    sh4g_fastmem_io16_direct_store(tp, 0x04000052u, 0x052u, store_tail);
+    sh4g_fastmem_io16_direct_store(tp, 0x04000054u, 0x054u, store_tail);
+
     sh4g_const(tp, 0x04000202u, SH4_REG_T1);
     { sh4_codegen cg = sh4g_open(tp);
       sh4_emit_cmpeq(&cg, SH4_REG_T1, SH4_REG_T0);   /* T = REG_IF */
@@ -400,14 +825,14 @@ static inline u8 *sh4g_fastmem_emit_routine(u8 **tp, int fm)
       sh4g_patch_bra(b, store_tail); }
     sh4g_patch_cond(fail_ie, *tp);
     /* falls into the guard-failure tramp below */
-  }
 
-  /* guard failure: straight into the compact C-helper trampoline. PR still
-   * points at the site's BRA, so the tramp reads fn/opcode/pc/cycles from
-   * the same tuple this routine was called with. */
-  for (i = 0; i < ng; i++)
-    sh4g_patch_cond(guards[i], *tp);
-  sh4g_far_jmp(tp, (const void *)sh4_op2_pc_mem_tramp);
+    /* IO-tail guard failure: straight into the compact C-helper trampoline. PR
+     * still points at the site's BRA, so the tramp reads fn/opcode/pc/cycles
+     * from the same tuple this routine was called with. */
+    for (i = 0; i < ng; i++)
+      sh4g_patch_cond(guards[i], *tp);
+    sh4g_far_jmp(tp, (const void *)sh4_op2_pc_mem_tramp);
+  }
 
   return entry;
 }

@@ -68,7 +68,8 @@ static void reload_timing(u32 waitcnt)
 
 enum kind {
   K_DP, K_LD, K_ST, K_LDM, K_STM, K_B, K_BCOND_T, K_BCOND_NT,
-  K_BX_ARM, K_BX_THUMB, K_TBX_THUMB, K_TMUL, K_TSWI
+  K_BX_ARM, K_BX_THUMB, K_TBX_THUMB, K_TMUL, K_AMUL, K_AMLA, K_AMULL,
+  K_AMLAL, K_ASMULL, K_ASMLAL, K_TSWI, K_THLE_DIV
 };
 typedef struct {
   u32 pc; int kind; u32 data; int width; int nregs; u32 target;
@@ -76,6 +77,24 @@ typedef struct {
 typedef struct { int thumb; int n; insn ins[16]; u32 dpc; } block;
 
 static int fcol(int thumb) { return thumb ? 0 : 1; }
+
+static int swi_dispatch_cycles(int sp_region, int lr_region, int thumb)
+{
+  int c = 19 * ws_seq[0][1] + 3 * ws_nseq[0][1];
+  c += 8 * ws_seq[3][1];
+  c += 6 * ws_seq[sp_region & 0xF][1];
+  c += ws_nseq[lr_region & 0xF][0];
+  if (!thumb)
+    c += ws_seq[lr_region & 0xF][1];
+  return c;
+}
+
+static int hle_div_cycles(const insn *in)
+{
+  int align = in->width;
+  return swi_dispatch_cycles((int)in->data, REGION(in->target), 1) +
+    (22 + 10 * align) * ws_seq[0][1] + (2 * align) * ws_nseq[0][1] - 1;
+}
 
 /* Interpreter mem/branch charge (cpu.cc rules), the oracle. */
 static int interp_mb(const insn *in, int col)
@@ -87,6 +106,8 @@ static int interp_mb(const insn *in, int col)
       return ws_nseq[REGION(in->target)][col];
     case K_BX_ARM:
       return ws_nseq[REGION(in->target)][1] + ws_seq[REGION(in->target)][1];
+    case K_THLE_DIV:
+      return hle_div_cycles(in);
     default:                return 0;  /* DP, BX_THUMB: none */
   }
 }
@@ -101,10 +122,13 @@ enum bug {
   BUG_COND_NT_FREE,
   BUG_GATE_FETCH_FREE,
   BUG_THUMB_MUL_EXTRA,
+  BUG_ARM_MUL_EXTRA,
+  BUG_HLE_DIV_FLAT,
   BUG_THUMB_SWI_FETCH,
   BUG_ARM_BX_TARGET_FETCH_FREE
 };
 static enum bug g_inject;
+
 static int dyn_mb(const insn *in, int col)
 {
   switch (in->kind) {
@@ -126,6 +150,14 @@ static int dyn_mb(const insn *in, int col)
         ((g_inject == BUG_ARM_BX_TARGET_FETCH_FREE) ? 0 : ws_seq[REGION(in->target)][1]);
     case K_TMUL:
       return (g_inject == BUG_THUMB_MUL_EXTRA) ? 2 : 0;
+    case K_AMUL:  return (g_inject == BUG_ARM_MUL_EXTRA) ? 2 : 0;
+    case K_AMLA:  return (g_inject == BUG_ARM_MUL_EXTRA) ? 3 : 0;
+    case K_AMULL: return (g_inject == BUG_ARM_MUL_EXTRA) ? 3 : 0;
+    case K_AMLAL: return (g_inject == BUG_ARM_MUL_EXTRA) ? 3 : 0;
+    case K_ASMULL:return (g_inject == BUG_ARM_MUL_EXTRA) ? 2 : 0;
+    case K_ASMLAL:return (g_inject == BUG_ARM_MUL_EXTRA) ? 3 : 0;
+    case K_THLE_DIV:
+      return (g_inject == BUG_HLE_DIV_FLAT) ? 64 : hle_div_cycles(in);
     default:                return 0;
   }
 }
@@ -235,6 +267,22 @@ static void run_suite(void)
     {.pc=0x08002526,.kind=K_DP}, {.pc=0x08002528,.kind=K_DP},
     {.pc=0x0800252A,.kind=K_TMUL}}});
 
+  check("ARM MUL has no SH4 extra", &(block){.thumb=0,.n=1,.dpc=0x03001004,.ins={
+    {.pc=0x03001000,.kind=K_AMUL}}});
+  check("ARM MLA has no SH4 extra", &(block){.thumb=0,.n=1,.dpc=0x03001008,.ins={
+    {.pc=0x03001004,.kind=K_AMLA}}});
+  check("ARM UMULL has no SH4 extra", &(block){.thumb=0,.n=1,.dpc=0x0300100C,.ins={
+    {.pc=0x03001008,.kind=K_AMULL}}});
+  check("ARM UMLAL has no SH4 extra", &(block){.thumb=0,.n=1,.dpc=0x03001010,.ins={
+    {.pc=0x0300100C,.kind=K_AMLAL}}});
+  check("ARM SMULL has no SH4 extra", &(block){.thumb=0,.n=1,.dpc=0x03001014,.ins={
+    {.pc=0x03001010,.kind=K_ASMULL}}});
+  check("ARM SMLAL has no SH4 extra", &(block){.thumb=0,.n=1,.dpc=0x03001018,.ins={
+    {.pc=0x03001014,.kind=K_ASMLAL}}});
+
+  check("Thumb Div HLE tracks BIOS cycles", &(block){.thumb=1,.n=1,.dpc=0x0812F6C6,.ins={
+    {.pc=0x0812F6C4,.kind=K_THLE_DIV,.data=3,.width=6,.target=0x0812F6C6}}});
+
   check("Thumb SWI vectors with no fetch", &(block){.thumb=1,.n=1,.dpc=0x00000008,.ins={
     {.pc=0x08004B9C,.kind=K_TSWI,.target=0x00000008}}});
 
@@ -265,6 +313,10 @@ static int self_test(void)
     {.pc=0x08004C82,.kind=K_BCOND_T,.target=0x08004C76}}};
   block tmul_blk = {.thumb=1,.n=1,.dpc=0x0800252C,.ins={
     {.pc=0x0800252A,.kind=K_TMUL}}};
+  block amul_blk = {.thumb=0,.n=1,.dpc=0x03001004,.ins={
+    {.pc=0x03001000,.kind=K_AMUL}}};
+  block div_blk = {.thumb=1,.n=1,.dpc=0x0812F6C6,.ins={
+    {.pc=0x0812F6C4,.kind=K_THLE_DIV,.data=3,.width=6,.target=0x0812F6C6}}};
   block tswi_blk = {.thumb=1,.n=1,.dpc=0x00000008,.ins={
     {.pc=0x08004B9C,.kind=K_TSWI,.target=0x00000008}}};
   block abx_blk = {.thumb=0,.n=1,.dpc=0x00000720,.ins={
@@ -275,6 +327,8 @@ static int self_test(void)
     { BUG_COND_NT_FREE,      "not-taken Thumb conditional branch skips refill", &cond_blk },
     { BUG_GATE_FETCH_FREE,   "exhausted loop gate skips target fetch", &gate_blk },
     { BUG_THUMB_MUL_EXTRA,   "Thumb MUL carries the old +2 threaded approximation", &tmul_blk },
+    { BUG_ARM_MUL_EXTRA,     "ARM MUL carries the old threaded approximation", &amul_blk },
+    { BUG_HLE_DIV_FLAT,      "HLE Div carries the old flat 64-cycle charge", &div_blk },
     { BUG_THUMB_SWI_FETCH,   "Thumb SWI charges its skipped instruction fetch", &tswi_blk },
     { BUG_ARM_BX_TARGET_FETCH_FREE, "ARM BX-to-ARM skips target fetch", &abx_blk },
   };
@@ -314,9 +368,10 @@ int main(void)
   int st = self_test();
 
   printf("\nModeled classes: ARM/Thumb fetch, single load/store, LDM/STM, B/BL,\n"
-         "BX (ARM & Thumb targets), Thumb MUL no-extra, Thumb SWI, branch refill. NOT yet\n"
+         "BX (ARM & Thumb targets), ARM/Thumb MUL no-extra, Thumb HLE Div, Thumb SWI,\n"
+         "branch refill. NOT yet\n"
          "modeled (add here if a residual per-block gap appears): MSR/MRS, SWP,\n"
-         "ARM MUL/MLA internal cycles, SWI, conditional-fail instruction fetch accounting.\n");
+         "SWI, conditional-fail instruction fetch accounting.\n");
 
   printf("\n== %d ok/tolerated, %d REAL backend bug(s); self-test %s ==\n",
          n_pass, n_real, st ? "FAILED" : "passed");

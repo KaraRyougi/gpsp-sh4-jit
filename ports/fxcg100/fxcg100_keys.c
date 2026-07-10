@@ -17,6 +17,7 @@ typedef struct fxcg100_key_choice {
 static const fxcg100_key_choice bindable_keys[] = {
   { KEY_MENU, "MENU" },   { KEY_EXIT, "EXIT" },
   { KEY_SHIFT, "SHIFT" }, { KEY_ALPHA, "ALPHA" },
+  { KEY_SQUARE, "X^2" },  { KEY_POWER, "^" },
   { KEY_OPTN, "OPTN" },   { KEY_VARS, "VARS" },
   { KEY_F1, "F1" },       { KEY_F2, "F2" },
   { KEY_F3, "F3" },       { KEY_F4, "F4" },
@@ -27,19 +28,29 @@ static const fxcg100_key_choice bindable_keys[] = {
   { KEY_XOT, "X,T" },     { KEY_LOG, "LOG" },
   { KEY_LN, "LN" },       { KEY_SIN, "SIN" },
   { KEY_COS, "COS" },     { KEY_TAN, "TAN" },
-  { KEY_FRAC, "a b/c" },  { KEY_DEL, "DEL" },
+  { KEY_FRAC, "a b/c" },  { KEY_FD, "S<=>D" },
+  { KEY_LEFTP, "(" },      { KEY_RIGHTP, ")" },
+  { KEY_COMMA, "," },     { KEY_ARROW, "->" },
+  { KEY_DEL, "DEL" },
   { KEY_7, "7" },         { KEY_8, "8" },
   { KEY_9, "9" },         { KEY_4, "4" },
   { KEY_5, "5" },         { KEY_6, "6" },
+  { KEY_MUL, "x" },       { KEY_DIV, "/" },
   { KEY_1, "1" },         { KEY_2, "2" },
-  { KEY_3, "3" },         { KEY_0, "0" },
+  { KEY_3, "3" },         { KEY_ADD, "+" },
+  { KEY_SUB, "-" },       { KEY_0, "0" },
+  { KEY_DOT, "." },       { KEY_EXP, "x10" },
+  { KEY_NEG, "(-)" },
 };
 
+_Static_assert(sizeof(bindable_keys) / sizeof(bindable_keys[0]) == 49,
+  "fx-CG50 must expose every physical key except AC/ON");
+
 /* GBA button -> fx-CG50 key, in enum order:
- *   A=MENU B=EXIT SELECT=SHIFT START=VARS
+ *   A=MENU B=EXIT SELECT=^ START=VARS
  *   RIGHT LEFT UP DOWN L=F5 R=F6  (AC/ON opens the emulator menu) */
 static const uint16_t default_keymap[FXCG100_GBA_KEY_COUNT] = {
-  KEY_MENU, KEY_EXIT, KEY_SHIFT, KEY_VARS,
+  KEY_MENU, KEY_EXIT, KEY_POWER, KEY_VARS,
   KEY_RIGHT, KEY_LEFT, KEY_UP, KEY_DOWN, KEY_F5, KEY_F6
 };
 #else

@@ -24,7 +24,9 @@ MEMORY
 		(mpm-installer notes), with further OS state above it. A build
 		whose arena reached 0x8c715300 overwrote it and HARD-RESET the
 		calculator on the spot; an arena end of 0x8c655300 is proven fine.
-		The ASSERT below keeps a 64 KiB margin under mpm.bin.
+		Production is pinned to the only hardware-proven end, 0x8c655300.
+		An explicit emulator-only differential-harness build can override
+		cgba_highram_limit at link time; never install that build on hardware.
 	*/
 	highram (rw):   o = 0x8c200000, l = 0x4F0000
 	ilram   (rwx):  o = 0xe5200000, l = 4k
@@ -141,8 +143,9 @@ SECTIONS
 		_cgba_highbss_end = . ;
 	} > highram :NONE
 
-	ASSERT(_cgba_highbss_end <= 0x8c6F0000,
-		"fx-CG100 gpSP high RAM arena would overwrite the resident MPM loader at 0x8c700000 (hard reset)")
+	PROVIDE(cgba_highram_limit = 0x8c655300);
+	ASSERT(_cgba_highbss_end <= cgba_highram_limit,
+		"fx-CG100 gpSP high RAM arena exceeds the hardware-proven 0x8c655300 ceiling (hard-reset risk)")
 
 	/DISCARD/ : {
 		*(.gint.rodata.sh3 .gint.data.sh3 .gint.bss.sh3)

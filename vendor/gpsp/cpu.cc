@@ -22,6 +22,28 @@ extern "C" {
   #include "cpu_instrument.h"
 }
 
+#ifdef CGBA_GBA_OVER_AZLE_IDLE
+#include "ports/fxcg100/sh4/sh4_idle_signature.h"
+
+static inline int cgba_registered_idle_signature_ok(u32 pc, const u8 *map)
+{
+  u32 off;
+
+  if (pc != CGBA_SH4_AZLE_IDLE_PC)
+    return 1;
+  if (!map || map != memory_map_read[pc >> 15])
+    return 0;
+  off = pc & 0x7FFFu;
+  return cgba_sh4_azle_idle_signature_match(
+    readaddress16(map, off + 0u), readaddress16(map, off + 2u),
+    readaddress16(map, off + 4u), readaddress16(map, off + 6u),
+    readaddress16(map, off + 8u));
+}
+#else
+#define cgba_registered_idle_signature_ok(pc, map)                            \
+  ((void)(pc), (void)(map), 1)
+#endif
+
 const u8 bit_count[256] =
 {
   0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4, 1, 2, 2, 3, 2, 3, 3,
@@ -1575,7 +1597,7 @@ extern u32 cgba_interp_instr_bios, cgba_interp_instr_rom, cgba_interp_instr_ram;
            /* Adaptive increment: +4 while the ROM cache is quiet (working
             * set fits — promote scene-cycling once-per-frame code fast),
             * +1 within 180 frames of a wholesale flush (thrash regime: the
-            * halve-on-flush decay must outpace accumulation). */             \
+            * leaky-bucket flush decay must outpace accumulation). */         \
            u32 _inc = (frame_counter - cgba_last_rom_flush_frame >           \
                        CGBA_SH4_HEAT_QUIET_FRAMES)                            \
              ? CGBA_SH4_HEAT_FAST : CGBA_SH4_HEAT_SLOW;                       \
@@ -1627,6 +1649,7 @@ extern u32 cgba_interp_instr_bios, cgba_interp_instr_rom, cgba_interp_instr_ram;
 #else
 #define CGBA_DIFF_STOP_CHECK() do {} while(0)
 #define CGBA_COLD_HEAT(isz, thumbbit) do {} while(0)
+#define CGBA_INTERP_COUNT() do {} while(0)
 #endif
 
 #ifdef CGBA_SH4_DIFF_DUMP_OPS
@@ -3266,11 +3289,12 @@ skip_instruction:
 #endif
        CGBA_DIFF_STOP_CHECK();
 
-       if ((reg[REG_PC] == idle_loop_target_pc
+       if (((reg[REG_PC] == idle_loop_target_pc &&
+             cgba_registered_idle_signature_ok(reg[REG_PC], pc_address_block))
 #if defined(CGBA_FXCG100) || defined(CGBA_FXCG50)
             || reg[REG_PC] == cgba_detected_idle_pc
 #endif
-           ) && cycles_remaining > 0) cycles_remaining = 0;
+            ) && cycles_remaining > 0) cycles_remaining = 0;
 
        if (cpu_alert & (CPU_ALERT_HALT | CPU_ALERT_IRQ))
          goto alert;
@@ -3782,11 +3806,12 @@ thumb_loop:
        cycles_remaining -= ws_cyc_seq[(reg[REG_PC] >> 24) & 0xF][0];
        CGBA_DIFF_STOP_CHECK();
 
-       if ((reg[REG_PC] == idle_loop_target_pc
+       if (((reg[REG_PC] == idle_loop_target_pc &&
+             cgba_registered_idle_signature_ok(reg[REG_PC], pc_address_block))
 #if defined(CGBA_FXCG100) || defined(CGBA_FXCG50)
             || reg[REG_PC] == cgba_detected_idle_pc
 #endif
-           ) && cycles_remaining > 0) cycles_remaining = 0;
+            ) && cycles_remaining > 0) cycles_remaining = 0;
 
        if (cpu_alert & (CPU_ALERT_HALT | CPU_ALERT_IRQ))
           goto alert;

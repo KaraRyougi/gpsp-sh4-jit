@@ -148,6 +148,9 @@ bool gba_load_state(const void* src)
   {
      palette_ram_converted[i] = convert_palette(eswap16(palette_ram[i]));
   }
+#ifdef CGBA_PALETTE_DIRTY_ACTIVE
+  palette_ram_dirty = CGBA_PALETTE_DIRTY_ACTIVE;
+#endif
 
   video_reload_counters();
 
@@ -198,5 +201,3 @@ void gba_save_state(void* dst)
   // Update the doc size  
   bson_write_u32(stptr, wrptr - stptr);
 }
-
-

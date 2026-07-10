@@ -194,17 +194,24 @@ u32 cgba_idle_wait;
  * Recomputed on any timer start/stop and after savestate loads; zero for
  * pure sound-clock configurations (AW), skipping the per-slice scan. */
 u32 cgba_timer_cap_mask;
+u32 cgba_timer_active_mask;
 
 void cgba_recompute_timer_cap_mask(void)
 {
   unsigned i;
   u32 m = 0;
+  u32 active = 0;
   for (i = 0; i < 4; i++)
+  {
+    if (timer[i].status != TIMER_INACTIVE)
+      active |= 1u << i;
     if (timer[i].status == TIMER_PRESCALE &&
         (timer[i].irq ||
          (i != 3 && timer[i + 1].status == TIMER_CASCADE)))
       m |= 1u << i;
+  }
   cgba_timer_cap_mask = m;
+  cgba_timer_active_mask = active;
 }
 
 u32 function_cc update_gba(int remaining_cycles)
@@ -239,8 +246,9 @@ u32 function_cc update_gba(int remaining_cycles)
 
     remaining_cycles = 0;
 
-    // Timers can trigger DMA (usually sound) and consume cycles
-    dma_cycles = update_timers(&irq_raised, completed_cycles);
+    // Timers can trigger DMA (usually sound) and consume cycles.
+    dma_cycles = cgba_timer_active_mask ?
+      update_timers(&irq_raised, completed_cycles) : 0;
     // Check for serial port IRQs as well. Skip the call (once per event
     // slice) when nothing is scheduled and no cycle-driven device is
     // active: RFU/Pokemon-serial poll unconditionally; the AdvWars link
@@ -517,6 +525,7 @@ bool main_check_savestate(const u8 *src)
       return false;
   }
 
+  cgba_recompute_timer_cap_mask();
   return true;
 }
 

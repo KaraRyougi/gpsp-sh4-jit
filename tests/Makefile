@@ -9,18 +9,21 @@
 
 CC      ?= cc
 CFLAGS  ?= -std=c11 -Wall -Wextra
+CXX     ?= c++
+CXXFLAGS ?= -std=c++11 -Wall -Wextra -O2
 ROOT    := ..
 BIN     := /tmp/cgba-sh4
+comma   := ,
+DEAD_STRIP := $(if $(filter Darwin,$(shell uname -s)),\
+	-Wl$(comma)-dead_strip,-Wl$(comma)--gc-sections)
 
-ifeq ($(shell uname -s),Darwin)
-RTC_GC_LDFLAGS := -Wl,-dead_strip
-else
-RTC_GC_LDFLAGS := -Wl,--gc-sections
-endif
+.PHONY: all smoke audit core thumb cond native-ldst input rtc cycle exec \
+	swi-overlap swi-oam udiv udiv-emitter idle-signature video-opaque \
+	video-blend-cache video-backdrop-shadow arm-mixer clean
 
-.PHONY: all smoke audit core thumb cond native-ldst input rtc cycle exec clean
-
-all: smoke core thumb cond native-ldst rtc input cycle exec audit
+all: smoke core thumb cond native-ldst rtc input cycle exec swi-overlap swi-oam udiv \
+	udiv-emitter idle-signature video-opaque video-blend-cache \
+	video-backdrop-shadow arm-mixer audit
 
 # Execution oracle: run emitted native code in a mini SH4 interpreter against
 # the C-helper semantics (closes the pixel-soak blind spot on the audio path).
@@ -48,9 +51,13 @@ thumb: $(ROOT)/tests/sh4_thumb_mvp_audit.c $(ROOT)/ports/fxcg100/sh4/sh4_thumb_m
 
 input: $(ROOT)/tests/fxcg100_input_maps_test.c \
        $(ROOT)/ports/fxcg100/fxcg100_keys.c \
-       $(ROOT)/ports/fxcg100/fxcg100_platform.h
+       $(ROOT)/ports/fxcg100/fxcg100_platform.h \
+       $(ROOT)/tests/stubs/gint/keycodes.h
 	$(CC) $(CFLAGS) -I$(ROOT) $(ROOT)/tests/fxcg100_input_maps_test.c -o $(BIN)-input
 	$(BIN)-input
+	$(CC) $(CFLAGS) -DCGBA_FXCG50=1 -I$(ROOT)/tests/stubs -I$(ROOT) \
+	  $(ROOT)/tests/fxcg100_input_maps_test.c -o $(BIN)-input-cg50
+	$(BIN)-input-cg50
 
 # Production gpSP cartridge GPIO/RTC and calculator-specific ROM loaders. Dead
 # section elimination keeps the otherwise monolithic gba_memory.c host-linkable.
@@ -61,7 +68,7 @@ rtc: $(ROOT)/tests/rtc_test.c $(ROOT)/vendor/gpsp/gba_memory.c \
 	  -DCGBA_RTC_WALLCLOCK=1 \
 	  -I$(ROOT) -I$(ROOT)/vendor/gpsp -I$(ROOT)/vendor/gpsp/libretro \
 	  -I$(ROOT)/vendor/gpsp/libretro/libretro-common/include \
-	  $(ROOT)/tests/rtc_test.c $(RTC_GC_LDFLAGS) -o $(BIN)-rtc
+	  $(ROOT)/tests/rtc_test.c $(DEAD_STRIP) -o $(BIN)-rtc
 	$(BIN)-rtc
 
 # ARM condition-code -> SH4 T-bit emission, every cond x every NZCV (host-only).
@@ -86,10 +93,86 @@ cycle: $(ROOT)/tests/sh4_cycle_audit.c
 	$(CC) $(CFLAGS) $(ROOT)/tests/sh4_cycle_audit.c -o $(BIN)-cycle
 	$(BIN)-cycle
 
+swi-overlap: $(ROOT)/tests/sh4_swi_overlap_test.c \
+	      $(ROOT)/ports/fxcg100/sh4/sh4_swi_overlap.h
+	$(CC) $(CFLAGS) -I$(ROOT) $(ROOT)/tests/sh4_swi_overlap_test.c \
+	  -o $(BIN)-swi-overlap
+	$(BIN)-swi-overlap
+
+swi-oam: $(ROOT)/tests/sh4_swi_oam_test.c \
+	 $(ROOT)/ports/fxcg100/sh4/sh4_swi_oam.h
+	$(CC) $(CFLAGS) -O2 -I$(ROOT) $(ROOT)/tests/sh4_swi_oam_test.c \
+	  -o $(BIN)-swi-oam
+	$(BIN)-swi-oam
+
+udiv: $(ROOT)/tests/sh4_udiv_fastpath_test.c \
+	$(ROOT)/ports/fxcg100/sh4/sh4_thumb_udiv.h
+	$(CC) $(CFLAGS) -I$(ROOT) $(ROOT)/tests/sh4_udiv_fastpath_test.c \
+	  -o $(BIN)-udiv
+	$(BIN)-udiv
+
+udiv-emitter: $(ROOT)/tests/sh4_udiv_emitter_test.c \
+	$(ROOT)/ports/fxcg100/sh4/sh4_thumb_udiv.h \
+	$(ROOT)/ports/fxcg100/sh4/sh4_interp_helpers.c \
+	$(ROOT)/vendor/gpsp/sh4/sh4_emit.h
+	$(CC) $(CFLAGS) -Wno-unused-function \
+	  -DCGBA_SH4_THUMB_UDIV_FASTPATH=1 \
+	  -ffunction-sections -fdata-sections -I$(ROOT) \
+	  -I$(ROOT)/vendor/gpsp/libretro \
+	  -I$(ROOT)/vendor/gpsp/libretro/libretro-common/include \
+	  $(ROOT)/tests/sh4_udiv_emitter_test.c \
+	  $(ROOT)/ports/fxcg100/sh4/sh4_interp_helpers.c \
+	  $(DEAD_STRIP) -o $(BIN)-udiv-emitter
+	$(BIN)-udiv-emitter
+
+arm-mixer: $(ROOT)/tests/sh4_arm_mixer_fastpath_test.c \
+	$(ROOT)/ports/fxcg100/sh4/sh4_arm_mixer.h
+	$(CC) $(CFLAGS) -O2 -I$(ROOT) \
+	  $(ROOT)/tests/sh4_arm_mixer_fastpath_test.c -o $(BIN)-arm-mixer
+	$(BIN)-arm-mixer
+
+idle-signature: $(ROOT)/tests/sh4_idle_signature_test.c \
+	$(ROOT)/ports/fxcg100/sh4/sh4_idle_signature.h
+	$(CC) $(CFLAGS) -I$(ROOT) $(ROOT)/tests/sh4_idle_signature_test.c \
+	  -o $(BIN)-idle-signature
+	$(BIN)-idle-signature
+
+video-opaque: $(ROOT)/tests/video_opaque_tile_test.cc \
+	$(ROOT)/vendor/gpsp/video.cc
+	$(CXX) $(CXXFLAGS) -ffunction-sections -fdata-sections \
+	  -I$(ROOT)/vendor/gpsp -I$(ROOT)/vendor/gpsp/libretro \
+	  -I$(ROOT)/vendor/gpsp/libretro/libretro-common/include \
+	  $(DEAD_STRIP) $(ROOT)/tests/video_opaque_tile_test.cc \
+	  -o $(BIN)-video-opaque
+	$(BIN)-video-opaque
+
+video-blend-cache: $(ROOT)/tests/video_blend_palette_cache_test.cc \
+	$(ROOT)/vendor/gpsp/video.cc
+	$(CXX) $(CXXFLAGS) -ffunction-sections -fdata-sections \
+	  -I$(ROOT)/vendor/gpsp -I$(ROOT)/vendor/gpsp/libretro \
+	  -I$(ROOT)/vendor/gpsp/libretro/libretro-common/include \
+	  $(DEAD_STRIP) $(ROOT)/tests/video_blend_palette_cache_test.cc \
+	  -o $(BIN)-video-blend-cache
+	$(BIN)-video-blend-cache
+
+video-backdrop-shadow: $(ROOT)/tests/video_backdrop_shadow_test.cc \
+	$(ROOT)/vendor/gpsp/video.cc
+	$(CXX) $(CXXFLAGS) -ffunction-sections -fdata-sections \
+	  -I$(ROOT)/vendor/gpsp -I$(ROOT)/vendor/gpsp/libretro \
+	  -I$(ROOT)/vendor/gpsp/libretro/libretro-common/include \
+	  $(DEAD_STRIP) $(ROOT)/tests/video_backdrop_shadow_test.cc \
+	  -o $(BIN)-video-backdrop-shadow
+	$(BIN)-video-backdrop-shadow
+
 # Requires sh-elf-as + sh-elf-objcopy on PATH.
 audit: $(ROOT)/tests/sh4_codegen_audit.c $(ROOT)/ports/fxcg100/sh4/sh4_codegen.h
 	$(CC) $(CFLAGS) -I$(ROOT) $(ROOT)/tests/sh4_codegen_audit.c -o $(BIN)-audit
 	$(BIN)-audit
 
 clean:
-	rm -f $(BIN)-smoke $(BIN)-core $(BIN)-thumb $(BIN)-cond $(BIN)-native-ldst $(BIN)-input $(BIN)-rtc $(BIN)-cycle $(BIN)-audit
+	rm -f $(BIN)-smoke $(BIN)-core $(BIN)-thumb $(BIN)-cond $(BIN)-native-ldst \
+	  $(BIN)-input $(BIN)-input-cg50 $(BIN)-rtc $(BIN)-cycle $(BIN)-exec $(BIN)-swi-overlap $(BIN)-udiv \
+	  $(BIN)-swi-oam $(BIN)-udiv-emitter $(BIN)-idle-signature \
+	  $(BIN)-video-opaque $(BIN)-video-blend-cache \
+	  $(BIN)-video-backdrop-shadow \
+	  $(BIN)-arm-mixer $(BIN)-audit

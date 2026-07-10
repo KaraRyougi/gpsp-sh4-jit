@@ -28,7 +28,10 @@ typedef int64_t  s64;
 
 u8 *memory_map_read[0x2000];
 u8 iwram[1024 * 32 * 2];
+u8 vram[1024 * 96];
 u16 io_registers[512];
+u16 palette_ram[512];
+u16 palette_ram_converted[512];
 int cgba_sh4_extra_cycles;
 u8 ws_cyc_seq[16][2];
 u8 ws_cyc_nseq[16][2];
@@ -182,6 +185,25 @@ static void expect_thumb_const_io_fallback(const char *name, u32 opcode,
   }
 }
 
+static void expect_fastmem_routine(const char *name, int fm)
+{
+  u8 *p = code;
+  memset(code, 0xCC, sizeof(code));
+
+  if (sh4g_fastmem_emit_routine(&p, fm) != code) {
+    fprintf(stderr, "%s: routine entry was not at buffer start\n", name);
+    fail = 1;
+  }
+  if (p == code) {
+    fprintf(stderr, "%s: routine emitted no code\n", name);
+    fail = 1;
+  }
+  if ((size_t)(p - code) >= sizeof(code)) {
+    fprintf(stderr, "%s: routine exceeded host audit buffer\n", name);
+    fail = 1;
+  }
+}
+
 static void expect_arm_block_fallback(const char *name, u32 opcode)
 {
   u8 *p = code;
@@ -269,6 +291,7 @@ int main(void)
                                  0x04000130u);
   expect_thumb_const_io_fallback("const LDRH r1,[r0,#0] non-IO", 0x8801u,
                                  0x03000130u);
+  expect_fastmem_routine("shared STRH routine", CGBA_FM_STORE_UH);
 
   expect_arm_block_native_load("STMIA r0,{r1,r2}", 0xE8800006u);
   expect_arm_block_fallback("STMIA r0!,{r0,r1}", 0xE8A00003u); /* wb base in list */

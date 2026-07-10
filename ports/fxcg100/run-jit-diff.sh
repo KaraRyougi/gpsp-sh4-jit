@@ -176,6 +176,7 @@ build "$GG/build-cg-jitdiff-jit" jit
 if [[ "$run_diagnostic" == "1" ]]; then
   echo "[3/5] configure + build diagnostic pass ..."
   cfg "$GG/build-cg-jitdiff-block" 0 \
+      -DCGBA_SH4_DIFF_HARNESS=ON \
       -DCGBA_GPSP_HEADLESS_DIFF_FRAME="$DIFF_FRAME" \
       -DCGBA_GPSP_HEADLESS_DIFF_BLOCKS="$DIFF_BLOCKS" \
       -DCGBA_GPSP_HEADLESS_WINDOW_DIFF_FRAME="$WINDOW_DIFF_FRAME"

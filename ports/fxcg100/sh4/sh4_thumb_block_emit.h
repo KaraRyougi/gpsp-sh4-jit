@@ -13,6 +13,10 @@
 #include "ports/fxcg100/sh4/sh4_emit_glue.h"
 #include "ports/fxcg100/sh4/sh4_fastmem.h"
 
+#ifndef CGBA_SH4_LDST_DETAIL_COUNTERS
+#define CGBA_SH4_LDST_DETAIL_COUNTERS 0
+#endif
+
 extern u8 *memory_map_read[];
 extern u8 iwram[];
 int  cgba_sh4_thumb_block(u32 opcode, u32 pc);
@@ -111,7 +115,8 @@ static inline int sh4g_thumb_push_iwram_native(u8 **tp, u32 opcode, u32 pc,
     sh4_emit_add_imm(&cg, -(int)(count * 4), SH4_REG_RET);
     sh4g_close(tp, &cg); }
 
-#if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
+#if (defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)) && \
+  CGBA_SH4_LDST_DETAIL_COUNTERS
   sh4g_const(tp, (u32)(uintptr_t)&cgba_sh4_native_thumb_push_iwram_count,
              SH4_REG_T2);
   { sh4_codegen cg = sh4g_open(tp);

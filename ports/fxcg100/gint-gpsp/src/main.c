@@ -7,13 +7,23 @@
 #include "fxcg100_platform.h"
 #include "frame_pacing.h"
 #include "gpsp_runner.h"
-#ifdef CGBA_DYNAREC
-#include "sh4/sh4_diff_harness.h"
+#ifdef CGBA_GPSP_HEADLESS_TEST
+#define CGBA_HEADLESS_STATE_SIZE (416u * 1024u)
+extern unsigned char *cgba_gamepak_scratch_acquire(unsigned int min_size);
+extern void cgba_gamepak_scratch_release(void);
+extern void gba_save_state(void *dst);
+extern _Bool gba_load_state(const void *src);
+#endif
 
 /* AUTOMATIC backup-save flush cadence (guest frames). ~10s at 60fps; only
  * writes NOR when the save is dirty, so idle play never touches flash. */
 #define CGBA_BACKUP_AUTO_FRAMES 600u
 
+#if defined(CGBA_DYNAREC) && defined(CGBA_SH4_DIFF_HARNESS)
+#include "sh4/sh4_diff_harness.h"
+#endif
+
+#ifdef CGBA_DYNAREC
 extern int dynarec_enable;   /* gpSP: 0 = interpreter, 1 = SH4 recompiler */
 extern uint32_t execute_cycles;
 extern uint32_t reg[64];
@@ -65,6 +75,7 @@ extern uint32_t cgba_sh4_helper_thumb_ldst_store_count;
 extern uint32_t cgba_sh4_helper_thumb_ldst_ram_count;
 extern uint32_t cgba_sh4_helper_thumb_ldst_io_count;
 extern uint32_t cgba_sh4_helper_thumb_ldst_video_count;
+extern uint32_t cgba_sh4_helper_thumb_ldst_video_region_count[3];
 extern uint32_t cgba_sh4_helper_thumb_ldst_rom_count;
 extern uint32_t cgba_sh4_helper_thumb_ldst_other_count;
 extern uint32_t cgba_sh4_helper_thumb_ldst_unmapped_count;
@@ -83,6 +94,33 @@ extern uint32_t cgba_sh4_helper_thumb_ldst_imm_count;
 extern uint32_t cgba_sh4_native_thumb_const_io_count;
 extern uint32_t cgba_sh4_native_thumb_runtime_io_count;
 extern uint32_t cgba_sh4_native_thumb_push_iwram_count;
+extern uint32_t cgba_sh4_thumb_io16_store_count[512];
+extern uint32_t cgba_sh4_dma_ctl_count[4];
+extern uint32_t cgba_sh4_dma_ctl_enable_count[4];
+extern uint32_t cgba_sh4_dma_ctl_value[4][4];
+extern uint32_t cgba_sh4_dma_ctl_value_count[4][4];
+extern uint32_t cgba_sh4_hle_div_zero_count;
+extern uint32_t cgba_sh4_hle_div_one_count;
+extern uint32_t cgba_sh4_hle_div_neg_one_count;
+extern uint32_t cgba_sh4_hle_div_pow2_count;
+extern uint32_t cgba_sh4_hle_div_other_count;
+extern uint32_t cgba_sh4_prof_entry_count;
+extern uint32_t cgba_sh4_prof_overflow_count;
+extern uint32_t read_memory16(uint32_t address);
+struct cgba_sh4_prof_row {
+	uint32_t key;
+	uint32_t count;
+};
+extern unsigned cgba_sh4_prof_top(struct cgba_sh4_prof_row *out, unsigned max);
+#ifdef CGBA_SH4_ARM_MIXER_FASTPATH
+extern uint32_t cgba_sh4_arm_mixer_try_count;
+extern uint32_t cgba_sh4_arm_mixer_hit_count;
+extern uint32_t cgba_sh4_arm_mixer_batch_count;
+extern uint32_t cgba_sh4_arm_mixer_guard_fallback_count;
+extern uint32_t cgba_sh4_arm_mixer_budget_stop_count;
+extern uint32_t cgba_sh4_arm_mixer_first_pc;
+extern uint32_t cgba_sh4_arm_mixer_first_reg[10];
+#endif
 #endif
 #endif
 
@@ -92,7 +130,14 @@ extern uint32_t cgba_sh4_native_thumb_push_iwram_count;
 
 #define CGBA_HIGH_BSS __attribute__((section(".cgba.highbss"), aligned(32)))
 #define CGBA_HIGHRAM_SAFE_START ((uintptr_t)0x8c200000u)
-#define CGBA_HIGHRAM_SAFE_END   ((uintptr_t)0x8c780000u)
+#if defined(CGBA_FXCG100) && !defined(CGBA_GPSP_HEADLESS_TEST) && \
+	!defined(CGBA_SH4_DIFF_HARNESS)
+/* This is the only end address proven safe on physical fx-CG100 hardware.
+ * A 0x8c6b5300 arena already caused an OS reset while loading a ROM. */
+#define CGBA_HIGHRAM_SAFE_END   ((uintptr_t)0x8c655300u)
+#else
+#define CGBA_HIGHRAM_SAFE_END   ((uintptr_t)0x8c6f0000u)
+#endif
 
 extern char cgba_highbss_start[];
 extern char cgba_highbss_end[];
@@ -236,6 +281,13 @@ static int start_gpsp(uint16_t *framebuffer, unsigned rom_id)
 	cgba_dynarec_ibh_dual_slow_count = 0;
 	cgba_dynarec_ibh_dual_hot_arm_count = 0;
 	cgba_dynarec_ibh_dual_hot_thumb_count = 0;
+	{
+		extern u32 cgba_bios_hle_irq_in, cgba_bios_hle_irq_out;
+		extern u32 cgba_bios_hle_swi_count;
+		cgba_bios_hle_irq_in = 0;
+		cgba_bios_hle_irq_out = 0;
+		cgba_bios_hle_swi_count = 0;
+	}
 	cgba_sh4_prof_reset();
 	cgba_sh4_helper_thumb_ldst_count = 0;
 	cgba_sh4_helper_thumb_block_count = 0;
@@ -262,6 +314,8 @@ static int start_gpsp(uint16_t *framebuffer, unsigned rom_id)
 	cgba_sh4_helper_thumb_ldst_ram_count = 0;
 	cgba_sh4_helper_thumb_ldst_io_count = 0;
 	cgba_sh4_helper_thumb_ldst_video_count = 0;
+	memset(cgba_sh4_helper_thumb_ldst_video_region_count, 0,
+		sizeof(uint32_t) * 3u);
 	cgba_sh4_helper_thumb_ldst_rom_count = 0;
 	cgba_sh4_helper_thumb_ldst_other_count = 0;
 	cgba_sh4_helper_thumb_ldst_unmapped_count = 0;
@@ -280,6 +334,17 @@ static int start_gpsp(uint16_t *framebuffer, unsigned rom_id)
 	cgba_sh4_native_thumb_const_io_count = 0;
 	cgba_sh4_native_thumb_runtime_io_count = 0;
 	cgba_sh4_native_thumb_push_iwram_count = 0;
+	memset(cgba_sh4_thumb_io16_store_count, 0,
+		sizeof(uint32_t) * 512u);
+	memset(cgba_sh4_dma_ctl_count, 0, sizeof(uint32_t) * 4u);
+	memset(cgba_sh4_dma_ctl_enable_count, 0, sizeof(uint32_t) * 4u);
+	memset(cgba_sh4_dma_ctl_value, 0, sizeof(uint32_t) * 16u);
+	memset(cgba_sh4_dma_ctl_value_count, 0, sizeof(uint32_t) * 16u);
+	cgba_sh4_hle_div_zero_count = 0;
+	cgba_sh4_hle_div_one_count = 0;
+	cgba_sh4_hle_div_neg_one_count = 0;
+	cgba_sh4_hle_div_pow2_count = 0;
+	cgba_sh4_hle_div_other_count = 0;
 #endif
 	return 0;
 }
@@ -359,6 +424,14 @@ static void show_diag_overlay(void)
 #define CGBA_GPSP_HEADLESS_A_PRESS 2u
 #endif
 
+#ifndef CGBA_GPSP_HEADLESS_DOWN_FRAME
+#define CGBA_GPSP_HEADLESS_DOWN_FRAME 0u
+#endif
+
+#ifndef CGBA_GPSP_HEADLESS_DOWN_HOLD
+#define CGBA_GPSP_HEADLESS_DOWN_HOLD 0u
+#endif
+
 #ifndef CGBA_GPSP_HEADLESS_DUMP_EVERY
 #define CGBA_GPSP_HEADLESS_DUMP_EVERY 0u
 #endif
@@ -426,8 +499,8 @@ static void show_diag_overlay(void)
 #define CGBA_GPSP_HEADLESS_SAVE_STATE_FRAME -1
 #endif
 /* Alternating input: from ALT_FRAME on, tap A at the start of even 60-frame
- * windows and START at the start of odd ones (window length = ALT_PERIOD,
- * tap length = ALT_PRESS). 0 = off. */
+ * windows and START (or LEFT with CGBA_GPSP_HEADLESS_ALT_LEFT) at the start of
+ * odd ones (window length = ALT_PERIOD, tap length = ALT_PRESS). 0 = off. */
 #ifndef CGBA_GPSP_HEADLESS_ALT_PERIOD
 #define CGBA_GPSP_HEADLESS_ALT_PERIOD 0u
 #endif
@@ -436,6 +509,9 @@ static void show_diag_overlay(void)
 #endif
 #ifndef CGBA_GPSP_HEADLESS_ALT_FRAME
 #define CGBA_GPSP_HEADLESS_ALT_FRAME 60u
+#endif
+#ifndef CGBA_GPSP_HEADLESS_ALT_LEFT
+#define CGBA_GPSP_HEADLESS_ALT_LEFT 0
 #endif
 #ifndef CGBA_GPSP_HEADLESS_SAVE_SLOT_FRAME
 #define CGBA_GPSP_HEADLESS_SAVE_SLOT_FRAME -1
@@ -464,6 +540,73 @@ static void hputs_dbg(const char *s)
 		hputc_dbg(*s++);
 	hputc_dbg('\n');
 }
+
+#if defined(CGBA_DYNAREC) && \
+	(defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS))
+static void cgba_print_thumb_io16_top(void)
+{
+	int used[8];
+	char buf[96];
+
+	for(int slot = 0; slot < 8; slot++) {
+		uint32_t best = 0;
+		int best_i = -1;
+
+		used[slot] = -1;
+		for(int i = 0; i < 512; i++) {
+			int seen = 0;
+			for(int j = 0; j < slot; j++)
+				if(used[j] == i)
+					seen = 1;
+			if(!seen && cgba_sh4_thumb_io16_store_count[i] > best) {
+				best = cgba_sh4_thumb_io16_store_count[i];
+				best_i = i;
+			}
+		}
+		if(best_i < 0 || best == 0)
+			break;
+		used[slot] = best_i;
+		snprintf(buf, sizeof buf, "jit thumb io16 #%d reg=%03X n=%lu",
+			slot, best_i * 2, (unsigned long)best);
+		hputs_dbg(buf);
+	}
+}
+
+static void cgba_print_prof_top(void)
+{
+	struct cgba_sh4_prof_row rows[8];
+	char buf[96];
+	unsigned n;
+
+	snprintf(buf, sizeof buf, "jit prof entries=%lu ovf=%lu",
+		(unsigned long)cgba_sh4_prof_entry_count,
+		(unsigned long)cgba_sh4_prof_overflow_count);
+	hputs_dbg(buf);
+	n = cgba_sh4_prof_top(rows, 8);
+	for(unsigned i = 0; i < n; i++) {
+		uint32_t key = rows[i].key;
+		if(key == 0xffffffffu) {
+			snprintf(buf, sizeof buf, "jit prof #%u ovf n=%lu",
+				i, (unsigned long)rows[i].count);
+		}
+		else {
+			char mode = (key & 1u) ? 'T' : 'A';
+			uint32_t pc = key & 0x0fffffffu;
+			if(mode == 'T')
+				pc &= ~1u;
+			snprintf(buf, sizeof buf,
+				"jit prof #%u %c%08lX n=%lu op=%04lX %04lX %04lX %04lX",
+				i, mode, (unsigned long)pc,
+				(unsigned long)rows[i].count,
+				(unsigned long)(read_memory16(pc) & 0xffffu),
+				(unsigned long)(read_memory16(pc + 2) & 0xffffu),
+				(unsigned long)(read_memory16(pc + 4) & 0xffffu),
+				(unsigned long)(read_memory16(pc + 6) & 0xffffu));
+		}
+		hputs_dbg(buf);
+	}
+}
+#endif
 
 static void hput_hex4_dbg(uint16_t value)
 {
@@ -633,13 +776,15 @@ static int headless_create_blob(const uint16_t *path, unsigned size)
 
 static int headless_save_checkpoint(unsigned frame)
 {
-	void *state = cgba_sh4_checkpoint_buffer();
-	unsigned size = cgba_sh4_checkpoint_size();
+	unsigned size = CGBA_HEADLESS_STATE_SIZE;
+	void *state = cgba_gamepak_scratch_acquire(size);
 	int existing_size = headless_storage_blob_size(headless_checkpoint_path);
 	int ok = 0;
 	char buf[128];
 
-	cgba_sh4_checkpoint_capture();
+	if(!state)
+		return 0;
+	gba_save_state(state);
 	if(existing_size == (int)size) {
 		ok = headless_write_blob_contents(headless_checkpoint_path, state, size);
 	} else {
@@ -673,8 +818,9 @@ static int headless_save_checkpoint(unsigned frame)
 			hputc_dbg('\n');
 		snprintf(buf, sizeof buf,
 			"@@CGBA_CHECKPOINT_HEX_END frame=%u", frame);
-		hputs_dbg(buf);
+			hputs_dbg(buf);
 	}
+	cgba_gamepak_scratch_release();
 	return ok;
 }
 
@@ -721,16 +867,18 @@ static int headless_read_checkpoint(void *state, unsigned size)
 
 static int headless_load_checkpoint(void)
 {
-	void *state = cgba_sh4_checkpoint_buffer();
-	unsigned size = cgba_sh4_checkpoint_size();
-	int read_ok = headless_read_checkpoint(state, size);
-	int load_ok = read_ok ? cgba_sh4_checkpoint_restore() : 0;
+	unsigned size = CGBA_HEADLESS_STATE_SIZE;
+	void *state = cgba_gamepak_scratch_acquire(size);
+	int read_ok = state ? headless_read_checkpoint(state, size) : 0;
+	int load_ok = read_ok ? gba_load_state(state) : 0;
 	char buf[128];
 
 	snprintf(buf, sizeof buf,
 		"@@CGBA_CHECKPOINT load ok=%d read=%d size=%u",
-		load_ok, read_ok, size);
+			load_ok, read_ok, size);
 	hputs_dbg(buf);
+	if(state)
+		cgba_gamepak_scratch_release();
 	return load_ok;
 }
 #endif
@@ -832,7 +980,7 @@ static void headless_log_state(unsigned frame, const char *phase,
 		hputs_dbg(lines[i]);
 }
 
-#ifdef CGBA_DYNAREC
+#if defined(CGBA_DYNAREC) && defined(CGBA_SH4_DIFF_HARNESS)
 enum {
 	CGBA_HEADLESS_REG_PC = 15,
 	CGBA_HEADLESS_CPU_HALT_STATE = 18,
@@ -900,16 +1048,23 @@ static int headless_a_down(unsigned frame)
 {
 	const unsigned start = (unsigned)CGBA_GPSP_HEADLESS_A_FRAME;
 	const unsigned hold = (unsigned)CGBA_GPSP_HEADLESS_A_HOLD;
+#if CGBA_GPSP_HEADLESS_A_PERIOD != 0
 	const unsigned period = (unsigned)CGBA_GPSP_HEADLESS_A_PERIOD;
+#endif
 	const unsigned press = (unsigned)CGBA_GPSP_HEADLESS_A_PRESS;
 	unsigned rel;
 
 	if(hold == 0 || press == 0 || frame < start || frame >= start + hold)
 		return 0;
 	rel = frame - start;
+#if CGBA_GPSP_HEADLESS_A_PERIOD == 0
+	(void)rel;
+	return 1;
+#else
 	if(period == 0)
 		return 1;
 	return (rel % period) < press;
+#endif
 }
 
 static int headless_a_edge(unsigned frame)
@@ -967,6 +1122,8 @@ static uint32_t headless_buttons_for_frame(unsigned frame)
 {
 	const unsigned start = (unsigned)CGBA_GPSP_HEADLESS_START_FRAME;
 	const unsigned hold = (unsigned)CGBA_GPSP_HEADLESS_START_HOLD;
+	const unsigned down_start = (unsigned)CGBA_GPSP_HEADLESS_DOWN_FRAME;
+	const unsigned down_hold = (unsigned)CGBA_GPSP_HEADLESS_DOWN_HOLD;
 	uint32_t buttons = FXCG100_GBA_BUTTON_NONE;
 
 #if CGBA_HEADLESS_FUZZ_ON
@@ -984,15 +1141,27 @@ static uint32_t headless_buttons_for_frame(unsigned frame)
 	}
 	if(headless_a_down(frame))
 		buttons |= FXCG100_GBA_BUTTON_A;
+	if(down_hold != 0 && frame >= down_start &&
+			frame - down_start < down_hold)
+		buttons |= FXCG100_GBA_BUTTON_DOWN;
 #if CGBA_GPSP_HEADLESS_ALT_PERIOD > 0
+#if CGBA_GPSP_HEADLESS_ALT_FRAME > 0
 	if(frame >= (unsigned)CGBA_GPSP_HEADLESS_ALT_FRAME) {
+#endif
 		unsigned rel = frame - (unsigned)CGBA_GPSP_HEADLESS_ALT_FRAME;
 		unsigned win = rel / (unsigned)CGBA_GPSP_HEADLESS_ALT_PERIOD;
 		if((rel % (unsigned)CGBA_GPSP_HEADLESS_ALT_PERIOD) <
 		   (unsigned)CGBA_GPSP_HEADLESS_ALT_PRESS)
+#if CGBA_GPSP_HEADLESS_ALT_LEFT
+			buttons |= (win & 1) ? FXCG100_GBA_BUTTON_LEFT
+				: FXCG100_GBA_BUTTON_A;
+#else
 			buttons |= (win & 1) ? FXCG100_GBA_BUTTON_START
 				: FXCG100_GBA_BUTTON_A;
+#endif
+#if CGBA_GPSP_HEADLESS_ALT_FRAME > 0
 	}
+#endif
 #endif
 #if CGBA_GPSP_HEADLESS_RUN_FRAME > 0
 	if(frame >= (unsigned)CGBA_GPSP_HEADLESS_RUN_FRAME) {
@@ -1090,6 +1259,8 @@ static int cgba_headless_test(uint16_t *framebuffer)
 	cgba_sh4_helper_thumb_ldst_ram_count = 0;
 	cgba_sh4_helper_thumb_ldst_io_count = 0;
 	cgba_sh4_helper_thumb_ldst_video_count = 0;
+	memset(cgba_sh4_helper_thumb_ldst_video_region_count, 0,
+		sizeof(uint32_t) * 3u);
 	cgba_sh4_helper_thumb_ldst_rom_count = 0;
 	cgba_sh4_helper_thumb_ldst_other_count = 0;
 	cgba_sh4_helper_thumb_ldst_unmapped_count = 0;
@@ -1108,14 +1279,32 @@ static int cgba_headless_test(uint16_t *framebuffer)
 	cgba_sh4_native_thumb_const_io_count = 0;
 	cgba_sh4_native_thumb_runtime_io_count = 0;
 	cgba_sh4_native_thumb_push_iwram_count = 0;
+	memset(cgba_sh4_thumb_io16_store_count, 0,
+		sizeof(uint32_t) * 512u);
+	memset(cgba_sh4_dma_ctl_count, 0, sizeof(uint32_t) * 4u);
+	memset(cgba_sh4_dma_ctl_enable_count, 0, sizeof(uint32_t) * 4u);
+	memset(cgba_sh4_dma_ctl_value, 0, sizeof(uint32_t) * 16u);
+	memset(cgba_sh4_dma_ctl_value_count, 0, sizeof(uint32_t) * 16u);
+	cgba_sh4_hle_div_zero_count = 0;
+	cgba_sh4_hle_div_one_count = 0;
+	cgba_sh4_hle_div_neg_one_count = 0;
+	cgba_sh4_hle_div_pow2_count = 0;
+	cgba_sh4_hle_div_other_count = 0;
 	#endif
-	snprintf(buf, sizeof buf, "input START f=%u h=%u A/SHIFT f=%u h=%u p=%u w=%u",
+	snprintf(buf, sizeof buf,
+		"input START f=%u h=%u A f=%u h=%u p=%u w=%u DOWN f=%u h=%u ALT f=%u p=%u w=%u L=%u",
 		(unsigned)CGBA_GPSP_HEADLESS_START_FRAME,
 		(unsigned)CGBA_GPSP_HEADLESS_START_HOLD,
 		(unsigned)CGBA_GPSP_HEADLESS_A_FRAME,
 		(unsigned)CGBA_GPSP_HEADLESS_A_HOLD,
 		(unsigned)CGBA_GPSP_HEADLESS_A_PERIOD,
-		(unsigned)CGBA_GPSP_HEADLESS_A_PRESS);
+		(unsigned)CGBA_GPSP_HEADLESS_A_PRESS,
+		(unsigned)CGBA_GPSP_HEADLESS_DOWN_FRAME,
+		(unsigned)CGBA_GPSP_HEADLESS_DOWN_HOLD,
+		(unsigned)CGBA_GPSP_HEADLESS_ALT_FRAME,
+		(unsigned)CGBA_GPSP_HEADLESS_ALT_PERIOD,
+		(unsigned)CGBA_GPSP_HEADLESS_ALT_PRESS,
+		(unsigned)CGBA_GPSP_HEADLESS_ALT_LEFT);
 	hputs_dbg(buf);
 
 	frame_base = headless_frame_base();
@@ -1155,7 +1344,7 @@ static int cgba_headless_test(uint16_t *framebuffer)
 			snprintf(buf, sizeof buf, "frame %u A/SHIFT", frame);
 			hputs_dbg(buf);
 		}
-#ifdef CGBA_DYNAREC
+#if defined(CGBA_DYNAREC) && defined(CGBA_SH4_DIFF_HARNESS)
 #if CGBA_GPSP_HEADLESS_DIFF_BLOCKS > 0
 		if((int)frame == CGBA_GPSP_HEADLESS_DIFF_FRAME) {
 			unsigned j;
@@ -1174,7 +1363,7 @@ static int cgba_headless_test(uint16_t *framebuffer)
 #endif
 		headless_log_phase(frame, "pre-run");
 		headless_log_state(frame, "pre", framebuffer);
-#ifdef CGBA_DYNAREC
+#if defined(CGBA_DYNAREC) && defined(CGBA_SH4_DIFF_HARNESS)
 		headless_window_diff(frame);
 #endif
 		cgba_gpsp_run_frame(buttons, rendered);
@@ -1223,6 +1412,13 @@ static int cgba_headless_test(uint16_t *framebuffer)
 		headless_log_phase(frame, "loop-end");
 	}
 
+#ifdef CGBA_GPSP_HEADLESS_PROFILE_STOP
+	/* casio-emu's PC profiler stops on the "=== done ===" suffix. Emit an
+	 * opt-in marker here so post-run diagnostics (notably the one-frame
+	 * interpreter-vs-JIT region diff) cannot dominate gameplay profiles. */
+	hputs_dbg("@@CGBA_PROFILE_STOP === done ===");
+#endif
+
 	snprintf(buf, sizeof buf, "fps emu=%u draw=%u",
 		(unsigned)cgba_fps.emu_fps, (unsigned)cgba_fps.draw_fps);
 	hputs_dbg(buf);
@@ -1238,7 +1434,7 @@ static int cgba_headless_test(uint16_t *framebuffer)
 	extern unsigned long cgba_em_pj_n, cgba_em_pj_bytes;
 	extern unsigned long cgba_em_fm_n, cgba_em_fm_bytes;
 	extern unsigned long cgba_em_blk_n, cgba_em_blk_bytes;
-	#if CGBA_GPSP_HEADLESS_BENCH_FRAMES > 0
+	#if CGBA_GPSP_HEADLESS_BENCH_FRAMES > 0 && defined(CGBA_SH4_DIFF_HARNESS)
 	snprintf(buf, sizeof buf,
 		"jit stats rom_flush=%lu ram_flush=%lu arm_tx=%lu thumb_tx=%lu "
 		"bios_n=%lu bios_kc=%lu cold_n=%lu",
@@ -1396,6 +1592,71 @@ static int cgba_headless_test(uint16_t *framebuffer)
 		(unsigned long)cgba_sh4_helper_thumb_dp_count,
 		(unsigned long)cgba_sh4_helper_hle_div_count);
 	hputs_dbg(buf);
+	snprintf(buf, sizeof buf,
+		"jit thumb ldst detail load=%lu store=%lu ram=%lu io=%lu vid=%lu rom=%lu other=%lu",
+		(unsigned long)cgba_sh4_helper_thumb_ldst_load_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_store_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_ram_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_io_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_video_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_rom_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_other_count);
+	hputs_dbg(buf);
+	snprintf(buf, sizeof buf, "jit thumb ldst video pal=%lu vram=%lu oam=%lu",
+		(unsigned long)cgba_sh4_helper_thumb_ldst_video_region_count[0],
+		(unsigned long)cgba_sh4_helper_thumb_ldst_video_region_count[1],
+		(unsigned long)cgba_sh4_helper_thumb_ldst_video_region_count[2]);
+	hputs_dbg(buf);
+	snprintf(buf, sizeof buf,
+		"jit thumb ldst why unm=%lu ga=%lu ha=%lu unsafe=%lu smc=%lu ready=%lu",
+		(unsigned long)cgba_sh4_helper_thumb_ldst_unmapped_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_guest_unaligned_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_host_unaligned_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_unsafe_region_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_smc_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_native_ready_count);
+	hputs_dbg(buf);
+	snprintf(buf, sizeof buf,
+		"jit thumb ldst kind word=%lu byte=%lu half=%lu src pc=%lu sp=%lu reg=%lu imm=%lu fast cio=%lu rio=%lu push=%lu",
+		(unsigned long)cgba_sh4_helper_thumb_ldst_word_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_byte_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_half_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_pc_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_sp_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_reg_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_imm_count,
+		(unsigned long)cgba_sh4_native_thumb_const_io_count,
+		(unsigned long)cgba_sh4_native_thumb_runtime_io_count,
+		(unsigned long)cgba_sh4_native_thumb_push_iwram_count);
+	hputs_dbg(buf);
+	cgba_print_thumb_io16_top();
+	cgba_print_prof_top();
+	snprintf(buf, sizeof buf,
+		"jit div den zero=%lu one=%lu neg1=%lu pow2=%lu other=%lu",
+		(unsigned long)cgba_sh4_hle_div_zero_count,
+		(unsigned long)cgba_sh4_hle_div_one_count,
+		(unsigned long)cgba_sh4_hle_div_neg_one_count,
+		(unsigned long)cgba_sh4_hle_div_pow2_count,
+		(unsigned long)cgba_sh4_hle_div_other_count);
+	hputs_dbg(buf);
+	for(unsigned dma = 0; dma < 4; dma++) {
+		if(cgba_sh4_dma_ctl_count[dma] == 0)
+			continue;
+		snprintf(buf, sizeof buf,
+			"jit dma%u ctl n=%lu en=%lu v=%04lX:%lu %04lX:%lu %04lX:%lu %04lX:%lu",
+			dma,
+			(unsigned long)cgba_sh4_dma_ctl_count[dma],
+			(unsigned long)cgba_sh4_dma_ctl_enable_count[dma],
+			(unsigned long)cgba_sh4_dma_ctl_value[dma][0],
+			(unsigned long)cgba_sh4_dma_ctl_value_count[dma][0],
+			(unsigned long)cgba_sh4_dma_ctl_value[dma][1],
+			(unsigned long)cgba_sh4_dma_ctl_value_count[dma][1],
+			(unsigned long)cgba_sh4_dma_ctl_value[dma][2],
+			(unsigned long)cgba_sh4_dma_ctl_value_count[dma][2],
+			(unsigned long)cgba_sh4_dma_ctl_value[dma][3],
+			(unsigned long)cgba_sh4_dma_ctl_value_count[dma][3]);
+		hputs_dbg(buf);
+	}
 	snprintf(buf, sizeof buf,
 		"jit arm ldst detail load=%lu store=%lu ram=%lu io=%lu vid=%lu rom=%lu other=%lu",
 		(unsigned long)cgba_sh4_helper_arm_ldst_load_count,
@@ -1573,6 +1834,71 @@ static int cgba_headless_test(uint16_t *framebuffer)
 		(unsigned long)cgba_sh4_helper_hle_div_count);
 	hputs_dbg(buf);
 	snprintf(buf, sizeof buf,
+		"jit thumb ldst detail load=%lu store=%lu ram=%lu io=%lu vid=%lu rom=%lu other=%lu",
+		(unsigned long)cgba_sh4_helper_thumb_ldst_load_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_store_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_ram_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_io_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_video_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_rom_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_other_count);
+	hputs_dbg(buf);
+	snprintf(buf, sizeof buf, "jit thumb ldst video pal=%lu vram=%lu oam=%lu",
+		(unsigned long)cgba_sh4_helper_thumb_ldst_video_region_count[0],
+		(unsigned long)cgba_sh4_helper_thumb_ldst_video_region_count[1],
+		(unsigned long)cgba_sh4_helper_thumb_ldst_video_region_count[2]);
+	hputs_dbg(buf);
+	snprintf(buf, sizeof buf,
+		"jit thumb ldst why unm=%lu ga=%lu ha=%lu unsafe=%lu smc=%lu ready=%lu",
+		(unsigned long)cgba_sh4_helper_thumb_ldst_unmapped_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_guest_unaligned_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_host_unaligned_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_unsafe_region_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_smc_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_native_ready_count);
+	hputs_dbg(buf);
+	snprintf(buf, sizeof buf,
+		"jit thumb ldst kind word=%lu byte=%lu half=%lu src pc=%lu sp=%lu reg=%lu imm=%lu fast cio=%lu rio=%lu push=%lu",
+		(unsigned long)cgba_sh4_helper_thumb_ldst_word_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_byte_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_half_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_pc_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_sp_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_reg_count,
+		(unsigned long)cgba_sh4_helper_thumb_ldst_imm_count,
+		(unsigned long)cgba_sh4_native_thumb_const_io_count,
+		(unsigned long)cgba_sh4_native_thumb_runtime_io_count,
+		(unsigned long)cgba_sh4_native_thumb_push_iwram_count);
+	hputs_dbg(buf);
+	cgba_print_thumb_io16_top();
+	cgba_print_prof_top();
+	snprintf(buf, sizeof buf,
+		"jit div den zero=%lu one=%lu neg1=%lu pow2=%lu other=%lu",
+		(unsigned long)cgba_sh4_hle_div_zero_count,
+		(unsigned long)cgba_sh4_hle_div_one_count,
+		(unsigned long)cgba_sh4_hle_div_neg_one_count,
+		(unsigned long)cgba_sh4_hle_div_pow2_count,
+		(unsigned long)cgba_sh4_hle_div_other_count);
+	hputs_dbg(buf);
+	for(unsigned dma = 0; dma < 4; dma++) {
+		if(cgba_sh4_dma_ctl_count[dma] == 0)
+			continue;
+		snprintf(buf, sizeof buf,
+			"jit dma%u ctl n=%lu en=%lu v=%04lX:%lu %04lX:%lu %04lX:%lu %04lX:%lu",
+			dma,
+			(unsigned long)cgba_sh4_dma_ctl_count[dma],
+			(unsigned long)cgba_sh4_dma_ctl_enable_count[dma],
+			(unsigned long)cgba_sh4_dma_ctl_value[dma][0],
+			(unsigned long)cgba_sh4_dma_ctl_value_count[dma][0],
+			(unsigned long)cgba_sh4_dma_ctl_value[dma][1],
+			(unsigned long)cgba_sh4_dma_ctl_value_count[dma][1],
+			(unsigned long)cgba_sh4_dma_ctl_value[dma][2],
+			(unsigned long)cgba_sh4_dma_ctl_value_count[dma][2],
+			(unsigned long)cgba_sh4_dma_ctl_value[dma][3],
+			(unsigned long)cgba_sh4_dma_ctl_value_count[dma][3]);
+		hputs_dbg(buf);
+	}
+	snprintf(buf, sizeof buf,
 		"jit arm ldst detail load=%lu store=%lu ram=%lu io=%lu vid=%lu rom=%lu other=%lu",
 		(unsigned long)cgba_sh4_helper_arm_ldst_load_count,
 		(unsigned long)cgba_sh4_helper_arm_ldst_store_count,
@@ -1585,6 +1911,33 @@ static int cgba_headless_test(uint16_t *framebuffer)
 	snprintf(buf, sizeof buf, "jit arm block detail load=%lu store=%lu",
 		(unsigned long)cgba_sh4_helper_arm_block_load_count,
 		(unsigned long)cgba_sh4_helper_arm_block_store_count);
+	hputs_dbg(buf);
+	#endif
+	#ifdef CGBA_SH4_ARM_MIXER_FASTPATH
+	snprintf(buf, sizeof buf,
+		"jit mixer try=%lu hit=%lu batch=%lu guard=%lu budget=%lu",
+		(unsigned long)cgba_sh4_arm_mixer_try_count,
+		(unsigned long)cgba_sh4_arm_mixer_hit_count,
+		(unsigned long)cgba_sh4_arm_mixer_batch_count,
+		(unsigned long)cgba_sh4_arm_mixer_guard_fallback_count,
+		(unsigned long)cgba_sh4_arm_mixer_budget_stop_count);
+	hputs_dbg(buf);
+	snprintf(buf, sizeof buf,
+		"jit mixer first pc=%08lX r0=%08lX r1=%08lX r2=%08lX r3=%08lX r4=%08lX",
+		(unsigned long)cgba_sh4_arm_mixer_first_pc,
+		(unsigned long)cgba_sh4_arm_mixer_first_reg[0],
+		(unsigned long)cgba_sh4_arm_mixer_first_reg[1],
+		(unsigned long)cgba_sh4_arm_mixer_first_reg[2],
+		(unsigned long)cgba_sh4_arm_mixer_first_reg[3],
+		(unsigned long)cgba_sh4_arm_mixer_first_reg[4]);
+	hputs_dbg(buf);
+	snprintf(buf, sizeof buf,
+		"jit mixer first r5=%08lX r6=%08lX r7=%08lX r8=%08lX r12=%08lX",
+		(unsigned long)cgba_sh4_arm_mixer_first_reg[5],
+		(unsigned long)cgba_sh4_arm_mixer_first_reg[6],
+		(unsigned long)cgba_sh4_arm_mixer_first_reg[7],
+		(unsigned long)cgba_sh4_arm_mixer_first_reg[8],
+		(unsigned long)cgba_sh4_arm_mixer_first_reg[9]);
 	hputs_dbg(buf);
 	#endif
 	}

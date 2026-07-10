@@ -1121,12 +1121,21 @@ cpu_alert_type function_cc write_io_register32(u32 address, u32 value)
   return allow | alhigh;
 }
 
+#ifdef CGBA_PALETTE_DIRTY_ACTIVE
+volatile u32 palette_ram_dirty = CGBA_PALETTE_DIRTY_ACTIVE;
+#define mark_palette_ram_dirty() \
+  (palette_ram_dirty = CGBA_PALETTE_DIRTY_ACTIVE)
+#else
+#define mark_palette_ram_dirty() ((void)0)
+#endif
+
 #define write_palette8(address, value)                                        \
 {                                                                             \
   u32 aladdr = address & ~1U;                                                 \
   u16 val16 = (value << 8) | value;                                           \
   address16(palette_ram, aladdr) = eswap16(val16);                            \
   address16(palette_ram_converted, aladdr) = convert_palette(val16);          \
+  mark_palette_ram_dirty();                                                   \
 }
 
 #define write_palette16(address, value)                                       \
@@ -1135,6 +1144,7 @@ cpu_alert_type function_cc write_io_register32(u32 address, u32 value)
   address16(palette_ram, palette_address) = eswap16(value);                   \
   value = convert_palette(value);                                             \
   address16(palette_ram_converted, palette_address) = value;                  \
+  mark_palette_ram_dirty();                                                   \
 }                                                                             \
 
 #define write_palette32(address, value)                                       \
@@ -1147,6 +1157,7 @@ cpu_alert_type function_cc write_io_register32(u32 address, u32 value)
   address16(palette_ram_converted, palette_address + 2) = value_high;         \
   value_low = convert_palette(value_low);                                     \
   address16(palette_ram_converted, palette_address) = value_low;              \
+  mark_palette_ram_dirty();                                                   \
 }                                                                             \
 
 
@@ -2457,6 +2468,60 @@ void init_gamepak_buffer(void)
   gamepak_lru_tail = 32 * gamepak_buffer_count - 1;
 }
 
+/* Savestates need a 416 KiB raw image, but growing .cgba.highbss beyond the
+ * fx-CG100's proven 0x8c655300 endpoint resets real hardware. Borrow the
+ * already-reserved fragmented-ROM page cache while guest execution is stopped
+ * instead. Every mapping backed by this cache is dropped before and after use;
+ * direct NOR mappings are not represented in the LRU and remain untouched. */
+static void cgba_gamepak_cache_invalidate(void)
+{
+#if defined(CGBA_FXCG100) || defined(CGBA_FXCG50)
+  u32 i;
+  u32 entries = 32u * gamepak_buffer_count;
+  u32 rom_blocks = gamepak_size >> 15;
+
+  if (entries > 1024u)
+    entries = 1024u;
+  if (rom_blocks != 0)
+  {
+    for (i = 0; i < entries; i++)
+    {
+      s16 physical = gamepak_blk_queue[i].phy_rom;
+      if (physical >= 0 && (u32)physical < rom_blocks)
+        map_rom_entry(read, (u32)physical, NULL, rom_blocks);
+    }
+  }
+  for (i = 0; i < 1024u; i++)
+  {
+    gamepak_blk_queue[i].next_lru = (u16)(i + 1u);
+    gamepak_blk_queue[i].phy_rom = -1;
+  }
+  gamepak_lru_head = 0;
+  gamepak_lru_tail = entries ? (u16)(entries - 1u) : 0;
+  memset(gamepak_sticky_bit, 0, sizeof(gamepak_sticky_bit));
+#endif
+}
+
+u8 *cgba_gamepak_scratch_acquire(u32 min_size)
+{
+#if defined(CGBA_FXCG100) || defined(CGBA_FXCG50)
+  u32 capacity = gamepak_buffer_count * gamepak_buffer_blocksize;
+
+  if (gamepak_buffer_count == 0 || min_size > capacity)
+    return NULL;
+  cgba_gamepak_cache_invalidate();
+  return gamepak_buffers[0];
+#else
+  (void)min_size;
+  return NULL;
+#endif
+}
+
+void cgba_gamepak_scratch_release(void)
+{
+  cgba_gamepak_cache_invalidate();
+}
+
 bool gamepak_must_swap(void)
 {
   if (gamepak_mini_materialized)
@@ -2498,6 +2563,7 @@ void init_memory(void)
   memset(io_registers, 0, sizeof(io_registers));
   memset(oam_ram, 0, sizeof(oam_ram));
   memset(palette_ram, 0, sizeof(palette_ram));
+  mark_palette_ram_dirty();
   memset(iwram, 0, sizeof(iwram));
   memset(ewram, 0, sizeof(ewram));
   memset(vram, 0, sizeof(vram));
