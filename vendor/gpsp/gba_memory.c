@@ -2384,6 +2384,7 @@ static u32 evict_gamepak_page(void)
   u32 ret;
   s16 phyrom;
   u32 spins = 0;
+  u32 resident_count = 32u * gamepak_buffer_count;
   do {
     // Return the index to the last used entry
     u32 newhead = gamepak_blk_queue[gamepak_lru_head].next_lru;
@@ -2399,11 +2400,13 @@ static u32 evict_gamepak_page(void)
     // If this page is marked as sticky, we keep going through the list.
     // Deadlock breaker: when EVERY resident page is sticky (all touched as
     // execution pages since the last per-frame clear), this loop would spin
-    // forever. Clear the sticky set and keep going — the LRU order then
-    // picks the oldest page. (The evicted page could in principle be the
-    // one the interpreter is executing; a stale pc_address_block is still
-    // recoverable, a frozen machine is not.)
-    if (++spins > 32 * 1024) {
+    // forever. After one complete LRU lap, clear the old frame's sticky set
+    // but immediately re-protect the page containing the current guest PC.
+    // execute_arm/execute_thumb cache that page in pc_address_block until a
+    // 32 KiB boundary crossing, so evicting it here would execute bytes from
+    // whichever ROM page reused the slot rather than causing a recoverable
+    // page fault.
+    if (resident_count != 0 && ++spins >= resident_count) {
 #if defined(CGBA_GPSP_HEADLESS_TEST)
       static const char msg[] = "@@CGBA_EVICT_DEADLOCK sticky set cleared";
       const char *s = msg;
@@ -2411,6 +2414,8 @@ static u32 evict_gamepak_page(void)
       *(volatile unsigned char *)0xb7000000u = '\n';
 #endif
       clear_gamepak_stickybits();
+      if (reg[REG_PC] >= 0x08000000u && reg[REG_PC] < 0x0E000000u)
+        touch_gamepak_page(reg[REG_PC] >> 15);
       spins = 0;
     }
   } while (phyrom >= 0 && gamepak_sb_test(phyrom));
