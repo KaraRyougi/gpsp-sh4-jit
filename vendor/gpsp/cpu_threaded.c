@@ -23,6 +23,13 @@
 
 #include "common.h"
 #include "sh4/sh4_jit_safety.h"
+#ifdef SH4_ARCH
+#if RAM_TRANSLATION_CACHE_SIZE <= \
+    CGBA_SH4_RAM_CACHE_WATERMARK + TRANSLATION_CACHE_LIMIT_THRESHOLD + \
+    CGBA_SH4_RAM_TAG_BYTES
+#error "SH4 RAM translation cache is too small for its sentinel and safety reserve"
+#endif
+#endif
 #if defined(VITA)
 #include <psp2/kernel/sysmem.h>
 #include <stdio.h>
@@ -51,10 +58,16 @@ u8 *rom_translation_ptr = rom_translation_cache;
 u8 *ram_translation_ptr = ram_translation_cache;
 #else
 u8 *rom_translation_ptr = rom_translation_cache;
+#ifdef SH4_ARCH
+u8 *ram_translation_ptr = CGBA_SH4_RAM_CACHE_START(ram_translation_cache);
+#else
 u8 *ram_translation_ptr = ram_translation_cache;
+#endif
 #endif
 /* Note, see stub files for more cache definitions */
 
+/* `min == ~0U` is the unseen sentinel; guest I/EWRAM offset zero is valid
+ * translated code.  Host RAM-cache byte zero is a separate sentinel. */
 u32 iwram_code_min = ~0U;
 u32 iwram_code_max =  0U;
 u32 ewram_code_min = ~0U;
@@ -2830,6 +2843,11 @@ typedef struct
   u32 offset_thumb;   // Cache offset to the Thumb-mode compiled block
 } ramtag_type;
 
+#ifdef SH4_ARCH
+typedef char cgba_sh4_ram_tag_size_must_match_guard[
+  sizeof(ramtag_type) == CGBA_SH4_RAM_TAG_BYTES ? 1 : -1];
+#endif
+
 static u32 ram_block_tag = INITIAL_TOP_TAG;
 
 #if defined(CGBA_GPSP_HEADLESS_TEST)
@@ -3476,8 +3494,24 @@ u8 function_cc *block_lookup_address_thumb(u32 pc)
 #define MAX_BLOCK_SIZE   1024   // 2/4KiB blocks max
 #define MAX_EXITS          32   // This covers 99% blocks
 
-/* Adaptive scan cap: a single block whose EMITTED code exceeds the whole
- * (freshly flushed) translation cache would flush+retranslate forever — the
+#ifdef SH4_ARCH
+#ifndef CGBA_SH4_RAM_SCAN_CAP_INITIAL
+#define CGBA_SH4_RAM_SCAN_CAP_INITIAL MAX_BLOCK_SIZE
+#endif
+#ifndef CGBA_SH4_ROM_SCAN_CAP_INITIAL
+#define CGBA_SH4_ROM_SCAN_CAP_INITIAL MAX_BLOCK_SIZE
+#endif
+#if CGBA_SH4_RAM_SCAN_CAP_INITIAL < 32 || \
+    CGBA_SH4_RAM_SCAN_CAP_INITIAL > MAX_BLOCK_SIZE
+#error "CGBA_SH4_RAM_SCAN_CAP_INITIAL must be in [32, MAX_BLOCK_SIZE]"
+#endif
+#if CGBA_SH4_ROM_SCAN_CAP_INITIAL < 32 || \
+    CGBA_SH4_ROM_SCAN_CAP_INITIAL > MAX_BLOCK_SIZE
+#error "CGBA_SH4_ROM_SCAN_CAP_INITIAL must be in [32, MAX_BLOCK_SIZE]"
+#endif
+
+/* Adaptive per-cache scan caps: a single block whose EMITTED code exceeds the
+ * whole freshly-flushed translation cache would flush+retranslate forever — the
  * "went too far, pedal out to the beginning" retry assumes a block always
  * fits an empty cache. That assumption fails on this port: SimCity 2000
  * copies a 724-instruction LDM/STM-heavy renderer into IWRAM whose SH4
@@ -3486,20 +3520,30 @@ u8 function_cc *block_lookup_address_thumb(u32 pc)
  * EXC=040 crash report). When an oversized attempt overflows, halve the cap
  * so the retry ends the block early through the fall-through translation
  * gate (a legal "size-limit" block end, same as the MAX_BLOCK_SIZE stop).
- * Sticky for the session; reset on init_dynarec_caches (ROM load/reset).
+ * Sticky for the session within its RAM/ROM cache; reset on
+ * init_dynarec_caches (ROM load/reset).  Keeping the domains separate avoids
+ * shortening ordinary ROM blocks after one pathological copied-RAM routine.
  *
  * The shrink keys off the bytes THIS attempt emitted, not off starting at
  * the cache base: the oversized block is usually reached recursively while
  * resolving another block's external exits, so its attempts never begin in
- * an empty cache. Any single block emitting more than a quarter of its
- * cache is capped, which both guarantees it can fit and leaves room for
- * the rest of the working set. */
+ * an empty cache. An overflowing attempt that emitted more than a quarter of
+ * its cache halves that domain's cap; repeated retries eventually reach the
+ * 32-instruction floor while leaving room for the rest of the working set. */
+static u32 cgba_ram_block_scan_cap = CGBA_SH4_RAM_SCAN_CAP_INITIAL;
+static u32 cgba_rom_block_scan_cap = CGBA_SH4_ROM_SCAN_CAP_INITIAL;
+#else
+/* Preserve the upstream cross-backend behavior outside the SH4 port. */
 static u32 cgba_block_scan_cap = MAX_BLOCK_SIZE;
+#endif
 
 /* DIAG bisect knob: -DCGBA_BLOCK_SCAN_CAP_DISABLE reverts scan_block to the
  * fixed MAX_BLOCK_SIZE stop (cap machinery inert) to isolate the cap. */
 #ifdef CGBA_BLOCK_SCAN_CAP_DISABLE
 #define CGBA_BLOCK_SCAN_CAP_EXPR ((u32)MAX_BLOCK_SIZE)
+#elif defined(SH4_ARCH)
+#define CGBA_BLOCK_SCAN_CAP_EXPR \
+  (ram_region ? cgba_ram_block_scan_cap : cgba_rom_block_scan_cap)
 #else
 #define CGBA_BLOCK_SCAN_CAP_EXPR cgba_block_scan_cap
 #endif
@@ -3507,11 +3551,19 @@ static u32 cgba_block_scan_cap = MAX_BLOCK_SIZE;
 static void cgba_block_overflow_shrink(u8 *attempt_base, u8 *attempt_end,
   bool ram_region)
 {
+#ifdef SH4_ARCH
   u32 cache_size = ram_region ? RAM_TRANSLATION_CACHE_SIZE
                               : ROM_TRANSLATION_CACHE_SIZE;
-  if((u32)(attempt_end - attempt_base) > cache_size / 4 &&
-     cgba_block_scan_cap > 32)
+  if((u32)(attempt_end - attempt_base) > cache_size / 4)
+    cgba_sh4_scan_caps_shrink_domain(&cgba_ram_block_scan_cap,
+      &cgba_rom_block_scan_cap, ram_region);
+#else
+  u32 cache_size = ram_region ? RAM_TRANSLATION_CACHE_SIZE
+                              : ROM_TRANSLATION_CACHE_SIZE;
+  if((u32)(attempt_end - attempt_base) >
+       cache_size / 4 && cgba_block_scan_cap > 32)
     cgba_block_scan_cap >>= 1;
+#endif
 }
 
 
@@ -3813,7 +3865,7 @@ bool translate_block_arm(u32 pc, bool ram_region)
       CGBA_DIAG_LOG("@@CGBA_XFLUSH arm ram=%d start=%08lx pc=%08lx end=%08lx pos=%ld cap=%lu",
         (int)ram_region, (unsigned long)block_start_pc, (unsigned long)pc,
         (unsigned long)block_end_pc, (long)block_data_position,
-        (unsigned long)cgba_block_scan_cap);
+        (unsigned long)CGBA_BLOCK_SCAN_CAP_EXPR);
       cgba_block_overflow_shrink(attempt_base, translation_ptr, ram_region);
       if (ram_region)
         flush_translation_cache_ram();
@@ -4100,7 +4152,7 @@ bool translate_block_thumb(u32 pc, bool ram_region)
       CGBA_DIAG_LOG("@@CGBA_XFLUSH thumb ram=%d start=%08lx pc=%08lx end=%08lx pos=%ld cap=%lu",
         (int)ram_region, (unsigned long)block_start_pc, (unsigned long)pc,
         (unsigned long)block_end_pc, (long)block_data_position,
-        (unsigned long)cgba_block_scan_cap);
+        (unsigned long)CGBA_BLOCK_SCAN_CAP_EXPR);
       cgba_block_overflow_shrink(attempt_base, translation_ptr, ram_region);
       if (ram_region)
         flush_translation_cache_ram();
@@ -4263,8 +4315,15 @@ void flush_translation_cache_ram(void)
    flush_ram_count, reg[REG_PC], iwram_code_min, iwram_code_max,
    ewram_code_min, ewram_code_max);*/
 
+#ifdef SH4_ARCH
+  last_ram_translation_ptr =
+    CGBA_SH4_RAM_CACHE_START(ram_translation_cache);
+  ram_translation_ptr =
+    CGBA_SH4_RAM_CACHE_START(ram_translation_cache);
+#else
   last_ram_translation_ptr = ram_translation_cache;
   ram_translation_ptr = ram_translation_cache;
+#endif
 
   // Proceed to clean the SMC area if needed
   // (also try to memset as little as possible for performance)
@@ -4391,14 +4450,25 @@ void init_dynarec_caches(void)
   memset(cgba_hot_count, 0, sizeof(cgba_hot_count));
   cgba_cold_pending = 0;
 #endif
+#ifdef SH4_ARCH
+  cgba_sh4_scan_caps_reset(&cgba_ram_block_scan_cap,
+    &cgba_rom_block_scan_cap, CGBA_SH4_RAM_SCAN_CAP_INITIAL,
+    CGBA_SH4_ROM_SCAN_CAP_INITIAL);
+#else
   cgba_block_scan_cap = MAX_BLOCK_SIZE;
+#endif
   /* Initialize caches so that we can start initalizing the emitter. */
   rom_translation_ptr = last_rom_translation_ptr = &rom_translation_cache[0];
   memset(rom_branch_hash, 0, sizeof(rom_branch_hash));
   memset(cgba_dynarec_dual_hot_key, 0, sizeof(cgba_dynarec_dual_hot_key));
   memset(cgba_dynarec_dual_hot_ptr, 0, sizeof(cgba_dynarec_dual_hot_ptr));
 
+#ifdef SH4_ARCH
+  ram_translation_ptr = last_ram_translation_ptr =
+    CGBA_SH4_RAM_CACHE_START(ram_translation_cache);
+#else
   ram_translation_ptr = last_ram_translation_ptr = &ram_translation_cache[0];
+#endif
   memset(iwram, 0, 0x8000);
   memset(&ewram[0x40000], 0, 0x40000);
 

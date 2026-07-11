@@ -94,6 +94,10 @@ set(CGBA_SH4_HOT_THRESHOLD "8" CACHE STRING
   "Cold-code gate: translate ROM blocks after N dispatches (1-255; 0 = gate off)")
 set(CGBA_SH4_COLD_CHUNK_CYCLES "512" CACHE STRING
   "Cold-code gate: max GBA cycles to interpret per cold fallback (0 = whole scheduler budget)")
+set(CGBA_SH4_RAM_SCAN_CAP_INITIAL "1024" CACHE STRING
+  "Initial maximum guest instructions per translated RAM block (32-1024; may halve after an overflow)")
+set(CGBA_SH4_ROM_SCAN_CAP_INITIAL "1024" CACHE STRING
+  "Initial maximum guest instructions per translated ROM block (32-1024; may halve after an overflow)")
 option(CGBA_SH4_EXACT_CYCLE_BOUNDARIES
   "Headless/debug: check the SH4 dynarec cycle budget at each translated instruction boundary" OFF)
 option(CGBA_SH4_DIFF_HARNESS
@@ -258,6 +262,9 @@ if(CGBA_DYNAREC)
     CGBA_SH4_HOT_THRESHOLD=${CGBA_SH4_HOT_THRESHOLD})
   target_compile_definitions(cgba-gint-gpsp PRIVATE
     CGBA_SH4_COLD_CHUNK_CYCLES=${CGBA_SH4_COLD_CHUNK_CYCLES})
+  target_compile_definitions(cgba-gint-gpsp PRIVATE
+    CGBA_SH4_RAM_SCAN_CAP_INITIAL=${CGBA_SH4_RAM_SCAN_CAP_INITIAL}
+    CGBA_SH4_ROM_SCAN_CAP_INITIAL=${CGBA_SH4_ROM_SCAN_CAP_INITIAL})
   # Re-sync the I-cache line for every INSTRUCTION patch (BT/BF/BRA rewrites).
   # All such patches are in not-yet-synced memory by construction, so this is
   # belt-and-suspenders — but it is translate-time-only (a few thousand patches
