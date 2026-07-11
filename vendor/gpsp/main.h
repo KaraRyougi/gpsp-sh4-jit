@@ -45,6 +45,10 @@ typedef struct
   u32 status;
 } timer_type;
 
+/* Rebuild guest-visible timer counters after raw I/O registers are restored
+ * from a savestate. */
+void main_finalize_savestate_load(void);
+
 typedef enum
 {
   no_frameskip = 0,
@@ -111,5 +115,4 @@ void print_regs(void);
 #endif
 
 #endif
-
 

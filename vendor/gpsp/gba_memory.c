@@ -281,10 +281,13 @@ static void trigger_timer(u32 timer_number, u32 value)
    {
       if(timer[timer_number].status == TIMER_INACTIVE)
       {
-         u32 prescale = prescale_table[value & 0x03];
+         /* Timer 0 cannot count up; for timers 1-3, count-up mode ignores
+            the clock-select bits in TMxCNT_H. */
+         bool cascade = timer_number != 0 && (value & 0x04);
+         u32 prescale = cascade ? 0 : prescale_table[value & 0x03];
          u32 timer_reload = timer[timer_number].reload;
 
-         if((value >> 2) & 0x01)
+         if(cascade)
             timer[timer_number].status = TIMER_CASCADE;
          else
             timer[timer_number].status = TIMER_PRESCALE;
