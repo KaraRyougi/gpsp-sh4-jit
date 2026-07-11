@@ -415,6 +415,46 @@ static void test_scheduled_waitcnt_redispatch(void)
         "scheduled WAITCNT DMA return lacked changed-PC bit: 0x%08X", ret);
 }
 
+static void test_gamepak_eviction_preserves_current_pc(void)
+{
+  u32 evicted;
+  unsigned i;
+  const u32 rom_map_base = 0x08000000u / 0x8000u;
+
+  reset_fixture();
+  memset(memory_map_read, 0, sizeof(memory_map_read));
+  clear_gamepak_stickybits();
+  gamepak_buffer_count = 1;
+  gamepak_size = 1024u * 1024u;
+  gamepak_lru_head = 0;
+  gamepak_lru_tail = 31;
+
+  for (i = 0; i < 32; i++) {
+    gamepak_blk_queue[i].next_lru = (u16)(i + 1);
+    gamepak_blk_queue[i].phy_rom = (s16)i;
+    touch_gamepak_page(i);
+  }
+
+  /* The interpreter keeps a direct pointer to this page until it crosses a
+   * 32 KiB boundary. Eviction recovery must therefore retain page zero even
+   * when every resident page was marked sticky during the previous frame. */
+  reg[REG_PC] = 0x08000000u;
+  memory_map_read[rom_map_base] = ewram;
+  memory_map_read[rom_map_base + 31] = iwram;
+
+  evicted = evict_gamepak_page();
+  CHECK(evicted == 31, "all-sticky eviction chose entry %u", evicted);
+  CHECK(gamepak_blk_queue[evicted].phy_rom == 31,
+        "all-sticky eviction returned physical page %d",
+        gamepak_blk_queue[evicted].phy_rom);
+  CHECK(gamepak_sb_test(0) != 0,
+        "all-sticky eviction cleared the active PC page");
+  CHECK(memory_map_read[rom_map_base] == ewram,
+        "all-sticky eviction unmapped the active PC page");
+  CHECK(memory_map_read[rom_map_base + 31] == NULL,
+        "all-sticky eviction left victim page mapped");
+}
+
 int main(void)
 {
   test_waitcnt_invalidation();
@@ -423,11 +463,12 @@ int main(void)
   test_scheduled_dma_redispatch();
   test_scheduled_waitcnt_redispatch();
   test_timer_reload_is_guest_visible();
+  test_gamepak_eviction_preserves_current_pc();
 
   if (failures) {
     printf("JIT boundary regressions failed: %d\n", failures);
     return 1;
   }
-  puts("JIT timing/WAITCNT/DMA boundary regressions passed");
+  puts("JIT timing/WAITCNT/DMA/cache boundary regressions passed");
   return 0;
 }
