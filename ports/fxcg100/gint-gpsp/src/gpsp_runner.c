@@ -275,6 +275,16 @@ static void cgba_panic_text(int row, const char *fmt, ...)
 	vsnprintf(line, sizeof line, fmt, ap);
 	va_end(ap);
 	cgba_panic_draw_line(row, line);
+#ifdef CGBA_GPSP_HEADLESS_TEST
+	/* Headless: mirror the crash report to the emulator debug port so the
+	 * harness log captures what the calculator screen would show. */
+	{
+		const char *s = line;
+		while(*s)
+			*(volatile unsigned char *)0xb7000000u = (unsigned char)*s++;
+		*(volatile unsigned char *)0xb7000000u = '\n';
+	}
+#endif
 }
 
 __attribute__((noreturn))
@@ -304,12 +314,31 @@ static void cgba_crash_panic(uint32_t code)
 		(unsigned long)reg[REG_LR], (unsigned long)reg[REG_SP]);
 	cgba_panic_text(row++, "GBA R0=%08lX R1=%08lX",
 		(unsigned long)reg[0], (unsigned long)reg[1]);
+	/* The game's IRQ handler vector: the BIOS IRQ HLE dispatches through it,
+	 * so a wild-jump target matching this value means the vector variable
+	 * itself is what got corrupted. */
+	cgba_panic_text(row++, "IRQV=%08lX",
+		(unsigned long)read_memory32(0x03007FFCu));
 #ifdef CGBA_DYNAREC
 	cgba_panic_text(row++, "JIT ROM=%luk RAM=%luk",
 		(unsigned long)((uintptr_t)rom_translation_ptr -
 			(uintptr_t)rom_translation_cache) / 1024u,
 		(unsigned long)((uintptr_t)ram_translation_ptr -
 			(uintptr_t)ram_translation_cache) / 1024u);
+	/* Last C-resolver dispatch targets (cpu_threaded.c ring), oldest first:
+	 * the guest's block-level path INTO a wild jump, readable off a photo. */
+	{
+		extern u32 cgba_wj_ring[24];
+		extern unsigned cgba_wj_pos;
+		unsigned i;
+
+		for(i = 0; i < 8; i += 4)
+			cgba_panic_text(row++, "J%u %08lX %08lX %08lX %08lX", i,
+				(unsigned long)cgba_wj_ring[(cgba_wj_pos + 16 + i) % 24],
+				(unsigned long)cgba_wj_ring[(cgba_wj_pos + 17 + i) % 24],
+				(unsigned long)cgba_wj_ring[(cgba_wj_pos + 18 + i) % 24],
+				(unsigned long)cgba_wj_ring[(cgba_wj_pos + 19 + i) % 24]);
+	}
 #endif
 	cgba_panic_text(row++, "photo this screen; then RESTART");
 	cgba_panic_draw_present();
@@ -321,6 +350,20 @@ static void cgba_crash_panic(uint32_t code)
 void cgba_crash_reporting_init(void)
 {
 	gint_panic_set(cgba_crash_panic);
+}
+
+/* Interpreter counterpart of cgba_sh4_wild_jump (cpu.cc check_pc_region):
+ * the guest PC left the 256MB GBA bus, so indexing memory_map_read[] with
+ * pc>>15 would fault at an undiagnosable host address — this is exactly the
+ * EXC=040 TEA=memory_map_read+(pc>>15)*4 crash SimCity 2000 produced with a
+ * wild reg[REG_PC]=E1A00820. Report it as a wild jump with the PC visible. */
+__attribute__((noreturn))
+void cgba_wild_pc_trap(u32 pc)
+{
+	cgba_wild_jump_pc = pc;
+	gint_panic(CGBA_EXC_WILD_JUMP);
+	for(;;)                       /* gint_panic never returns */
+		;
 }
 
 #ifdef CGBA_DYNAREC

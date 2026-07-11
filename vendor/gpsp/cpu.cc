@@ -22,6 +22,12 @@ extern "C" {
   #include "cpu_instrument.h"
 }
 
+/* Interpreter guard for a PC outside the 256MB GBA bus: memory_map_read[]
+ * only covers 0x0..0x0FFFFFFF (8K entries), so indexing it with a wild
+ * pc>>15 reads host memory out of the table. The port supplies a noreturn
+ * panic that reports the wild guest PC (gpsp_runner.c). */
+extern "C" __attribute__((noreturn)) void cgba_wild_pc_trap(u32 pc);
+
 #ifdef CGBA_GBA_OVER_AZLE_IDLE
 #include "ports/fxcg100/sh4/sh4_idle_signature.h"
 
@@ -600,6 +606,12 @@ static const u8 gba_header_logo[156] = {
   new_pc_region = (reg[REG_PC] >> 15);                                        \
   if(new_pc_region != pc_region)                                              \
   {                                                                           \
+    /* PC left the 256MB GBA bus: memory_map_read[] has 8K entries, so the    \
+       lookup below would read host memory out of the table (observed on     \
+       fx-CG100 as an EXC=040 TLB miss at memory_map_read+(pc>>15)*4 with a  \
+       wild reg[REG_PC]). Trap loudly with the guest PC instead. */          \
+    if(new_pc_region >= 0x2000)                                               \
+      cgba_wild_pc_trap(reg[REG_PC]);                                         \
     pc_region = new_pc_region;                                                \
     pc_address_block = memory_map_read[new_pc_region];                        \
     touch_gamepak_page(pc_region);                                            \
@@ -916,7 +928,10 @@ const u32 spsr_masks[4] = { 0x00000000, 0x000000EF, 0xF0000000, 0xF00000EF };
 #define load_aligned32(address, dest)                                         \
 {                                                                             \
   u32 _address = address;                                                     \
-  u8 *map = memory_map_read[_address >> 15];                                  \
+  /* Index the 8K-entry map only for on-bus addresses: a wild base register   \
+     (e.g. LDM through a garbage pointer) would otherwise read host memory    \
+     out of the table before the bound check below. */                        \
+  u8 *map = (_address < 0x10000000) ? memory_map_read[_address >> 15] : NULL; \
   if(_address < 0x10000000)                                                   \
   {                                                                           \
     /* Account for cycles and other stats */                                  \
@@ -1664,7 +1679,9 @@ void execute_arm(u32 cycles)
   u32 condition;
   u32 n_flag, z_flag, c_flag, v_flag;
   u32 pc_region = (reg[REG_PC] >> 15);
-  u8 *pc_address_block = memory_map_read[pc_region];
+  u8 *pc_address_block =
+    (pc_region < 0x2000) ? memory_map_read[pc_region]
+                         : (cgba_wild_pc_trap(reg[REG_PC]), (u8 *)NULL);
   u32 new_pc_region;
   s32 cycles_remaining;
   u32 update_ret;
