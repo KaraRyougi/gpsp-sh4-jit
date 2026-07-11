@@ -839,7 +839,8 @@ static int headless_read_checkpoint(void *state, unsigned size)
 #ifdef CGBA_DYNAREC
 	{
 		extern u8 rom_translation_cache[];
-		u8 *comp = rom_translation_cache;
+		extern u32 rom_cache_watermark;
+		u8 *comp = rom_translation_cache + rom_cache_watermark;
 		int fd = headless_bfile_open(headless_checkpoint_path,
 			CGBA_HEADLESS_BFILE_READ_ONLY);
 		int fsz, rd;
@@ -847,7 +848,9 @@ static int headless_read_checkpoint(void *state, unsigned size)
 		if(fd < 0)
 			return 0;
 		fsz = headless_bfile_size(fd);
-		if(fsz <= 8 || fsz > (int)size + 64) {
+		if(fsz <= 8 || fsz > (int)size + 64 ||
+			rom_cache_watermark >= ROM_TRANSLATION_CACHE_SIZE ||
+			(unsigned)fsz > ROM_TRANSLATION_CACHE_SIZE - rom_cache_watermark) {
 			headless_bfile_close(fd);
 			return 0;
 		}

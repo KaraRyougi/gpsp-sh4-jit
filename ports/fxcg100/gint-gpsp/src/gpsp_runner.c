@@ -25,6 +25,9 @@ extern RFILE *gamepak_file_large;   /* gpSP ROM page-fault source (gba_memory.c)
 extern timer_type timer[4];
 extern s32 video_count;
 extern u32 instruction_count;
+#ifdef CGBA_DYNAREC
+extern u32 rom_cache_watermark;
+#endif
 #if defined(CGBA_DYNAREC) && \
 	(defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS))
 extern uint32_t cgba_dynarec_rom_flush_count;
@@ -396,11 +399,21 @@ void cgba_sh4_wild_jump(u32 pc)
 
 uint32_t cgba_jit_canary(char *out, unsigned out_len)
 {
-	u8 *arena = rom_translation_cache;
-	u32 span = ROM_TRANSLATION_CACHE_SIZE;
+	/* The prefix contains the resident fastmem/rebank routines.  The canary may
+	 * destroy translated blocks, but those routines have live entry pointers
+	 * and cannot be reconstructed by an ordinary cache flush. */
+	u8 *arena = rom_translation_cache + rom_cache_watermark;
+	u32 span = rom_cache_watermark < ROM_TRANSLATION_CACHE_SIZE ?
+		ROM_TRANSLATION_CACHE_SIZE - rom_cache_watermark : 0;
 	u32 fails = 0, first_off = 0, exp = 0, got = 0;
 	u32 seed = 0x2545F491u;
 	unsigned iter;
+
+	if(span < 64) {
+		if(out && out_len)
+			snprintf(out, out_len, "FAIL no writable JIT cache");
+		return 1;
+	}
 
 	for(iter = 0; iter < 8 && fails == 0; iter++) {
 		u32 i, v;
@@ -856,7 +869,6 @@ static void cgba_state_buffer_release(void)
 void flush_translation_cache_rom(void);
 void flush_translation_cache_ram(void);
 void flush_dynarec_caches(void);
-extern u32 rom_cache_watermark;
 
 static u8 *cgba_state_comp_buffer(void)
 {
