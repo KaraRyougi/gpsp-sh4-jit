@@ -91,6 +91,10 @@ cpu_alert_type write_rcnt(u16 value)
 { (void)value; return CPU_ALERT_NONE; }
 u32 serial_next_event(void) { return ~0U; }
 bool update_serial(unsigned cycles) { (void)cycles; return false; }
+u32 serial_get_irq_cycles(void) { return serial_irq_cycles; }
+void serial_set_irq_cycles(u32 cycles) { serial_irq_cycles = cycles; }
+u32 gbp_get_state(void) { return 0; }
+void gbp_set_state(u32 state) { (void)state; }
 
 cpu_alert_type check_interrupt(void) { return CPU_ALERT_NONE; }
 cpu_alert_type flag_interrupt(irq_type irq_raised)
@@ -263,6 +267,131 @@ static void test_scheduled_dma_redispatch(void)
         "untagged scheduled DMA forced redispatch: 0x%08X", ret);
 }
 
+static void test_timer_reload_is_guest_visible(void)
+{
+  irq_type raised;
+
+  /* Exact prescaled overflow: hardware exposes the programmed reload, not
+   * the transient internal zero used to detect the event. */
+  reset_fixture();
+  timer[0].status = TIMER_PRESCALE;
+  timer[0].prescale = 0;
+  timer[0].reload = 0x120;
+  timer[0].count = 1;
+  timer[0].irq = 1;
+  raised = IRQ_NONE;
+  update_timers(&raised, 1);
+  CHECK(timer[0].count == 0x120,
+        "prescaled timer count=%d", timer[0].count);
+  CHECK(read_ioreg(REG_TM0D) == 0xFEE0,
+        "prescaled timer exposed %04X after reload", read_ioreg(REG_TM0D));
+  CHECK((raised & IRQ_TIMER0) != 0,
+        "prescaled timer failed to raise IRQ: 0x%X", raised);
+
+  /* SimCity's failure mode: TM0 clocks cascaded TM1 exactly to overflow.
+   * The old code wrote TM1D=0 while processing TM0, reloaded TM1 internally,
+   * then returned without replacing that guest-visible zero. */
+  reset_fixture();
+  timer[0].status = TIMER_PRESCALE;
+  timer[0].prescale = 0;
+  timer[0].reload = 1;
+  timer[0].count = 1;
+  timer[1].status = TIMER_CASCADE;
+  timer[1].prescale = 10; /* ignored in count-up mode */
+  timer[1].reload = 0x120;
+  timer[1].count = 1;
+  timer[1].irq = 1;
+  raised = IRQ_NONE;
+  update_timers(&raised, 1);
+  CHECK(timer[1].count == 0x120,
+        "cascaded timer count=%d", timer[1].count);
+  CHECK(read_ioreg(REG_TM1D) == 0xFEE0,
+        "cascaded timer exposed %04X after reload", read_ioreg(REG_TM1D));
+  CHECK((raised & IRQ_TIMER1) != 0,
+        "cascaded timer failed to raise IRQ: 0x%X", raised);
+
+  /* TM0 cannot cascade, while TM1 count-up must ignore clock-select bits. */
+  reset_fixture();
+  timer[0].reload = 0x120;
+  trigger_timer(0, 0x87);
+  CHECK(timer[0].status == TIMER_PRESCALE && timer[0].prescale == 10,
+        "timer 0 accepted cascade: status=%u shift=%u",
+        timer[0].status, timer[0].prescale);
+  timer[1].reload = 0x120;
+  trigger_timer(1, 0x87);
+  CHECK(timer[1].status == TIMER_CASCADE && timer[1].prescale == 0,
+        "timer 1 retained count-up clock select: status=%u shift=%u",
+        timer[1].status, timer[1].prescale);
+  CHECK(timer[1].count == 0x120,
+        "timer 1 count-up period=%d", timer[1].count);
+  CHECK(read_ioreg(REG_TM1CNT) == 0x87,
+        "timer 1 lost raw control bits: %04X", read_ioreg(REG_TM1CNT));
+
+  /* Import the phase from a state written by builds that scaled cascades. */
+  timer[1].prescale = 10;
+  timer[1].count = (0x120 << 10) - 5;
+  {
+    u8 *p = state_doc + 4;
+    p += main_write_savestate(p);
+    *p++ = 0;
+    {
+      u8 *hdr = state_doc;
+      bson_write_u32(hdr, (u32)(p - state_doc));
+    }
+  }
+  timer[1].status = TIMER_INACTIVE;
+  timer[1].prescale = 6;
+  timer[1].count = 0;
+  CHECK(main_read_savestate(state_doc), "timer savestate restore failed");
+  CHECK(timer[1].status == TIMER_CASCADE && timer[1].prescale == 0,
+        "restored cascade not normalized: status=%u shift=%u",
+        timer[1].status, timer[1].prescale);
+  CHECK(timer[1].count == 0x11B,
+        "restored cascade phase=%d", timer[1].count);
+  write_ioreg(REG_TM1D, 0); /* legacy raw I/O image restored after main state */
+  main_finalize_savestate_load();
+  CHECK(read_ioreg(REG_TM1D) == 0xFEE5,
+        "restored cascade exposed %04X", read_ioreg(REG_TM1D));
+
+  /* A running canonical cascade may retain a count above a newly written
+   * reload latch.  Loading it must not mistake that valid phase for legacy
+   * prescaler scaling. */
+  timer[1].prescale = 0;
+  timer[1].reload = 4;
+  timer[1].count = 7;
+  {
+    u8 *p = state_doc + 4;
+    p += main_write_savestate(p);
+    *p++ = 0;
+    {
+      u8 *hdr = state_doc;
+      bson_write_u32(hdr, (u32)(p - state_doc));
+    }
+  }
+  timer[1].status = TIMER_INACTIVE;
+  timer[1].count = 0;
+  CHECK(main_read_savestate(state_doc),
+        "canonical timer savestate restore failed");
+  CHECK(timer[1].count == 7,
+        "canonical cascade phase changed to %d", timer[1].count);
+  main_finalize_savestate_load();
+  CHECK(read_ioreg(REG_TM1D) == 0xFFF9,
+        "canonical cascade exposed %04X", read_ioreg(REG_TM1D));
+
+  /* An IRQ-less timer can batch several periods in one event slice.  Its
+   * register must describe the final remainder, not the pre-reload underflow. */
+  reset_fixture();
+  timer[0].status = TIMER_PRESCALE;
+  timer[0].prescale = 0;
+  timer[0].reload = 4;
+  timer[0].count = 1;
+  raised = IRQ_NONE;
+  update_timers(&raised, 10);
+  CHECK(timer[0].count == 3, "batched timer count=%d", timer[0].count);
+  CHECK(read_ioreg(REG_TM0D) == 0xFFFD,
+        "batched timer exposed %04X", read_ioreg(REG_TM0D));
+}
+
 static void test_scheduled_waitcnt_redispatch(void)
 {
   u32 ret;
@@ -293,11 +422,12 @@ int main(void)
   test_dma_smc_alert();
   test_scheduled_dma_redispatch();
   test_scheduled_waitcnt_redispatch();
+  test_timer_reload_is_guest_visible();
 
   if (failures) {
     printf("JIT boundary regressions failed: %d\n", failures);
     return 1;
   }
-  puts("JIT WAITCNT/DMA boundary regressions passed");
+  puts("JIT timing/WAITCNT/DMA boundary regressions passed");
   return 0;
 }
