@@ -27,6 +27,50 @@ static void test_ram_seen_sentinel(void)
          cgba_sh4_ram_code_seen(0x3FFFF), 1);
 }
 
+static void test_ram_cache_offset_sentinel(void)
+{
+  uint8_t cache[16];
+
+  expect("RAM cache byte zero remains sentinel", CGBA_SH4_RAM_CACHE_WATERMARK,
+         CGBA_SH4_RAM_CACHE_WATERMARK != 0, 1);
+  expect("RAM cache watermark stays word aligned", CGBA_SH4_RAM_CACHE_WATERMARK,
+         (CGBA_SH4_RAM_CACHE_WATERMARK & 3u) == 0, 1);
+  expect("RAM cache start skips sentinel word",
+         (uint32_t)(CGBA_SH4_RAM_CACHE_START(cache) - cache),
+         CGBA_SH4_RAM_CACHE_START(cache) == cache + 4, 1);
+}
+
+static void test_scan_cap_floor(void)
+{
+  uint32_t ram_cap = 128;
+  uint32_t rom_cap = 1024;
+
+  expect("scan cap 32 stays at floor", 32,
+         cgba_sh4_scan_cap_after_overflow(32) == 32, 1);
+  expect("scan cap 33 clamps to floor", 33,
+         cgba_sh4_scan_cap_after_overflow(33) == 32, 1);
+  expect("scan cap 63 clamps to floor", 63,
+         cgba_sh4_scan_cap_after_overflow(63) == 32, 1);
+  expect("scan cap 64 halves to floor", 64,
+         cgba_sh4_scan_cap_after_overflow(64) == 32, 1);
+  expect("scan cap 1024 halves", 1024,
+         cgba_sh4_scan_cap_after_overflow(1024) == 512, 1);
+
+  cgba_sh4_scan_caps_shrink_domain(&ram_cap, &rom_cap, 1);
+  expect("RAM shrink leaves ROM cap independent", rom_cap,
+         rom_cap == 1024, 1);
+  expect("RAM domain cap shrinks", ram_cap, ram_cap == 64, 1);
+  cgba_sh4_scan_caps_shrink_domain(&ram_cap, &rom_cap, 0);
+  expect("ROM shrink leaves RAM cap independent", ram_cap,
+         ram_cap == 64, 1);
+  expect("ROM domain cap shrinks", rom_cap, rom_cap == 512, 1);
+  cgba_sh4_scan_caps_reset(&ram_cap, &rom_cap, 63, 1024);
+  expect("RAM cap resets to configured initial", ram_cap,
+         ram_cap == 63, 1);
+  expect("ROM cap resets to configured initial", rom_cap,
+         rom_cap == 1024, 1);
+}
+
 static void test_exec_domains(void)
 {
   expect("BIOS executable", 0x00003FFF,
@@ -65,6 +109,8 @@ static void test_scan_domain_boundaries(void)
 int main(void)
 {
   test_ram_seen_sentinel();
+  test_ram_cache_offset_sentinel();
+  test_scan_cap_floor();
   test_exec_domains();
   test_scan_domain_boundaries();
   printf("sh4 JIT safety: %u boundary checks passed\n", checks);
