@@ -1118,13 +1118,64 @@ static uint32_t headless_fuzz_buttons(unsigned frame)
 }
 #endif
 
+/* Explicit input script: CGBA_GPSP_HEADLESS_SCRIPT is a string of
+ * "frame:key[:hold]" tokens separated by commas, e.g. "30:A,200:D:4,260:A".
+ * Keys: A B S(tart) E(select) U D L R. Default hold = 4 frames. Composes with
+ * (usually replaces) the fixed A/START/DOWN pattern knobs. */
+#ifndef CGBA_GPSP_HEADLESS_SCRIPT
+#define CGBA_GPSP_HEADLESS_SCRIPT ""
+#endif
+
+static uint32_t headless_script_buttons(unsigned frame)
+{
+	static const char script[] = CGBA_GPSP_HEADLESS_SCRIPT;
+	const char *p = script;
+	uint32_t buttons = FXCG100_GBA_BUTTON_NONE;
+
+	while(*p) {
+		unsigned f = 0, hold = 4;
+		uint32_t bit = 0;
+
+		while(*p >= '0' && *p <= '9')
+			f = f * 10 + (unsigned)(*p++ - '0');
+		if(*p == ':')
+			p++;
+		switch(*p) {
+		case 'A': bit = FXCG100_GBA_BUTTON_A; break;
+		case 'B': bit = FXCG100_GBA_BUTTON_B; break;
+		case 'S': bit = FXCG100_GBA_BUTTON_START; break;
+		case 'E': bit = FXCG100_GBA_BUTTON_SELECT; break;
+		case 'U': bit = FXCG100_GBA_BUTTON_UP; break;
+		case 'D': bit = FXCG100_GBA_BUTTON_DOWN; break;
+		case 'L': bit = FXCG100_GBA_BUTTON_LEFT; break;
+		case 'R': bit = FXCG100_GBA_BUTTON_RIGHT; break;
+		default: break;
+		}
+		if(*p)
+			p++;
+		if(*p == ':') {
+			p++;
+			hold = 0;
+			while(*p >= '0' && *p <= '9')
+				hold = hold * 10 + (unsigned)(*p++ - '0');
+		}
+		if(bit && frame >= f && frame < f + hold)
+			buttons |= bit;
+		while(*p && *p != ',')
+			p++;
+		if(*p == ',')
+			p++;
+	}
+	return buttons;
+}
+
 static uint32_t headless_buttons_for_frame(unsigned frame)
 {
 	const unsigned start = (unsigned)CGBA_GPSP_HEADLESS_START_FRAME;
 	const unsigned hold = (unsigned)CGBA_GPSP_HEADLESS_START_HOLD;
 	const unsigned down_start = (unsigned)CGBA_GPSP_HEADLESS_DOWN_FRAME;
 	const unsigned down_hold = (unsigned)CGBA_GPSP_HEADLESS_DOWN_HOLD;
-	uint32_t buttons = FXCG100_GBA_BUTTON_NONE;
+	uint32_t buttons = headless_script_buttons(frame);
 
 #if CGBA_HEADLESS_FUZZ_ON
 	return headless_fuzz_buttons(frame);

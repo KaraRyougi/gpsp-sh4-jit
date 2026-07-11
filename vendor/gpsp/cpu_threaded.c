@@ -2831,6 +2831,29 @@ typedef struct
 
 static u32 ram_block_tag = INITIAL_TOP_TAG;
 
+#if defined(CGBA_GPSP_HEADLESS_TEST)
+/* DIAG: translation-storm tracing (headless only). Prints go to the
+ * emulator debug port; capped so a livelock cannot flood the log. */
+static void cgba_diag_puts(const char *s)
+{
+  while(*s)
+    *(volatile unsigned char *)0xb7000000u = (unsigned char)*s++;
+  *(volatile unsigned char *)0xb7000000u = '\n';
+}
+static unsigned cgba_diag_budget = 4000;
+#define CGBA_DIAG_LOG(...) do {                                               \
+    if(cgba_diag_budget) {                                                    \
+      char _dbg[120];                                                         \
+      cgba_diag_budget--;                                                     \
+      snprintf(_dbg, sizeof _dbg, __VA_ARGS__);                               \
+      cgba_diag_puts(_dbg);                                                   \
+    }                                                                         \
+  } while(0)
+#else
+#define CGBA_DIAG_LOG(...) do { } while(0)
+#endif
+
+
 inline static ramtag_type* get_ram_tag(u16 tagval) {
   ramtag_type *tbl = (ramtag_type*)&ram_translation_cache[RAM_TRANSLATION_CACHE_SIZE];
   s16 tgidx = (s16)(tagval);
@@ -2995,7 +3018,6 @@ u8 function_cc *block_lookup_translate_##type(u32 pc)                         \
 block_lookup_translate_builder(arm);
 block_lookup_translate_builder(thumb);
 
-#ifdef CGBA_GPSP_HEADLESS_TEST
 #ifndef CGBA_GPSP_HEADLESS_WJ_START
 #define CGBA_GPSP_HEADLESS_WJ_START 0u
 #endif
@@ -3003,18 +3025,25 @@ block_lookup_translate_builder(thumb);
 #define CGBA_GPSP_HEADLESS_WJ_END 0xffffffffu
 #endif
 
+/* Ring of recent C-resolver dispatch targets (block sequence). Compiled in
+ * ALL dynarec builds — the crash reporter prints its tail so a wild-jump
+ * photo shows the guest's path into the bad branch (resolver dispatches are
+ * already the slow path, one ring store is noise). The boot/vector-region
+ * logging below additionally streams to the emulator debug port and remains
+ * headless-only. */
+u32 cgba_wj_ring[24];
+unsigned cgba_wj_pos;
+
+#ifdef CGBA_GPSP_HEADLESS_TEST
 /* DIAG: trace guest jumps into the BIOS boot/vector region (a wild jump =
  * corrupted control flow). Logs the target + a ring of recent resolver targets
  * (block sequence) + LR to the casio-emu putchar port. */
-static u32 cgba_wj_ring[24];
-static unsigned cgba_wj_pos;
 static void cgba_wj_putc(char c) { *(volatile unsigned char *)0xb7000000u = (unsigned char)c; }
 static void cgba_wj_hex(u32 v) { static const char h[] = "0123456789ABCDEF"; int i;
   for (i = 7; i >= 0; i--) cgba_wj_putc(h[(v >> (i * 4)) & 0xF]); }
-static void cgba_wj_note(u32 pc)
+static void cgba_wj_note_boot_region(u32 pc)
 {
   unsigned i;
-  cgba_wj_ring[cgba_wj_pos] = pc; cgba_wj_pos = (cgba_wj_pos + 1) % 24;
   if (pc >= 0x260u) return;                 /* not the boot/vector region */
   if (frame_counter > (u32)CGBA_GPSP_HEADLESS_WJ_END)
     return;
@@ -3032,9 +3061,15 @@ static void cgba_wj_note(u32 pc)
   for (i = 0; i < 24; i++) { cgba_wj_hex(cgba_wj_ring[(cgba_wj_pos + i) % 24]); cgba_wj_putc(' '); }
   cgba_wj_putc('\n');
 }
-#else
-#define cgba_wj_note(pc) ((void)0)
 #endif
+
+static void cgba_wj_note(u32 pc)
+{
+  cgba_wj_ring[cgba_wj_pos] = pc; cgba_wj_pos = (cgba_wj_pos + 1) % 24;
+#ifdef CGBA_GPSP_HEADLESS_TEST
+  cgba_wj_note_boot_region(pc);
+#endif
+}
 
 u8 function_cc *block_lookup_address_dual(u32 pc)
 {
@@ -3438,6 +3473,45 @@ u8 function_cc *block_lookup_address_thumb(u32 pc)
 #define MAX_BLOCK_SIZE   1024   // 2/4KiB blocks max
 #define MAX_EXITS          32   // This covers 99% blocks
 
+/* Adaptive scan cap: a single block whose EMITTED code exceeds the whole
+ * (freshly flushed) translation cache would flush+retranslate forever — the
+ * "went too far, pedal out to the beginning" retry assumes a block always
+ * fits an empty cache. That assumption fails on this port: SimCity 2000
+ * copies a 724-instruction LDM/STM-heavy renderer into IWRAM whose SH4
+ * emission (~480 bytes/insn worst case) can never fit the RAM cache, so the
+ * JIT livelocked (emulator) or spun until the guest went wild (hardware,
+ * EXC=040 crash report). When an oversized attempt overflows, halve the cap
+ * so the retry ends the block early through the fall-through translation
+ * gate (a legal "size-limit" block end, same as the MAX_BLOCK_SIZE stop).
+ * Sticky for the session; reset on init_dynarec_caches (ROM load/reset).
+ *
+ * The shrink keys off the bytes THIS attempt emitted, not off starting at
+ * the cache base: the oversized block is usually reached recursively while
+ * resolving another block's external exits, so its attempts never begin in
+ * an empty cache. Any single block emitting more than a quarter of its
+ * cache is capped, which both guarantees it can fit and leaves room for
+ * the rest of the working set. */
+static u32 cgba_block_scan_cap = MAX_BLOCK_SIZE;
+
+/* DIAG bisect knob: -DCGBA_BLOCK_SCAN_CAP_DISABLE reverts scan_block to the
+ * fixed MAX_BLOCK_SIZE stop (cap machinery inert) to isolate the cap. */
+#ifdef CGBA_BLOCK_SCAN_CAP_DISABLE
+#define CGBA_BLOCK_SCAN_CAP_EXPR ((u32)MAX_BLOCK_SIZE)
+#else
+#define CGBA_BLOCK_SCAN_CAP_EXPR cgba_block_scan_cap
+#endif
+
+static void cgba_block_overflow_shrink(u8 *attempt_base, u8 *attempt_end,
+  bool ram_region)
+{
+  u32 cache_size = ram_region ? RAM_TRANSLATION_CACHE_SIZE
+                              : ROM_TRANSLATION_CACHE_SIZE;
+  if((u32)(attempt_end - attempt_base) > cache_size / 4 &&
+     cgba_block_scan_cap > 32)
+    cgba_block_scan_cap >>= 1;
+}
+
+
 block_data_type block_data[MAX_BLOCK_SIZE];
 block_exit_type block_exits[MAX_EXITS];
 
@@ -3559,7 +3633,7 @@ extern int cgba_dynarec_single_block;
     }                                                                         \
                                                                               \
     block_data_position++;                                                    \
-    if((block_data_position == MAX_BLOCK_SIZE) ||                             \
+    if(((u32)block_data_position >= CGBA_BLOCK_SCAN_CAP_EXPR) ||               \
      CGBA_DIAG_ONE_INSN_BLOCK(cgba_blk_start) ||                             \
      (block_end_pc == 0x3007FF0) || (block_end_pc == 0x203FFFF0))             \
     {                                                                         \
@@ -3608,6 +3682,7 @@ bool translate_block_arm(u32 pc, bool ram_region)
   u8 *backpatch_address = NULL;
   u8 *translation_ptr = NULL;
   u8 *translation_cache_limit = NULL;
+  u8 *attempt_base = NULL;
   s32 i;
   u32 flag_status;
   block_exit_type external_block_exits[MAX_EXITS];
@@ -3633,6 +3708,7 @@ bool translate_block_arm(u32 pc, bool ram_region)
      rom_translation_cache + ROM_TRANSLATION_CACHE_SIZE -
      TRANSLATION_CACHE_LIMIT_THRESHOLD;
   }
+  attempt_base = translation_ptr;
 
   generate_block_prologue();
 
@@ -3730,6 +3806,11 @@ bool translate_block_arm(u32 pc, bool ram_region)
        the beginning. */
 
     if(translation_ptr > translation_cache_limit) {
+      CGBA_DIAG_LOG("@@CGBA_XFLUSH arm ram=%d start=%08lx pc=%08lx end=%08lx pos=%ld cap=%lu",
+        (int)ram_region, (unsigned long)block_start_pc, (unsigned long)pc,
+        (unsigned long)block_end_pc, (long)block_data_position,
+        (unsigned long)cgba_block_scan_cap);
+      cgba_block_overflow_shrink(attempt_base, translation_ptr, ram_region);
       if (ram_region)
         flush_translation_cache_ram();
       else
@@ -3898,6 +3979,7 @@ bool translate_block_thumb(u32 pc, bool ram_region)
   u8 *backpatch_address = NULL;
   u8 *translation_ptr = NULL;
   u8 *translation_cache_limit = NULL;
+  u8 *attempt_base = NULL;
   s32 i;
   u32 flag_status;
   block_exit_type external_block_exits[MAX_EXITS];
@@ -3922,6 +4004,7 @@ bool translate_block_thumb(u32 pc, bool ram_region)
     translation_cache_limit = &rom_translation_cache[
        ROM_TRANSLATION_CACHE_SIZE - TRANSLATION_CACHE_LIMIT_THRESHOLD];
   }
+  attempt_base = translation_ptr;
 
   generate_block_prologue();
 
@@ -4010,6 +4093,11 @@ bool translate_block_thumb(u32 pc, bool ram_region)
 
     if(translation_ptr > translation_cache_limit)
     {
+      CGBA_DIAG_LOG("@@CGBA_XFLUSH thumb ram=%d start=%08lx pc=%08lx end=%08lx pos=%ld cap=%lu",
+        (int)ram_region, (unsigned long)block_start_pc, (unsigned long)pc,
+        (unsigned long)block_end_pc, (long)block_data_position,
+        (unsigned long)cgba_block_scan_cap);
+      cgba_block_overflow_shrink(attempt_base, translation_ptr, ram_region);
       if (ram_region)
         flush_translation_cache_ram();
       else
@@ -4161,6 +4249,12 @@ void flush_translation_cache_ram(void)
 #if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
   cgba_dynarec_ram_flush_count++;
 #endif
+#if defined(CGBA_GPSP_HEADLESS_TEST)
+  CGBA_DIAG_LOG("@@CGBA_RAMFLUSH n=%lu pc=%08lx used=%lu iw=%04x-%04x",
+    (unsigned long)cgba_dynarec_ram_flush_count, (unsigned long)reg[REG_PC],
+    (unsigned long)(ram_translation_ptr - ram_translation_cache),
+    (unsigned)(iwram_code_min & 0xFFFF), (unsigned)(iwram_code_max & 0xFFFF));
+#endif
   /*printf("ram flush %d (pc %x), %x to %x, %x to %x\n",
    flush_ram_count, reg[REG_PC], iwram_code_min, iwram_code_max,
    ewram_code_min, ewram_code_max);*/
@@ -4271,6 +4365,11 @@ void flush_translation_cache_rom(void)
 #if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
   cgba_dynarec_rom_flush_count++;
 #endif
+#if defined(CGBA_GPSP_HEADLESS_TEST)
+  CGBA_DIAG_LOG("@@CGBA_ROMFLUSH n=%lu pc=%08lx used=%lu",
+    (unsigned long)cgba_dynarec_rom_flush_count, (unsigned long)reg[REG_PC],
+    (unsigned long)(rom_translation_ptr - rom_translation_cache));
+#endif
 
   last_rom_translation_ptr = &rom_translation_cache[rom_cache_watermark];
   rom_translation_ptr      = &rom_translation_cache[rom_cache_watermark];
@@ -4287,6 +4386,7 @@ void init_dynarec_caches(void)
   memset(cgba_hot_count, 0, sizeof(cgba_hot_count));
   cgba_cold_pending = 0;
 #endif
+  cgba_block_scan_cap = MAX_BLOCK_SIZE;
   /* Initialize caches so that we can start initalizing the emitter. */
   rom_translation_ptr = last_rom_translation_ptr = &rom_translation_cache[0];
   memset(rom_branch_hash, 0, sizeof(rom_branch_hash));
