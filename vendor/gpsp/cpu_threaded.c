@@ -22,6 +22,7 @@
 // - block memory needs psr swapping and user mode reg swapping
 
 #include "common.h"
+#include "sh4/sh4_jit_safety.h"
 #if defined(VITA)
 #include <psp2/kernel/sysmem.h>
 #include <stdio.h>
@@ -2914,6 +2915,8 @@ u8 function_cc *block_lookup_translate_##type(u32 pc)                         \
   u32 block_tag;                                                              \
                                                                               \
   block_lookup_address_pc_##type();                                           \
+  if(!cgba_sh4_jit_exec_domain(pc))                                           \
+    return (u8 *)(~(uintptr_t)0);                                             \
                                                                               \
   switch(pcregion)                                                            \
   {                                                                           \
@@ -3633,7 +3636,8 @@ extern int cgba_dynarec_single_block;
     }                                                                         \
                                                                               \
     block_data_position++;                                                    \
-    if(((u32)block_data_position >= CGBA_BLOCK_SCAN_CAP_EXPR) ||               \
+    if(!cgba_sh4_jit_scan_may_continue(cgba_blk_start, block_end_pc) ||        \
+     ((u32)block_data_position >= CGBA_BLOCK_SCAN_CAP_EXPR) ||                 \
      CGBA_DIAG_ONE_INSN_BLOCK(cgba_blk_start) ||                             \
      (block_end_pc == 0x3007FF0) || (block_end_pc == 0x203FFFF0))             \
     {                                                                         \
