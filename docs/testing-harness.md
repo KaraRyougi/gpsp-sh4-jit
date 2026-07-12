@@ -150,9 +150,10 @@ Env-gated; all combine freely with the headless builds:
   (`ALT_FRAME=0 ALT_PERIOD=60 ALT_PRESS=60 ALT_LEFT=ON`) still completes but
   remains at `fps emu=18 draw=3`; the current frame-300 slot-save repro again
   completes with `@@CGBA_SLOTSAVE frame=300 ok=1` and no HLE panic signature.
-  The raw savestate image is now staged in the existing high-RAM checkpoint
-  buffer; only the compressed output stream borrows the executable ROM cache,
-  bracketed by full dynarec flushes. The patched default-96 run completed all
+  During calculator saves, raw and compressed savestate images are staged
+  together in the first 1 MiB GamePak-cache block, preserving both JIT caches
+  and their heat state. State loads still flush translated code after replacing
+  guest memory. The patched default-96 run completed all
   600 frames with final `hash=D48DE1EA`, `fps emu=18 draw=3`,
   `rom_flush=3 ram_flush=3 arm_tx=122 thumb_tx=2398 cold_n=30729`; its
   frame-300 slot-save repro reached frame 359 and `=== done ===`.

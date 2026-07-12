@@ -13,7 +13,7 @@
 
 /* Calculator savestates use a fixed 416 KiB raw BSON image. Compressed files
  * are rounded to 64 KiB buckets, so the largest legacy bucket is 448 KiB.
- * Keep raw and compressed staging adjacent in the non-executable GamePak
+ * Keep raw and compressed staging adjacent in the non-JIT GamePak
  * scratch arena; a save must never perturb the JIT cache or its heat state. */
 #define CGBA_STATE_RAW_SIZE       (416u * 1024u)
 #define CGBA_STATE_FILE_BUCKET    0x10000u
