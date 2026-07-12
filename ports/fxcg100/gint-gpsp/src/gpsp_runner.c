@@ -227,9 +227,14 @@ static const cgba_rom_source cgba_rom_sources[] = {
 };
 
 static cgba_nor_rom cgba_current_nor_rom = { .fd = -1 };
+static uint16_t cgba_current_nor_path[CGBA_NOR_ROM_PATH_MAX];
+static uint8_t cgba_current_rom_header[0xC0];
+static uint32_t cgba_current_rom_size;
 static cgba_nor_rom_list cgba_storage_roms;
 static int cgba_storage_roms_scanned;
 static char cgba_last_error[96];
+static int cgba_rom_mapping_failed;
+static uint32_t cgba_storage_generation_seen;
 static int cgba_lcd_test_active;
 static int cgba_mode3_debug_copy_active;
 static unsigned cgba_loaded_rom_id;
@@ -605,6 +610,11 @@ int cgba_gpsp_init(uint16_t *framebuffer, unsigned rom_id)
 		return -1;
 
 	cgba_last_error[0] = 0;
+	cgba_rom_mapping_failed = 0;
+	cgba_storage_generation_seen = fxcg100_storage_mutation_generation();
+	memset(cgba_current_nor_path, 0, sizeof(cgba_current_nor_path));
+	memset(cgba_current_rom_header, 0, sizeof(cgba_current_rom_header));
+	cgba_current_rom_size = 0;
 
 	if(rom_id < CGBA_GPSP_ROM_BUILTIN_COUNT)
 		rom = &cgba_rom_sources[rom_id];
@@ -635,6 +645,8 @@ int cgba_gpsp_init(uint16_t *framebuffer, unsigned rom_id)
 
 	cgba_nor_rom_close(&cgba_current_nor_rom);
 	if(nor_entry) {
+		memcpy(cgba_current_nor_path, nor_entry->path,
+			sizeof(cgba_current_nor_path));
 		nor_result = cgba_nor_rom_open_path(&cgba_current_nor_rom,
 			nor_entry->path);
 		if(nor_result != 0) {
@@ -642,6 +654,9 @@ int cgba_gpsp_init(uint16_t *framebuffer, unsigned rom_id)
 				cgba_last_error, sizeof(cgba_last_error));
 			return -3;
 		}
+		cgba_current_rom_size = cgba_current_nor_rom.size;
+		memcpy(cgba_current_rom_header, cgba_current_nor_rom.pages[0],
+			sizeof(cgba_current_rom_header));
 		/* Fragmented pages are left unmapped by load_gamepak_from_pages and
 		 * page-faulted on demand; point gpSP's page source at the NOR gather. */
 		cgba_gpsp_filestream_bind(&cgba_current_nor_rom);
@@ -850,14 +865,13 @@ static void copy_mode3_vram_to_framebuffer(void)
  * harness (copy it over USB into the HLE_FLS0 dir as CGBACHK.SAV).
  *
  * Staging buffer: borrow the already-reserved fragmented-ROM page cache while
- * guest execution is stopped.  Acquiring/releasing it invalidates only pages
- * backed by that cache; direct NOR mappings remain intact.  This keeps the
- * production high-RAM arena at the hardware-proven 0x8c655300 endpoint instead
- * of retaining the emulator-only 492 KiB differential snapshot.  JIT builds
- * use the ROM translation cache separately for the compressed stream. */
+ * guest execution is stopped. Raw and compressed images live side-by-side in
+ * that non-executable scratch. Older builds put the compressed stream in the
+ * ROM translation cache and flushed both JIT caches around every save; that
+ * changed cold/JIT selection and measurably perturbed continued gameplay. */
 static u8 *cgba_state_buffer(void)
 {
-	return cgba_gamepak_scratch_acquire(GBA_STATE_MEM_SIZE);
+	return cgba_gamepak_scratch_acquire(CGBA_STATE_WORK_SIZE);
 }
 
 static void cgba_state_buffer_release(void)
@@ -865,21 +879,86 @@ static void cgba_state_buffer_release(void)
 	cgba_gamepak_scratch_release();
 }
 
+/* Fugue is log-structured: creating or overwriting the .SVS may relocate live
+ * ROM records. The direct P1 block/page pointers captured at ROM open are not
+ * a lifetime guarantee, so refresh them after every mutation attempt before
+ * guest execution resumes. This deliberately preserves translated code and
+ * heat state because the logical ROM bytes did not change. */
+static int cgba_refresh_rom_after_storage(void)
+{
+	uint8_t original_header[0xC0];
+	uint32_t expected_size;
+	int refreshed, reopened = -1;
+
+	if(!cgba_current_nor_path[0]) {
+		if(cgba_current_nor_rom.fd >= 0 || cgba_rom_mapping_failed)
+			return 0;
+		cgba_storage_generation_seen =
+			fxcg100_storage_mutation_generation();
+		return 1; /* Built-in/non-NOR content. */
+	}
+	if(cgba_current_rom_size == 0) {
+		cgba_rom_mapping_failed = 1;
+		return 0;
+	}
+	expected_size = cgba_current_rom_size;
+	memcpy(original_header, cgba_current_rom_header, sizeof(original_header));
+
+	/* Remove every cartridge alias before asking Fugue for new physical
+	 * addresses. A failed query must never leave the old P1 pointers live. */
+	cgba_gamepak_unmap_pages();
+	refreshed = (cgba_current_nor_rom.fd >= 0 &&
+		cgba_current_nor_rom.pages[0]) ?
+		cgba_nor_rom_refresh(&cgba_current_nor_rom) : -1;
+	if(refreshed < 0 || cgba_current_nor_rom.size != expected_size ||
+			!cgba_current_nor_rom.pages[0] ||
+			memcmp(original_header, cgba_current_nor_rom.pages[0],
+				sizeof(original_header)) != 0) {
+		/* An open descriptor is not assumed to survive a Fugue relocation.
+		 * Reopen by the exact selected path, then validate size and header. */
+		if(cgba_current_nor_path[0])
+			reopened = cgba_nor_rom_open_path(&cgba_current_nor_rom,
+				cgba_current_nor_path);
+		if(reopened != 0 || cgba_current_nor_rom.size != expected_size ||
+				!cgba_current_nor_rom.pages[0] ||
+				memcmp(original_header, cgba_current_nor_rom.pages[0],
+					sizeof(original_header)) != 0)
+			refreshed = -3;
+		else
+			refreshed = 2; /* Reopened and revalidated. */
+	}
+	if(refreshed < 0 || !cgba_gamepak_remap_pages(
+			cgba_current_nor_rom.pages, cgba_current_nor_rom.padded_size)) {
+		cgba_rom_mapping_failed = 1;
+		snprintf(cgba_last_error, sizeof(cgba_last_error),
+			"NOR refresh after storage failed: %d/%d", refreshed, reopened);
+		return 0;
+	}
+	cgba_rom_mapping_failed = 0;
+	cgba_storage_generation_seen = fxcg100_storage_mutation_generation();
+	return 1;
+}
+
+int cgba_gpsp_storage_sync(void)
+{
+	if(!cgba_rom_mapping_failed && cgba_storage_generation_seen ==
+			fxcg100_storage_mutation_generation())
+		return 1;
+	return cgba_refresh_rom_after_storage();
+}
+
 #ifdef CGBA_DYNAREC
 void flush_translation_cache_rom(void);
 void flush_translation_cache_ram(void);
-void flush_dynarec_caches(void);
 
-static u8 *cgba_state_comp_buffer(void)
+static u8 *cgba_state_comp_buffer(u8 *raw)
 {
-	return rom_translation_cache + rom_cache_watermark;
+	return raw + GBA_STATE_MEM_SIZE;
 }
 
 static unsigned cgba_state_comp_capacity(void)
 {
-	if (rom_cache_watermark >= ROM_TRANSLATION_CACHE_SIZE)
-		return 0;
-	return ROM_TRANSLATION_CACHE_SIZE - rom_cache_watermark;
+	return CGBA_STATE_COMP_FILE_MAX;
 }
 #endif
 
@@ -1008,11 +1087,8 @@ static void cgba_state_path_legacy(uint16_t *path, unsigned slot)
 	path[13] = (uint16_t)('0' + (slot % 10));
 }
 
-#ifdef CGBA_DYNAREC
-/* Compressed staging borrows the ROM cache, separate from the raw snapshot. */
-_Static_assert(GBA_STATE_MEM_SIZE + 64 <= ROM_TRANSLATION_CACHE_SIZE,
-	"comp area must fit the worst case (all-literal) stream");
-#endif
+_Static_assert(GBA_STATE_MEM_SIZE == CGBA_STATE_RAW_SIZE,
+	"calculator and core savestate sizes must agree");
 
 
 int cgba_gpsp_state_save(unsigned slot)
@@ -1025,15 +1101,10 @@ int cgba_gpsp_state_save(unsigned slot)
 		return 0;
 
 	cgba_state_path(path, slot);
-#ifdef CGBA_DYNAREC
-	/* Clear RAM SMC tags before serializing, and drop direct chains before the
-	 * compression buffer borrows executable cache memory. */
-	flush_dynarec_caches();
-#endif
 	gba_save_state(buf);
 #ifdef CGBA_DYNAREC
 	{
-		u8 *comp = cgba_state_comp_buffer();
+		u8 *comp = cgba_state_comp_buffer(buf);
 		unsigned cap = cgba_state_comp_capacity();
 		unsigned csz = cgba_state_compress(buf, GBA_STATE_MEM_SIZE,
 			comp, cap);
@@ -1042,22 +1113,29 @@ int cgba_gpsp_state_save(unsigned slot)
 			 * similar size hit write_blob's fast overwrite path
 			 * instead of delete+create; the decoder stops at
 			 * raw_size so the slack tail is ignored. */
-			unsigned fsz = (csz + 0xFFFFu) & ~0xFFFFu;
-			if (fsz <= cap) {
+			unsigned fsz = (csz + CGBA_STATE_FILE_BUCKET - 1u) &
+				~(CGBA_STATE_FILE_BUCKET - 1u);
+			/* Rounding can make a nominally compressed stream larger
+			 * than the raw state. Store raw in that case. */
+			if (fsz <= cap && fsz < GBA_STATE_MEM_SIZE) {
 				memset(comp + csz, 0, fsz - csz);
 				ok = fxcg100_storage_write_blob(path, comp, fsz);
+			} else {
+				ok = fxcg100_storage_write_blob(path, buf,
+					GBA_STATE_MEM_SIZE);
 			}
 		} else {
 			ok = fxcg100_storage_write_blob(path, buf,
 				GBA_STATE_MEM_SIZE);
 		}
 	}
-	flush_dynarec_caches();            /* comp buffer was executable cache */
 #else
 	ok = fxcg100_storage_write_blob(path, buf, GBA_STATE_MEM_SIZE);
 #endif
 	cgba_state_buffer_release();
-	return ok;
+	/* Refresh even after a reported write failure: remove/create may already
+	 * have triggered filesystem relocation before the final write failed. */
+	return cgba_refresh_rom_after_storage() && ok;
 }
 
 static int cgba_state_load_from(const uint16_t *path)
@@ -1074,11 +1152,10 @@ static int cgba_state_load_from(const uint16_t *path)
 			GBA_STATE_MEM_SIZE) && gba_load_state(buf);
 	}
 #ifdef CGBA_DYNAREC
-	else if (fsz > 8 && fsz <= (int)GBA_STATE_MEM_SIZE + 64) {
-		u8 *comp = cgba_state_comp_buffer();
+	else if (fsz > 8 && fsz <= (int)CGBA_STATE_COMP_FILE_MAX) {
+		u8 *comp = cgba_state_comp_buffer(buf);
 		unsigned cap = cgba_state_comp_capacity();
 		if ((unsigned)fsz <= cap) {
-			flush_dynarec_caches();    /* comp buffer borrows ROM cache */
 			ok = fxcg100_storage_read_blob(path, comp, (unsigned)fsz) &&
 				cgba_state_decompress(comp, (unsigned)fsz, buf,
 						      GBA_STATE_MEM_SIZE) &&
@@ -1173,13 +1250,15 @@ void cgba_gpsp_backup_flush(int force)
 {
 	unsigned sz = cgba_backup_size();
 	uint16_t path[24];
+	int wrote;
 
 	if (sz == 0)
 		return;                       /* game never touched its backup */
 	if (!force && !cgba_backup_dirty)
 		return;                       /* nothing new since the last flush */
 	cgba_backup_path(path);
-	if (fxcg100_storage_write_blob(path, gamepak_backup, sz))
+	wrote = fxcg100_storage_write_blob(path, gamepak_backup, sz);
+	if (cgba_refresh_rom_after_storage() && wrote)
 		cgba_backup_dirty = 0;
 }
 
@@ -1192,6 +1271,8 @@ void cgba_gpsp_run_frame(uint32_t gba_buttons, int render_video)
 		fill_lcd_test_frame(test_frame++);
 		return;
 	}
+	if(cgba_rom_mapping_failed)
+		return;
 
 	gpsp_set_input_state_bits(gba_buttons & 0x3ff);
 	update_input();
@@ -1548,10 +1629,16 @@ unsigned cgba_gpsp_diag(char out[][CGBA_DIAG_LINE_MAX], unsigned max_lines)
 
 void cgba_gpsp_shutdown(void)
 {
-	cgba_gpsp_backup_flush(0);   /* persist the game's save before teardown */
 	if(!cgba_lcd_test_active)
 		memory_term();
 	cgba_nor_rom_close(&cgba_current_nor_rom);
+	memset(cgba_current_nor_path, 0, sizeof(cgba_current_nor_path));
+	memset(cgba_current_rom_header, 0, sizeof(cgba_current_rom_header));
+	cgba_current_rom_size = 0;
+	cgba_rom_mapping_failed = 0;
+	/* No guest can resume now, so persist backup only after closing the ROM;
+	 * this avoids a pointless full-ROM block refresh on exit. */
+	cgba_gpsp_backup_flush(0);
 	cgba_lcd_test_active = 0;
 	cgba_mode3_debug_copy_active = 0;
 	cgba_active_framebuffer = NULL;

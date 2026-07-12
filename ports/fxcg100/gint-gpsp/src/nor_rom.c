@@ -354,6 +354,20 @@ static const uint8_t *cached_nor_pointer(unsigned char *address)
 	return NULL;
 }
 
+/* Fugue can relocate live records while creating/writing another file. P1 is
+ * cached, so a newly returned physical NOR slot may still have operand-cache
+ * lines from its previous contents. These addresses are read-only: invalidate
+ * without writeback, then synchronize once after all changed blocks. */
+static void invalidate_nor_block(const uint8_t *address)
+{
+	uintptr_t first = (uintptr_t)address & ~(uintptr_t)31u;
+	uintptr_t end = ((uintptr_t)address + CGBA_FLASH_BLOCK_SIZE + 31u) &
+		~(uintptr_t)31u;
+
+	for(uintptr_t p = first; p < end; p += 32u)
+		__asm__ volatile("ocbi @%0" :: "r"(p) : "memory");
+}
+
 static int make_root_path(uint16_t *path, size_t path_count,
 	const char *name8dot3, unsigned variant)
 {
@@ -570,6 +584,7 @@ static int build_block_table(cgba_nor_rom *rom)
 {
 	uint32_t total = rom->page_count * CGBA_FLASH_BLOCKS_PER_PAGE;
 	uint32_t p;
+	int cache_invalidated = 0;
 
 	if(total > CGBA_NOR_ROM_MAX_BLOCKS)
 		return -1;
@@ -592,6 +607,10 @@ static int build_block_table(cgba_nor_rom *rom)
 		result = os_bfile_get_block_address(rom->fd,
 			(int)(b * CGBA_FLASH_BLOCK_SIZE), &raw);
 		ptr = result < 0 ? NULL : cached_nor_pointer(raw);
+		if(ptr && ptr != cgba_block_addr[b]) {
+			invalidate_nor_block(ptr);
+			cache_invalidated = 1;
+		}
 
 		if(b == 0) {
 			rom->block_result = result;
@@ -611,13 +630,16 @@ static int build_block_table(cgba_nor_rom *rom)
 		}
 		cgba_block_addr[b] = ptr;
 	}
+	if(cache_invalidated)
+		__asm__ volatile("synco" ::: "memory");
 	cgba_block_total = total;
 
 	for(p = 0; p < rom->page_count; p++) {
 		const uint8_t *base = cgba_block_addr[p * CGBA_FLASH_BLOCKS_PER_PAGE];
-		int contiguous = 1;
+		int contiguous = base != NULL;
 
-		for(uint32_t i = 1; i < CGBA_FLASH_BLOCKS_PER_PAGE; i++) {
+		for(uint32_t i = 1; contiguous &&
+				i < CGBA_FLASH_BLOCKS_PER_PAGE; i++) {
 			if(cgba_block_addr[p * CGBA_FLASH_BLOCKS_PER_PAGE + i] !=
 					base + i * CGBA_FLASH_BLOCK_SIZE) {
 				contiguous = 0;
@@ -647,6 +669,53 @@ static int build_block_table(cgba_nor_rom *rom)
 	cgba_nor_rom_read(rom, cgba_page0_buf, 0, CGBA_NOR_ROM_PAGE_SIZE);
 	rom->pages[0] = cgba_page0_buf;
 	return 0;
+}
+
+int cgba_nor_rom_refresh(cgba_nor_rom *rom)
+{
+	uint8_t original_header[0xC0];
+	uint32_t total;
+	int got;
+
+	if(!rom || rom->fd < 0 || rom->page_count == 0 || !rom->pages[0])
+		return -1;
+	if(os_bfile_size(rom->fd) != (int)rom->size)
+		return -2;
+	total = rom->page_count * CGBA_FLASH_BLOCKS_PER_PAGE;
+	if(total > CGBA_NOR_ROM_MAX_BLOCKS)
+		return -1;
+	memcpy(original_header, rom->pages[0], sizeof(original_header));
+	memset(rom->pages, 0, sizeof(rom->pages));
+	rom->direct_page_count = 0;
+	rom->fallback_used = 0;
+	rom->fail_page = 0;
+	rom->fail_block = 0;
+
+	if(build_block_table(rom) == 0 &&
+			memcmp(original_header, rom->pages[0], sizeof(original_header)) == 0)
+		return 0;
+
+	/* A descriptor/block-address refresh that cannot reproduce the immutable
+	 * ROM header must not leave stale direct pointers reachable. Fall back to
+	 * logical BFile reads for every block; this is slow but remains correct. */
+	memset(cgba_block_addr, 0, total * sizeof(cgba_block_addr[0]));
+	cgba_block_total = total;
+	memset(rom->pages, 0, sizeof(rom->pages));
+	rom->direct_page_count = 0;
+	memset(cgba_page0_buf, 0xFF, sizeof(cgba_page0_buf));
+	{
+		uint32_t first_size = rom->size < CGBA_NOR_ROM_PAGE_SIZE ?
+			rom->size : CGBA_NOR_ROM_PAGE_SIZE;
+		got = os_bfile_read(rom->fd, cgba_page0_buf, (int)first_size, 0);
+		if(!bfile_read_exact_ok(got, (int)first_size))
+			return -2;
+	}
+	if(memcmp(original_header, cgba_page0_buf,
+				sizeof(original_header)) != 0)
+		return -2;
+	rom->pages[0] = cgba_page0_buf;
+	rom->fallback_used = 1;
+	return 1;
 }
 
 static int map_open_fd(cgba_nor_rom *rom, int fd)

@@ -8,7 +8,7 @@
 #include "frame_pacing.h"
 #include "gpsp_runner.h"
 #ifdef CGBA_GPSP_HEADLESS_TEST
-#define CGBA_HEADLESS_STATE_SIZE (416u * 1024u)
+#define CGBA_HEADLESS_STATE_SIZE CGBA_STATE_RAW_SIZE
 extern unsigned char *cgba_gamepak_scratch_acquire(unsigned int min_size);
 extern void cgba_gamepak_scratch_release(void);
 extern void gba_save_state(void *dst);
@@ -848,7 +848,7 @@ static int headless_read_checkpoint(void *state, unsigned size)
 		if(fd < 0)
 			return 0;
 		fsz = headless_bfile_size(fd);
-		if(fsz <= 8 || fsz > (int)size + 64 ||
+		if(fsz <= 8 || fsz > (int)CGBA_STATE_COMP_FILE_MAX ||
 			rom_cache_watermark >= ROM_TRANSLATION_CACHE_SIZE ||
 			(unsigned)fsz > ROM_TRANSLATION_CACHE_SIZE - rom_cache_watermark) {
 			headless_bfile_close(fd);
@@ -2117,6 +2117,14 @@ int main(void)
 				enter_gameplay_display(framebuffer, frame);
 				continue;
 			}
+			/* CONFIG SAVE also mutates Fugue while the menu is open. Before
+			 * resuming the same game, refresh every direct NOR mapping even
+			 * when no savestate/backup write followed it. */
+			if(!cgba_gpsp_storage_sync()) {
+				draw_status("ROM remap FAILED", "restart or reset required");
+				wait_status();
+				break;
+			}
 			if(result == FXCG100_MENU_LOAD_STATE ||
 					result == FXCG100_MENU_SAVE_STATE) {
 				int save = result == FXCG100_MENU_SAVE_STATE;
@@ -2128,6 +2136,12 @@ int main(void)
 					: "loading state...", slot_line);
 				ok = save ? cgba_gpsp_state_save(menu_state.savestate_slot)
 					: cgba_gpsp_state_load(menu_state.savestate_slot);
+				if(save && !ok && !cgba_gpsp_storage_sync()) {
+					draw_status("ROM remap FAILED",
+						"restart or reset required");
+					wait_status();
+					break;
+				}
 				draw_status(ok ? (save ? "state saved" : "state loaded")
 					: (save ? "state save FAILED"
 						: "state load FAILED (no file?)"), slot_line);
@@ -2181,8 +2195,17 @@ int main(void)
 			wait_status();
 			enter_gameplay_display(framebuffer, frame);
 #else
-			draw_status(cgba_gpsp_state_save(menu_state.savestate_slot)
-				? "state saved" : "state save FAILED", NULL);
+			{
+				int ok = cgba_gpsp_state_save(menu_state.savestate_slot);
+				int storage_ok = ok || cgba_gpsp_storage_sync();
+				draw_status(ok ? "state saved" :
+					(storage_ok ? "state save FAILED" : "ROM remap FAILED"),
+					storage_ok ? NULL : "restart or reset required");
+				if(!storage_ok) {
+					wait_status();
+					break;
+				}
+			}
 			wait_status();
 			enter_gameplay_display(framebuffer, frame);
 #endif
