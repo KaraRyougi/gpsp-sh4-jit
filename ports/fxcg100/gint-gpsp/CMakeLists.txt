@@ -94,6 +94,10 @@ set(CGBA_SH4_HOT_THRESHOLD "8" CACHE STRING
   "Cold-code gate: translate ROM blocks after N dispatches (1-255; 0 = gate off)")
 set(CGBA_SH4_COLD_CHUNK_CYCLES "512" CACHE STRING
   "Cold-code gate: max GBA cycles to interpret per cold fallback (0 = whole scheduler budget)")
+set(CGBA_SH4_RAM_SCAN_CAP_INITIAL "1024" CACHE STRING
+  "Initial maximum guest instructions per translated RAM block (32-1024; may halve after an overflow)")
+set(CGBA_SH4_ROM_SCAN_CAP_INITIAL "1024" CACHE STRING
+  "Initial maximum guest instructions per translated ROM block (32-1024; may halve after an overflow)")
 option(CGBA_SH4_EXACT_CYCLE_BOUNDARIES
   "Headless/debug: check the SH4 dynarec cycle budget at each translated instruction boundary" OFF)
 option(CGBA_SH4_DIFF_HARNESS
@@ -104,23 +108,26 @@ option(CGBA_SH4_PROFILE_COUNTERS
   "Hardware/debug: count SH4 JIT translations, cache flushes, and helper calls for the ON-menu debug page" OFF)
 option(CGBA_FXCG100_STORAGE
   "Enable gint_world_switch-backed fx-CG100 BFile storage for ROM/config files" ON)
-# The ROM+RAM cache TOTAL must keep the .cgba.highbss arena end at 0x8c655300
-# — the ONLY layout proven safe on real hardware. Growing the arena hard-reset
-# the calculator twice: 1.5 MB ROM cache (arena end 0x8c715300) overwrote the
-# resident MPM loader at 0x8c700000, and even 1152 KB (end 0x8c6b5300) still
-# reset — live OS state sits well below 0x8c700000. Do not grow the TOTAL
-# without probing the real bound with a dedicated hardware test.
+# The .cgba.highbss arena must end at or below 0x8c655300, the ONLY layout
+# proven safe on real hardware. Growing the arena hard-reset the calculator
+# twice: a 1.5 MB ROM cache (arena end 0x8c715300) overwrote the resident MPM
+# loader at 0x8c700000, and even 1152 KB (end 0x8c6b5300) reset because live OS
+# state sits below it. Do not raise the arena end without an on-device probe.
 #
-# Within that fixed 1 MiB total, the split favors ROM code: hardware showed the
-# post-BIOS-fix hot translated set at ~739 KB+ (right at the old 768 KB cap →
-# constant wholesale flush-retranslate thrash) while the RAM-code cache used
-# only ~83 KB of its 256 KB. 896/128 relieves the ROM side at no layout risk.
+# The hybrid cartridge map keeps contiguous 32 KiB pages on the existing direct
+# path and resolves fragmented pages through sanitized 4 KiB NOR pointers. Only
+# unsafe blocks need the aligned gather fallback, so one 1 MiB / 32-page cache is
+# sufficient. The 256 KiB embedded mini-ROM staging area is separate from that
+# cache and from its 864 KiB savestate scratch use. Compared with the former
+# 2 MiB shared cache, this layout recovers 768 KiB: 256 KiB grows the RAM JIT to
+# the conservative 1024/512 profile and 512 KiB remains below the hardware-proven
+# arena ceiling.
 # The 8-dispatch cold gate plus 4-count flush leak is the July 2026 Yoshi
 # A/LEFT cache-sim default: it trims repeated cold fallback after cache flushes
 # while keeping leaky decay to avoid the threshold-0 translate-everything cliff.
-set(CGBA_GPSP_ROM_TRANSLATION_CACHE_SIZE "917504" CACHE STRING
+set(CGBA_GPSP_ROM_TRANSLATION_CACHE_SIZE "1048576" CACHE STRING
   "SH4 dynarec ROM translation cache size in bytes")
-set(CGBA_GPSP_RAM_TRANSLATION_CACHE_SIZE "131072" CACHE STRING
+set(CGBA_GPSP_RAM_TRANSLATION_CACHE_SIZE "524288" CACHE STRING
   "SH4 dynarec RAM translation cache size in bytes")
 set(CGBA_GPSP_ROM_BRANCH_HASH_BITS "12" CACHE STRING
   "SH4 dynarec ROM branch-hash = 2^N u32 entries; 12 is 16 KiB, which is friendlier to the SH7305 cache than the upstream 16 / 256 KiB table")
@@ -258,6 +265,9 @@ if(CGBA_DYNAREC)
     CGBA_SH4_HOT_THRESHOLD=${CGBA_SH4_HOT_THRESHOLD})
   target_compile_definitions(cgba-gint-gpsp PRIVATE
     CGBA_SH4_COLD_CHUNK_CYCLES=${CGBA_SH4_COLD_CHUNK_CYCLES})
+  target_compile_definitions(cgba-gint-gpsp PRIVATE
+    CGBA_SH4_RAM_SCAN_CAP_INITIAL=${CGBA_SH4_RAM_SCAN_CAP_INITIAL}
+    CGBA_SH4_ROM_SCAN_CAP_INITIAL=${CGBA_SH4_ROM_SCAN_CAP_INITIAL})
   # Re-sync the I-cache line for every INSTRUCTION patch (BT/BF/BRA rewrites).
   # All such patches are in not-yet-synced memory by construction, so this is
   # belt-and-suspenders — but it is translate-time-only (a few thousand patches
@@ -433,6 +443,8 @@ set(CGBA_GPSP_HEADLESS_SAVE_STATE_FRAME "-1" CACHE STRING
   "Headless debug: absolute frame after which to save a reusable checkpoint; -1 disables")
 set(CGBA_GPSP_HEADLESS_LOAD_STATE "0" CACHE STRING
   "Headless debug: load the reusable checkpoint before running frames; 0 disables")
+set(CGBA_GPSP_HEADLESS_SCRIPT "" CACHE STRING
+  "Headless input script: comma list of frame:key[:hold] (keys ABSEUDLR), e.g. 30:A,200:D:4")
 set(CGBA_GPSP_HEADLESS_TRACE_PC "0" CACHE STRING
   "Headless debug: trace Thumb load/store helper state at this guest PC; 0 disables")
 set(CGBA_GPSP_HEADLESS_TRACE_MASK "4095" CACHE STRING
@@ -498,6 +510,7 @@ if(CGBA_GPSP_HEADLESS_TEST)
     CGBA_GPSP_HEADLESS_WINDOW_DIFF_FRAME=${CGBA_GPSP_HEADLESS_WINDOW_DIFF_FRAME}
     CGBA_GPSP_HEADLESS_SAVE_STATE_FRAME=${CGBA_GPSP_HEADLESS_SAVE_STATE_FRAME}
     CGBA_GPSP_HEADLESS_LOAD_STATE=${CGBA_GPSP_HEADLESS_LOAD_STATE}
+    CGBA_GPSP_HEADLESS_SCRIPT="${CGBA_GPSP_HEADLESS_SCRIPT}"
     CGBA_GPSP_HEADLESS_TRACE_PC=${CGBA_GPSP_HEADLESS_TRACE_PC}
     CGBA_GPSP_HEADLESS_TRACE_MASK=${CGBA_GPSP_HEADLESS_TRACE_MASK}
     CGBA_GPSP_HEADLESS_TRACE_JIT=${CGBA_GPSP_HEADLESS_TRACE_JIT}

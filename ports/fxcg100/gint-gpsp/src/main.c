@@ -8,7 +8,7 @@
 #include "frame_pacing.h"
 #include "gpsp_runner.h"
 #ifdef CGBA_GPSP_HEADLESS_TEST
-#define CGBA_HEADLESS_STATE_SIZE (416u * 1024u)
+#define CGBA_HEADLESS_STATE_SIZE CGBA_STATE_RAW_SIZE
 extern unsigned char *cgba_gamepak_scratch_acquire(unsigned int min_size);
 extern void cgba_gamepak_scratch_release(void);
 extern void gba_save_state(void *dst);
@@ -227,9 +227,32 @@ static void wait_for_keys_released(void)
 	}
 }
 
+static void prepare_exit_to_os(const char *detail)
+{
+	draw_status("exiting gpSP...", detail);
+	/* Do not enter Fugue or hand control back to the launcher while the menu
+	 * activation key is still physically down. In particular, the initial-menu
+	 * EXIT path used to return immediately with EXE/HOME held. */
+	wait_for_keys_released();
+	/* Finish direct-LCD DMA and restore the full panel window before any final
+	 * BFile world switches. kquit() can then restore the OS drivers from a
+	 * quiescent add-in state. */
+	fxcg100_lcd_shutdown();
+}
+
 static int exit_to_os(int code)
 {
-	fxcg100_lcd_shutdown();
+	prepare_exit_to_os(NULL);
+	return code;
+}
+
+static int shutdown_gpsp_and_exit(int code)
+{
+	/* The dirty backup flush in cgba_gpsp_shutdown() can take visibly longer
+	 * than a clean exit. Publish the status first, then quiesce input/display
+	 * before the ROM-close and save-file OS calls. */
+	prepare_exit_to_os("saving backup if changed");
+	cgba_gpsp_shutdown();
 	return code;
 }
 
@@ -781,12 +804,18 @@ static int headless_save_checkpoint(unsigned frame)
 	unsigned size = CGBA_HEADLESS_STATE_SIZE;
 	void *state = cgba_gamepak_scratch_acquire(size);
 	int existing_size = headless_storage_blob_size(headless_checkpoint_path);
+	int mapping_ok;
 	int ok = 0;
 	char buf[128];
 
 	if(!state)
 		return 0;
 	gba_save_state(state);
+	/* The HLE harness calls its BFile hooks directly, but the write can relocate
+	 * the still-running ROM just like a production slot save. Publish the
+	 * mutation before the first remove/create/write attempt so the normal sync
+	 * path cannot short-circuit, including on partial failure. */
+	fxcg100_storage_note_mutation();
 	if(existing_size == (int)size) {
 		ok = headless_write_blob_contents(headless_checkpoint_path, state, size);
 	} else {
@@ -799,11 +828,6 @@ static int headless_save_checkpoint(unsigned frame)
 		}
 		ok = headless_write_blob_contents(headless_checkpoint_path, state, size);
 	}
-
-	snprintf(buf, sizeof buf,
-		"@@CGBA_CHECKPOINT save frame=%u ok=%d size=%u existing=%d",
-		frame, ok, size, existing_size);
-	hputs_dbg(buf);
 	if(!ok) {
 		const uint8_t *p = (const uint8_t *)state;
 
@@ -820,9 +844,18 @@ static int headless_save_checkpoint(unsigned frame)
 			hputc_dbg('\n');
 		snprintf(buf, sizeof buf,
 			"@@CGBA_CHECKPOINT_HEX_END frame=%u", frame);
-			hputs_dbg(buf);
+		hputs_dbg(buf);
 	}
 	cgba_gamepak_scratch_release();
+	/* Refresh both the 32 KiB map and published 4 KiB table before the next
+	 * headless frame. Report remap failure as checkpoint failure so validation
+	 * can never count a run with stale NOR pointers as a pass. */
+	mapping_ok = cgba_gpsp_storage_sync();
+	ok = ok && mapping_ok;
+	snprintf(buf, sizeof buf,
+		"@@CGBA_CHECKPOINT save frame=%u ok=%d size=%u existing=%d map=%d",
+		frame, ok, size, existing_size, mapping_ok);
+	hputs_dbg(buf);
 	return ok;
 }
 
@@ -841,7 +874,8 @@ static int headless_read_checkpoint(void *state, unsigned size)
 #ifdef CGBA_DYNAREC
 	{
 		extern u8 rom_translation_cache[];
-		u8 *comp = rom_translation_cache;
+		extern u32 rom_cache_watermark;
+		u8 *comp = rom_translation_cache + rom_cache_watermark;
 		int fd = headless_bfile_open(headless_checkpoint_path,
 			CGBA_HEADLESS_BFILE_READ_ONLY);
 		int fsz, rd;
@@ -849,7 +883,9 @@ static int headless_read_checkpoint(void *state, unsigned size)
 		if(fd < 0)
 			return 0;
 		fsz = headless_bfile_size(fd);
-		if(fsz <= 8 || fsz > (int)size + 64) {
+		if(fsz <= 8 || fsz > (int)CGBA_STATE_COMP_FILE_MAX ||
+			rom_cache_watermark >= ROM_TRANSLATION_CACHE_SIZE ||
+			(unsigned)fsz > ROM_TRANSLATION_CACHE_SIZE - rom_cache_watermark) {
 			headless_bfile_close(fd);
 			return 0;
 		}
@@ -1120,13 +1156,64 @@ static uint32_t headless_fuzz_buttons(unsigned frame)
 }
 #endif
 
+/* Explicit input script: CGBA_GPSP_HEADLESS_SCRIPT is a string of
+ * "frame:key[:hold]" tokens separated by commas, e.g. "30:A,200:D:4,260:A".
+ * Keys: A B S(tart) E(select) U D L R. Default hold = 4 frames. Composes with
+ * (usually replaces) the fixed A/START/DOWN pattern knobs. */
+#ifndef CGBA_GPSP_HEADLESS_SCRIPT
+#define CGBA_GPSP_HEADLESS_SCRIPT ""
+#endif
+
+static uint32_t headless_script_buttons(unsigned frame)
+{
+	static const char script[] = CGBA_GPSP_HEADLESS_SCRIPT;
+	const char *p = script;
+	uint32_t buttons = FXCG100_GBA_BUTTON_NONE;
+
+	while(*p) {
+		unsigned f = 0, hold = 4;
+		uint32_t bit = 0;
+
+		while(*p >= '0' && *p <= '9')
+			f = f * 10 + (unsigned)(*p++ - '0');
+		if(*p == ':')
+			p++;
+		switch(*p) {
+		case 'A': bit = FXCG100_GBA_BUTTON_A; break;
+		case 'B': bit = FXCG100_GBA_BUTTON_B; break;
+		case 'S': bit = FXCG100_GBA_BUTTON_START; break;
+		case 'E': bit = FXCG100_GBA_BUTTON_SELECT; break;
+		case 'U': bit = FXCG100_GBA_BUTTON_UP; break;
+		case 'D': bit = FXCG100_GBA_BUTTON_DOWN; break;
+		case 'L': bit = FXCG100_GBA_BUTTON_LEFT; break;
+		case 'R': bit = FXCG100_GBA_BUTTON_RIGHT; break;
+		default: break;
+		}
+		if(*p)
+			p++;
+		if(*p == ':') {
+			p++;
+			hold = 0;
+			while(*p >= '0' && *p <= '9')
+				hold = hold * 10 + (unsigned)(*p++ - '0');
+		}
+		if(bit && frame >= f && frame < f + hold)
+			buttons |= bit;
+		while(*p && *p != ',')
+			p++;
+		if(*p == ',')
+			p++;
+	}
+	return buttons;
+}
+
 static uint32_t headless_buttons_for_frame(unsigned frame)
 {
 	const unsigned start = (unsigned)CGBA_GPSP_HEADLESS_START_FRAME;
 	const unsigned hold = (unsigned)CGBA_GPSP_HEADLESS_START_HOLD;
 	const unsigned down_start = (unsigned)CGBA_GPSP_HEADLESS_DOWN_FRAME;
 	const unsigned down_hold = (unsigned)CGBA_GPSP_HEADLESS_DOWN_HOLD;
-	uint32_t buttons = FXCG100_GBA_BUTTON_NONE;
+	uint32_t buttons = headless_script_buttons(frame);
 
 #if CGBA_HEADLESS_FUZZ_ON
 	return headless_fuzz_buttons(frame);
@@ -1981,8 +2068,7 @@ int main(void)
 		cgba_gpsp_run_frame(FXCG100_GBA_BUTTON_NONE, 1);
 		blit_gba_frame(framebuffer, frame, FXCG100_GBA_BUTTON_NONE);
 	}
-	cgba_gpsp_shutdown();
-	return exit_to_os(1);
+	return shutdown_gpsp_and_exit(1);
 #endif
 	cgba_gpsp_refresh_roms();
 	fxcg100_menu_init(&menu_state);
@@ -2032,7 +2118,11 @@ int main(void)
 
 		if(menu_open_edge) {
 			last_hash = cgba_gpsp_frame_hash(framebuffer);
-			cgba_gpsp_refresh_roms();
+			/* The storage ROM list is immutable for this process. In particular,
+			 * never rescan it while entering the menu: on fx-CG100 that would
+			 * world-switch into Fugue while the physical ON key can still be held,
+			 * which can leave the OS call stuck. The one startup scan is enough;
+			 * restart gpSP to discover files added after launch. */
 			menu_state.rom_source = normalize_rom_id(menu_state.rom_source);
 			cgba_gpsp_debug_menu(&debug_info, frame, last_hash,
 				cgba_fps.emu_fps, cgba_fps.draw_fps, framebuffer,
@@ -2065,6 +2155,14 @@ int main(void)
 				enter_gameplay_display(framebuffer, frame);
 				continue;
 			}
+			/* CONFIG SAVE also mutates Fugue while the menu is open. Before
+			 * resuming the same game, refresh every direct NOR mapping even
+			 * when no savestate/backup write followed it. */
+			if(!cgba_gpsp_storage_sync()) {
+				draw_status("ROM remap FAILED", "restart or reset required");
+				wait_status();
+				break;
+			}
 			if(result == FXCG100_MENU_LOAD_STATE ||
 					result == FXCG100_MENU_SAVE_STATE) {
 				int save = result == FXCG100_MENU_SAVE_STATE;
@@ -2076,6 +2174,12 @@ int main(void)
 					: "loading state...", slot_line);
 				ok = save ? cgba_gpsp_state_save(menu_state.savestate_slot)
 					: cgba_gpsp_state_load(menu_state.savestate_slot);
+				if(save && !ok && !cgba_gpsp_storage_sync()) {
+					draw_status("ROM remap FAILED",
+						"restart or reset required");
+					wait_status();
+					break;
+				}
 				draw_status(ok ? (save ? "state saved" : "state loaded")
 					: (save ? "state save FAILED"
 						: "state load FAILED (no file?)"), slot_line);
@@ -2129,8 +2233,17 @@ int main(void)
 			wait_status();
 			enter_gameplay_display(framebuffer, frame);
 #else
-			draw_status(cgba_gpsp_state_save(menu_state.savestate_slot)
-				? "state saved" : "state save FAILED", NULL);
+			{
+				int ok = cgba_gpsp_state_save(menu_state.savestate_slot);
+				int storage_ok = ok || cgba_gpsp_storage_sync();
+				draw_status(ok ? "state saved" :
+					(storage_ok ? "state save FAILED" : "ROM remap FAILED"),
+					storage_ok ? NULL : "restart or reset required");
+				if(!storage_ok) {
+					wait_status();
+					break;
+				}
+			}
 			wait_status();
 			enter_gameplay_display(framebuffer, frame);
 #endif
@@ -2172,6 +2285,5 @@ int main(void)
 		previous_hotkeys = hotkeys;
 	}
 
-	cgba_gpsp_shutdown();
-	return exit_to_os(1);
+	return shutdown_gpsp_and_exit(1);
 }

@@ -4,6 +4,18 @@
 #include <stdint.h>
 #include <string.h>
 
+static uint32_t storage_mutation_generation;
+
+uint32_t fxcg100_storage_mutation_generation(void)
+{
+  return storage_mutation_generation;
+}
+
+void fxcg100_storage_note_mutation(void)
+{
+  storage_mutation_generation++;
+}
+
 #ifdef CGBA_GPSP_DISABLE_STORAGE
 
 int fxcg100_config_load(fxcg100_menu_state *state)
@@ -341,6 +353,8 @@ int fxcg100_storage_write_blob(const uint16_t *path, const void *src, unsigned s
 {
   int existing_size = storage_blob_size(path);
 
+  fxcg100_storage_note_mutation();
+
   if (existing_size == (int)size)
     return write_blob_contents(path, src, size);
   if (existing_size >= 0)
@@ -377,6 +391,7 @@ int fxcg100_config_save(const fxcg100_menu_state *state)
   config_from_state(&config, state);
   if (!config_valid(&config))
     return 0;
+  fxcg100_storage_note_mutation();
   return write_config(&config);
 }
 

@@ -22,6 +22,14 @@
 // - block memory needs psr swapping and user mode reg swapping
 
 #include "common.h"
+#include "sh4/sh4_jit_safety.h"
+#ifdef SH4_ARCH
+#if RAM_TRANSLATION_CACHE_SIZE <= \
+    CGBA_SH4_RAM_CACHE_WATERMARK + TRANSLATION_CACHE_LIMIT_THRESHOLD + \
+    CGBA_SH4_RAM_TAG_BYTES
+#error "SH4 RAM translation cache is too small for its sentinel and safety reserve"
+#endif
+#endif
 #if defined(VITA)
 #include <psp2/kernel/sysmem.h>
 #include <stdio.h>
@@ -50,10 +58,16 @@ u8 *rom_translation_ptr = rom_translation_cache;
 u8 *ram_translation_ptr = ram_translation_cache;
 #else
 u8 *rom_translation_ptr = rom_translation_cache;
+#ifdef SH4_ARCH
+u8 *ram_translation_ptr = CGBA_SH4_RAM_CACHE_START(ram_translation_cache);
+#else
 u8 *ram_translation_ptr = ram_translation_cache;
+#endif
 #endif
 /* Note, see stub files for more cache definitions */
 
+/* `min == ~0U` is the unseen sentinel; guest I/EWRAM offset zero is valid
+ * translated code.  Host RAM-cache byte zero is a separate sentinel. */
 u32 iwram_code_min = ~0U;
 u32 iwram_code_max =  0U;
 u32 ewram_code_min = ~0U;
@@ -441,20 +455,19 @@ void translate_icache_sync() {
 
 
 #define check_pc_region(pc)                                                   \
-  new_pc_region = (pc >> 15);                                                 \
+  new_pc_region = (pc >> 12);                                                 \
   if(new_pc_region != pc_region)                                              \
   {                                                                           \
     pc_region = new_pc_region;                                                \
-    pc_address_block = memory_map_read[new_pc_region];                        \
-                                                                              \
+    pc_address_block = cgba_memory_map_read_4k(pc);                           \
     if(!pc_address_block)                                                     \
-      pc_address_block = load_gamepak_page(pc_region & 0x3FF);                \
+      return false;                                                           \
   }                                                                           \
 
 #define translate_arm_instruction()                                           \
   arm_load_flag_status()                                                      \
   check_pc_region(pc);                                                        \
-  opcode = readaddress32(pc_address_block, (pc & 0x7FFF));                    \
+  opcode = readaddress32(pc_address_block, (pc & 0x0FFF));                    \
   condition = block_data[block_data_position].condition;                      \
                                                                               \
   if((condition != last_condition) || (condition >= 0x20))                    \
@@ -2038,7 +2051,7 @@ void translate_icache_sync() {
   flag_status = block_data[block_data_position].flag_data;                    \
   check_pc_region(pc);                                                        \
   last_opcode = opcode;                                                       \
-  opcode = readaddress16(pc_address_block, (pc & 0x7FFF));                    \
+  opcode = readaddress16(pc_address_block, (pc & 0x0FFF));                    \
   emit_trace_thumb_instruction(pc);                                           \
   u8 hiop = opcode >> 8;                                                      \
                                                                               \
@@ -2246,9 +2259,10 @@ void translate_icache_sync() {
         thumb_decode_imm();                                                   \
         u32 rdreg = (hiop & 7);                                               \
         u32 aoff = (pc & ~2) + (imm*4) + 4;                                   \
-        /* ROM + same page -> optimize as const load */                       \
-        if (!ram_region && (((aoff + 4) >> 15) == (pc >> 15))) {              \
-          u32 value = readaddress32(pc_address_block, (aoff & 0x7FFF));       \
+        /* ROM + same 4 KiB source block -> optimize as const load. */         \
+        if (!ram_region && ((aoff >> 12) == (pc >> 12)) &&                    \
+            (((aoff + 3) >> 12) == (pc >> 12))) {                            \
+          u32 value = readaddress32(pc_address_block, (aoff & 0x0FFF));       \
           thumb_load_pc_pool_const(rdreg, value);                             \
         } else {                                                              \
           thumb_access_memory(load, imm, rdreg, 0, 0, pc_relative, aoff, u32);\
@@ -2829,7 +2843,35 @@ typedef struct
   u32 offset_thumb;   // Cache offset to the Thumb-mode compiled block
 } ramtag_type;
 
+#ifdef SH4_ARCH
+typedef char cgba_sh4_ram_tag_size_must_match_guard[
+  sizeof(ramtag_type) == CGBA_SH4_RAM_TAG_BYTES ? 1 : -1];
+#endif
+
 static u32 ram_block_tag = INITIAL_TOP_TAG;
+
+#if defined(CGBA_GPSP_HEADLESS_TEST)
+/* DIAG: translation-storm tracing (headless only). Prints go to the
+ * emulator debug port; capped so a livelock cannot flood the log. */
+static void cgba_diag_puts(const char *s)
+{
+  while(*s)
+    *(volatile unsigned char *)0xb7000000u = (unsigned char)*s++;
+  *(volatile unsigned char *)0xb7000000u = '\n';
+}
+static unsigned cgba_diag_budget = 4000;
+#define CGBA_DIAG_LOG(...) do {                                               \
+    if(cgba_diag_budget) {                                                    \
+      char _dbg[120];                                                         \
+      cgba_diag_budget--;                                                     \
+      snprintf(_dbg, sizeof _dbg, __VA_ARGS__);                               \
+      cgba_diag_puts(_dbg);                                                   \
+    }                                                                         \
+  } while(0)
+#else
+#define CGBA_DIAG_LOG(...) do { } while(0)
+#endif
+
 
 inline static ramtag_type* get_ram_tag(u16 tagval) {
   ramtag_type *tbl = (ramtag_type*)&ram_translation_cache[RAM_TRANSLATION_CACHE_SIZE];
@@ -2891,6 +2933,8 @@ u8 function_cc *block_lookup_translate_##type(u32 pc)                         \
   u32 block_tag;                                                              \
                                                                               \
   block_lookup_address_pc_##type();                                           \
+  if(!cgba_sh4_jit_exec_domain(pc))                                           \
+    return (u8 *)(~(uintptr_t)0);                                             \
                                                                               \
   switch(pcregion)                                                            \
   {                                                                           \
@@ -2995,7 +3039,6 @@ u8 function_cc *block_lookup_translate_##type(u32 pc)                         \
 block_lookup_translate_builder(arm);
 block_lookup_translate_builder(thumb);
 
-#ifdef CGBA_GPSP_HEADLESS_TEST
 #ifndef CGBA_GPSP_HEADLESS_WJ_START
 #define CGBA_GPSP_HEADLESS_WJ_START 0u
 #endif
@@ -3003,18 +3046,25 @@ block_lookup_translate_builder(thumb);
 #define CGBA_GPSP_HEADLESS_WJ_END 0xffffffffu
 #endif
 
+/* Ring of recent C-resolver dispatch targets (block sequence). Compiled in
+ * ALL dynarec builds — the crash reporter prints its tail so a wild-jump
+ * photo shows the guest's path into the bad branch (resolver dispatches are
+ * already the slow path, one ring store is noise). The boot/vector-region
+ * logging below additionally streams to the emulator debug port and remains
+ * headless-only. */
+u32 cgba_wj_ring[24];
+unsigned cgba_wj_pos;
+
+#ifdef CGBA_GPSP_HEADLESS_TEST
 /* DIAG: trace guest jumps into the BIOS boot/vector region (a wild jump =
  * corrupted control flow). Logs the target + a ring of recent resolver targets
  * (block sequence) + LR to the casio-emu putchar port. */
-static u32 cgba_wj_ring[24];
-static unsigned cgba_wj_pos;
 static void cgba_wj_putc(char c) { *(volatile unsigned char *)0xb7000000u = (unsigned char)c; }
 static void cgba_wj_hex(u32 v) { static const char h[] = "0123456789ABCDEF"; int i;
   for (i = 7; i >= 0; i--) cgba_wj_putc(h[(v >> (i * 4)) & 0xF]); }
-static void cgba_wj_note(u32 pc)
+static void cgba_wj_note_boot_region(u32 pc)
 {
   unsigned i;
-  cgba_wj_ring[cgba_wj_pos] = pc; cgba_wj_pos = (cgba_wj_pos + 1) % 24;
   if (pc >= 0x260u) return;                 /* not the boot/vector region */
   if (frame_counter > (u32)CGBA_GPSP_HEADLESS_WJ_END)
     return;
@@ -3032,9 +3082,15 @@ static void cgba_wj_note(u32 pc)
   for (i = 0; i < 24; i++) { cgba_wj_hex(cgba_wj_ring[(cgba_wj_pos + i) % 24]); cgba_wj_putc(' '); }
   cgba_wj_putc('\n');
 }
-#else
-#define cgba_wj_note(pc) ((void)0)
 #endif
+
+static void cgba_wj_note(u32 pc)
+{
+  cgba_wj_ring[cgba_wj_pos] = pc; cgba_wj_pos = (cgba_wj_pos + 1) % 24;
+#ifdef CGBA_GPSP_HEADLESS_TEST
+  cgba_wj_note_boot_region(pc);
+#endif
+}
 
 u8 function_cc *block_lookup_address_dual(u32 pc)
 {
@@ -3209,7 +3265,7 @@ u8 function_cc *block_lookup_address_thumb(u32 pc)
 #define thumb_scan_terminal_emitted 1
 
 #define arm_load_opcode()                                                     \
-  opcode = readaddress32(pc_address_block, (block_end_pc & 0x7FFF));          \
+  opcode = readaddress32(pc_address_block, (block_end_pc & 0x0FFF));          \
   condition = opcode >> 28;                                                   \
                                                                               \
   opcode &= 0xFFFFFFF;                                                        \
@@ -3338,7 +3394,7 @@ u8 function_cc *block_lookup_address_thumb(u32 pc)
 
 #define thumb_load_opcode()                                                   \
   last_opcode = opcode;                                                       \
-  opcode = readaddress16(pc_address_block, (block_end_pc & 0x7FFF));          \
+  opcode = readaddress16(pc_address_block, (block_end_pc & 0x0FFF));          \
                                                                               \
   block_end_pc += 2                                                           \
 
@@ -3438,6 +3494,79 @@ u8 function_cc *block_lookup_address_thumb(u32 pc)
 #define MAX_BLOCK_SIZE   1024   // 2/4KiB blocks max
 #define MAX_EXITS          32   // This covers 99% blocks
 
+#ifdef SH4_ARCH
+#ifndef CGBA_SH4_RAM_SCAN_CAP_INITIAL
+#define CGBA_SH4_RAM_SCAN_CAP_INITIAL MAX_BLOCK_SIZE
+#endif
+#ifndef CGBA_SH4_ROM_SCAN_CAP_INITIAL
+#define CGBA_SH4_ROM_SCAN_CAP_INITIAL MAX_BLOCK_SIZE
+#endif
+#if CGBA_SH4_RAM_SCAN_CAP_INITIAL < 32 || \
+    CGBA_SH4_RAM_SCAN_CAP_INITIAL > MAX_BLOCK_SIZE
+#error "CGBA_SH4_RAM_SCAN_CAP_INITIAL must be in [32, MAX_BLOCK_SIZE]"
+#endif
+#if CGBA_SH4_ROM_SCAN_CAP_INITIAL < 32 || \
+    CGBA_SH4_ROM_SCAN_CAP_INITIAL > MAX_BLOCK_SIZE
+#error "CGBA_SH4_ROM_SCAN_CAP_INITIAL must be in [32, MAX_BLOCK_SIZE]"
+#endif
+
+/* Adaptive per-cache scan caps: a single block whose EMITTED code exceeds the
+ * whole freshly-flushed translation cache would flush+retranslate forever — the
+ * "went too far, pedal out to the beginning" retry assumes a block always
+ * fits an empty cache. That assumption fails on this port: SimCity 2000
+ * copies a 724-instruction LDM/STM-heavy renderer into IWRAM whose SH4
+ * emission (~480 bytes/insn worst case) can never fit the RAM cache, so the
+ * JIT livelocked (emulator) or spun until the guest went wild (hardware,
+ * EXC=040 crash report). When an oversized attempt overflows, halve the cap
+ * so the retry ends the block early through the fall-through translation
+ * gate (a legal "size-limit" block end, same as the MAX_BLOCK_SIZE stop).
+ * Sticky for the session within its RAM/ROM cache; reset on
+ * init_dynarec_caches (ROM load/reset).  Keeping the domains separate avoids
+ * shortening ordinary ROM blocks after one pathological copied-RAM routine.
+ *
+ * The shrink keys off the bytes THIS attempt emitted, not off starting at
+ * the cache base: the oversized block is usually reached recursively while
+ * resolving another block's external exits, so its attempts never begin in
+ * an empty cache. An overflowing attempt that emitted more than a quarter of
+ * its cache halves that domain's cap; repeated retries eventually reach the
+ * 32-instruction floor while leaving room for the rest of the working set. */
+static u32 cgba_ram_block_scan_cap = CGBA_SH4_RAM_SCAN_CAP_INITIAL;
+static u32 cgba_rom_block_scan_cap = CGBA_SH4_ROM_SCAN_CAP_INITIAL;
+#else
+/* Preserve the upstream cross-backend behavior outside the SH4 port. */
+static u32 cgba_block_scan_cap = MAX_BLOCK_SIZE;
+#endif
+
+/* DIAG bisect knob: -DCGBA_BLOCK_SCAN_CAP_DISABLE reverts scan_block to the
+ * fixed MAX_BLOCK_SIZE stop (cap machinery inert) to isolate the cap. */
+#ifdef CGBA_BLOCK_SCAN_CAP_DISABLE
+#define CGBA_BLOCK_SCAN_CAP_EXPR ((u32)MAX_BLOCK_SIZE)
+#elif defined(SH4_ARCH)
+#define CGBA_BLOCK_SCAN_CAP_EXPR \
+  (ram_region ? cgba_ram_block_scan_cap : cgba_rom_block_scan_cap)
+#else
+#define CGBA_BLOCK_SCAN_CAP_EXPR cgba_block_scan_cap
+#endif
+
+static void cgba_block_overflow_shrink(u8 *attempt_base, u8 *attempt_end,
+  bool ram_region)
+{
+#ifdef SH4_ARCH
+  u32 cache_size = ram_region ? RAM_TRANSLATION_CACHE_SIZE
+                              : ROM_TRANSLATION_CACHE_SIZE;
+  if((u32)(attempt_end - attempt_base) > cache_size / 4)
+    cgba_sh4_scan_caps_shrink_domain(&cgba_ram_block_scan_cap,
+      &cgba_rom_block_scan_cap, ram_region);
+#else
+  u32 cache_size = ram_region ? RAM_TRANSLATION_CACHE_SIZE
+                              : ROM_TRANSLATION_CACHE_SIZE;
+  if((u32)(attempt_end - attempt_base) >
+       cache_size / 4 && cgba_block_scan_cap > 32)
+    cgba_block_scan_cap >>= 1;
+#endif
+}
+
+
 block_data_type block_data[MAX_BLOCK_SIZE];
 block_exit_type block_exits[MAX_EXITS];
 
@@ -3459,20 +3588,22 @@ extern int cgba_dynarec_single_block;
 #endif
 
 #define smc_write_arm_yes() {                                                 \
-  intptr_t offset = (pc < 0x03000000) ? 0x40000 : -0x8000;                    \
-  if(address32(pc_address_block, (block_end_pc & 0x7FFF) + offset) == 0)      \
+  u8 *tag_base = (block_end_pc < 0x03000000u) ? ewram + 0x40000 : iwram;      \
+  u32 tag_off = (block_end_pc < 0x03000000u) ?                               \
+    (block_end_pc & 0x3FFFFu) : (block_end_pc & 0x7FFFu);                     \
+  if(address32(tag_base, tag_off) == 0)                                       \
   {                                                                           \
-    address32(pc_address_block, (block_end_pc & 0x7FFF) + offset) =           \
-      CODE_TAG_BLOCK32;                                                       \
+    address32(tag_base, tag_off) = CODE_TAG_BLOCK32;                          \
   }                                                                           \
 }
 
 #define smc_write_thumb_yes() {                                               \
-  intptr_t offset = (pc < 0x03000000) ? 0x40000 : -0x8000;                    \
-  if(address16(pc_address_block, (block_end_pc & 0x7FFF) + offset) == 0)      \
+  u8 *tag_base = (block_end_pc < 0x03000000u) ? ewram + 0x40000 : iwram;      \
+  u32 tag_off = (block_end_pc < 0x03000000u) ?                               \
+    (block_end_pc & 0x3FFFFu) : (block_end_pc & 0x7FFFu);                     \
+  if(address16(tag_base, tag_off) == 0)                                       \
   {                                                                           \
-    address16(pc_address_block, (block_end_pc & 0x7FFF) + offset) =           \
-      CODE_TAG_BLOCK16;                                                       \
+    address16(tag_base, tag_off) = CODE_TAG_BLOCK16;                          \
   }                                                                           \
 }
 
@@ -3559,7 +3690,8 @@ extern int cgba_dynarec_single_block;
     }                                                                         \
                                                                               \
     block_data_position++;                                                    \
-    if((block_data_position == MAX_BLOCK_SIZE) ||                             \
+    if(!cgba_sh4_jit_scan_may_continue(cgba_blk_start, block_end_pc) ||        \
+     ((u32)block_data_position >= CGBA_BLOCK_SCAN_CAP_EXPR) ||                 \
      CGBA_DIAG_ONE_INSN_BLOCK(cgba_blk_start) ||                             \
      (block_end_pc == 0x3007FF0) || (block_end_pc == 0x203FFFF0))             \
     {                                                                         \
@@ -3594,9 +3726,9 @@ bool translate_block_arm(u32 pc, bool ram_region)
   u32 last_opcode;
   u32 condition;
   u32 last_condition;
-  u32 pc_region = (pc >> 15);
+  u32 pc_region = (pc >> 12);
   u32 new_pc_region;
-  u8 *pc_address_block = memory_map_read[pc_region];
+  u8 *pc_address_block = cgba_memory_map_read_4k(pc);
   u32 block_start_pc = pc;
   u32 block_end_pc = pc;
   u32 block_exit_position = 0;
@@ -3608,6 +3740,7 @@ bool translate_block_arm(u32 pc, bool ram_region)
   u8 *backpatch_address = NULL;
   u8 *translation_ptr = NULL;
   u8 *translation_cache_limit = NULL;
+  u8 *attempt_base = NULL;
   s32 i;
   u32 flag_status;
   block_exit_type external_block_exits[MAX_EXITS];
@@ -3620,7 +3753,7 @@ bool translate_block_arm(u32 pc, bool ram_region)
   arm_fix_pc();
 
   if(!pc_address_block)
-    pc_address_block = load_gamepak_page(pc_region & 0x3FF);
+    return false;
 
   if (ram_region) {
     translation_ptr = ram_translation_ptr;
@@ -3633,6 +3766,7 @@ bool translate_block_arm(u32 pc, bool ram_region)
      rom_translation_cache + ROM_TRANSLATION_CACHE_SIZE -
      TRANSLATION_CACHE_LIMIT_THRESHOLD;
   }
+  attempt_base = translation_ptr;
 
   generate_block_prologue();
 
@@ -3730,6 +3864,11 @@ bool translate_block_arm(u32 pc, bool ram_region)
        the beginning. */
 
     if(translation_ptr > translation_cache_limit) {
+      CGBA_DIAG_LOG("@@CGBA_XFLUSH arm ram=%d start=%08lx pc=%08lx end=%08lx pos=%ld cap=%lu",
+        (int)ram_region, (unsigned long)block_start_pc, (unsigned long)pc,
+        (unsigned long)block_end_pc, (long)block_data_position,
+        (unsigned long)CGBA_BLOCK_SCAN_CAP_EXPR);
+      cgba_block_overflow_shrink(attempt_base, translation_ptr, ram_region);
       if (ram_region)
         flush_translation_cache_ram();
       else
@@ -3884,9 +4023,9 @@ bool translate_block_thumb(u32 pc, bool ram_region)
   u32 opcode = 0;
   u32 last_opcode;
   u32 condition;
-  u32 pc_region = (pc >> 15);
+  u32 pc_region = (pc >> 12);
   u32 new_pc_region;
-  u8 *pc_address_block = memory_map_read[pc_region];
+  u8 *pc_address_block = cgba_memory_map_read_4k(pc);
   u32 block_start_pc = pc;
   u32 block_end_pc = pc;
   u32 block_exit_position = 0;
@@ -3898,6 +4037,7 @@ bool translate_block_thumb(u32 pc, bool ram_region)
   u8 *backpatch_address = NULL;
   u8 *translation_ptr = NULL;
   u8 *translation_cache_limit = NULL;
+  u8 *attempt_base = NULL;
   s32 i;
   u32 flag_status;
   block_exit_type external_block_exits[MAX_EXITS];
@@ -3910,7 +4050,7 @@ bool translate_block_thumb(u32 pc, bool ram_region)
   thumb_fix_pc();
 
   if(!pc_address_block)
-    pc_address_block = load_gamepak_page(pc_region & 0x3FF);
+    return false;
 
   if (ram_region) {
     translation_ptr = ram_translation_ptr;
@@ -3922,6 +4062,7 @@ bool translate_block_thumb(u32 pc, bool ram_region)
     translation_cache_limit = &rom_translation_cache[
        ROM_TRANSLATION_CACHE_SIZE - TRANSLATION_CACHE_LIMIT_THRESHOLD];
   }
+  attempt_base = translation_ptr;
 
   generate_block_prologue();
 
@@ -4010,6 +4151,11 @@ bool translate_block_thumb(u32 pc, bool ram_region)
 
     if(translation_ptr > translation_cache_limit)
     {
+      CGBA_DIAG_LOG("@@CGBA_XFLUSH thumb ram=%d start=%08lx pc=%08lx end=%08lx pos=%ld cap=%lu",
+        (int)ram_region, (unsigned long)block_start_pc, (unsigned long)pc,
+        (unsigned long)block_end_pc, (long)block_data_position,
+        (unsigned long)CGBA_BLOCK_SCAN_CAP_EXPR);
+      cgba_block_overflow_shrink(attempt_base, translation_ptr, ram_region);
       if (ram_region)
         flush_translation_cache_ram();
       else
@@ -4161,16 +4307,30 @@ void flush_translation_cache_ram(void)
 #if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
   cgba_dynarec_ram_flush_count++;
 #endif
+#if defined(CGBA_GPSP_HEADLESS_TEST)
+  CGBA_DIAG_LOG("@@CGBA_RAMFLUSH n=%lu pc=%08lx used=%lu iw=%04x-%04x",
+    (unsigned long)cgba_dynarec_ram_flush_count, (unsigned long)reg[REG_PC],
+    (unsigned long)(ram_translation_ptr - ram_translation_cache),
+    (unsigned)(iwram_code_min & 0xFFFF), (unsigned)(iwram_code_max & 0xFFFF));
+#endif
   /*printf("ram flush %d (pc %x), %x to %x, %x to %x\n",
    flush_ram_count, reg[REG_PC], iwram_code_min, iwram_code_max,
    ewram_code_min, ewram_code_max);*/
 
+#ifdef SH4_ARCH
+  last_ram_translation_ptr =
+    CGBA_SH4_RAM_CACHE_START(ram_translation_cache);
+  ram_translation_ptr =
+    CGBA_SH4_RAM_CACHE_START(ram_translation_cache);
+#else
   last_ram_translation_ptr = ram_translation_cache;
   ram_translation_ptr = ram_translation_cache;
+#endif
 
   // Proceed to clean the SMC area if needed
   // (also try to memset as little as possible for performance)
-  if (iwram_code_max) {
+  /* min == ~0U is the explicit unseen state; offset zero is valid code. */
+  if (cgba_sh4_ram_code_seen(iwram_code_min)) {
     if(iwram_code_max > iwram_code_min) {
       iwram_code_min &= ~15U;
       iwram_code_max = MIN(iwram_code_max + 8, 0x8000);
@@ -4179,7 +4339,7 @@ void flush_translation_cache_ram(void)
       memset(iwram, 0, 0x8000);
   }
 
-  if (ewram_code_max) {
+  if (cgba_sh4_ram_code_seen(ewram_code_min)) {
     if(ewram_code_max > ewram_code_min) {
       ewram_code_min &= ~15U;
       ewram_code_max = MIN(ewram_code_max + 8, 0x40000);
@@ -4271,6 +4431,11 @@ void flush_translation_cache_rom(void)
 #if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
   cgba_dynarec_rom_flush_count++;
 #endif
+#if defined(CGBA_GPSP_HEADLESS_TEST)
+  CGBA_DIAG_LOG("@@CGBA_ROMFLUSH n=%lu pc=%08lx used=%lu",
+    (unsigned long)cgba_dynarec_rom_flush_count, (unsigned long)reg[REG_PC],
+    (unsigned long)(rom_translation_ptr - rom_translation_cache));
+#endif
 
   last_rom_translation_ptr = &rom_translation_cache[rom_cache_watermark];
   rom_translation_ptr      = &rom_translation_cache[rom_cache_watermark];
@@ -4287,13 +4452,25 @@ void init_dynarec_caches(void)
   memset(cgba_hot_count, 0, sizeof(cgba_hot_count));
   cgba_cold_pending = 0;
 #endif
+#ifdef SH4_ARCH
+  cgba_sh4_scan_caps_reset(&cgba_ram_block_scan_cap,
+    &cgba_rom_block_scan_cap, CGBA_SH4_RAM_SCAN_CAP_INITIAL,
+    CGBA_SH4_ROM_SCAN_CAP_INITIAL);
+#else
+  cgba_block_scan_cap = MAX_BLOCK_SIZE;
+#endif
   /* Initialize caches so that we can start initalizing the emitter. */
   rom_translation_ptr = last_rom_translation_ptr = &rom_translation_cache[0];
   memset(rom_branch_hash, 0, sizeof(rom_branch_hash));
   memset(cgba_dynarec_dual_hot_key, 0, sizeof(cgba_dynarec_dual_hot_key));
   memset(cgba_dynarec_dual_hot_ptr, 0, sizeof(cgba_dynarec_dual_hot_ptr));
 
+#ifdef SH4_ARCH
+  ram_translation_ptr = last_ram_translation_ptr =
+    CGBA_SH4_RAM_CACHE_START(ram_translation_cache);
+#else
   ram_translation_ptr = last_ram_translation_ptr = &ram_translation_cache[0];
+#endif
   memset(iwram, 0, 0x8000);
   memset(&ewram[0x40000], 0, 0x40000);
 

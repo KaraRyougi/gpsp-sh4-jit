@@ -31,6 +31,17 @@ void netpacket_poll_receive(void)
 {
 }
 
+/* Weak fallback for cpu.cc's wild-guest-PC guard: the gint port overrides
+ * this with a gint_panic crash report (src/gpsp_runner.c). A PC outside the
+ * GBA bus means emulation already went wild; spinning here is still better
+ * than the out-of-bounds memory_map_read[] host read it replaces. */
+__attribute__((weak, noreturn)) void cgba_wild_pc_trap(u32 pc)
+{
+  (void)pc;
+  for(;;)
+    ;
+}
+
 /* Weak fallbacks: the gint NOR port overrides these with a NOR-backed
  * filestream (src/nor_filestream.c). The freestanding build keeps these stubs. */
 __attribute__((weak)) RFILE *filestream_open(const char *path, unsigned mode, unsigned hints)

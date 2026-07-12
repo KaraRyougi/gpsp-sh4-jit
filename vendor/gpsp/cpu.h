@@ -53,6 +53,10 @@ typedef u8 cpu_alert_type;
 #define CPU_ALERT_HALT   (1 << 0)
 #define CPU_ALERT_SMC    (1 << 1)
 #define CPU_ALERT_IRQ    (1 << 2)
+/* A timing-register write invalidated constants baked into translated code.
+ * The writer has already flushed the caches; translated callers must leave
+ * the current block before any instruction using the old timing can run. */
+#define CPU_ALERT_TIMING (1 << 3)
 
 typedef u16 irq_type;
 
