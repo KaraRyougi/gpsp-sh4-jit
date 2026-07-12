@@ -17,11 +17,11 @@ comma   := ,
 DEAD_STRIP := $(if $(filter Darwin,$(shell uname -s)),\
 	-Wl$(comma)-dead_strip,-Wl$(comma)--gc-sections)
 
-.PHONY: all smoke audit core thumb cond native-ldst input rtc cycle exec \
+.PHONY: all smoke audit core thumb cond native-ldst input rtc cycle exec jit-safety \
 	swi-overlap swi-oam udiv udiv-emitter idle-signature video-opaque \
 	video-blend-cache video-backdrop-shadow arm-mixer clean
 
-all: smoke core thumb cond native-ldst rtc input cycle exec swi-overlap swi-oam udiv \
+all: smoke core thumb cond native-ldst rtc input cycle exec jit-safety swi-overlap swi-oam udiv \
 	udiv-emitter idle-signature video-opaque video-blend-cache \
 	video-backdrop-shadow arm-mixer audit
 
@@ -92,6 +92,12 @@ native-ldst: $(ROOT)/tests/sh4_native_ldst_audit.c \
 cycle: $(ROOT)/tests/sh4_cycle_audit.c
 	$(CC) $(CFLAGS) $(ROOT)/tests/sh4_cycle_audit.c -o $(BIN)-cycle
 	$(BIN)-cycle
+
+jit-safety: $(ROOT)/tests/sh4_jit_safety_test.c \
+	$(ROOT)/vendor/gpsp/sh4/sh4_jit_safety.h
+	$(CC) $(CFLAGS) -I$(ROOT) $(ROOT)/tests/sh4_jit_safety_test.c \
+	  -o $(BIN)-jit-safety
+	$(BIN)-jit-safety
 
 swi-overlap: $(ROOT)/tests/sh4_swi_overlap_test.c \
 	      $(ROOT)/ports/fxcg100/sh4/sh4_swi_overlap.h
@@ -171,7 +177,7 @@ audit: $(ROOT)/tests/sh4_codegen_audit.c $(ROOT)/ports/fxcg100/sh4/sh4_codegen.h
 
 clean:
 	rm -f $(BIN)-smoke $(BIN)-core $(BIN)-thumb $(BIN)-cond $(BIN)-native-ldst \
-	  $(BIN)-input $(BIN)-input-cg50 $(BIN)-rtc $(BIN)-cycle $(BIN)-exec $(BIN)-swi-overlap $(BIN)-udiv \
+	  $(BIN)-input $(BIN)-input-cg50 $(BIN)-rtc $(BIN)-cycle $(BIN)-exec $(BIN)-jit-safety $(BIN)-swi-overlap $(BIN)-udiv \
 	  $(BIN)-swi-oam $(BIN)-udiv-emitter $(BIN)-idle-signature \
 	  $(BIN)-video-opaque $(BIN)-video-blend-cache \
 	  $(BIN)-video-backdrop-shadow \
