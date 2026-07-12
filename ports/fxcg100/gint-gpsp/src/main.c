@@ -779,12 +779,18 @@ static int headless_save_checkpoint(unsigned frame)
 	unsigned size = CGBA_HEADLESS_STATE_SIZE;
 	void *state = cgba_gamepak_scratch_acquire(size);
 	int existing_size = headless_storage_blob_size(headless_checkpoint_path);
+	int mapping_ok;
 	int ok = 0;
 	char buf[128];
 
 	if(!state)
 		return 0;
 	gba_save_state(state);
+	/* The HLE harness calls its BFile hooks directly, but the write can relocate
+	 * the still-running ROM just like a production slot save. Publish the
+	 * mutation before the first remove/create/write attempt so the normal sync
+	 * path cannot short-circuit, including on partial failure. */
+	fxcg100_storage_note_mutation();
 	if(existing_size == (int)size) {
 		ok = headless_write_blob_contents(headless_checkpoint_path, state, size);
 	} else {
@@ -797,11 +803,6 @@ static int headless_save_checkpoint(unsigned frame)
 		}
 		ok = headless_write_blob_contents(headless_checkpoint_path, state, size);
 	}
-
-	snprintf(buf, sizeof buf,
-		"@@CGBA_CHECKPOINT save frame=%u ok=%d size=%u existing=%d",
-		frame, ok, size, existing_size);
-	hputs_dbg(buf);
 	if(!ok) {
 		const uint8_t *p = (const uint8_t *)state;
 
@@ -818,9 +819,18 @@ static int headless_save_checkpoint(unsigned frame)
 			hputc_dbg('\n');
 		snprintf(buf, sizeof buf,
 			"@@CGBA_CHECKPOINT_HEX_END frame=%u", frame);
-			hputs_dbg(buf);
+		hputs_dbg(buf);
 	}
 	cgba_gamepak_scratch_release();
+	/* Refresh both the 32 KiB map and published 4 KiB table before the next
+	 * headless frame. Report remap failure as checkpoint failure so validation
+	 * can never count a run with stale NOR pointers as a pass. */
+	mapping_ok = cgba_gpsp_storage_sync();
+	ok = ok && mapping_ok;
+	snprintf(buf, sizeof buf,
+		"@@CGBA_CHECKPOINT save frame=%u ok=%d size=%u existing=%d map=%d",
+		frame, ok, size, existing_size, mapping_ok);
+	hputs_dbg(buf);
 	return ok;
 }
 

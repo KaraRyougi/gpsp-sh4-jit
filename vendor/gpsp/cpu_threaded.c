@@ -455,20 +455,19 @@ void translate_icache_sync() {
 
 
 #define check_pc_region(pc)                                                   \
-  new_pc_region = (pc >> 15);                                                 \
+  new_pc_region = (pc >> 12);                                                 \
   if(new_pc_region != pc_region)                                              \
   {                                                                           \
     pc_region = new_pc_region;                                                \
-    pc_address_block = memory_map_read[new_pc_region];                        \
-                                                                              \
+    pc_address_block = cgba_memory_map_read_4k(pc);                           \
     if(!pc_address_block)                                                     \
-      pc_address_block = load_gamepak_page(pc_region & 0x3FF);                \
+      return false;                                                           \
   }                                                                           \
 
 #define translate_arm_instruction()                                           \
   arm_load_flag_status()                                                      \
   check_pc_region(pc);                                                        \
-  opcode = readaddress32(pc_address_block, (pc & 0x7FFF));                    \
+  opcode = readaddress32(pc_address_block, (pc & 0x0FFF));                    \
   condition = block_data[block_data_position].condition;                      \
                                                                               \
   if((condition != last_condition) || (condition >= 0x20))                    \
@@ -2052,7 +2051,7 @@ void translate_icache_sync() {
   flag_status = block_data[block_data_position].flag_data;                    \
   check_pc_region(pc);                                                        \
   last_opcode = opcode;                                                       \
-  opcode = readaddress16(pc_address_block, (pc & 0x7FFF));                    \
+  opcode = readaddress16(pc_address_block, (pc & 0x0FFF));                    \
   emit_trace_thumb_instruction(pc);                                           \
   u8 hiop = opcode >> 8;                                                      \
                                                                               \
@@ -2260,9 +2259,10 @@ void translate_icache_sync() {
         thumb_decode_imm();                                                   \
         u32 rdreg = (hiop & 7);                                               \
         u32 aoff = (pc & ~2) + (imm*4) + 4;                                   \
-        /* ROM + same page -> optimize as const load */                       \
-        if (!ram_region && (((aoff + 4) >> 15) == (pc >> 15))) {              \
-          u32 value = readaddress32(pc_address_block, (aoff & 0x7FFF));       \
+        /* ROM + same 4 KiB source block -> optimize as const load. */         \
+        if (!ram_region && ((aoff >> 12) == (pc >> 12)) &&                    \
+            (((aoff + 3) >> 12) == (pc >> 12))) {                            \
+          u32 value = readaddress32(pc_address_block, (aoff & 0x0FFF));       \
           thumb_load_pc_pool_const(rdreg, value);                             \
         } else {                                                              \
           thumb_access_memory(load, imm, rdreg, 0, 0, pc_relative, aoff, u32);\
@@ -3265,7 +3265,7 @@ u8 function_cc *block_lookup_address_thumb(u32 pc)
 #define thumb_scan_terminal_emitted 1
 
 #define arm_load_opcode()                                                     \
-  opcode = readaddress32(pc_address_block, (block_end_pc & 0x7FFF));          \
+  opcode = readaddress32(pc_address_block, (block_end_pc & 0x0FFF));          \
   condition = opcode >> 28;                                                   \
                                                                               \
   opcode &= 0xFFFFFFF;                                                        \
@@ -3394,7 +3394,7 @@ u8 function_cc *block_lookup_address_thumb(u32 pc)
 
 #define thumb_load_opcode()                                                   \
   last_opcode = opcode;                                                       \
-  opcode = readaddress16(pc_address_block, (block_end_pc & 0x7FFF));          \
+  opcode = readaddress16(pc_address_block, (block_end_pc & 0x0FFF));          \
                                                                               \
   block_end_pc += 2                                                           \
 
@@ -3588,20 +3588,22 @@ extern int cgba_dynarec_single_block;
 #endif
 
 #define smc_write_arm_yes() {                                                 \
-  intptr_t offset = (pc < 0x03000000) ? 0x40000 : -0x8000;                    \
-  if(address32(pc_address_block, (block_end_pc & 0x7FFF) + offset) == 0)      \
+  u8 *tag_base = (block_end_pc < 0x03000000u) ? ewram + 0x40000 : iwram;      \
+  u32 tag_off = (block_end_pc < 0x03000000u) ?                               \
+    (block_end_pc & 0x3FFFFu) : (block_end_pc & 0x7FFFu);                     \
+  if(address32(tag_base, tag_off) == 0)                                       \
   {                                                                           \
-    address32(pc_address_block, (block_end_pc & 0x7FFF) + offset) =           \
-      CODE_TAG_BLOCK32;                                                       \
+    address32(tag_base, tag_off) = CODE_TAG_BLOCK32;                          \
   }                                                                           \
 }
 
 #define smc_write_thumb_yes() {                                               \
-  intptr_t offset = (pc < 0x03000000) ? 0x40000 : -0x8000;                    \
-  if(address16(pc_address_block, (block_end_pc & 0x7FFF) + offset) == 0)      \
+  u8 *tag_base = (block_end_pc < 0x03000000u) ? ewram + 0x40000 : iwram;      \
+  u32 tag_off = (block_end_pc < 0x03000000u) ?                               \
+    (block_end_pc & 0x3FFFFu) : (block_end_pc & 0x7FFFu);                     \
+  if(address16(tag_base, tag_off) == 0)                                       \
   {                                                                           \
-    address16(pc_address_block, (block_end_pc & 0x7FFF) + offset) =           \
-      CODE_TAG_BLOCK16;                                                       \
+    address16(tag_base, tag_off) = CODE_TAG_BLOCK16;                          \
   }                                                                           \
 }
 
@@ -3724,9 +3726,9 @@ bool translate_block_arm(u32 pc, bool ram_region)
   u32 last_opcode;
   u32 condition;
   u32 last_condition;
-  u32 pc_region = (pc >> 15);
+  u32 pc_region = (pc >> 12);
   u32 new_pc_region;
-  u8 *pc_address_block = memory_map_read[pc_region];
+  u8 *pc_address_block = cgba_memory_map_read_4k(pc);
   u32 block_start_pc = pc;
   u32 block_end_pc = pc;
   u32 block_exit_position = 0;
@@ -3751,7 +3753,7 @@ bool translate_block_arm(u32 pc, bool ram_region)
   arm_fix_pc();
 
   if(!pc_address_block)
-    pc_address_block = load_gamepak_page(pc_region & 0x3FF);
+    return false;
 
   if (ram_region) {
     translation_ptr = ram_translation_ptr;
@@ -4021,9 +4023,9 @@ bool translate_block_thumb(u32 pc, bool ram_region)
   u32 opcode = 0;
   u32 last_opcode;
   u32 condition;
-  u32 pc_region = (pc >> 15);
+  u32 pc_region = (pc >> 12);
   u32 new_pc_region;
-  u8 *pc_address_block = memory_map_read[pc_region];
+  u8 *pc_address_block = cgba_memory_map_read_4k(pc);
   u32 block_start_pc = pc;
   u32 block_end_pc = pc;
   u32 block_exit_position = 0;
@@ -4048,7 +4050,7 @@ bool translate_block_thumb(u32 pc, bool ram_region)
   thumb_fix_pc();
 
   if(!pc_address_block)
-    pc_address_block = load_gamepak_page(pc_region & 0x3FF);
+    return false;
 
   if (ram_region) {
     translation_ptr = ram_translation_ptr;

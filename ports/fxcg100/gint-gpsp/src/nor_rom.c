@@ -415,6 +415,8 @@ void cgba_nor_rom_reset(cgba_nor_rom *rom)
 		return;
 
 	memset(rom, 0, sizeof(*rom));
+	memset(cgba_block_addr, 0, sizeof(cgba_block_addr));
+	cgba_block_total = 0;
 	rom->fd = -1;
 	rom->block_result = 0;
 	rom->open_result = 0;
@@ -480,53 +482,10 @@ static int load_single_page_fallback(cgba_nor_rom *rom)
 	return 0;
 }
 
-static int resolve_page(cgba_nor_rom *rom, uint32_t page)
-{
-	const uint8_t *base = NULL;
-
-	for(uint32_t block = 0; block < CGBA_FLASH_BLOCKS_PER_PAGE; block++) {
-		unsigned char *raw = NULL;
-		int offset = (int)(page * CGBA_NOR_ROM_PAGE_SIZE +
-			block * CGBA_FLASH_BLOCK_SIZE);
-		int result = os_bfile_get_block_address(rom->fd, offset, &raw);
-		const uint8_t *ptr = result < 0 ? NULL : cached_nor_pointer(raw);
-
-		if(!ptr) {
-			rom->block_result = result;
-			rom->fail_page = page;
-			rom->fail_block = block;
-			rom->first_address = (uintptr_t)raw;
-			return -1;
-		}
-
-		if(page == 0 && block == 0) {
-			rom->block_result = result;
-			rom->first_address = (uintptr_t)ptr;
-		}
-
-		if(block == 0) {
-			base = ptr;
-			continue;
-		}
-
-		if(ptr != base + block * CGBA_FLASH_BLOCK_SIZE) {
-			rom->block_result = result;
-			rom->fail_page = page;
-			rom->fail_block = block;
-			rom->first_address = (uintptr_t)ptr;
-			return -1;
-		}
-	}
-
-	rom->pages[page] = base;
-	rom->direct_page_count++;
-	return 0;
-}
-
 /*
  * Read `len` bytes at logical ROM `offset` by gathering from the per-block NOR
- * address table via memcpy (fast memory-mapped flash reads, no BFile). Used to
- * fill gpSP's LRU page cache for fragmented pages, and to gather page 0.
+ * address table via memcpy. A rejected direct pointer falls back to BFile.
+ * Used to fill gpSP's aligned fallback cache and to gather page 0.
  */
 int cgba_nor_rom_read(cgba_nor_rom *rom, void *dst, uint32_t offset, uint32_t len)
 {
@@ -577,7 +536,8 @@ int cgba_nor_rom_read(cgba_nor_rom *rom, void *dst, uint32_t offset, uint32_t le
 /*
  * Resolve every 4KB block's direct NOR address, then classify each 32KB ROM
  * page: contiguous pages get a direct (zero-copy) pointer in rom->pages[];
- * fragmented pages are left NULL so gpSP page-faults them and gathers via
+ * fragmented pages are left NULL in that map but retain independently usable
+ * entries in the 4 KiB table. Only rejected blocks gather through
  * cgba_nor_rom_read. Page 0 is always made directly available for the loader.
  */
 static int build_block_table(cgba_nor_rom *rom)
@@ -607,6 +567,14 @@ static int build_block_table(cgba_nor_rom *rom)
 		result = os_bfile_get_block_address(rom->fd,
 			(int)(b * CGBA_FLASH_BLOCK_SIZE), &raw);
 		ptr = result < 0 ? NULL : cached_nor_pointer(raw);
+		/* The core performs native 16/32-bit SH4 loads from published blocks.
+		 * Reject an unaligned payload pointer, and never publish the partial
+		 * final file block: bytes beyond the true EOF must read as 0xFF rather
+		 * than leaking an adjacent Fugue record. cgba_nor_rom_read() retains the
+		 * safe BFile fallback for both cases. */
+		if(ptr && ((((uintptr_t)ptr & 3u) != 0) ||
+				(uint64_t)(b + 1u) * CGBA_FLASH_BLOCK_SIZE > rom->size))
+			ptr = NULL;
 		if(ptr && ptr != cgba_block_addr[b]) {
 			invalidate_nor_block(ptr);
 			cache_invalidated = 1;
@@ -633,6 +601,11 @@ static int build_block_table(cgba_nor_rom *rom)
 	if(cache_invalidated)
 		__asm__ volatile("synco" ::: "memory");
 	cgba_block_total = total;
+	/* GBA cartridge regions mirror the physical ROM throughout a 32 MiB
+	 * window. Expanding the already-resolved table removes a modulo operation
+	 * from every fragmented-ROM read and from the emitted JIT fast path. */
+	for(uint32_t b = total; b < CGBA_NOR_ROM_MAX_BLOCKS; b++)
+		cgba_block_addr[b] = cgba_block_addr[b % total];
 
 	for(p = 0; p < rom->page_count; p++) {
 		const uint8_t *base = cgba_block_addr[p * CGBA_FLASH_BLOCKS_PER_PAGE];
@@ -698,7 +671,7 @@ int cgba_nor_rom_refresh(cgba_nor_rom *rom)
 	/* A descriptor/block-address refresh that cannot reproduce the immutable
 	 * ROM header must not leave stale direct pointers reachable. Fall back to
 	 * logical BFile reads for every block; this is slow but remains correct. */
-	memset(cgba_block_addr, 0, total * sizeof(cgba_block_addr[0]));
+	memset(cgba_block_addr, 0, sizeof(cgba_block_addr));
 	cgba_block_total = total;
 	memset(rom->pages, 0, sizeof(rom->pages));
 	rom->direct_page_count = 0;
@@ -716,6 +689,13 @@ int cgba_nor_rom_refresh(cgba_nor_rom *rom)
 	rom->pages[0] = cgba_page0_buf;
 	rom->fallback_used = 1;
 	return 1;
+}
+
+const uint8_t * const *cgba_nor_rom_block_table(const cgba_nor_rom *rom)
+{
+	if(!rom || rom->fd < 0 || cgba_block_total == 0)
+		return NULL;
+	return cgba_block_addr;
 }
 
 static int map_open_fd(cgba_nor_rom *rom, int fd)

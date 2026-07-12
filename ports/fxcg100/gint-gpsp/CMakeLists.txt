@@ -114,17 +114,20 @@ option(CGBA_FXCG100_STORAGE
 # loader at 0x8c700000, and even 1152 KB (end 0x8c6b5300) reset because live OS
 # state sits below it. Do not raise the arena end without an on-device probe.
 #
-# The 256 KiB embedded mini-ROM staging area now shares the tail of the existing
-# 2 MiB GamePak page cache. Reclaiming that duplicate high-BSS allocation grows
-# the JIT caches to 1024/256 without moving the proven arena endpoint. This
-# preserves SimCity's RAM-renderer working set while giving Metroid-class ROM
-# code more room than the former 896/128 profile.
+# The hybrid cartridge map keeps contiguous 32 KiB pages on the existing direct
+# path and resolves fragmented pages through sanitized 4 KiB NOR pointers. Only
+# unsafe blocks need the aligned gather fallback, so one 1 MiB / 32-page cache is
+# sufficient. The 256 KiB embedded mini-ROM staging area is separate from that
+# cache and from its 864 KiB savestate scratch use. Compared with the former
+# 2 MiB shared cache, this layout recovers 768 KiB: 256 KiB grows the RAM JIT to
+# the conservative 1024/512 profile and 512 KiB remains below the hardware-proven
+# arena ceiling.
 # The 8-dispatch cold gate plus 4-count flush leak is the July 2026 Yoshi
 # A/LEFT cache-sim default: it trims repeated cold fallback after cache flushes
 # while keeping leaky decay to avoid the threshold-0 translate-everything cliff.
 set(CGBA_GPSP_ROM_TRANSLATION_CACHE_SIZE "1048576" CACHE STRING
   "SH4 dynarec ROM translation cache size in bytes")
-set(CGBA_GPSP_RAM_TRANSLATION_CACHE_SIZE "262144" CACHE STRING
+set(CGBA_GPSP_RAM_TRANSLATION_CACHE_SIZE "524288" CACHE STRING
   "SH4 dynarec RAM translation cache size in bytes")
 set(CGBA_GPSP_ROM_BRANCH_HASH_BITS "12" CACHE STRING
   "SH4 dynarec ROM branch-hash = 2^N u32 entries; 12 is 16 KiB, which is friendlier to the SH7305 cache than the upstream 16 / 256 KiB table")

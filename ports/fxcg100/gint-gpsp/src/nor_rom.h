@@ -51,6 +51,12 @@ void cgba_nor_rom_close(cgba_nor_rom *rom);
 void cgba_nor_rom_status(const cgba_nor_rom *rom, char *dst, size_t dst_size);
 unsigned cgba_nor_rom_scan_gba(cgba_nor_rom_list *list);
 
+/* Return the sanitized 4 KiB direct-NOR block table for the active ROM.
+ * The table always has CGBA_NOR_ROM_MAX_PAGES * 8 entries and is mirrored
+ * across the full 32 MiB GBA cartridge window. Unsafe, unaligned and partial
+ * EOF blocks are NULL so the core can fall back to its aligned gather cache. */
+const uint8_t * const *cgba_nor_rom_block_table(const cgba_nor_rom *rom);
+
 /* Gather `len` bytes at logical ROM `offset` from the per-block NOR address
  * table (memcpy from memory-mapped flash). Used by the gpSP filestream backend
  * to fill the ROM page cache for fragmented pages. */

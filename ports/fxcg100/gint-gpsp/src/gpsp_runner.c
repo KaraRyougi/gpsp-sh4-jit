@@ -643,6 +643,7 @@ int cgba_gpsp_init(uint16_t *framebuffer, unsigned rom_id)
 	init_sound();
 	memcpy(bios_rom, open_gba_bios_rom, sizeof(bios_rom));
 
+	cgba_gamepak_bind_fragment_table(NULL);
 	cgba_nor_rom_close(&cgba_current_nor_rom);
 	if(nor_entry) {
 		memcpy(cgba_current_nor_path, nor_entry->path,
@@ -658,9 +659,12 @@ int cgba_gpsp_init(uint16_t *framebuffer, unsigned rom_id)
 		memcpy(cgba_current_rom_header, cgba_current_nor_rom.pages[0],
 			sizeof(cgba_current_rom_header));
 		/* Fragmented pages are left unmapped by load_gamepak_from_pages and
-		 * page-faulted on demand; point gpSP's page source at the NOR gather. */
+		 * resolved through the 4 KiB NOR table. Unsafe blocks still page-fault
+		 * through the aligned gather fallback. */
 		cgba_gpsp_filestream_bind(&cgba_current_nor_rom);
 		gamepak_file_large = filestream_open(NULL, 0, 0);
+		cgba_gamepak_bind_fragment_table(
+			cgba_nor_rom_block_table(&cgba_current_nor_rom));
 		if(load_gamepak_from_pages(cgba_current_nor_rom.pages,
 				cgba_current_nor_rom.padded_size,
 				FEAT_AUTODETECT, FEAT_DISABLE,
@@ -671,6 +675,7 @@ int cgba_gpsp_init(uint16_t *framebuffer, unsigned rom_id)
 				(unsigned)cgba_current_nor_rom.padded_size,
 				(unsigned)cgba_current_nor_rom.page_count);
 			cgba_nor_rom_close(&cgba_current_nor_rom);
+			cgba_gamepak_bind_fragment_table(NULL);
 			return -4;
 		}
 	}
@@ -929,11 +934,14 @@ static int cgba_refresh_rom_after_storage(void)
 	}
 	if(refreshed < 0 || !cgba_gamepak_remap_pages(
 			cgba_current_nor_rom.pages, cgba_current_nor_rom.padded_size)) {
+		cgba_gamepak_bind_fragment_table(NULL);
 		cgba_rom_mapping_failed = 1;
 		snprintf(cgba_last_error, sizeof(cgba_last_error),
 			"NOR refresh after storage failed: %d/%d", refreshed, reopened);
 		return 0;
 	}
+	cgba_gamepak_bind_fragment_table(
+		cgba_nor_rom_block_table(&cgba_current_nor_rom));
 	cgba_rom_mapping_failed = 0;
 	cgba_storage_generation_seen = fxcg100_storage_mutation_generation();
 	return 1;

@@ -56,6 +56,8 @@ const u32 cpu_modes[16] =
   ORC_BSWAP32(0x16), ORC_BSWAP32(0x16), ORC_BSWAP32(0x16), ORC_BSWAP32(0x10)
 };
 u8 *memory_map_read[8192];
+u32 gamepak_size;
+const u8 * const *cgba_gamepak_fragment_blocks;
 u8 iwram[0x10000];                 /* gpSP global (push_iwram fast path) */
 u8 vram[1024 * 96];
 u16 palette_ram[512];
@@ -145,6 +147,14 @@ static char unmodeled[64];
 static struct { u32 base; u32 size; u8 *host; int is_maptab; } orc_win[ORC_MAX_WIN];
 static int orc_nwin;
 
+enum {
+  ORC_WIN_BYTES = 0,
+  ORC_WIN_READ_MAP = 1,
+  ORC_WIN_HOST_U32 = 2,
+  ORC_WIN_HOST_PTR = 3,
+  ORC_WIN_FRAGMENT_MAP = 4
+};
+
 static void orc_reset_windows(void) { orc_nwin = 0; }
 static void orc_add_window(const void *host, u32 size, int is_maptab)
 {
@@ -173,13 +183,30 @@ static u8 *orc_resolve(u32 addr, int *is_maptab)
 }
 static u32 orc_read(u32 addr, int size_log2, int *ok)
 {
+  /* These published target globals are part of every generated fastmem
+   * routine.  Model them implicitly so the older unmapped-page cases do not
+   * each need boilerplate windows merely to observe their zero defaults. */
+  if (size_log2 == 2 && addr == (u32)(uintptr_t)&gamepak_size)
+    return gamepak_size;
+  if (size_log2 == 2 &&
+      addr == (u32)(uintptr_t)&cgba_gamepak_fragment_blocks)
+    return (u32)(uintptr_t)cgba_gamepak_fragment_blocks;
+
   int maptab = 0;
   u8 *hp = orc_resolve(addr, &maptab);
   if (!hp) { *ok = 0; return 0; }
-  if (maptab) {                    /* pointer table: emitted code indexes
+  if (maptab == ORC_WIN_READ_MAP) {/* pointer table: emitted code indexes
                                       4-byte slots; host slots are 8 bytes */
     u32 idx = (u32)(hp - (u8 *)(void *)memory_map_read) / 4;
     return (u32)(uintptr_t)memory_map_read[idx];
+  }
+  if (maptab == ORC_WIN_HOST_U32)
+    return gamepak_size;           /* target-native u32 on a BE SH4 */
+  if (maptab == ORC_WIN_HOST_PTR)
+    return (u32)(uintptr_t)cgba_gamepak_fragment_blocks;
+  if (maptab == ORC_WIN_FRAGMENT_MAP) {
+    u32 idx = (u32)(hp - (u8 *)(void *)cgba_gamepak_fragment_blocks) / 4;
+    return (u32)(uintptr_t)cgba_gamepak_fragment_blocks[idx];
   }
   switch (size_log2) {             /* big-endian, as the SH4 would */
   case 0: return hp[0];
@@ -1497,6 +1524,159 @@ int main(void)
             memcpy((void *)(page + poff), mem_before, 4);
           }
         }
+
+    /* A NULL 32 KiB ROM page can still be composed of direct 4 KiB NOR
+     * fragments. Exercise the emitted second-level lookup itself (not its C
+     * fallback), every scalar load kind, writeback, and each fail-closed guard.
+     * The fragment lives in logical block 1 so a stale low-15 offset cannot
+     * accidentally address the right byte. */
+    {
+      static u8 fragment[0x1000];
+      static const u8 *fragment_map[8192];
+      const u32 faddr = 0x08001420u;
+      const u32 fpage = faddr >> 15;
+      const u32 fblock = (faddr & 0x01FFFFFFu) >> 12;
+      struct fload { u32 op; int kind; int wb; const char *nm; } floads[] = {
+        { 0xE5923000u, LDK_W,  0, "fragment-ldr"   },
+        { 0xE5D23000u, LDK_B,  0, "fragment-ldrb"  },
+        { 0xE1D230B0u, LDK_UH, 0, "fragment-ldrh"  },
+        { 0xE1D230D0u, LDK_SB, 0, "fragment-ldrsb" },
+        { 0xE1D230F0u, LDK_SH, 0, "fragment-ldrsh" },
+        { 0xE5B23010u, LDK_W,  1, "fragment-ldr-wb" },
+      };
+
+      for (unsigned i = 0; i < sizeof fragment; i++)
+        fragment[i] = (u8)(0x83u + i * 29u);
+      memset(fragment_map, 0, sizeof fragment_map);
+      fragment_map[fblock] = fragment;
+      memory_map_read[fpage] = NULL;
+      gamepak_size = 0x8000u;
+      cgba_gamepak_fragment_blocks = fragment_map;
+
+      for (unsigned fi = 0; fi < sizeof floads / sizeof *floads; fi++) {
+        static u8 sbuf[512];
+        u8 *sp = sbuf;
+        u32 base = faddr - (floads[fi].wb ? 0x10u : 0u);
+        u32 off = faddr & 0x0FFFu;
+        u32 lev = (u32)fragment[off] | ((u32)fragment[off + 1] << 8) |
+                  ((u32)fragment[off + 2] << 16) |
+                  ((u32)fragment[off + 3] << 24);
+        u32 want;
+
+        if (!sh4g_arm_ldst_native(&sp, floads[fi].op, pc, 0)) {
+          printf("FAIL %s: emitter rejected\n", floads[fi].nm);
+          fails++;
+          continue;
+        }
+        cases++;
+        memset(g_reg, 0, sizeof g_reg);
+        for (int i = 0; i < 16; i++) g_reg[i] = 0xF1000000u + (u32)i;
+        g_reg[SH4_GREG_CPSR] = 0x2000001Fu;
+        g_reg[2] = base;
+        g_reg[3] = 0xDEAD0001u;
+
+        orc_reset_windows();
+        orc_add_window(sbuf, sizeof sbuf, ORC_WIN_BYTES);
+        orc_add_window(fm_buf, sizeof fm_buf, ORC_WIN_BYTES);
+        orc_add_window(memory_map_read, 8192 * 4, ORC_WIN_READ_MAP);
+        orc_add_window(fragment, sizeof fragment, ORC_WIN_BYTES);
+        orc_add_window(fragment_map, 8192 * 4, ORC_WIN_FRAGMENT_MAP);
+        orc_add_window(&gamepak_size, 4, ORC_WIN_HOST_U32);
+        orc_add_window(&cgba_gamepak_fragment_blocks, 4, ORC_WIN_HOST_PTR);
+        orc_add_window(ws_cyc_seq, sizeof ws_cyc_seq, ORC_WIN_BYTES);
+        orc_add_window(ws_cyc_nseq, sizeof ws_cyc_nseq, ORC_WIN_BYTES);
+        orc_add_window(orc_vec_table, sizeof orc_vec_table, ORC_WIN_BYTES);
+        orc_slow_target = (u32)(uintptr_t)sh4_op2_pc_mem_tramp;
+        orc_slow_target2 = (u32)(uintptr_t)sh4_op2_pc_tramp;
+
+        if (!run_at((u32)(uintptr_t)sbuf,
+                    (u32)(uintptr_t)sbuf + (u32)(sp - sbuf))) {
+          printf("FAIL %s: %s%s\n", floads[fi].nm,
+                 orc_took_slow ? "took slow path: " : "interpreter: ",
+                 unmodeled);
+          fails++;
+          continue;
+        }
+        switch (floads[fi].kind) {
+        case LDK_W:  want = lev; break;
+        case LDK_B:  want = lev & 0xFFu; break;
+        case LDK_UH: want = lev & 0xFFFFu; break;
+        case LDK_SH: want = (u32)(s32)(int16_t)(lev & 0xFFFFu); break;
+        default:     want = (u32)(s32)(s8)(lev & 0xFFu); break;
+        }
+        if (g_reg[3] != want || g_reg[2] != (floads[fi].wb ? faddr : base)) {
+          printf("FAIL %s: rd/rn=%08X/%08X want %08X/%08X\n",
+                 floads[fi].nm, g_reg[3], g_reg[2], want,
+                 floads[fi].wb ? faddr : base);
+          fails++;
+        }
+      }
+
+      {
+        struct fguard {
+          u32 address, size;
+          int table_active, entry_active;
+          const char *nm;
+        } fguards[] = {
+          { faddr,        0x8000u, 0, 1, "fragment-null-table" },
+          { faddr,        0x8000u, 1, 0, "fragment-null-entry" },
+          { faddr,        0x1000u, 1, 1, "fragment-past-size" },
+          { 0x07001420u, 0x8000u, 1, 1, "fragment-region7" },
+          { 0x0D001420u, 0x2000000u, 1, 1, "fragment-regionD" },
+        };
+
+        for (unsigned gi = 0; gi < sizeof fguards / sizeof *fguards; gi++) {
+          static u8 sbuf[512];
+          u8 *sp = sbuf;
+          u32 block = (fguards[gi].address & 0x01FFFFFFu) >> 12;
+
+          memset(fragment_map, 0, sizeof fragment_map);
+          if (fguards[gi].entry_active)
+            fragment_map[block] = fragment;
+          cgba_gamepak_fragment_blocks = fguards[gi].table_active
+            ? fragment_map : NULL;
+          gamepak_size = fguards[gi].size;
+          memory_map_read[fguards[gi].address >> 15] = NULL;
+          memset(g_reg, 0, sizeof g_reg);
+          g_reg[SH4_GREG_CPSR] = 0x2000001Fu;
+          g_reg[2] = fguards[gi].address;
+          g_reg[3] = 0xDEAD0001u;
+          if (!sh4g_arm_ldst_native(&sp, 0xE5923000u, pc, 0)) {
+            printf("FAIL %s: emitter rejected\n", fguards[gi].nm);
+            fails++;
+            continue;
+          }
+          cases++;
+
+          orc_reset_windows();
+          orc_add_window(sbuf, sizeof sbuf, ORC_WIN_BYTES);
+          orc_add_window(fm_buf, sizeof fm_buf, ORC_WIN_BYTES);
+          orc_add_window(memory_map_read, 8192 * 4, ORC_WIN_READ_MAP);
+          orc_add_window(fragment, sizeof fragment, ORC_WIN_BYTES);
+          orc_add_window(fragment_map, 8192 * 4, ORC_WIN_FRAGMENT_MAP);
+          orc_add_window(&gamepak_size, 4, ORC_WIN_HOST_U32);
+          orc_add_window(&cgba_gamepak_fragment_blocks, 4, ORC_WIN_HOST_PTR);
+          orc_add_window(ws_cyc_seq, sizeof ws_cyc_seq, ORC_WIN_BYTES);
+          orc_add_window(ws_cyc_nseq, sizeof ws_cyc_nseq, ORC_WIN_BYTES);
+          orc_add_window(orc_vec_table, sizeof orc_vec_table, ORC_WIN_BYTES);
+          orc_slow_target = (u32)(uintptr_t)sh4_op2_pc_mem_tramp;
+          orc_slow_target2 = (u32)(uintptr_t)sh4_op2_pc_tramp;
+
+          if (run_at((u32)(uintptr_t)sbuf,
+                     (u32)(uintptr_t)sbuf + (u32)(sp - sbuf)) ||
+              !orc_took_slow) {
+            printf("FAIL %s: guard did not take slow path (%s)\n",
+                   fguards[gi].nm, unmodeled);
+            fails++;
+          }
+        }
+      }
+
+      memset(fragment_map, 0, sizeof fragment_map);
+      cgba_gamepak_fragment_blocks = NULL;
+      gamepak_size = 0;
+      memory_map_read[fpage] = rom;
+    }
 
     /* rn==15 literal-pool loads: address is a compile-time constant
      * (pc+8 +/- imm) synthesized into the site; lands in the rom page. */
