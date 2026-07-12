@@ -2094,7 +2094,11 @@ int main(void)
 
 		if(menu_open_edge) {
 			last_hash = cgba_gpsp_frame_hash(framebuffer);
-			cgba_gpsp_refresh_roms();
+			/* The storage ROM list is immutable for this process. In particular,
+			 * never rescan it while entering the menu: on fx-CG100 that would
+			 * world-switch into Fugue while the physical ON key can still be held,
+			 * which can leave the OS call stuck. The one startup scan is enough;
+			 * restart gpSP to discover files added after launch. */
 			menu_state.rom_source = normalize_rom_id(menu_state.rom_source);
 			cgba_gpsp_debug_menu(&debug_info, frame, last_hash,
 				cgba_fps.emu_fps, cgba_fps.draw_fps, framebuffer,
