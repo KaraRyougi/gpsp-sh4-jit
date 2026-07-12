@@ -415,6 +415,7 @@ bool gamepak_mirror_1m;     /* 1MiB Classic NES/Famicom Mini mirror mode */
 static u8 *gamepak_mini_rom;
 bool gamepak_mini_materialized;
 bool gamepak_header_nonstandard;
+const u8 * const *cgba_gamepak_fragment_blocks;
 // We allocate in 1MB chunks.
 const unsigned gamepak_buffer_blocksize = 1024*1024;
 
@@ -422,35 +423,22 @@ const unsigned gamepak_buffer_blocksize = 1024*1024;
 #define CGBA_FXCG100_STATIC_ROM_MAX (256 * 1024)
 static bool gamepak_mini_rom_static;
 
-/* LRU page cache for fragmented ROM pages. Contiguous pages are direct-mapped
- * zero-copy from NOR; fragmented pages page-fault through load_gamepak_page,
- * which fills these buffers via NOR gather. The original fx-CG100 path left
- * gamepak_buffers NULL (it assumed the whole ROM was directly mapped), so the
- * first fragmented page faulted into a NULL+offset write. One block = 1 MB =
- * 32 x 32 KB pages; the indexing in load_gamepak_page hardcodes 32 pages/block,
- * so the block size must stay 1 MB (== gamepak_buffer_blocksize). */
+/* Fallback cache for ROM blocks that cannot be published through either the
+ * 32 KiB direct-page map or the 4 KiB fragment table. One block = 1 MiB =
+ * 32 x 32 KiB pages; load_gamepak_page() hardcodes that geometry, so the block
+ * size must stay equal to gamepak_buffer_blocksize. The same block is borrowed
+ * as the savestate workspace while guest execution is stopped. */
 #define CGBA_GAMEPAK_BLOCK_BYTES  (1024u * 1024u)
-#define CGBA_GAMEPAK_CACHE_BLOCKS 2u   /* 2 MB -> 64 resident fragmented pages */
-#if CGBA_GAMEPAK_CACHE_BLOCKS < 2
-#error "calculator GamePak cache needs separate scratch and mini-ROM blocks"
-#endif
-#if CGBA_FXCG100_STATIC_ROM_MAX > CGBA_GAMEPAK_BLOCK_BYTES
-#error "embedded mini ROM must fit in one GamePak cache block"
-#endif
+#define CGBA_GAMEPAK_CACHE_BLOCKS 1u   /* 1 MiB -> 32 fallback pages */
 static u8 cgba_gamepak_cache[CGBA_GAMEPAK_CACHE_BLOCKS][CGBA_GAMEPAK_BLOCK_BYTES]
 	CGBA_HIGH_BSS;
 
-/* Embedded test ROMs and the fragmented-page cache are mutually exclusive:
- * load_gamepak_from_memory() maps every byte directly and never invokes the
- * page-cache LRU. Keep the at-most-256-KiB mini ROM in the tail of the existing
- * 2-MiB cache instead of reserving a duplicate high-BSS buffer. The savestate
- * workspace occupies at most the first 864 KiB, so both cold uses remain
- * disjoint. Reclaiming this duplicate allocation makes room for a 1-MiB ROM
- * JIT cache plus a 256-KiB RAM JIT cache without raising the hardware-proven
- * high-RAM endpoint. */
-#define CGBA_STATIC_MINI_ROM_PTR \
-  (&cgba_gamepak_cache[CGBA_GAMEPAK_CACHE_BLOCKS - 1u] \
-    [CGBA_GAMEPAK_BLOCK_BYTES - CGBA_FXCG100_STATIC_ROM_MAX])
+/* Embedded diagnostic ROMs need stable storage while they are directly mapped.
+ * Keep that at-most-256-KiB image separate from the fallback/savestate arena;
+ * the latter is invalidated and overwritten by every state operation. This
+ * buffer also serves as cold loader scratch for streaming backup signatures. */
+static u8 cgba_static_mini_rom[CGBA_FXCG100_STATIC_ROM_MAX] CGBA_HIGH_BSS;
+#define CGBA_STATIC_MINI_ROM_PTR cgba_static_mini_rom
 #endif
 
 // LRU queue with the loaded blocks and what they map to
@@ -483,7 +471,7 @@ u16 gamepak_lru_tail;
 u32 gamepak_sticky_bit[1024/32];
 
 #define gamepak_sb_test(idx) \
- (gamepak_sticky_bit[((unsigned)(idx)) >> 5] & (1 << (((unsigned)(idx)) & 31)))
+ (gamepak_sticky_bit[((unsigned)(idx)) >> 5] & (1u << (((unsigned)(idx)) & 31)))
 
 // This is global so that it can be kept open for large ROMs to swap
 // pages from, so there's no slowdown with opening and closing the file
@@ -689,13 +677,11 @@ void function_cc write_eeprom(u32 unused_address, u32 value)
 }
 
 #define read_memory_gamepak(type)                                             \
-  u32 gamepak_index = address >> 15;                                          \
-  u8 *map = memory_map_read[gamepak_index];                                   \
-                                                                              \
-  if(!map)                                                                    \
-    map = load_gamepak_page(gamepak_index & 0x3FF);                           \
-                                                                              \
-  value = readaddress##type(map, address & 0x7FFF)                            \
+  u8 *map = cgba_gamepak_resolve_4k(address);                                 \
+  if(map)                                                                     \
+    value = readaddress##type(map, address & 0x0FFF);                         \
+  else                                                                        \
+    value = unmapped_rom_read##type(address)                                  \
 
 
 #define unmapped_rom_read8(addr)                                              \
@@ -1767,7 +1753,10 @@ u32 function_cc read_memory32(u32 address)
   u32 rotate = (address & 0x03) * 8;
   address &= ~0x03;
   read_memory(32);
-  ror(value, value, rotate);
+  /* The rotate macro shifts left by (32 - rotate); rotate==0 therefore invokes
+   * undefined C behavior even though an aligned GBA load needs no rotation. */
+  if (rotate)
+    ror(value, value, rotate);
   return value;
 }
 
@@ -1942,31 +1931,25 @@ const dma_region_type dma_region_map[17] =
 
 #define dma_oam_ram_src()
 
-#define dma_segmented_load_src()                                              \
-  memory_map_read[src_current_region]                                         \
-
 #define dma_vars_gamepak(type)                                                \
   u32 type##_new_region;                                                      \
-  u32 type##_current_region = type##_ptr >> 15;                               \
-  u8 *type##_address_block = dma_segmented_load_##type();                     \
+  u32 type##_current_region = type##_ptr >> 12;                               \
+  if((type##_ptr & 0x01FFFFFFu) >= gamepak_size)                              \
+    break;                                                                    \
+  u8 *type##_address_block = cgba_gamepak_resolve_4k(type##_ptr);             \
   if(type##_address_block == NULL)                                            \
-  {                                                                           \
-    if((type##_ptr & 0x1FFFFFF) >= gamepak_size)                              \
-      break;                                                                  \
-    type##_address_block = load_gamepak_page(type##_current_region & 0x3FF);  \
-  }                                                                           \
+    break                                                                     \
 
 #define dma_gamepak_check_region(type)                                        \
-  type##_new_region = (type##_ptr >> 15);                                     \
+  type##_new_region = (type##_ptr >> 12);                                     \
   if(type##_new_region != type##_current_region)                              \
   {                                                                           \
     type##_current_region = type##_new_region;                                \
-    type##_address_block = dma_segmented_load_##type();                       \
+    if((type##_ptr & 0x01FFFFFFu) >= gamepak_size)                            \
+      break;                                                                  \
+    type##_address_block = cgba_gamepak_resolve_4k(type##_ptr);               \
     if(type##_address_block == NULL)                                          \
-    {                                                                         \
-      type##_address_block =                                                  \
-       load_gamepak_page(type##_current_region & 0x3FF);                      \
-    }                                                                         \
+      break;                                                                  \
   }                                                                           \
 
 #define dma_read_iwram(type, tfsize)                                          \
@@ -1993,7 +1976,7 @@ const dma_region_type dma_region_map[17] =
 #define dma_read_gamepak(type, tfsize)                                        \
   dma_gamepak_check_region(type);                                             \
   read_value = readaddress##tfsize(type##_address_block,                      \
-   type##_ptr & 0x7FFF)                                                       \
+   type##_ptr & 0x0FFF)                                                       \
 
 // DMAing from the BIOS/open zone causes previous DMA values to be read
 
@@ -2361,11 +2344,11 @@ cpu_alert_type dma_transfer(unsigned dma_chan, int *usedcycles)
 
 #define map_rom_entry(type, idx, ptr, mirror_blocks) {                        \
   unsigned mcount;                                                            \
-  for(mcount = 0; mcount < 1024; mcount += (mirror_blocks)) {                 \
+  for(mcount = 0; mcount + (idx) < 1024; mcount += (mirror_blocks)) {         \
     memory_map_##type[(0x8000000 / (32 * 1024)) + (idx) + mcount] = (ptr);    \
     memory_map_##type[(0xA000000 / (32 * 1024)) + (idx) + mcount] = (ptr);    \
   }                                                                           \
-  for(mcount = 0; mcount <  512; mcount += (mirror_blocks)) {                 \
+  for(mcount = 0; mcount + (idx) < 512; mcount += (mirror_blocks)) {          \
     memory_map_##type[(0xC000000 / (32 * 1024)) + (idx) + mcount] = (ptr);    \
   }                                                                           \
 }
@@ -2419,10 +2402,10 @@ static u32 evict_gamepak_page(void)
     // execution pages since the last per-frame clear), this loop would spin
     // forever. After one complete LRU lap, clear the old frame's sticky set
     // but immediately re-protect the page containing the current guest PC.
-    // execute_arm/execute_thumb cache that page in pc_address_block until a
-    // 32 KiB boundary crossing, so evicting it here would execute bytes from
-    // whichever ROM page reused the slot rather than causing a recoverable
-    // page fault.
+    // execute_arm/execute_thumb cache a 4 KiB view of that page in
+    // pc_address_block until the next 4 KiB boundary, so evicting it here
+    // would execute bytes from whichever ROM page reused the slot rather than
+    // causing a recoverable page fault.
     if (resident_count != 0 && ++spins >= resident_count) {
 #if defined(CGBA_GPSP_HEADLESS_TEST)
       static const char msg[] = "@@CGBA_EVICT_DEADLOCK sticky set cleared";
@@ -2484,6 +2467,60 @@ u8 *load_gamepak_page(u32 physical_index)
     update_gpio_romregs();
 
   return swap_location;
+}
+
+void cgba_gamepak_bind_fragment_table(const u8 * const *blocks)
+{
+#if defined(CGBA_FXCG100) || defined(CGBA_FXCG50)
+  cgba_gamepak_fragment_blocks = blocks;
+#else
+  (void)blocks;
+  cgba_gamepak_fragment_blocks = NULL;
+#endif
+}
+
+u8 *cgba_gamepak_resolve_4k(u32 address)
+{
+  u8 *page;
+  u32 page_index;
+
+  if (address < 0x08000000u || address >= 0x0E000000u ||
+      gamepak_size == 0)
+    return NULL;
+
+  page_index = address >> 15;
+  page = memory_map_read[page_index];
+  if (page)
+    return page + (address & 0x7000u);
+
+#if defined(CGBA_FXCG100) || defined(CGBA_FXCG50)
+  if (cgba_gamepak_fragment_blocks)
+  {
+    u32 block = (address & 0x01FFFFFFu) >> 12;
+    const u8 *direct = cgba_gamepak_fragment_blocks[block];
+    if (direct)
+      return (u8 *)direct;
+  }
+#endif
+
+  if (!gamepak_file_large || gamepak_buffer_count == 0)
+    return NULL;
+  page = load_gamepak_page(page_index & 0x3FFu);
+  return page ? page + (address & 0x7000u) : NULL;
+}
+
+u8 *cgba_memory_map_read_4k(u32 address)
+{
+  u8 *page;
+
+  if (address >= 0x10000000u)
+    return NULL;
+  page = memory_map_read[address >> 15];
+  if (page)
+    return page + (address & 0x7000u);
+  if (address >= 0x08000000u && address < 0x0E000000u)
+    return cgba_gamepak_resolve_4k(address);
+  return NULL;
 }
 
 void init_gamepak_buffer(void)
@@ -2562,9 +2599,8 @@ static void cgba_gamepak_cache_invalidate(void)
 u8 *cgba_gamepak_scratch_acquire(u32 min_size)
 {
 #if defined(CGBA_FXCG100) || defined(CGBA_FXCG50)
-  /* Return only the first 1-MiB block. It is large enough for the 864-KiB
-   * savestate workspace and remains disjoint from an embedded mini ROM parked
-   * in the second block's tail. */
+  /* The 1-MiB fallback arena is large enough for the 864-KiB savestate
+   * workspace and remains disjoint from the embedded mini-ROM buffer. */
   u32 capacity = gamepak_buffer_count ? gamepak_buffer_blocksize : 0;
 
   if (gamepak_buffer_count == 0 || min_size > capacity)
@@ -2585,6 +2621,10 @@ void cgba_gamepak_scratch_release(void)
 void cgba_gamepak_unmap_pages(void)
 {
 #if defined(CGBA_FXCG100) || defined(CGBA_FXCG50)
+  /* Storage mutation can relocate every Fugue record. Unpublish the 4 KiB
+   * table before invalidating the 32 KiB aliases so no stale NOR pointer can
+   * survive a failed refresh. */
+  cgba_gamepak_bind_fragment_table(NULL);
   cgba_gamepak_cache_invalidate();
   map_null(read, 0x8000000, 0xE000000);
 #endif
@@ -2609,11 +2649,10 @@ bool cgba_gamepak_remap_pages(const u8 * const *pages, u32 rom_size)
       map_rom_entry(read, phyn, (u8 *)pages[phyn], map_blocks);
   update_gpio_romregs();
 
-  /* Repopulate a fragmented page containing the resume PC before returning
-   * to either interpreter. No translated-code or heat state is disturbed. */
-  if (reg[REG_PC] >= 0x08000000u && reg[REG_PC] < 0x0E000000u &&
-      memory_map_read[reg[REG_PC] >> 15] == NULL && gamepak_file_large)
-    (void)load_gamepak_page((reg[REG_PC] >> 15) & 0x3FFu);
+  /* The storage owner republishes its refreshed 4 KiB table immediately after
+   * this call. Leave fragmented pages cold: eagerly gathering the resume page
+   * would hide its direct fragments behind a temporary 32 KiB mapping. An
+   * unsafe block still enters the fallback cache on its first real access. */
   return true;
 #else
   (void)pages;
@@ -2698,6 +2737,7 @@ void init_memory(void)
 
 void memory_term(void)
 {
+  cgba_gamepak_bind_fragment_table(NULL);
   if (gamepak_file_large)
   {
     filestream_close(gamepak_file_large);
@@ -2928,6 +2968,7 @@ static s32 load_gamepak_raw(const char *name)
                                        RETRO_VFS_FILE_ACCESS_HINT_NONE);
   if(gamepak_file_large)
   {
+    cgba_gamepak_bind_fragment_table(NULL);
     free_gamepak_mini_rom();
     gamepak_mini_materialized = false;
 
@@ -3047,6 +3088,7 @@ u32 load_gamepak_from_memory(const u8 *rom, u32 rom_size,
   if (!rom || rom_size == 0 || rom_size > 0x20000000)
     return (u32)-1;
 
+  cgba_gamepak_bind_fragment_table(NULL);
   free_gamepak_mini_rom();
 #if defined(CGBA_FXCG100) || defined(CGBA_FXCG50)
   /* A direct memory load can follow a paged ROM without init_gamepak_buffer().
@@ -3238,29 +3280,6 @@ u32 load_gamepak_from_pages(const u8 * const *pages, u32 rom_size,
   if (backup_type_reset == BACKUP_UNKN)
   {
     u32 scan_size = raw_size < (32 * 1024) ? raw_size : (32 * 1024);
-#if defined(CGBA_FXCG100) || defined(CGBA_FXCG50)
-    /* The header scan only covers page 0 (32 KB); many games place the
-     * EEPROM/SRAM/FLASH tag further in. detect_backup_subcircuit() falls back to
-     * rom_scan_signatures_in_memory(), which scans gamepak_buffers[] -- but the
-     * paging loader leaves those empty. Prefill them from the head of the ROM
-     * (via the NOR-gather filestream) exactly like load_gamepak_raw does before
-     * detecting. These are transient scratch; the LRU re-pages them on demand. */
-    if (gamepak_file_large)
-    {
-      u32 bi;
-      for (bi = 0; bi < gamepak_buffer_count; bi++)
-      {
-        u32 got;
-        filestream_seek(gamepak_file_large,
-          (int64_t)bi * gamepak_buffer_blocksize, SEEK_SET);
-        got = (u32)filestream_read(gamepak_file_large,
-          gamepak_buffers[bi], gamepak_buffer_blocksize);
-        if (got < gamepak_buffer_blocksize)
-          memset(gamepak_buffers[bi] + got, 0xFF,
-            gamepak_buffer_blocksize - got);
-      }
-    }
-#endif
     detect_backup_subcircuit(header, scan_size);
   }
 
@@ -3304,34 +3323,101 @@ enum
   ROM_SIG_FLASH5  = (1 << 3)
 };
 
-static u32 rom_scan_signatures_in_memory(void)
+static u32 rom_scan_signature_chunk(const u8 *chunk, u32 chunk_size)
 {
   u32 found = 0;
-  u32 size_left = gamepak_size;
-  u32 buf_idx = 0;
-
   const char *sig_eeprom = "EEPROM_V";
   const char *sig_sram = "SRAM_V";
   const char *sig_flash1m = "FLASH1M_V";
   const char *sig_flash512 = "FLASH512_V";
   const char *sig_flash = "FLASH_V";
+  u32 i;
 
+  /* Nintendo's tools place these identifiers on word boundaries. Preserve the
+   * established 4-byte stepping while making every individual length check
+   * explicit so short final chunks cannot underflow. */
+  for (i = 0; i < chunk_size; i += 4)
+  {
+    if (chunk[i] == 'E' && i + 8u <= chunk_size &&
+        memcmp(&chunk[i], sig_eeprom, 8) == 0)
+      found |= ROM_SIG_EEPROM;
+    else if (chunk[i] == 'S' && i + 6u <= chunk_size &&
+             memcmp(&chunk[i], sig_sram, 6) == 0)
+      found |= ROM_SIG_SRAM;
+    else if (chunk[i] == 'F')
+    {
+      if (i + 9u <= chunk_size &&
+          memcmp(&chunk[i], sig_flash1m, 9) == 0)
+        found |= ROM_SIG_FLASH1M;
+      if ((i + 10u <= chunk_size &&
+           memcmp(&chunk[i], sig_flash512, 10) == 0) ||
+          (i + 7u <= chunk_size &&
+           memcmp(&chunk[i], sig_flash, 7) == 0))
+        found |= ROM_SIG_FLASH5;
+    }
+  }
+
+  return found;
+}
+
+static u32 rom_scan_signatures_in_memory(void)
+{
+  u32 found = 0;
+  u32 size_left;
+  u32 buf_idx;
+
+#if defined(CGBA_FXCG100) || defined(CGBA_FXCG50)
+  /* The hybrid loader no longer preloads a multi-megabyte page cache. Stream
+   * the complete logical ROM through the separate mini-ROM buffer instead.
+   * Twelve bytes of overlap cover the longest signature while keeping every
+   * chunk's logical origin 4-byte aligned. This is a cold load-time path. */
+  if (gamepak_file_large && cgba_gamepak_fragment_blocks)
+  {
+    const u32 capacity = (u32)sizeof(cgba_static_mini_rom);
+    const u32 overlap = 12u;
+    u32 offset = 0;
+
+    while (offset < gamepak_size)
+    {
+      u32 request = gamepak_size - offset;
+      int64_t got;
+
+      if (request > capacity)
+        request = capacity;
+      if (filestream_seek(gamepak_file_large, offset, SEEK_SET) < 0)
+        got = 0;
+      else
+        got = filestream_read(gamepak_file_large,
+                              cgba_static_mini_rom, request);
+      if (got < 0)
+        got = 0;
+      if ((u64)got > request)
+        got = request;
+      if ((u32)got < request)
+        memset(cgba_static_mini_rom + (u32)got, 0xFF,
+               request - (u32)got);
+
+      found |= rom_scan_signature_chunk(cgba_static_mini_rom, request);
+      if ((found & (ROM_SIG_EEPROM | ROM_SIG_SRAM |
+                    ROM_SIG_FLASH1M | ROM_SIG_FLASH5)) ==
+          (ROM_SIG_EEPROM | ROM_SIG_SRAM |
+           ROM_SIG_FLASH1M | ROM_SIG_FLASH5) ||
+          request < capacity || gamepak_size - offset <= capacity)
+        break;
+      offset += capacity - overlap;
+    }
+    return found;
+  }
+#endif
+
+  size_left = gamepak_size;
+  buf_idx = 0;
   while (size_left > 0 && buf_idx < gamepak_buffer_count)
   {
     u32 chunk_size = (size_left > gamepak_buffer_blocksize) ? gamepak_buffer_blocksize : size_left;
     u8 *chunk = gamepak_buffers[buf_idx];
-    u32 i;
 
-    for (i = 0; i < chunk_size - 10; i += 4)
-    {
-      if (chunk[i] == 'E' && !(found & ROM_SIG_EEPROM) && memcmp(&chunk[i], sig_eeprom, 8) == 0) found |= ROM_SIG_EEPROM;
-      else if (chunk[i] == 'S' && !(found & ROM_SIG_SRAM) && memcmp(&chunk[i], sig_sram, 6) == 0) found |= ROM_SIG_SRAM;
-      else if (chunk[i] == 'F' && !(found & ROM_SIG_FLASH1M) && memcmp(&chunk[i], sig_flash1m, 9) == 0) found |= ROM_SIG_FLASH1M;
-      else if (chunk[i] == 'F' && !(found & ROM_SIG_FLASH5)) {
-        if (memcmp(&chunk[i], sig_flash512, 10) == 0 || memcmp(&chunk[i], sig_flash, 7) == 0)
-          found |= ROM_SIG_FLASH5;
-      }
-    }
+    found |= rom_scan_signature_chunk(chunk, chunk_size);
 
     if ((found & (ROM_SIG_EEPROM | ROM_SIG_SRAM | ROM_SIG_FLASH1M | ROM_SIG_FLASH5)) ==
         (ROM_SIG_EEPROM | ROM_SIG_SRAM | ROM_SIG_FLASH1M | ROM_SIG_FLASH5))

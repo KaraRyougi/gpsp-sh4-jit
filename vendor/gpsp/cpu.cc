@@ -22,10 +22,9 @@ extern "C" {
   #include "cpu_instrument.h"
 }
 
-/* Interpreter guard for a PC outside the 256MB GBA bus: memory_map_read[]
- * only covers 0x0..0x0FFFFFFF (8K entries), so indexing it with a wild
- * pc>>15 reads host memory out of the table. The port supplies a noreturn
- * panic that reports the wild guest PC (gpsp_runner.c). */
+/* Interpreter guard for a PC outside the 256MB GBA bus. The 4 KiB resolver
+ * rejects anything above 0x0fffffff before consulting memory_map_read[]. The
+ * port supplies a noreturn panic that reports the wild guest PC. */
 extern "C" __attribute__((noreturn)) void cgba_wild_pc_trap(u32 pc);
 
 #ifdef CGBA_GBA_OVER_AZLE_IDLE
@@ -37,9 +36,11 @@ static inline int cgba_registered_idle_signature_ok(u32 pc, const u8 *map)
 
   if (pc != CGBA_SH4_AZLE_IDLE_PC)
     return 1;
-  if (!map || map != memory_map_read[pc >> 15])
+  if (!map)
     return 0;
-  off = pc & 0x7FFFu;
+  off = pc & 0x0FFFu;
+  if (off + CGBA_SH4_AZLE_IDLE_BYTES > 0x1000u)
+    return 0;
   return cgba_sh4_azle_idle_signature_match(
     readaddress16(map, off + 0u), readaddress16(map, off + 2u),
     readaddress16(map, off + 4u), readaddress16(map, off + 6u),
@@ -603,21 +604,19 @@ static const u8 gba_header_logo[156] = {
    (v_flag << 28) | (reg[REG_CPSR] & 0xFF)                                    \
 
 #define check_pc_region()                                                     \
-  new_pc_region = (reg[REG_PC] >> 15);                                        \
+  new_pc_region = (reg[REG_PC] >> 12);                                        \
   if(new_pc_region != pc_region)                                              \
   {                                                                           \
-    /* PC left the 256MB GBA bus: memory_map_read[] has 8K entries, so the    \
-       lookup below would read host memory out of the table (observed on     \
-       fx-CG100 as an EXC=040 TLB miss at memory_map_read+(pc>>15)*4 with a  \
-       wild reg[REG_PC]). Trap loudly with the guest PC instead. */          \
-    if(new_pc_region >= 0x2000)                                               \
+    /* PC left the 256MB GBA bus. Trap loudly with the guest PC instead of    \
+       letting the generic resolver consult an invalid bus address. */       \
+    if(new_pc_region >= 0x10000)                                              \
       cgba_wild_pc_trap(reg[REG_PC]);                                         \
     pc_region = new_pc_region;                                                \
-    pc_address_block = memory_map_read[new_pc_region];                        \
-    touch_gamepak_page(pc_region);                                            \
+    pc_address_block = cgba_memory_map_read_4k(reg[REG_PC]);                  \
+    touch_gamepak_page(reg[REG_PC] >> 15);                                    \
                                                                               \
     if(!pc_address_block)                                                     \
-      pc_address_block = load_gamepak_page(pc_region & 0x3FF);                \
+      cgba_wild_pc_trap(reg[REG_PC]);                                         \
   }                                                                           \
 
 
@@ -1678,9 +1677,9 @@ void execute_arm(u32 cycles)
   u32 opcode;
   u32 condition;
   u32 n_flag, z_flag, c_flag, v_flag;
-  u32 pc_region = (reg[REG_PC] >> 15);
+  u32 pc_region = (reg[REG_PC] >> 12);
   u8 *pc_address_block =
-    (pc_region < 0x2000) ? memory_map_read[pc_region]
+    (pc_region < 0x10000) ? cgba_memory_map_read_4k(reg[REG_PC])
                          : (cgba_wild_pc_trap(reg[REG_PC]), (u8 *)NULL);
   u32 new_pc_region;
   s32 cycles_remaining;
@@ -1694,8 +1693,8 @@ void execute_arm(u32 cycles)
 #endif
 
   if(!pc_address_block)
-    pc_address_block = load_gamepak_page(pc_region & 0x3FF);
-  touch_gamepak_page(pc_region);
+    cgba_wild_pc_trap(reg[REG_PC]);
+  touch_gamepak_page(reg[REG_PC] >> 15);
 
   cycles_remaining = cycles;
   while(1)
@@ -1746,7 +1745,7 @@ arm_loop:
        CGBA_DIFF_STOP_CHECK();
        CGBA_COLD_HEAT(4, 0);
        CGBA_INTERP_COUNT();
-       opcode = readaddress32(pc_address_block, (reg[REG_PC] & 0x7FFF));
+       opcode = readaddress32(pc_address_block, (reg[REG_PC] & 0x0FFF));
        condition = opcode >> 28;
 
        switch(condition)
@@ -3352,7 +3351,7 @@ thumb_loop:
        CGBA_DIFF_STOP_CHECK();
        CGBA_COLD_HEAT(2, 1);
        CGBA_INTERP_COUNT();
-       opcode = readaddress16(pc_address_block, (reg[REG_PC] & 0x7FFF));
+       opcode = readaddress16(pc_address_block, (reg[REG_PC] & 0x0FFF));
 
        #ifdef TRACE_INSTRUCTIONS
        interp_trace_instruction(reg[REG_PC], 0);

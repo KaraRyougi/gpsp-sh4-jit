@@ -27,6 +27,8 @@ typedef int64_t  s64;
 #include "ports/fxcg100/sh4/sh4_arm_block_emit.h"
 
 u8 *memory_map_read[0x2000];
+u32 gamepak_size;
+const u8 * const *cgba_gamepak_fragment_blocks;
 u8 iwram[1024 * 32 * 2];
 u8 vram[1024 * 96];
 u16 io_registers[512];

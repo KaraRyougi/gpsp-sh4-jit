@@ -261,12 +261,23 @@ void init_gamepak_buffer(void);
 bool gamepak_must_swap(void);
 void memory_term(void);
 u8 *load_gamepak_page(u32 physical_index);
+/* Bind the calculator storage layer's sanitized 8192-entry table of direct
+ * 4 KiB NOR blocks. NULL unpublishes it before storage mutation/ROM teardown. */
+void cgba_gamepak_bind_fragment_table(const u8 * const *blocks);
+/* Resolve the 4 KiB host block containing a guest address. Contiguous 32 KiB
+ * mappings stay first and free; fragmented NOR uses the table; unsafe blocks
+ * fall back to the aligned 32 KiB gather LRU. */
+u8 *cgba_gamepak_resolve_4k(u32 address);
+/* Generic instruction-source resolver. Returns a 4 KiB block base for any
+ * mapped GBA-bus address and uses the cartridge resolver for fragmented ROM. */
+u8 *cgba_memory_map_read_4k(u32 address);
 
-/* Calculator-only transient storage backed by the first 1 MiB block of the
- * existing fragmented-ROM page cache. An embedded mini ROM may occupy the
- * second block's final 256 KiB. Acquiring/releasing invalidates cached page
- * mappings so callers may safely overwrite block zero while guest execution
- * is stopped. */
+extern const u8 * const *cgba_gamepak_fragment_blocks;
+
+/* Calculator-only transient storage backed by the 1 MiB fallback cache. The
+ * embedded mini ROM has separate storage. Acquiring/releasing invalidates all
+ * fallback mappings so callers may safely overwrite the arena while guest
+ * execution is stopped. */
 u8 *cgba_gamepak_scratch_acquire(u32 min_size);
 void cgba_gamepak_scratch_release(void);
 /* Drop every direct and cached GamePak alias before Fugue block addresses are
@@ -360,7 +371,7 @@ static inline void touch_gamepak_page(u32 physical_index)
   u32 idx = (physical_index >> 5) & 31;
   u32 bof = physical_index & 31;
 
-  gamepak_sticky_bit[idx] |= (1 << bof);
+  gamepak_sticky_bit[idx] |= (1u << bof);
 }
 
 static inline void clear_gamepak_stickybits(void)

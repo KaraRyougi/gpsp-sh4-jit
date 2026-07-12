@@ -151,9 +151,14 @@ Env-gated; all combine freely with the headless builds:
   remains at `fps emu=18 draw=3`; the current frame-300 slot-save repro again
   completes with `@@CGBA_SLOTSAVE frame=300 ok=1` and no HLE panic signature.
   During calculator saves, raw and compressed savestate images are staged
-  together in the first 1 MiB GamePak-cache block, preserving both JIT caches
-  and their heat state. State loads still flush translated code after replacing
-  guest memory. The patched default-96 run completed all
+  together in the 1 MiB aligned fallback cache. Its 32 KiB aliases are
+  invalidated before and after the overwrite, and the separate 256 KiB mini-ROM
+  staging buffer remains untouched. This preserves both JIT caches and their
+  heat state. State loads still flush translated code after replacing guest
+  memory. The headless `SAVE_STATE_FRAME` writer also records every raw BFile
+  mutation attempt and refreshes both cartridge maps before continuing, so a
+  rejected or partial checkpoint write cannot leave stale NOR pointers hidden
+  in a validation run. The patched default-96 run completed all
   600 frames with final `hash=D48DE1EA`, `fps emu=18 draw=3`,
   `rom_flush=3 ram_flush=3 arm_tx=122 thumb_tx=2398 cold_n=30729`; its
   frame-300 slot-save repro reached frame 359 and `=== done ===`.

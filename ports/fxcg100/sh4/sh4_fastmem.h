@@ -76,6 +76,8 @@ enum {
 };
 
 extern u8 *memory_map_read[];
+extern u32 gamepak_size;
+extern const u8 * const *cgba_gamepak_fragment_blocks;
 extern u16 io_registers[512];          /* eswap16'd (LE-layout) halfwords */
 extern u16 palette_ram[512];
 extern u16 palette_ram_converted[512];
@@ -292,6 +294,8 @@ static inline u8 *sh4g_fastmem_emit_routine(u8 **tp, int fm)
   u8 *guards[8]; int ng = 0;
   u8 *io_check = NULL, *store_tail = NULL;
   u8 *store_vram_page_done = NULL;
+  u8 *fragment_entry = NULL, *fragment_join = NULL;
+  u8 *fragment_far = NULL;
   int i;
 
   /* params -> R5 early (R5 is untouched by everything below). */
@@ -494,41 +498,53 @@ static inline u8 *sh4g_fastmem_emit_routine(u8 **tp, int fm)
     sh4_emit_mov_l_load_r0(&cg, SH4_REG_T2, SH4_REG_T2);
     sh4_emit_tst(&cg, SH4_REG_T2, SH4_REG_T2);       /* T = (page == NULL) */
     sh4g_close(tp, &cg); }
-  if (!is_load && kind != CGBA_FM_STORE_B) {
-    /* VRAM is not always present in memory_map_read[], but halfword/word VRAM
-     * stores are side-effect-free plain writes in gpSP. Synthesize the 32 KiB
-     * page base directly and keep R0 as the later addr&0x7fff page offset. */
-    u8 *not_vram, *not_mirror;
-    { sh4_codegen cg = sh4g_open(tp);
-      sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
-      sh4_emit_shlr16(&cg, SH4_REG_RET);
-      sh4_emit_shlr8(&cg, SH4_REG_RET);
-      sh4_emit_cmpeq_imm(&cg, 6);                    /* T = VRAM */
-      sh4g_close(tp, &cg); }
-    not_vram = sh4g_emit_bf_placeholder(tp);
+  if (is_load) {
+    /* A NULL 32 KiB entry may still be an aligned, directly readable 4 KiB
+     * NOR fragment. Keep that uncommon lookup out of line and preserve the
+     * original hot path: mapped RAM/ROM sees one not-taken BT. The BT reaches
+     * a nearby BRA trampoline after the ordinary RTS; the fragment lookup then
+     * rejoins with a synthetic 32 KiB base so the proven low-15 transfer body
+     * remains unchanged. */
+    fragment_entry = sh4g_emit_bt_placeholder(tp);
+    fragment_join = *tp;
+  } else {
+    if (kind != CGBA_FM_STORE_B) {
+      /* VRAM is not always present in memory_map_read[], but halfword/word
+       * VRAM stores are side-effect-free plain writes in gpSP. Synthesize the
+       * 32 KiB page base directly and keep R0 as the later addr&0x7fff page
+       * offset. */
+      u8 *not_vram, *not_mirror;
+      { sh4_codegen cg = sh4g_open(tp);
+        sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
+        sh4_emit_shlr16(&cg, SH4_REG_RET);
+        sh4_emit_shlr8(&cg, SH4_REG_RET);
+        sh4_emit_cmpeq_imm(&cg, 6);                  /* T = VRAM */
+        sh4g_close(tp, &cg); }
+      not_vram = sh4g_emit_bf_placeholder(tp);
 
-    sh4g_const(tp, (u32)(uintptr_t)vram, SH4_REG_T2);
-    sh4g_const(tp, 0x18000u, SH4_REG_ARG0);
-    { sh4_codegen cg = sh4g_open(tp);
-      sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
-      sh4_emit_and(&cg, SH4_REG_ARG0, SH4_REG_RET);  /* page base: 0/80k/100k/180k */
-      sh4_emit_cmpeq(&cg, SH4_REG_ARG0, SH4_REG_RET);
-      sh4g_close(tp, &cg); }
-    not_mirror = sh4g_emit_bf_placeholder(tp);
-    sh4g_const(tp, (u32)-0x8000, SH4_REG_ARG0);
-    sh4g_add_reg(tp, SH4_REG_ARG0, SH4_REG_RET);     /* 0x18000 mirrors to 0x10000 */
-    sh4g_patch_cond(not_mirror, *tp);
-    sh4g_add_reg(tp, SH4_REG_RET, SH4_REG_T2);
-    store_vram_page_done = sh4g_emit_bra_placeholder(tp);
+      sh4g_const(tp, (u32)(uintptr_t)vram, SH4_REG_T2);
+      sh4g_const(tp, 0x18000u, SH4_REG_ARG0);
+      { sh4_codegen cg = sh4g_open(tp);
+        sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
+        sh4_emit_and(&cg, SH4_REG_ARG0, SH4_REG_RET); /* page base: 0/80k/100k/180k */
+        sh4_emit_cmpeq(&cg, SH4_REG_ARG0, SH4_REG_RET);
+        sh4g_close(tp, &cg); }
+      not_mirror = sh4g_emit_bf_placeholder(tp);
+      sh4g_const(tp, (u32)-0x8000, SH4_REG_ARG0);
+      sh4g_add_reg(tp, SH4_REG_ARG0, SH4_REG_RET);   /* 0x18000 -> 0x10000 */
+      sh4g_patch_cond(not_mirror, *tp);
+      sh4g_add_reg(tp, SH4_REG_RET, SH4_REG_T2);
+      store_vram_page_done = sh4g_emit_bra_placeholder(tp);
 
-    sh4g_patch_cond(not_vram, *tp);
-    { sh4_codegen cg = sh4g_open(tp);
-      sh4_emit_tst(&cg, SH4_REG_T2, SH4_REG_T2);     /* restore NULL-page test */
-      sh4g_close(tp, &cg); }
+      sh4g_patch_cond(not_vram, *tp);
+      { sh4_codegen cg = sh4g_open(tp);
+        sh4_emit_tst(&cg, SH4_REG_T2, SH4_REG_T2);   /* restore NULL-page test */
+        sh4g_close(tp, &cg); }
+    }
+    guards[ng++] = sh4g_emit_bt_placeholder(tp);
+    if (store_vram_page_done)
+      sh4g_patch_bra(store_vram_page_done, *tp);
   }
-  guards[ng++] = sh4g_emit_bt_placeholder(tp);
-  if (store_vram_page_done)
-    sh4g_patch_bra(store_vram_page_done, *tp);
 
   if (is_load) {
     /* regions 2..12 (RAM/IO/video/gamepak); BIOS + backup stay on C */
@@ -718,6 +734,13 @@ static inline u8 *sh4g_fastmem_emit_routine(u8 **tp, int fm)
   sh4g_u16(tp, 0x000B);                              /* RTS */
   sh4g_u16(tp, 0x0009);                              /* delay NOP */
 
+  /* Keep the page-null conditional target inside its signed disp8 reach while
+   * letting the fragment body stay fully out of line. */
+  if (fragment_entry) {
+    sh4g_patch_cond(fragment_entry, *tp);
+    fragment_far = sh4g_emit_bra_placeholder(tp);
+  }
+
   /* Common guard failure. Keep this close to the early map/alignment/SMC
    * guards: they are disp8 BT/BF placeholders, and the optional IO-specialized
    * tail below can grow independently. */
@@ -725,6 +748,83 @@ static inline u8 *sh4g_fastmem_emit_routine(u8 **tp, int fm)
     sh4g_patch_cond(guards[i], *tp);
   sh4g_far_jmp(tp, (const void *)sh4_op2_pc_mem_tramp);
   ng = 0;
+
+  if (fragment_entry) {
+    u8 *miss[5];
+    u8 *fragment_ok;
+    int nmiss = 0;
+
+    sh4g_patch_bra(fragment_far, *tp);
+
+    /* Only Game Pak wait-state regions 0..2 (0x08..0x0c) are eligible.
+     * Region 0x0d retains EEPROM/backup helper semantics. */
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
+      sh4_emit_shlr16(&cg, SH4_REG_RET);
+      sh4_emit_shlr8(&cg, SH4_REG_RET);              /* R0 = addr >> 24 */
+      sh4_emit_mov_imm(&cg, 8, SH4_REG_T1);
+      sh4_emit_cmphs(&cg, SH4_REG_T1, SH4_REG_RET);  /* T = region >= 8 */
+      sh4g_close(tp, &cg); }
+    miss[nmiss++] = sh4g_emit_bf_placeholder(tp);
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_imm(&cg, 13, SH4_REG_T1);
+      sh4_emit_cmphs(&cg, SH4_REG_T1, SH4_REG_RET);  /* T = region >= 13 */
+      sh4g_close(tp, &cg); }
+    miss[nmiss++] = sh4g_emit_bt_placeholder(tp);
+
+    /* Canonical ROM reads return the unmapped-bus pattern beyond the logical
+     * padded ROM size. Do not accidentally introduce a new modulo mirror by
+     * consulting the expanded fragment table first. */
+    sh4g_const(tp, 0x01FFFFFFu, SH4_REG_T1);
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
+      sh4_emit_and(&cg, SH4_REG_T1, SH4_REG_RET);    /* R0 = logical offset */
+      sh4g_close(tp, &cg); }
+    sh4g_const(tp, (u32)(uintptr_t)&gamepak_size, SH4_REG_T2);
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_l_load(&cg, SH4_REG_T2, SH4_REG_T1);
+      sh4_emit_cmphs(&cg, SH4_REG_T1, SH4_REG_RET);  /* T = offset >= size */
+      sh4g_close(tp, &cg); }
+    miss[nmiss++] = sh4g_emit_bt_placeholder(tp);
+
+    /* Load the currently published table, then its `(offset >> 12)` pointer.
+     * The storage layer sets unsafe/unaligned/partial-EOF entries to NULL. */
+    sh4g_const(tp, (u32)(uintptr_t)&cgba_gamepak_fragment_blocks,
+               SH4_REG_T2);
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_l_load(&cg, SH4_REG_T2, SH4_REG_T2);
+      sh4_emit_tst(&cg, SH4_REG_T2, SH4_REG_T2);     /* T = table == NULL */
+      sh4g_close(tp, &cg); }
+    miss[nmiss++] = sh4g_emit_bt_placeholder(tp);
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_imm(&cg, -12, SH4_REG_T1);
+      sh4_emit_shld(&cg, SH4_REG_T1, SH4_REG_RET);   /* R0 = block index */
+      sh4_emit_shll2(&cg, SH4_REG_RET);              /* pointer-table offset */
+      sh4_emit_mov_l_load_r0(&cg, SH4_REG_T2, SH4_REG_T2);
+      sh4_emit_tst(&cg, SH4_REG_T2, SH4_REG_T2);     /* T = block == NULL */
+      sh4g_close(tp, &cg); }
+    miss[nmiss++] = sh4g_emit_bt_placeholder(tp);
+
+    /* The common body indexes a 32 KiB base with addr&0x7fff. Convert the
+     * actual 4 KiB pointer into an equivalent register-only synthetic base:
+     *   (block - (addr&0x7000)) + (addr&0x7fff)
+     *       == block + (addr&0x0fff).
+     * No C pointer with this synthetic value is ever formed or dereferenced. */
+    sh4g_const(tp, 0x7000u, SH4_REG_T1);
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
+      sh4_emit_and(&cg, SH4_REG_T1, SH4_REG_RET);
+      sh4_emit_sub(&cg, SH4_REG_RET, SH4_REG_T2);
+      sh4g_close(tp, &cg); }
+    fragment_ok = sh4g_emit_bra_placeholder(tp);
+
+    /* Every conditional miss is local (disp8-safe); only the unconditional
+     * fragment-entry and success branches span the main routine. */
+    for (i = 0; i < nmiss; i++)
+      sh4g_patch_cond(miss[i], *tp);
+    sh4g_far_jmp(tp, (const void *)sh4_op2_pc_mem_tramp);
+    sh4g_patch_bra(fragment_ok, fragment_join);
+  }
 
   /* Halfword-store interrupt-register fast path. Mirrors gpSP's
    * write_io_register16 exactly for the two hot ISR registers:

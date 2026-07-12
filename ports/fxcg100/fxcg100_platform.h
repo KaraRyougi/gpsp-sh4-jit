@@ -129,6 +129,7 @@ int fxcg100_storage_write_blob(const uint16_t *path, const void *src, unsigned s
 /* Monotonic notification for successful or partially failed storage-mutation
  * attempts; direct NOR consumers use it to refresh only when necessary. */
 uint32_t fxcg100_storage_mutation_generation(void);
+void fxcg100_storage_note_mutation(void);
 
 void fxcg100_menu_init(fxcg100_menu_state *state);
 fxcg100_menu_result fxcg100_menu_run(fxcg100_menu_state *state,
