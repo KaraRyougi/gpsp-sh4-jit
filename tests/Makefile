@@ -17,11 +17,11 @@ comma   := ,
 DEAD_STRIP := $(if $(filter Darwin,$(shell uname -s)),\
 	-Wl$(comma)-dead_strip,-Wl$(comma)--gc-sections)
 
-.PHONY: all smoke audit core thumb cond native-ldst input rtc cycle exec jit-safety \
+.PHONY: all smoke audit core thumb cond native-ldst input rtc cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc \
 	swi-overlap swi-oam udiv udiv-emitter idle-signature video-opaque \
 	video-blend-cache video-backdrop-shadow arm-mixer clean
 
-all: smoke core thumb cond native-ldst rtc input cycle exec jit-safety swi-overlap swi-oam udiv \
+all: smoke core thumb cond native-ldst rtc input cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc swi-overlap swi-oam udiv \
 	udiv-emitter idle-signature video-opaque video-blend-cache \
 	video-backdrop-shadow arm-mixer audit
 
@@ -93,11 +93,51 @@ cycle: $(ROOT)/tests/sh4_cycle_audit.c
 	$(CC) $(CFLAGS) $(ROOT)/tests/sh4_cycle_audit.c -o $(BIN)-cycle
 	$(BIN)-cycle
 
+# Real WAITCNT mutation, savestate table restoration, and scheduled-DMA SMC
+# invalidation through the production memory/scheduler implementations.
+jit-boundaries: $(ROOT)/tests/jit_boundary_regression.c \
+		$(ROOT)/vendor/gpsp/gba_memory.c $(ROOT)/vendor/gpsp/main.c \
+		$(ROOT)/vendor/gpsp/savestate.c
+	$(CC) $(CFLAGS) -Wno-unused-parameter -Wno-sign-compare \
+	  -Wno-unused-function -ffunction-sections -fdata-sections \
+	  -I$(ROOT) -I$(ROOT)/vendor/gpsp -I$(ROOT)/vendor/gpsp/libretro \
+	  -I$(ROOT)/vendor/gpsp/libretro/libretro-common/include \
+	  $(ROOT)/tests/jit_boundary_regression.c $(DEAD_STRIP) \
+	  -o $(BIN)-jit-boundaries
+	$(BIN)-jit-boundaries
+
 jit-safety: $(ROOT)/tests/sh4_jit_safety_test.c \
 	$(ROOT)/vendor/gpsp/sh4/sh4_jit_safety.h
 	$(CC) $(CFLAGS) -I$(ROOT) $(ROOT)/tests/sh4_jit_safety_test.c \
 	  -o $(BIN)-jit-safety
 	$(BIN)-jit-safety
+
+# Exercise the real cpu_threaded.c RAM flush, including the valid translated
+# block/tag case at guest offset zero that a predicate-only test cannot bind.
+jit-ram-flush: $(ROOT)/tests/sh4_ram_flush_test.c \
+	       $(ROOT)/vendor/gpsp/cpu_threaded.c \
+	       $(ROOT)/vendor/gpsp/sh4/sh4_jit_safety.h
+	$(CC) $(CFLAGS) -std=gnu11 -Wno-unused-parameter -Wno-sign-compare \
+	  -Wno-unused-function -Wno-unused-variable -Wno-unused-but-set-variable \
+	  -Wno-unused-label -ffunction-sections -fdata-sections \
+	  -I$(ROOT) -I$(ROOT)/vendor/gpsp -I$(ROOT)/vendor/gpsp/libretro \
+	  -I$(ROOT)/vendor/gpsp/libretro/libretro-common/include \
+	  $(ROOT)/tests/sh4_ram_flush_test.c $(DEAD_STRIP) \
+	  -o $(BIN)-jit-ram-flush
+	$(BIN)-jit-ram-flush
+
+# Production SH4 memory fallbacks must publish the interpreter-form PC before
+# gpSP's BIOS-protection and open-bus paths inspect reg[REG_PC].
+memory-pc: $(ROOT)/tests/sh4_memory_pc_test.c \
+	$(ROOT)/ports/fxcg100/sh4/sh4_interp_helpers.c
+	$(CC) $(CFLAGS) -Wno-unused-function \
+	  -ffunction-sections -fdata-sections -I$(ROOT) \
+	  -I$(ROOT)/vendor/gpsp/libretro \
+	  -I$(ROOT)/vendor/gpsp/libretro/libretro-common/include \
+	  $(ROOT)/tests/sh4_memory_pc_test.c \
+	  $(ROOT)/ports/fxcg100/sh4/sh4_interp_helpers.c \
+	  $(DEAD_STRIP) -o $(BIN)-memory-pc
+	$(BIN)-memory-pc
 
 swi-overlap: $(ROOT)/tests/sh4_swi_overlap_test.c \
 	      $(ROOT)/ports/fxcg100/sh4/sh4_swi_overlap.h
@@ -177,7 +217,7 @@ audit: $(ROOT)/tests/sh4_codegen_audit.c $(ROOT)/ports/fxcg100/sh4/sh4_codegen.h
 
 clean:
 	rm -f $(BIN)-smoke $(BIN)-core $(BIN)-thumb $(BIN)-cond $(BIN)-native-ldst \
-	  $(BIN)-input $(BIN)-input-cg50 $(BIN)-rtc $(BIN)-cycle $(BIN)-exec $(BIN)-jit-safety $(BIN)-swi-overlap $(BIN)-udiv \
+	  $(BIN)-input $(BIN)-input-cg50 $(BIN)-rtc $(BIN)-cycle $(BIN)-exec $(BIN)-jit-boundaries $(BIN)-jit-safety $(BIN)-jit-ram-flush $(BIN)-memory-pc $(BIN)-swi-overlap $(BIN)-udiv \
 	  $(BIN)-swi-oam $(BIN)-udiv-emitter $(BIN)-idle-signature \
 	  $(BIN)-video-opaque $(BIN)-video-blend-cache \
 	  $(BIN)-video-backdrop-shadow \

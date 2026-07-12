@@ -236,6 +236,7 @@ u32 function_cc update_gba(int remaining_cycles)
   do
   {
     unsigned i;
+    cpu_alert_type dma_alert = CPU_ALERT_NONE;
 #if defined(CGBA_GPSP_HEADLESS_TEST) && defined(CGBA_SH4_DIAG_COUNTERS)
     cgba_update_gba_slices++;
 #endif
@@ -303,7 +304,7 @@ u32 function_cc update_gba(int remaining_cycles)
           for (i = 0; i < 4; i++)
           {
             if(dma[i].start_type == DMA_START_HBLANK)
-              dma_transfer(i, &dma_cycles);
+              dma_alert |= dma_transfer(i, &dma_cycles);
           }
         }
 
@@ -356,7 +357,7 @@ u32 function_cc update_gba(int remaining_cycles)
           for (i = 0; i < 4; i++)
           {
             if(dma[i].start_type == DMA_START_VBLANK)
-              dma_transfer(i, &dma_cycles);
+              dma_alert |= dma_transfer(i, &dma_cycles);
           }
         }
         else if (vcount == 228)
@@ -401,6 +402,18 @@ u32 function_cc update_gba(int remaining_cycles)
       }
       write_ioreg(REG_DISPSTAT, dispstat);
     }
+
+#ifdef HAVE_DYNAREC
+    /* Scheduled DMA runs while translated execution is parked here. A code
+     * overwrite invalidates RAM translations, and either SMC or a DMA write
+     * to WAITCNT must prevent the SH4 update stub from resuming its old block. */
+    if (dma_alert & CPU_ALERT_SMC)
+      flush_translation_cache_ram();
+    if (dma_alert & (CPU_ALERT_SMC | CPU_ALERT_TIMING))
+      changed_pc = 0x40000000;
+#else
+    (void)dma_alert;
+#endif
 
     // Flag any V/H blank interrupts, DMA IRQs, Vcount, etc.
     if (irq_raised)

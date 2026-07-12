@@ -4268,7 +4268,8 @@ void flush_translation_cache_ram(void)
 
   // Proceed to clean the SMC area if needed
   // (also try to memset as little as possible for performance)
-  if (iwram_code_max) {
+  /* min == ~0U is the explicit unseen state; offset zero is valid code. */
+  if (cgba_sh4_ram_code_seen(iwram_code_min)) {
     if(iwram_code_max > iwram_code_min) {
       iwram_code_min &= ~15U;
       iwram_code_max = MIN(iwram_code_max + 8, 0x8000);
@@ -4277,7 +4278,7 @@ void flush_translation_cache_ram(void)
       memset(iwram, 0, 0x8000);
   }
 
-  if (ewram_code_max) {
+  if (cgba_sh4_ram_code_seen(ewram_code_min)) {
     if(ewram_code_max > ewram_code_min) {
       ewram_code_min &= ~15U;
       ewram_code_max = MIN(ewram_code_max + 8, 0x40000);
