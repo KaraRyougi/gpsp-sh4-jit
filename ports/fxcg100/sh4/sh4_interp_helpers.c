@@ -60,11 +60,12 @@ extern int cgba_diff_stop_on_budget;
 
 /* Cold-code gate: ROM blocks are only translated once dispatched this many
  * times; colder code runs on the interpreter in small budget chunks. The
- * in-world Metroid working set (~thousands of live blocks) can never fit the
- * 896KB ROM cache, so unconditional translation wholesale-flushes ~1.3x per
- * FRAME (profiled: 95% of the slow regime was translate_block_thumb + the
- * emitters). Hotness survives flushes, so after warmup only the hot set is
- * cached and the flush cycle stops. Collisions in the counter hash only
+ * in-world Metroid working set (~thousands of live blocks) overflowed the
+ * former 896KB ROM cache, so unconditional translation wholesale-flushed
+ * ~1.3x per FRAME (profiled: 95% of the slow regime was
+ * translate_block_thumb + the emitters). Hotness survives flushes, so after
+ * warmup only the hot set is cached and the flush cycle stops. Collisions in
+ * the counter hash only
  * pre-heat a block — harmless. */
 #ifndef CGBA_SH4_HOT_THRESHOLD
 #define CGBA_SH4_HOT_THRESHOLD 64
@@ -375,6 +376,16 @@ static void cgba_sh4_reset_mem_cycles(int seq)
   cgba_sh4_mem_cycle_seq = seq;
 }
 
+/* Generated blocks keep their live PC in host state and commit reg[REG_PC]
+ * only at dispatch/event boundaries. Generic memory fallbacks are older than
+ * that ABI: open-bus reads and BIOS protection inspect reg[REG_PC] directly.
+ * Publish the interpreter-visible PC before the fallback. Generated control
+ * flow remains authoritative and overwrites it at the normal commit point. */
+static inline void cgba_sh4_begin_mem_helper(u32 access_pc)
+{
+  reg[REG_PC] = access_pc;
+}
+
 static void cgba_sh4_charge_mem(u32 address, unsigned size_index)
 {
   if (address < 0x10000000u) {
@@ -544,6 +555,10 @@ static int cgba_store_alert_break(u32 next_pc)
    * immediately because stale translated RAM must not continue running. */
   if (a & ~(cpu_alert_type)CPU_ALERT_IRQ) {
     reg[REG_PC] = next_pc;
+    /* WAITCNT already invalidated both caches. It needs a pure redispatch,
+     * while HALT/SMC/DMA must still enter the scheduler immediately. */
+    if ((a & ~(cpu_alert_type)(CPU_ALERT_IRQ | CPU_ALERT_TIMING)) == 0)
+      return 1;
     return CGBA_SH4_HELPER_ALERT;
   }
   return 0;
@@ -685,6 +700,7 @@ static void cgba_sh4_thumb_ldst_do(u32 opcode, u32 pc)
 int cgba_sh4_thumb_ldst(u32 opcode, u32 pc)
 {
   CGBA_SH4_HELPER_HIT(thumb_ldst);
+  cgba_sh4_begin_mem_helper(pc + 2);
   cgba_sh4_reset_mem_cycles(0);
   cgba_sh4_thumb_ldst_do(opcode, pc);
   sh4_headless_trace_op('L', pc, opcode);
@@ -701,6 +717,7 @@ int cgba_sh4_thumb_block(u32 opcode, u32 pc)
   int wrote_pc = 0;
   int i;
 
+  cgba_sh4_begin_mem_helper(pc + 2);
   cgba_sh4_reset_mem_cycles(1);
 
   if (hi == 0xB4 || hi == 0xB5) {                  /* PUSH {rlist[, lr]} */
@@ -982,6 +999,7 @@ int cgba_sh4_arm_ldst(u32 opcode, u32 pc)
   u32 offset, addr;
   int is_half = 0, is_byte = 0, signed_ld = 0, half_w = 0;
 
+  cgba_sh4_begin_mem_helper(pc + 4);
   cgba_sh4_reset_mem_cycles(0);
 
   if ((opcode & 0x0E000090) == 0x00000090) {
@@ -1105,6 +1123,7 @@ int cgba_sh4_arm_block(u32 opcode, u32 pc)
   int user_bank = s_bit && (!is_load || rn != 15);
   u32 old_cpsr = reg[REG_CPSR];
 
+  cgba_sh4_begin_mem_helper(pc + 4);
   cgba_sh4_reset_mem_cycles(1);
   cgba_sh4_helper_arm_block_detail(is_load);
 
@@ -1342,6 +1361,8 @@ int cgba_sh4_arm_swap(u32 opcode, u32 pc)
   u32 rm = opcode & 0xF;
   u32 is_byte = (opcode >> 22) & 1;
   u32 addr = reg[rn];
+  /* SWP's interpreter advances PC after the read/write pair. */
+  cgba_sh4_begin_mem_helper(pc);
   cgba_sh4_reset_mem_cycles(0);
   if (is_byte) {
     u32 tmp = execute_load_u8(addr);

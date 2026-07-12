@@ -106,15 +106,18 @@ static unsigned update_timers(irq_type *irq_raised, unsigned completed_cycles)
    unsigned i, ret = 0;
    for (i = 0; i < 4; i++)
    {
+      unsigned shift;
+
       if(timer[i].status == TIMER_INACTIVE)
          continue;
 
+      /* Clock-select bits are ignored for count-up timers.  Keeping this
+         defensive check here also makes old savestates with a nonzero
+         cascade prescale behave correctly after loading. */
+      shift = timer[i].status == TIMER_CASCADE ? 0 : timer[i].prescale;
+
       if(timer[i].status != TIMER_CASCADE)
-      {
          timer[i].count -= completed_cycles;
-         /* io_registers accessors range: REG_TM0D, REG_TM1D, REG_TM2D, REG_TM3D */
-         write_ioreg(REG_TMXD(i), -(timer[i].count >> timer[i].prescale));
-      }
 
       /* Process EVERY overflow the elapsed cycles covered: IRQ-less sound
          timers no longer cap the event slice (AW: the ~38kHz sample timer
@@ -128,10 +131,7 @@ static unsigned update_timers(irq_type *irq_raised, unsigned completed_cycles)
             *irq_raised |= (IRQ_TIMER0 << i);
 
          if((i != 3) && (timer[i + 1].status == TIMER_CASCADE))
-         {
             timer[i + 1].count--;
-            write_ioreg(REG_TMXD(i + 1), -timer[i+1].count);
-         }
 
          if(i < 2)
          {
@@ -142,8 +142,16 @@ static unsigned update_timers(irq_type *irq_raised, unsigned completed_cycles)
                ret += sound_timer(timer[i].frequency_step, 1);
          }
 
-         timer[i].count += (timer[i].reload << timer[i].prescale);
+         timer[i].count += (timer[i].reload << shift);
       }
+
+      /* Publish the final counter after applying every reload.  Publishing
+         before the loop exposed a transient zero at an exact overflow and
+         left it visible after returning to guest code.  SimCity 2000 samples
+         cascaded TM1 at that boundary; zero followed by the normal 0xFFxx
+         value looked like nearly 65536 elapsed audio samples and made its
+         mixer overwrite IWRAM code. */
+      write_ioreg(REG_TMXD(i), -(timer[i].count >> shift));
    }
    return ret;
 }
@@ -236,6 +244,7 @@ u32 function_cc update_gba(int remaining_cycles)
   do
   {
     unsigned i;
+    cpu_alert_type dma_alert = CPU_ALERT_NONE;
 #if defined(CGBA_GPSP_HEADLESS_TEST) && defined(CGBA_SH4_DIAG_COUNTERS)
     cgba_update_gba_slices++;
 #endif
@@ -303,7 +312,7 @@ u32 function_cc update_gba(int remaining_cycles)
           for (i = 0; i < 4; i++)
           {
             if(dma[i].start_type == DMA_START_HBLANK)
-              dma_transfer(i, &dma_cycles);
+              dma_alert |= dma_transfer(i, &dma_cycles);
           }
         }
 
@@ -356,7 +365,7 @@ u32 function_cc update_gba(int remaining_cycles)
           for (i = 0; i < 4; i++)
           {
             if(dma[i].start_type == DMA_START_VBLANK)
-              dma_transfer(i, &dma_cycles);
+              dma_alert |= dma_transfer(i, &dma_cycles);
           }
         }
         else if (vcount == 228)
@@ -401,6 +410,18 @@ u32 function_cc update_gba(int remaining_cycles)
       }
       write_ioreg(REG_DISPSTAT, dispstat);
     }
+
+#ifdef HAVE_DYNAREC
+    /* Scheduled DMA runs while translated execution is parked here. A code
+     * overwrite invalidates RAM translations, and either SMC or a DMA write
+     * to WAITCNT must prevent the SH4 update stub from resuming its old block. */
+    if (dma_alert & CPU_ALERT_SMC)
+      flush_translation_cache_ram();
+    if (dma_alert & (CPU_ALERT_SMC | CPU_ALERT_TIMING))
+      changed_pc = 0x40000000;
+#else
+    (void)dma_alert;
+#endif
 
     // Flag any V/H blank interrupts, DMA IRQs, Vcount, etc.
     if (irq_raised)
@@ -584,9 +605,49 @@ bool main_read_savestate(const u8 *src)
       bson_read_int32(p, "irq", &timer[i].irq) &&
       bson_read_int32(p, "status", &timer[i].status)))
       return false;
-  }
+
+    /* Older builds applied TMxCNT_H clock-select bits to cascaded timers,
+       stretching both their count and reload by 64/256/1024.  Count-up mode
+       ignores those bits.  Modulo the unscaled period to preserve the exact
+       parent-overflow phase when importing such a state. */
+    if(timer[i].status == TIMER_CASCADE && i == 0)
+    {
+      /* TM0 count-up is ignored; old builds could nevertheless save this
+         impossible state.  Resume it as the selected prescaled timer. */
+      timer[i].status = TIMER_PRESCALE;
+    }
+    else if(timer[i].status == TIMER_CASCADE)
+    {
+      /* Only legacy nonzero-prescaler states need phase conversion.  A
+         canonical count-up timer can legitimately have count > reload when
+         the guest changes the reload latch while it is already running. */
+      if(timer[i].prescale != 0 && timer[i].count > 0 &&
+         timer[i].reload != 0)
+        timer[i].count = ((timer[i].count - 1) % timer[i].reload) + 1;
+      timer[i].prescale = 0;
+    }
+   }
 
   return true;
+}
+
+void main_finalize_savestate_load(void)
+{
+  unsigned i;
+
+  /* memory_read_savestate() runs after main_read_savestate() and restores the
+     old raw I/O image.  Republish active counters from normalized internal
+     state so a legacy transient-zero TMxD cannot survive the load boundary. */
+  for(i = 0; i < 4; i++)
+  {
+    unsigned shift;
+
+    if(timer[i].status == TIMER_INACTIVE)
+      continue;
+    shift = timer[i].status == TIMER_CASCADE ? 0 : timer[i].prescale;
+    write_ioreg(REG_TMXD(i), -(timer[i].count >> shift));
+  }
+  cgba_recompute_timer_cap_mask();
 }
 
 unsigned main_write_savestate(u8* dst)

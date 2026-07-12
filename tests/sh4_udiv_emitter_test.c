@@ -335,11 +335,16 @@ static void install_pattern(u32 pc)
       eswap16(cgba_sh4_thumb_udiv_loop_pattern[i]);
 }
 
+static u8 *pattern_block(u32 pc)
+{
+  return rom_map + (pc & 0x7000u);
+}
+
 static size_t emit_prefix(u32 pc)
 {
   u8 *p = code;
   memset(code, 0xCC, sizeof(code));
-  sh4g_thumb_udiv_loop_entry(&p, rom_map, pc);
+  sh4g_thumb_udiv_loop_entry(&p, pattern_block(pc), pc);
   return (size_t)(p - code);
 }
 
@@ -357,7 +362,7 @@ static void check_signature_and_observers(void)
 
   install_pattern(pc);
   reset_observers();
-  if (!sh4g_thumb_udiv_loop_match_map(rom_map, pc))
+  if (!sh4g_thumb_udiv_loop_match_map(pattern_block(pc), pc))
     failf("canonical opcode-map signature rejected");
   emitted = emit_prefix(pc);
   if (emitted == 0)
@@ -367,14 +372,16 @@ static void check_signature_and_observers(void)
     u32 off = (pc & 0x7FFFu) + i * 2u;
     u16 saved = address16(rom_map, off);
     address16(rom_map, off) = (u16)(saved ^ eswap16(1u));
-    if (sh4g_thumb_udiv_loop_match_map(rom_map, pc) || emit_prefix(pc) != 0) {
+    if (sh4g_thumb_udiv_loop_match_map(pattern_block(pc), pc) ||
+        emit_prefix(pc) != 0) {
       fprintf(stderr, "FAIL: mutated signature word %u accepted\n", i);
       failures++;
     }
     address16(rom_map, off) = saved;
   }
 
-  if (sh4g_thumb_udiv_loop_match_map(rom_map, 0x08007FF0u))
+  if (sh4g_thumb_udiv_loop_match_map(
+        pattern_block(0x08007FF0u), 0x08007FF0u))
     failf("cross-map signature accepted");
 
   cheat_master_hook = pc;

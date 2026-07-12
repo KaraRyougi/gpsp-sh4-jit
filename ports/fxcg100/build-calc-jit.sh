@@ -8,7 +8,7 @@
 # This is the real, hand-held build (NOT the headless emulator test harness):
 #   - CGBA_DYNAREC=ON              the SH4 dynamic recompiler (the "JIT")
 #   - CGBA_GPSP_HEADLESS_TEST=OFF  normal menu + ROM picker + live input
-#   - Thumb LDST/block native ON, ARM-LDST native ON, 768K/256K translation
+#   - Thumb LDST/block native ON, ARM-LDST native ON, 1024K/512K translation
 #     cache, 12-bit (16 KiB) branch hash — the perf configuration.
 #
 # Copy gpSP.g3a to the calculator's main memory and put a GBA ROM named
@@ -38,7 +38,7 @@ JOBS="$( (sysctl -n hw.ncpu 2>/dev/null) || (nproc 2>/dev/null) || echo 4 )"
 # Perf config (see docs/sh4-jit-optimization-plan.md / the HW-perf diagnosis):
 #  - ARM_LDST_NATIVE=ON  : native ARM load/store, avoids per-op far-call into a
 #    NOR C helper (verified pixel-identical to the interpreter).
-#  - ROM_BRANCH_HASH_BITS : defaults to 13 (32KB) in CMakeLists so the branch hash
+#  - ROM_BRANCH_HASH_BITS : defaults to 12 (16KB) in CMakeLists so the branch hash
 #    fits the SH7305 cache instead of thrashing it at the upstream 16 (256KB).
 #    Sweep with -DCGBA_GPSP_ROM_BRANCH_HASH_BITS=N below.
 cmake -S "$GG" -B "$GG/$BUILD" \
@@ -46,7 +46,9 @@ cmake -S "$GG" -B "$GG/$BUILD" \
   -DCMAKE_TOOLCHAIN_FILE="$TC" \
   -DFXSDK_CMAKE_MODULE_PATH="$PREFIX/lib/cmake/fxsdk" \
   -DCGBA_DYNAREC=ON \
-  -DCGBA_SH4_ARM_LDST_NATIVE=ON
+  -DCGBA_SH4_ARM_LDST_NATIVE=ON \
+  -DCGBA_GPSP_ROM_TRANSLATION_CACHE_SIZE=1048576 \
+  -DCGBA_GPSP_RAM_TRANSLATION_CACHE_SIZE=524288
 cmake --build "$GG/$BUILD" -j"$JOBS"
 
 G3A="$(find "$GG/$BUILD" "$GG" -maxdepth 1 -name 'gpSP.g3a' 2>/dev/null | head -1)"

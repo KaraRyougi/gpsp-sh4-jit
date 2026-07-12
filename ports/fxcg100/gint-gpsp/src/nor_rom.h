@@ -43,9 +43,19 @@ typedef struct cgba_nor_rom_list {
 void cgba_nor_rom_reset(cgba_nor_rom *rom);
 int cgba_nor_rom_open_root_file(cgba_nor_rom *rom, const char *name8dot3);
 int cgba_nor_rom_open_path(cgba_nor_rom *rom, const uint16_t *path);
+/* Re-query physical Fugue/NOR blocks after another file was mutated. Returns
+ * 0 for direct/fragmented mapping, 1 for safe BFile-only fallback, <0 if the
+ * open ROM can no longer be read or no longer matches its original header. */
+int cgba_nor_rom_refresh(cgba_nor_rom *rom);
 void cgba_nor_rom_close(cgba_nor_rom *rom);
 void cgba_nor_rom_status(const cgba_nor_rom *rom, char *dst, size_t dst_size);
 unsigned cgba_nor_rom_scan_gba(cgba_nor_rom_list *list);
+
+/* Return the sanitized 4 KiB direct-NOR block table for the active ROM.
+ * The table always has CGBA_NOR_ROM_MAX_PAGES * 8 entries and is mirrored
+ * across the full 32 MiB GBA cartridge window. Unsafe, unaligned and partial
+ * EOF blocks are NULL so the core can fall back to its aligned gather cache. */
+const uint8_t * const *cgba_nor_rom_block_table(const cgba_nor_rom *rom);
 
 /* Gather `len` bytes at logical ROM `offset` from the per-block NOR address
  * table (memcpy from memory-mapped flash). Used by the gpSP filestream backend

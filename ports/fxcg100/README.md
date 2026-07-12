@@ -98,14 +98,20 @@ Runtime shape:
 - Reserves only the model's menu key (`ON` on fx-CG100, `AC/ON` on fx-CG50);
   every other physical key is bindable as a GBA input or gpSP hotkey, including
   the fx-CG50 arithmetic, punctuation, power, and parenthesis keys
-- Keeps gpSP's large GBA memories, framebuffer, and embedded smoke ROM buffer in
-  `.cgba.highbss` at `0x8c200000`
+- Keeps gpSP's large GBA memories, framebuffer, JIT caches, and shared GamePak
+  fallback/embedded-ROM arena in `.cgba.highbss` at `0x8c200000`
+- Uses the conservative 1024 KiB ROM / 512 KiB RAM JIT-cache profile; the
+  linked high arena is expected to end at `0x8c5d5300`, 512 KiB below the
+  hardware-proven ceiling
 - Refuses to clear/run the gpSP high arena if the linked range falls outside
-  `0x8c200000..0x8c780000`
+  the hardware-proven `0x8c200000..0x8c655300` production range
 - Disables gint's fallback OS heap arena so allocation exhaustion returns NULL
   instead of using the unsupported `0x80020070` syscall gate
-- Skips gpSP's 1 MiB streaming ROM cache for the embedded-ROM path; larger
-  cartridge support should use the later NOR/direct mapping path
+- Resolves fragmented cartridges through a hybrid map: contiguous 32 KiB pages
+  stay on the direct path, aligned fragments use the 4 KiB NOR table, and only
+  unsafe blocks enter the 1 MiB / 32-page aligned fallback cache
+- Keeps the 256 KiB embedded-ROM staging buffer separate from the fallback
+  cache, which is also borrowed as the 864 KiB savestate workspace
 - Boots the embedded Mode 3 smoke ROM through the interpreter and blits the
   resulting 240x160 RGB565 frame centered on the 384x216 LCD
 

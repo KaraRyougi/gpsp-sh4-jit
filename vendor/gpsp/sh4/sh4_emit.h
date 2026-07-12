@@ -145,9 +145,9 @@ extern void *tmemst[4][16];
  * and may be NOR-backed, so raw memcmp would be wrong on big-endian SH4. */
 static inline int sh4g_thumb_udiv_loop_match_map(const u8 *map, u32 pc)
 {
-  u32 off = pc & 0x7FFFu;
+  u32 off = pc & 0x0FFFu;
   u32 i;
-  if (off + CGBA_SH4_THUMB_UDIV_LOOP_BYTES > 0x8000u)
+  if (!map || off + CGBA_SH4_THUMB_UDIV_LOOP_BYTES > 0x1000u)
     return 0;
   for (i = 0; i < CGBA_SH4_THUMB_UDIV_LOOP_HALFWORDS; i++) {
     if (readaddress16(map, off + i * 2u) !=
@@ -213,9 +213,9 @@ static inline void sh4g_thumb_udiv_loop_entry(u8 **tp, const u8 *map, u32 pc)
  * cannot be compared with a host-endian raw memcmp on SH4. */
 static inline int sh4g_arm_mixer_match_map(const u8 *map, u32 pc)
 {
-  u32 off = pc & 0x7FFFu;
+  u32 off = pc & 0x0FFFu;
   u32 i;
-  if (!map || off + CGBA_SH4_ARM_MIXER_BYTES > 0x8000u)
+  if (!map || off + CGBA_SH4_ARM_MIXER_BYTES > 0x1000u)
     return 0;
   for (i = 0; i < CGBA_SH4_ARM_MIXER_WORDS; i++) {
     if (readaddress32(map, off + i * 4u) !=
@@ -442,10 +442,10 @@ static inline int sh4g_registered_idle_signature_ok(const u8 *map,
 
   if (target != CGBA_SH4_AZLE_IDLE_PC)
     return 1;
-  if (!map || map_region != (target >> 15))
+  if (!map || map_region != (target >> 12))
     return 0;                              /* cross-page/unmapped: stay normal */
-  off = target & 0x7FFFu;
-  if (off + CGBA_SH4_AZLE_IDLE_BYTES > 0x8000u)
+  off = target & 0x0FFFu;
+  if (off + CGBA_SH4_AZLE_IDLE_BYTES > 0x1000u)
     return 0;
   return cgba_sh4_azle_idle_signature_match(
     readaddress16(map, off + 0u), readaddress16(map, off + 2u),
