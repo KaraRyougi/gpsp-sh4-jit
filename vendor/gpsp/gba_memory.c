@@ -1064,9 +1064,24 @@ cpu_alert_type function_cc write_io_register16(u32 address, u32 value)
       break;  // Do nothing
 
     case REG_WAITCNT:
+    {
+#if defined(HAVE_DYNAREC) || defined(CGBA_DYNAREC)
+      u16 old_waitcnt = read_ioreg(REG_WAITCNT);
+#endif
       write_ioreg(REG_WAITCNT, value);
       reload_timing_info();
+
+#if defined(HAVE_DYNAREC) || defined(CGBA_DYNAREC)
+      /* Only bits consumed by reload_timing_info() invalidate the ARM/Thumb
+       * fetch and refill constants already embedded in translated blocks. */
+      if ((old_waitcnt ^ value) & 0x07FCu)
+      {
+        flush_dynarec_caches();
+        return CPU_ALERT_TIMING;
+      }
+#endif
       break;
+    }
 
     // Registers without side effects
     default:
@@ -2794,6 +2809,10 @@ bool memory_read_savestate(const u8 *src)
 
   rtc_data = rtc_data_array[0] | (((u64)rtc_data_array[1]) << 32);
   update_gpio_romregs();
+
+  /* io_registers was restored as raw state. Rebuild the WAITCNT-derived
+   * tables before gba_load_state() flushes and restarts translated code. */
+  reload_timing_info();
 
   return true;
 }
