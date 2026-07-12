@@ -267,6 +267,12 @@ u8 *load_gamepak_page(u32 physical_index);
  * may safely overwrite the buffer while guest execution is stopped. */
 u8 *cgba_gamepak_scratch_acquire(u32 min_size);
 void cgba_gamepak_scratch_release(void);
+/* Drop every direct and cached GamePak alias before Fugue block addresses are
+ * refreshed. A failed refresh must never leave stale P1 pointers reachable. */
+void cgba_gamepak_unmap_pages(void);
+/* Replace cartridge aliases after a NOR block-address refresh without
+ * resetting any guest cartridge/RTC/backup state. */
+bool cgba_gamepak_remap_pages(const u8 * const *pages, u32 rom_size);
 
 extern u32 oam_update;
 extern u32 gbc_sound_wave_update;

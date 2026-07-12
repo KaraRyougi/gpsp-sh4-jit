@@ -11,6 +11,24 @@
 #define CGBA_GBA_PITCH 240
 #define CGBA_GBA_BUFFER_PIXELS (CGBA_GBA_PITCH * (CGBA_GBA_HEIGHT + 1))
 
+/* Calculator savestates use a fixed 416 KiB raw BSON image. Compressed files
+ * are rounded to 64 KiB buckets, so the largest legacy bucket is 448 KiB.
+ * Keep raw and compressed staging adjacent in the non-executable GamePak
+ * scratch arena; a save must never perturb the JIT cache or its heat state. */
+#define CGBA_STATE_RAW_SIZE       (416u * 1024u)
+#define CGBA_STATE_FILE_BUCKET    0x10000u
+#define CGBA_STATE_COMP_STREAM_MAX (CGBA_STATE_RAW_SIZE + 12u)
+#define CGBA_STATE_COMP_FILE_MAX  \
+	((CGBA_STATE_COMP_STREAM_MAX + CGBA_STATE_FILE_BUCKET - 1u) & \
+	 ~(CGBA_STATE_FILE_BUCKET - 1u))
+#define CGBA_STATE_WORK_SIZE \
+	(CGBA_STATE_RAW_SIZE + CGBA_STATE_COMP_FILE_MAX)
+
+_Static_assert((CGBA_STATE_FILE_BUCKET & (CGBA_STATE_FILE_BUCKET - 1u)) == 0,
+	"savestate file bucket must be a power of two");
+_Static_assert(CGBA_STATE_WORK_SIZE <= 1024u * 1024u,
+	"savestate work area must fit one contiguous GamePak cache block");
+
 typedef enum cgba_gpsp_rom_id {
 	/* LCD TEST is a generated pattern (no embedded ROM); kept as the built-in
 	 * fallback when no storage ROM is present. Games load from \fls0\ storage. */
@@ -23,6 +41,9 @@ unsigned cgba_gpsp_rom_count(void);
 unsigned cgba_gpsp_refresh_roms(void);
 int cgba_gpsp_init(uint16_t *framebuffer, unsigned rom_id);
 const char *cgba_gpsp_last_error(void);
+/* Revalidate the active ROM's Fugue/NOR mappings after any storage mutation.
+ * Returns 0 without allowing guest execution if no safe mapping can be made. */
+int cgba_gpsp_storage_sync(void);
 void cgba_gpsp_run_frame(uint32_t gba_buttons, int render_video);
 uint32_t cgba_gpsp_keyinput(void);
 uint32_t cgba_gpsp_frame_hash(const uint16_t *pixels);

@@ -2539,6 +2539,46 @@ void cgba_gamepak_scratch_release(void)
   cgba_gamepak_cache_invalidate();
 }
 
+void cgba_gamepak_unmap_pages(void)
+{
+#if defined(CGBA_FXCG100) || defined(CGBA_FXCG50)
+  cgba_gamepak_cache_invalidate();
+  map_null(read, 0x8000000, 0xE000000);
+#endif
+}
+
+bool cgba_gamepak_remap_pages(const u8 * const *pages, u32 rom_size)
+{
+#if defined(CGBA_FXCG100) || defined(CGBA_FXCG50)
+  u32 phyn;
+  u32 map_blocks;
+
+  cgba_gamepak_unmap_pages();
+  if (!pages || !pages[0] || rom_size != gamepak_size ||
+      (rom_size & 0x7FFFu) != 0)
+    return false;
+  map_blocks = rom_size >> 15;
+  if (map_blocks == 0 || map_blocks > 1024)
+    return false;
+
+  for (phyn = 0; phyn < map_blocks; phyn++)
+    if (pages[phyn])
+      map_rom_entry(read, phyn, (u8 *)pages[phyn], map_blocks);
+  update_gpio_romregs();
+
+  /* Repopulate a fragmented page containing the resume PC before returning
+   * to either interpreter. No translated-code or heat state is disturbed. */
+  if (reg[REG_PC] >= 0x08000000u && reg[REG_PC] < 0x0E000000u &&
+      memory_map_read[reg[REG_PC] >> 15] == NULL && gamepak_file_large)
+    (void)load_gamepak_page((reg[REG_PC] >> 15) & 0x3FFu);
+  return true;
+#else
+  (void)pages;
+  (void)rom_size;
+  return false;
+#endif
+}
+
 bool gamepak_must_swap(void)
 {
   if (gamepak_mini_materialized)
@@ -2876,7 +2916,7 @@ static s32 load_gamepak_raw(const char *name)
         if (gamepak_buffer_count > 0)
           memcpy(gamepak_buffers[0], gamepak_mini_rom, gamepak_buffer_blocksize);
 
-        map_null(read, 0x8000000, 0xD000000);
+        map_null(read, 0x8000000, 0xE000000);
         for (phyn = 0; phyn < map_blocks; phyn++)
         {
           u8 *blkptr = &gamepak_mini_rom[32 * 1024 * phyn];
@@ -2910,7 +2950,7 @@ static s32 load_gamepak_raw(const char *name)
                     buf_blocks : gamepak_buffer_count;
 
     // Unmap the ROM space since we will re-map it now
-    map_null(read, 0x8000000, 0xD000000);
+    map_null(read, 0x8000000, 0xE000000);
 
     // Proceed to read the whole ROM or as much as possible.
     for (i = 0; i < ldblks; i++)
@@ -2989,7 +3029,7 @@ u32 load_gamepak_from_memory(const u8 *rom, u32 rom_size,
   }
 
   map_blocks = raw_size >> 15;
-  map_null(read, 0x8000000, 0xD000000);
+  map_null(read, 0x8000000, 0xE000000);
   for (phyn = 0; phyn < map_blocks; phyn++)
   {
     u8 *blkptr = &gamepak_mini_rom[32 * 1024 * phyn];
@@ -3089,7 +3129,7 @@ u32 load_gamepak_from_pages(const u8 * const *pages, u32 rom_size,
   gamepak_size = raw_size;
   gamepak_mirror_1m = false;
 
-  map_null(read, 0x8000000, 0xD000000);
+  map_null(read, 0x8000000, 0xE000000);
   for (phyn = 0; phyn < map_blocks; phyn++)
     if (pages[phyn])
       map_rom_entry(read, phyn, (u8 *)pages[phyn], map_blocks);
