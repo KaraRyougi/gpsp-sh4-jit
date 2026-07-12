@@ -70,6 +70,13 @@ rtc: $(ROOT)/tests/rtc_test.c $(ROOT)/vendor/gpsp/gba_memory.c \
 	  -I$(ROOT)/vendor/gpsp/libretro/libretro-common/include \
 	  $(ROOT)/tests/rtc_test.c $(DEAD_STRIP) -o $(BIN)-rtc
 	$(BIN)-rtc
+	$(CC) $(CFLAGS) -Wno-unused-parameter -Wno-sign-compare \
+	  -ffunction-sections -fdata-sections -DROM_BUFFER_SIZE=1 \
+	  -DCGBA_RTC_WALLCLOCK=1 -DCGBA_FXCG100=1 -DCGBA_HOST_TEST=1 \
+	  -I$(ROOT) -I$(ROOT)/vendor/gpsp -I$(ROOT)/vendor/gpsp/libretro \
+	  -I$(ROOT)/vendor/gpsp/libretro/libretro-common/include \
+	  $(ROOT)/tests/rtc_test.c $(DEAD_STRIP) -o $(BIN)-rtc-fxcg100
+	$(BIN)-rtc-fxcg100
 
 # ARM condition-code -> SH4 T-bit emission, every cond x every NZCV (host-only).
 cond: $(ROOT)/tests/sh4_cond_audit.c $(ROOT)/ports/fxcg100/sh4/sh4_emit_glue.h \

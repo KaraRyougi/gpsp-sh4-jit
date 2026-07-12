@@ -225,8 +225,8 @@ flushes leave the ROM cache in place — hence linking rule 4 above.
 
 ## Cold-code gate
 
-The arena is hardware-pinned (see below), and Metroid-class working sets
-overflow 896 KiB no matter what, so ROM code is interpreted until proven
+The arena is hardware-pinned (see below), and Metroid-class working sets can
+overflow even a large ROM cache, so ROM code is interpreted until proven
 hot: a hashed 16 K-entry u8 heat counter (`cgba_hot_count`) increments per
 block-entry dispatch; below `CGBA_SH4_HOT_THRESHOLD=64` the block runs in
 the interpreter in ≤512-cycle chunks (`cgba_sh4_cold_interp`). Refinements
@@ -254,16 +254,18 @@ gate's original bring-up blocker).
 ## Memory layout (hardware-pinned)
 
 Both translation caches live in the NOLOAD `.cgba.highbss` arena at
-0x8c200000 (P1 cached+executable alias), fixed split **896 KiB ROM / 128 KiB
-RAM**, with `ROM_BRANCH_HASH_BITS=12`. The arena end 0x8c655300 is the only
-layout proven safe on hardware: the resident MPM loader lives at 0x8c700000
-(1.5 MiB cache overwrote it → instant hard reset), and live OS state sits
-below it (1152 KiB total also hard-reset). The linker script asserts
-`_cgba_highbss_end <= 0x8c6F0000`; do not raise the cache sizes without
+0x8c200000 (P1 cached+executable alias), fixed split **1024 KiB ROM / 256 KiB
+RAM**, with `ROM_BRANCH_HASH_BITS=12`. The added 256 KiB does not grow the
+arena: embedded mini ROMs share the tail of the mutually exclusive 2 MiB
+GamePak page cache instead of reserving a duplicate buffer. The arena end
+0x8c655300 is the only layout proven safe on hardware: the resident MPM loader
+lives at 0x8c700000 (1.5 MiB cache overwrote it → instant hard reset), and
+live OS state sits below it (an arena ending at 0x8c6b5300 also hard-reset).
+The linker script asserts the production ceiling; do not raise it without
 on-device proof. GBA state arrays (ewram ×2, iwram ×2, vram, bios,
-backup) share the same arena. Savestates borrow the ROM translation cache
-as their staging buffer (416 KiB raw image; the cache is flushed afterwards
-anyway).
+backup) share the same arena. Calculator savestate saves borrow the non-JIT
+GamePak cache while guest execution is stopped, preserving translated code and
+heat. State loads still flush both JIT caches after replacing guest memory.
 
 ROMs execute in place from NOR flash: 32 KiB pages direct-mapped into
 `memory_map_read[8192]` only when all eight 4 KiB flash blocks are

@@ -262,9 +262,11 @@ bool gamepak_must_swap(void);
 void memory_term(void);
 u8 *load_gamepak_page(u32 physical_index);
 
-/* Calculator-only transient storage backed by the existing fragmented-ROM
- * page cache. Acquiring/releasing invalidates cached page mappings so callers
- * may safely overwrite the buffer while guest execution is stopped. */
+/* Calculator-only transient storage backed by the first 1 MiB block of the
+ * existing fragmented-ROM page cache. An embedded mini ROM may occupy the
+ * second block's final 256 KiB. Acquiring/releasing invalidates cached page
+ * mappings so callers may safely overwrite block zero while guest execution
+ * is stopped. */
 u8 *cgba_gamepak_scratch_acquire(u32 min_size);
 void cgba_gamepak_scratch_release(void);
 /* Drop every direct and cached GamePak alias before Fugue block addresses are

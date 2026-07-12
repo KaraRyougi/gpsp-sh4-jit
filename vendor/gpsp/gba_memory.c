@@ -420,7 +420,6 @@ const unsigned gamepak_buffer_blocksize = 1024*1024;
 
 #if defined(CGBA_FXCG100) || defined(CGBA_FXCG50)
 #define CGBA_FXCG100_STATIC_ROM_MAX (256 * 1024)
-static u8 cgba_static_mini_rom[CGBA_FXCG100_STATIC_ROM_MAX] CGBA_HIGH_BSS;
 static bool gamepak_mini_rom_static;
 
 /* LRU page cache for fragmented ROM pages. Contiguous pages are direct-mapped
@@ -432,8 +431,26 @@ static bool gamepak_mini_rom_static;
  * so the block size must stay 1 MB (== gamepak_buffer_blocksize). */
 #define CGBA_GAMEPAK_BLOCK_BYTES  (1024u * 1024u)
 #define CGBA_GAMEPAK_CACHE_BLOCKS 2u   /* 2 MB -> 64 resident fragmented pages */
+#if CGBA_GAMEPAK_CACHE_BLOCKS < 2
+#error "calculator GamePak cache needs separate scratch and mini-ROM blocks"
+#endif
+#if CGBA_FXCG100_STATIC_ROM_MAX > CGBA_GAMEPAK_BLOCK_BYTES
+#error "embedded mini ROM must fit in one GamePak cache block"
+#endif
 static u8 cgba_gamepak_cache[CGBA_GAMEPAK_CACHE_BLOCKS][CGBA_GAMEPAK_BLOCK_BYTES]
 	CGBA_HIGH_BSS;
+
+/* Embedded test ROMs and the fragmented-page cache are mutually exclusive:
+ * load_gamepak_from_memory() maps every byte directly and never invokes the
+ * page-cache LRU. Keep the at-most-256-KiB mini ROM in the tail of the existing
+ * 2-MiB cache instead of reserving a duplicate high-BSS buffer. The savestate
+ * workspace occupies at most the first 864 KiB, so both cold uses remain
+ * disjoint. Reclaiming this duplicate allocation makes room for a 1-MiB ROM
+ * JIT cache plus a 256-KiB RAM JIT cache without raising the hardware-proven
+ * high-RAM endpoint. */
+#define CGBA_STATIC_MINI_ROM_PTR \
+  (&cgba_gamepak_cache[CGBA_GAMEPAK_CACHE_BLOCKS - 1u] \
+    [CGBA_GAMEPAK_BLOCK_BYTES - CGBA_FXCG100_STATIC_ROM_MAX])
 #endif
 
 // LRU queue with the loaded blocks and what they map to
@@ -2545,7 +2562,10 @@ static void cgba_gamepak_cache_invalidate(void)
 u8 *cgba_gamepak_scratch_acquire(u32 min_size)
 {
 #if defined(CGBA_FXCG100) || defined(CGBA_FXCG50)
-  u32 capacity = gamepak_buffer_count * gamepak_buffer_blocksize;
+  /* Return only the first 1-MiB block. It is large enough for the 864-KiB
+   * savestate workspace and remains disjoint from an embedded mini ROM parked
+   * in the second block's tail. */
+  u32 capacity = gamepak_buffer_count ? gamepak_buffer_blocksize : 0;
 
   if (gamepak_buffer_count == 0 || min_size > capacity)
     return NULL;
@@ -2684,10 +2704,17 @@ void memory_term(void)
     gamepak_file_large = NULL;
   }
 
+#if defined(CGBA_FXCG100) || defined(CGBA_FXCG50)
+  /* Calculator page-cache blocks are static high-BSS storage, not heap
+   * allocations. The fx-CG100 free stub happened to hide this distinction;
+   * hosts and fx-CG50 must never pass these pointers to free(). */
+  gamepak_buffer_count = 0;
+#else
   while (gamepak_buffer_count)
   {
     free(gamepak_buffers[--gamepak_buffer_count]);
   }
+#endif
 
   free_gamepak_mini_rom();
   gamepak_mini_materialized = false;
@@ -3021,6 +3048,12 @@ u32 load_gamepak_from_memory(const u8 *rom, u32 rom_size,
     return (u32)-1;
 
   free_gamepak_mini_rom();
+#if defined(CGBA_FXCG100) || defined(CGBA_FXCG50)
+  /* A direct memory load can follow a paged ROM without init_gamepak_buffer().
+   * Retire its LRU mappings before the queue is reused, or a later scratch
+   * acquire could unmap pages belonging to the new embedded ROM. */
+  cgba_gamepak_cache_invalidate();
+#endif
   gamepak_mini_materialized = false;
 
   raw_size = (rom_size + 0x7FFF) & ~0x7FFF;
@@ -3030,10 +3063,10 @@ u32 load_gamepak_from_memory(const u8 *rom, u32 rom_size,
 
 #if defined(CGBA_FXCG100) || defined(CGBA_FXCG50)
   /* Both calculators run with the OS heap stubbed out (malloc returns NULL),
-   * so materialize into the reserved high-BSS buffer instead of the heap. */
-  if (raw_size > sizeof(cgba_static_mini_rom))
+   * so materialize into the reserved GamePak-cache tail instead of the heap. */
+  if (raw_size > CGBA_FXCG100_STATIC_ROM_MAX)
     return (u32)-1;
-  gamepak_mini_rom = cgba_static_mini_rom;
+  gamepak_mini_rom = CGBA_STATIC_MINI_ROM_PTR;
   gamepak_mini_rom_static = true;
 #else
   gamepak_mini_rom = (u8*)malloc(raw_size);
@@ -3041,7 +3074,8 @@ u32 load_gamepak_from_memory(const u8 *rom, u32 rom_size,
   if (!gamepak_mini_rom)
     return (u32)-1;
 
-  memcpy(gamepak_mini_rom, rom, rom_size);
+  /* The caller may be reloading from a view inside the shared GamePak arena. */
+  memmove(gamepak_mini_rom, rom, rom_size);
   if (rom_size < raw_size)
     memset(gamepak_mini_rom + rom_size, 0xFF, raw_size - rom_size);
 

@@ -29,6 +29,22 @@ int filestream_close(RFILE *stream)
   return 0;
 }
 
+int64_t filestream_seek(RFILE *stream, int64_t offset, int seek_position)
+{
+  (void)stream;
+  (void)offset;
+  (void)seek_position;
+  return -1;
+}
+
+int64_t filestream_read(RFILE *stream, void *data, int64_t len)
+{
+  (void)stream;
+  (void)data;
+  (void)len;
+  return 0;
+}
+
 static int failures;
 
 #define CHECK(condition, ...) do {                                            \
@@ -63,6 +79,9 @@ struct tm *cgba_test_localtime(const time_t *timep)
 }
 
 static u8 emerald_rom[0x8000];
+#if defined(CGBA_FXCG100) || defined(CGBA_FXCG50)
+static u8 maximum_mini_rom[CGBA_FXCG100_STATIC_ROM_MAX];
+#endif
 
 static void make_emerald_rom(void)
 {
@@ -216,6 +235,77 @@ static void test_emerald_loader_autodetect(void)
         fake_time_calls);
 }
 
+#if defined(CGBA_FXCG100) || defined(CGBA_FXCG50)
+static void test_calculator_mini_rom_scratch_isolation(void)
+{
+  enum { STATE_WORK_SIZE = 864 * 1024 };
+  u8 saved_header[0xc0];
+  u8 *mapped_page;
+  u8 *scratch;
+  u32 result;
+
+  /* Exercise the transition from a live fragmented-page LRU entry to direct
+   * mini-ROM mappings. The loader must retire the old queue metadata first. */
+  gamepak_size = sizeof(emerald_rom);
+  gamepak_file_blocks = 1;
+  gamepak_blk_queue[0].phy_rom = 0;
+  map_rom_entry(read, 0, gamepak_buffers[0], 1);
+
+  make_emerald_rom();
+  result = load_gamepak_from_memory(emerald_rom, sizeof(emerald_rom),
+                                    FEAT_AUTODETECT, FEAT_DISABLE,
+                                    SERIAL_MODE_DISABLED);
+  CHECK(result == 0, "calculator mini-ROM loader returned %lu",
+        (unsigned long)result);
+  CHECK(gamepak_mini_rom == CGBA_STATIC_MINI_ROM_PTR,
+        "mini ROM %p not parked at GamePak tail %p",
+        (void *)gamepak_mini_rom, (void *)CGBA_STATIC_MINI_ROM_PTR);
+
+  mapped_page = memory_map_read[0x08000000u / (32u * 1024u)];
+  CHECK(mapped_page == gamepak_mini_rom,
+        "ROM page zero %p does not map mini tail %p",
+        (void *)mapped_page, (void *)gamepak_mini_rom);
+  CHECK(gamepak_blk_queue[0].phy_rom == -1,
+        "direct mini-ROM load retained stale page-cache metadata");
+  memcpy(saved_header, gamepak_mini_rom, sizeof(saved_header));
+
+  scratch = cgba_gamepak_scratch_acquire(STATE_WORK_SIZE);
+  CHECK(scratch == gamepak_buffers[0],
+        "savestate scratch %p is not GamePak block zero %p",
+        (void *)scratch, (void *)gamepak_buffers[0]);
+  if (scratch)
+    memset(scratch, 0x5a, STATE_WORK_SIZE);
+  cgba_gamepak_scratch_release();
+
+  CHECK(memcmp(saved_header, gamepak_mini_rom, sizeof(saved_header)) == 0,
+        "savestate scratch overwrote embedded mini ROM");
+  CHECK(memory_map_read[0x08000000u / (32u * 1024u)] == gamepak_mini_rom,
+        "scratch release unmapped embedded ROM page zero");
+  CHECK(cgba_gamepak_scratch_acquire(1024u * 1024u + 1u) == NULL,
+        "oversized GamePak scratch request unexpectedly succeeded");
+
+  /* The inclusive upper bound must fit exactly in the second block's tail. */
+  memset(maximum_mini_rom, 0xff, sizeof(maximum_mini_rom));
+  maximum_mini_rom[3] = 0xea;
+  maximum_mini_rom[0xb2] = 0x96;
+  memcpy(&maximum_mini_rom[0xac], "MAX0", 4);
+  maximum_mini_rom[sizeof(maximum_mini_rom) - 1u] = 0x42;
+  result = load_gamepak_from_memory(maximum_mini_rom,
+                                    sizeof(maximum_mini_rom),
+                                    FEAT_DISABLE, FEAT_DISABLE,
+                                    SERIAL_MODE_DISABLED);
+  CHECK(result == 0, "maximum-size mini-ROM loader returned %lu",
+        (unsigned long)result);
+  CHECK(gamepak_mini_rom == CGBA_STATIC_MINI_ROM_PTR,
+        "maximum-size mini ROM did not use the shared tail");
+  CHECK(gamepak_mini_rom[sizeof(maximum_mini_rom) - 1u] == 0x42,
+        "maximum-size mini ROM lost its final byte");
+  CHECK(memory_map_read[0x08038000u / (32u * 1024u)] ==
+        gamepak_mini_rom + 7u * 32u * 1024u,
+        "maximum-size mini ROM did not map its final page");
+}
+#endif
+
 static void test_reset_and_status(void)
 {
   u64 status;
@@ -317,6 +407,9 @@ static void test_forced_disable(void)
 int main(void)
 {
   init_gamepak_buffer();
+#if defined(CGBA_FXCG100) || defined(CGBA_FXCG50)
+  test_calculator_mini_rom_scratch_isolation();
+#endif
   test_emerald_loader_autodetect();
   test_reset_and_status();
   test_datetime_reads();

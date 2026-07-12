@@ -108,23 +108,23 @@ option(CGBA_SH4_PROFILE_COUNTERS
   "Hardware/debug: count SH4 JIT translations, cache flushes, and helper calls for the ON-menu debug page" OFF)
 option(CGBA_FXCG100_STORAGE
   "Enable gint_world_switch-backed fx-CG100 BFile storage for ROM/config files" ON)
-# The ROM+RAM cache TOTAL must keep the .cgba.highbss arena end at 0x8c655300
-# — the ONLY layout proven safe on real hardware. Growing the arena hard-reset
-# the calculator twice: 1.5 MB ROM cache (arena end 0x8c715300) overwrote the
-# resident MPM loader at 0x8c700000, and even 1152 KB (end 0x8c6b5300) still
-# reset — live OS state sits well below 0x8c700000. Do not grow the TOTAL
-# without probing the real bound with a dedicated hardware test.
+# The .cgba.highbss arena must end at or below 0x8c655300, the ONLY layout
+# proven safe on real hardware. Growing the arena hard-reset the calculator
+# twice: a 1.5 MB ROM cache (arena end 0x8c715300) overwrote the resident MPM
+# loader at 0x8c700000, and even 1152 KB (end 0x8c6b5300) reset because live OS
+# state sits below it. Do not raise the arena end without an on-device probe.
 #
-# Within that fixed 1 MiB total, the split favors ROM code: hardware showed the
-# post-BIOS-fix hot translated set at ~739 KB+ (right at the old 768 KB cap →
-# constant wholesale flush-retranslate thrash) while the RAM-code cache used
-# only ~83 KB of its 256 KB. 896/128 relieves the ROM side at no layout risk.
+# The 256 KiB embedded mini-ROM staging area now shares the tail of the existing
+# 2 MiB GamePak page cache. Reclaiming that duplicate high-BSS allocation grows
+# the JIT caches to 1024/256 without moving the proven arena endpoint. This
+# preserves SimCity's RAM-renderer working set while giving Metroid-class ROM
+# code more room than the former 896/128 profile.
 # The 8-dispatch cold gate plus 4-count flush leak is the July 2026 Yoshi
 # A/LEFT cache-sim default: it trims repeated cold fallback after cache flushes
 # while keeping leaky decay to avoid the threshold-0 translate-everything cliff.
-set(CGBA_GPSP_ROM_TRANSLATION_CACHE_SIZE "917504" CACHE STRING
+set(CGBA_GPSP_ROM_TRANSLATION_CACHE_SIZE "1048576" CACHE STRING
   "SH4 dynarec ROM translation cache size in bytes")
-set(CGBA_GPSP_RAM_TRANSLATION_CACHE_SIZE "131072" CACHE STRING
+set(CGBA_GPSP_RAM_TRANSLATION_CACHE_SIZE "262144" CACHE STRING
   "SH4 dynarec RAM translation cache size in bytes")
 set(CGBA_GPSP_ROM_BRANCH_HASH_BITS "12" CACHE STRING
   "SH4 dynarec ROM branch-hash = 2^N u32 entries; 12 is 16 KiB, which is friendlier to the SH7305 cache than the upstream 16 / 256 KiB table")

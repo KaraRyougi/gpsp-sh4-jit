@@ -4,7 +4,7 @@
 /*
  * Out-of-line native memory fast paths — the translation-cache DENSITY fix.
  *
- * Metroid's in-world working set overflows the 896KB ROM translation cache
+ * Metroid's in-world working set overflowed the former 896KB ROM cache
  * when every native load/store site inlines its ~90-130 byte fast path
  * (guards + page probe + transfer + SMC tags + wait-state charge): the JIT
  * wholesale-flushes ~3x per FRAME and spends the frame retranslating (~3fps,

@@ -160,7 +160,7 @@ correctness is now the differential harness's job):
 
 | Task | Status | Artifact |
 |---|---|---|
-| **1. Executable JIT cache** | DONE | The translation caches are placed in the `.cgba.highbss` arena (P1 `0x8c2…`, cached + **executable**) via [sh4_dynarec_state.c](../ports/fxcg100/sh4/sh4_dynarec_state.c), not the no-execute `0x081…` add-in alias. `platform_cache_sync` gains an `SH4_ARCH` branch ([cpu_threaded.c](../vendor/gpsp/cpu_threaded.c)) calling the `OCBWB→SYNCO→ICBI` sequence. Verified: `nm` shows `rom_translation_cache @ 0x8c4cede0`. |
+| **1. Executable JIT cache** | DONE | The translation caches are placed in the `.cgba.highbss` arena (P1 `0x8c2…`, cached + **executable**) via [sh4_dynarec_state.c](../ports/fxcg100/sh4/sh4_dynarec_state.c), not the no-execute `0x081…` add-in alias. `platform_cache_sync` gains an `SH4_ARCH` branch ([cpu_threaded.c](../vendor/gpsp/cpu_threaded.c)) calling the `OCBWB→SYNCO→ICBI` sequence. The production map must keep both caches in P1 and `_cgba_highbss_end` at or below the hardware-proven ceiling. |
 | **2. Differential interp-vs-dynarec harness** | DONE | [sh4_diff_harness.c](../ports/fxcg100/sh4/sh4_diff_harness.c) snapshots reg[]+memory, runs the same window under `execute_arm` and `execute_arm_translate`, and reports the first divergent register/region (interpreter = oracle). `cgba_gpsp_run_frame` dispatches on the live `dynarec_enable` toggle. |
 | **3. `sh4_emit.h` glue until `-DSH4_ARCH` links** | DONE | The full 45-macro host-emitter contract is implemented in [sh4_emit.h](../vendor/gpsp/sh4/sh4_emit.h) + [sh4_emit_glue.h](../ports/fxcg100/sh4/sh4_emit_glue.h); `sh-elf-gcc -DSH4_ARCH -c cpu_threaded.c` compiles clean and the whole `CGBA_DYNAREC=ON` add-in links into `CGBA-GPSP.g3a`. |
 

@@ -866,7 +866,7 @@ static void copy_mode3_vram_to_framebuffer(void)
  *
  * Staging buffer: borrow the already-reserved fragmented-ROM page cache while
  * guest execution is stopped. Raw and compressed images live side-by-side in
- * that non-executable scratch. Older builds put the compressed stream in the
+ * that non-JIT scratch. Older builds put the compressed stream in the
  * ROM translation cache and flushed both JIT caches around every save; that
  * changed cold/JIT selection and measurably perturbed continued gameplay. */
 static u8 *cgba_state_buffer(void)

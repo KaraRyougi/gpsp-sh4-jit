@@ -60,11 +60,12 @@ extern int cgba_diff_stop_on_budget;
 
 /* Cold-code gate: ROM blocks are only translated once dispatched this many
  * times; colder code runs on the interpreter in small budget chunks. The
- * in-world Metroid working set (~thousands of live blocks) can never fit the
- * 896KB ROM cache, so unconditional translation wholesale-flushes ~1.3x per
- * FRAME (profiled: 95% of the slow regime was translate_block_thumb + the
- * emitters). Hotness survives flushes, so after warmup only the hot set is
- * cached and the flush cycle stops. Collisions in the counter hash only
+ * in-world Metroid working set (~thousands of live blocks) overflowed the
+ * former 896KB ROM cache, so unconditional translation wholesale-flushed
+ * ~1.3x per FRAME (profiled: 95% of the slow regime was
+ * translate_block_thumb + the emitters). Hotness survives flushes, so after
+ * warmup only the hot set is cached and the flush cycle stops. Collisions in
+ * the counter hash only
  * pre-heat a block — harmless. */
 #ifndef CGBA_SH4_HOT_THRESHOLD
 #define CGBA_SH4_HOT_THRESHOLD 64
