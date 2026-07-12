@@ -227,9 +227,32 @@ static void wait_for_keys_released(void)
 	}
 }
 
+static void prepare_exit_to_os(const char *detail)
+{
+	draw_status("exiting gpSP...", detail);
+	/* Do not enter Fugue or hand control back to the launcher while the menu
+	 * activation key is still physically down. In particular, the initial-menu
+	 * EXIT path used to return immediately with EXE/HOME held. */
+	wait_for_keys_released();
+	/* Finish direct-LCD DMA and restore the full panel window before any final
+	 * BFile world switches. kquit() can then restore the OS drivers from a
+	 * quiescent add-in state. */
+	fxcg100_lcd_shutdown();
+}
+
 static int exit_to_os(int code)
 {
-	fxcg100_lcd_shutdown();
+	prepare_exit_to_os(NULL);
+	return code;
+}
+
+static int shutdown_gpsp_and_exit(int code)
+{
+	/* The dirty backup flush in cgba_gpsp_shutdown() can take visibly longer
+	 * than a clean exit. Publish the status first, then quiesce input/display
+	 * before the ROM-close and save-file OS calls. */
+	prepare_exit_to_os("saving backup if changed");
+	cgba_gpsp_shutdown();
 	return code;
 }
 
@@ -2043,8 +2066,7 @@ int main(void)
 		cgba_gpsp_run_frame(FXCG100_GBA_BUTTON_NONE, 1);
 		blit_gba_frame(framebuffer, frame, FXCG100_GBA_BUTTON_NONE);
 	}
-	cgba_gpsp_shutdown();
-	return exit_to_os(1);
+	return shutdown_gpsp_and_exit(1);
 #endif
 	cgba_gpsp_refresh_roms();
 	fxcg100_menu_init(&menu_state);
@@ -2261,6 +2283,5 @@ int main(void)
 		previous_hotkeys = hotkeys;
 	}
 
-	cgba_gpsp_shutdown();
-	return exit_to_os(1);
+	return shutdown_gpsp_and_exit(1);
 }
