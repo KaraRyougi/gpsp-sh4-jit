@@ -601,19 +601,22 @@ is optional and separately counted from final block publication. Emission
 telemetry reports literal-pool use, helper/tuple bytes, total bytes per block,
 ARM/Thumb totals, and six block-size buckets.
 
-The unscaled presenter now uses ten 16-row strips per frame. With
-`CGBA_LCD_SCANLINE_STREAM=ON`, each completed 16-row renderer group is copied
-to the DMA-safe YRAM bank immediately, allowing its LCD DMA to overlap
-emulation of the next group. Scaling, FPS-overlay frames, and incomplete
-streams fall back to the established end-of-frame presenter. This changes only
-when pixels are published, not framebuffer contents, but physical display
-timing/tearing and throughput still require qualification.
+The unscaled presenter now uses ten 16-row strips per frame. An experimental
+`CGBA_LCD_SCANLINE_STREAM=ON` path copies each completed 16-row renderer group
+to the DMA-safe YRAM bank immediately. Scaling, FPS-overlay frames, and
+incomplete streams fall back to the established end-of-frame presenter.
+
+Physical Ace Attorney testing found the scanline-streamed path substantially
+slower. An otherwise-identical build with streaming disabled nearly recovered
+the previous release's speed. Follow-up builds disabling guest-r0 pinning and
+the known-target microcaches produced no further measurable difference, so
+those JIT optimizations remain enabled and scanline streaming returns to an
+opt-in hardware experiment.
 
 The full host suite passes, including 148,963 native execution-oracle cases,
 1,407,616 opaque-row cases, 1,356,940 backdrop-shadow comparisons, the
 segmented-pool reach/dedup test, and the SH-4 assembler audit. Production and
-differential-harness calculator cross-links pass. No physical speedup is
-claimed for the streaming switch yet.
+differential-harness calculator cross-links pass.
 
 ## State at HEAD
 
@@ -622,8 +625,8 @@ opt-in hardware artifact with cold gate T=8, heat leak 4, faithful
 CpuSet/FastSet HLE on, experimental ObjAffine HLE off by default, all other
 infidel HLEs compiled out, IntrWait HLE off.
 Guest-r0 pinning, segmented pools, compact fastmem tuples, known-target caches,
-exact renderer paths, 16-row strips, and scanline streaming are enabled in JIT
-hardware candidates. XYRAM fastmem defaults off pending isolated physical A/Bs;
+exact renderer paths, and 16-row strips are enabled in JIT hardware candidates.
+Scanline streaming and XYRAM fastmem default off after physical regressions;
 dispatch stubs remain in ILRAM, and the ROM JIT remains one contiguous arena.
 Modeled numbers on the standing scenarios: AW 39.8 fps, Metroid movement
 32.4 fps, Metroid dense parity green, SMA2 from the 30fps-goal era 35.1

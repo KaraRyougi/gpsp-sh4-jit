@@ -354,12 +354,12 @@ if(CGBA_VIDEO_OPAQUE_ROW_UNROLL)
     CGBA_VIDEO_OPAQUE_ROW_UNROLL=1)
 endif()
 
-# In unscaled mode, publish each completed 16-row group from the renderer to
-# the double-buffered YRAM presenter. The previous strip's LCD DMA overlaps the
-# next group's emulation; scaled modes and the framebuffer FPS overlay retain
-# the existing end-of-frame blit so their post-processing remains exact.
+# Experimental unscaled-mode path that publishes each completed 16-row group
+# from the renderer to the double-buffered YRAM presenter. Physical Ace
+# Attorney A/B testing found this slower than the established end-of-frame DMA
+# presenter, so release builds keep it compiled out by default.
 option(CGBA_LCD_SCANLINE_STREAM
-  "Stream completed unscaled scanline groups to LCD DMA" ON)
+  "Stream completed unscaled scanline groups to LCD DMA (hardware A/B)" OFF)
 if(CGBA_LCD_SCANLINE_STREAM)
   target_compile_definitions(cgba-gint-gpsp PRIVATE
     CGBA_LCD_SCANLINE_STREAM=1)
