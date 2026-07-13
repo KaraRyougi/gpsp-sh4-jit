@@ -26,7 +26,7 @@ under casio-emu.
 | **Build seam** | `SH4_ARCH` include in [cpu_threaded.c](../vendor/gpsp/cpu_threaded.c); [sh4_emit.h](../vendor/gpsp/sh4/sh4_emit.h) | `sh4_emit.h` cross-compiles standalone with `sh-elf-gcc` |
 | **Cache sync** | [sh4_cache.h](../ports/fxcg100/sh4/sh4_cache.h) — `OCBWB → SYNCO → ICBI` | Pre-existing; ordering confirmed correct vs SH-4A manual; [jit_probe.c](../ports/fxcg100/jit_probe.c) proves on-device execution |
 | **Phase 0 auto-frameskip** | [frame_pacing.c](../ports/fxcg100/gint-gpsp/src/frame_pacing.c) — RTC-windowed adaptive controller behind the menu's "AUTOMATIC" type | `fxsdk build-cg` → `CGBA-GPSP.g3a` builds + links clean |
-| **Phase 0 strip-DMA LCD** | [gint_platform.c](../ports/fxcg100/gint-gpsp/src/gint_platform.c): ten 16-row unscaled strips, with optional renderer-to-LCD scanline streaming | geometry tests; production cross-link; physical streaming qualification pending |
+| **Phase 0 strip-DMA LCD** | [gint_platform.c](../ports/fxcg100/gint-gpsp/src/gint_platform.c): ten 16-row unscaled strips, with opt-in renderer-to-LCD scanline streaming | geometry tests; production cross-link; physical Ace Attorney A/B rejected streaming as slower |
 | **Menu display handoff** | gameplay blit narrows the R61524 window; restore full 396×224 via `r61524_win_set` before any gint push ([gint_platform.c](../ports/fxcg100/gint-gpsp/src/gint_platform.c) `restore_full_window`) | builds; menu must render via gint only, never direct DMA |
 
 Run the host suite (needs `sh-elf-as`/`objcopy` on PATH for the audit):
