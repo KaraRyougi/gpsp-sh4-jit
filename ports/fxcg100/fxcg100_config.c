@@ -90,7 +90,9 @@ typedef struct fxcg100_config_file {
   uint32_t frameskip_variation;
   uint32_t savestate_slot;
   uint32_t quick_save_slot;
-  uint32_t backup_update;
+  /* Version-2 compatibility slot. Older builds stored the removed automatic
+   * backup policy here; keep the word so existing CGBA.CFG files still load. */
+  uint32_t reserved_backup_update;
   uint32_t show_fps;
   uint32_t reserved[8];
 } fxcg100_config_file;
@@ -100,10 +102,20 @@ static const uint16_t config_path[] = {
   'C', 'G', 'B', 'A', '.', 'C', 'F', 'G', 0
 };
 
+#if CGBA_FXCG100_STORAGE
+static int os_bfile_call(gint_call_t call)
+{
+  int result = gint_world_switch(call);
+
+  fxcg100_lcd_note_os_activity();
+  return result;
+}
+#endif
+
 static int os_bfile_open(const uint16_t *path, int mode)
 {
 #if CGBA_FXCG100_STORAGE
-  return gint_world_switch(GINT_CALL((void *)CGBA_BFILE_OPEN, path, mode));
+  return os_bfile_call(GINT_CALL((void *)CGBA_BFILE_OPEN, path, mode));
 #else
   (void)path;
   (void)mode;
@@ -114,7 +126,7 @@ static int os_bfile_open(const uint16_t *path, int mode)
 static int os_bfile_size(int fd)
 {
 #if CGBA_FXCG100_STORAGE
-  return gint_world_switch(GINT_CALL((void *)CGBA_BFILE_SIZE, fd));
+  return os_bfile_call(GINT_CALL((void *)CGBA_BFILE_SIZE, fd));
 #else
   (void)fd;
   return -1;
@@ -124,8 +136,8 @@ static int os_bfile_size(int fd)
 static int os_bfile_create(const uint16_t *path, int type, int *size)
 {
 #if CGBA_FXCG100_STORAGE
-  return gint_world_switch(GINT_CALL((void *)CGBA_BFILE_CREATE,
-                                     path, type, size));
+  return os_bfile_call(GINT_CALL((void *)CGBA_BFILE_CREATE,
+                                 path, type, size));
 #else
   (void)path;
   (void)type;
@@ -137,7 +149,7 @@ static int os_bfile_create(const uint16_t *path, int type, int *size)
 static void os_bfile_remove(const uint16_t *path)
 {
 #if CGBA_FXCG100_STORAGE
-  (void)gint_world_switch(GINT_CALL((void *)CGBA_BFILE_REMOVE, path));
+  (void)os_bfile_call(GINT_CALL((void *)CGBA_BFILE_REMOVE, path));
 #else
   (void)path;
 #endif
@@ -146,8 +158,8 @@ static void os_bfile_remove(const uint16_t *path)
 static int os_bfile_read(int fd, void *dst, int size, int offset)
 {
 #if CGBA_FXCG100_STORAGE
-  return gint_world_switch(GINT_CALL((void *)CGBA_BFILE_READ,
-                                     fd, dst, size, offset));
+  return os_bfile_call(GINT_CALL((void *)CGBA_BFILE_READ,
+                                 fd, dst, size, offset));
 #else
   (void)fd;
   (void)dst;
@@ -166,8 +178,8 @@ static int bfile_read_exact_ok(int result, int size)
 static int os_bfile_write(int fd, const void *src, int size)
 {
 #if CGBA_FXCG100_STORAGE
-  return gint_world_switch(GINT_CALL((void *)CGBA_BFILE_WRITE,
-                                     fd, src, size));
+  return os_bfile_call(GINT_CALL((void *)CGBA_BFILE_WRITE,
+                                 fd, src, size));
 #else
   (void)fd;
   (void)src;
@@ -179,7 +191,7 @@ static int os_bfile_write(int fd, const void *src, int size)
 static void os_bfile_close(int fd)
 {
 #if CGBA_FXCG100_STORAGE
-  (void)gint_world_switch(GINT_CALL((void *)CGBA_BFILE_CLOSE, fd));
+  (void)os_bfile_call(GINT_CALL((void *)CGBA_BFILE_CLOSE, fd));
 #else
   (void)fd;
 #endif
@@ -194,7 +206,6 @@ static int config_options_valid(const fxcg100_config_file *config)
     config->frameskip_variation < 2 &&
     config->savestate_slot < 10 &&
     config->quick_save_slot < 10 &&
-    config->backup_update < 2 &&
     config->show_fps < 2;
 }
 
@@ -227,7 +238,6 @@ static void config_from_state(fxcg100_config_file *config,
   config->frameskip_variation = state->frameskip_variation;
   config->savestate_slot = state->savestate_slot;
   config->quick_save_slot = state->quick_save_slot;
-  config->backup_update = state->backup_update;
   config->show_fps = state->show_fps;
 }
 
@@ -244,7 +254,6 @@ static void state_from_config(fxcg100_menu_state *state,
   state->frameskip_variation = config->frameskip_variation;
   state->savestate_slot = config->savestate_slot;
   state->quick_save_slot = config->quick_save_slot;
-  state->backup_update = config->backup_update;
   state->show_fps = config->show_fps;
 }
 

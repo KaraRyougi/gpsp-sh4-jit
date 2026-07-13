@@ -92,7 +92,6 @@ typedef struct fxcg100_menu_state {
   uint32_t frameskip_variation;
   uint32_t savestate_slot;
   uint32_t quick_save_slot;
-  uint32_t backup_update;
   uint32_t show_fps;
   uint16_t keymap[FXCG100_GBA_KEY_COUNT];
   uint16_t hotkey_map[FXCG100_HOTKEY_COUNT];
@@ -148,6 +147,9 @@ void fxcg100_lcd_draw_text(unsigned x, unsigned y, const char *text,
                            uint16_t fg, uint16_t bg);
 void fxcg100_lcd_update(void);
 void fxcg100_lcd_status(const char *text);
+/* OS BFile calls can draw a busy icon directly into LCD GRAM. Mark that
+ * activity so the next gameplay presentation removes any stale border pixels. */
+void fxcg100_lcd_note_os_activity(void);
 void fxcg100_lcd_blit_gba(const uint16_t *pixels);
 /* Display scaling for the gameplay blit (menu DISPLAY SCALING):
  * 0 = 1:1 centered, 1 = 4:3 320x212, 2 = fullscreen 384x216. */

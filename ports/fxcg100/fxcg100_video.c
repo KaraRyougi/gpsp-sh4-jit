@@ -143,6 +143,10 @@ void fxcg100_lcd_shutdown(void)
   lcd_set_window(0, 0, LCD_VISIBLE_WIDTH, LCD_VISIBLE_HEIGHT);
 }
 
+void fxcg100_lcd_note_os_activity(void)
+{
+}
+
 void fxcg100_lcd_fill_rect(unsigned x, unsigned y, unsigned w, unsigned h,
                            uint16_t color)
 {
