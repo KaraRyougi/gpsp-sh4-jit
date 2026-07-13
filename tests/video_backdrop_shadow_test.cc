@@ -2,8 +2,8 @@
 #include <stdio.h>
 #include <string.h>
 
-/* Include the production templates so the test exercises the exact opt-in
- * base-layer renderer.  Enable the existing blend cache as well to verify the
+/* Include the production templates so the test exercises the exact default
+ * base-layer renderer. Enable the existing blend cache as well to verify the
  * two derived-palette consumers cannot clear each other's invalidation. */
 #define CGBA_VIDEO_BLEND_PALETTE_CACHE 1
 #define CGBA_VIDEO_BACKDROP_SHADOW_PALETTE 1

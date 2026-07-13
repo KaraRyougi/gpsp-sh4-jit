@@ -64,6 +64,16 @@ option(CGBA_SH4_THUMB_LDST_NATIVE
   "Enable SH4 native Thumb RAM load fast path" ON)
 option(CGBA_SH4_THUMB_BLOCK_NATIVE
   "Enable SH4 native Thumb RAM block-load fast path" ON)
+option(CGBA_SH4_PIN_GUEST_R0
+  "Keep guest ARM r0 resident in callee-saved SH-4 R11" ON)
+option(CGBA_SH4_FASTMEM_XYRAM
+  "Place generated resident fastmem routines in on-chip XYRAM (hardware A/B)" OFF)
+option(CGBA_SH4_KNOWN_TARGET_CACHE
+  "Cache known ARM and Thumb indirect targets before the ROM hash walk" ON)
+option(CGBA_SH4_SEGMENTED_LITERAL_POOL
+  "Deduplicate large SH-4 constants in bounded per-block literal segments" ON)
+option(CGBA_SH4_COMPACT_FASTMEM_TUPLE
+  "Pack single-fastmem params with a 16-bit cycle field to shrink JIT sites" ON)
 option(CGBA_SH4_INTERP_STATS
   "Count interpreted guest instructions by region (diag; ~4.5% overhead)" OFF)
 option(CGBA_SH4_DIAG_COUNTERS
@@ -104,6 +114,8 @@ option(CGBA_SH4_DIFF_HARNESS
   "Emulator-only interp/JIT differential harness (uses 492 KiB beyond the fx-CG100 hardware-safe arena)" OFF)
 option(CGBA_SH4_DIFF_DUMP_OPS
   "Headless/debug: dump block-diff op/cycle diagnostics" OFF)
+option(CGBA_SH4_PATCH_RESYNC
+  "Re-sync each unpublished instruction patch before final block publication" OFF)
 option(CGBA_SH4_PROFILE_COUNTERS
   "Hardware/debug: count SH4 JIT translations, cache flushes, and helper calls for the ON-menu debug page" OFF)
 option(CGBA_FXCG100_STORAGE
@@ -197,6 +209,11 @@ if(CGBA_DYNAREC)
   target_compile_definitions(cgba-gint-gpsp PRIVATE
     CGBA_DYNAREC=1
     SH4_ARCH=1
+    CGBA_SH4_PIN_GUEST_R0=$<BOOL:${CGBA_SH4_PIN_GUEST_R0}>
+    CGBA_SH4_FASTMEM_XYRAM=$<BOOL:${CGBA_SH4_FASTMEM_XYRAM}>
+    CGBA_SH4_KNOWN_TARGET_CACHE=$<BOOL:${CGBA_SH4_KNOWN_TARGET_CACHE}>
+    CGBA_SH4_SEGMENTED_LITERAL_POOL=$<BOOL:${CGBA_SH4_SEGMENTED_LITERAL_POOL}>
+    CGBA_SH4_COMPACT_FASTMEM_TUPLE=$<BOOL:${CGBA_SH4_COMPACT_FASTMEM_TUPLE}>
     SMALL_TRANSLATION_CACHE=1
     ROM_TRANSLATION_CACHE_SIZE=${CGBA_GPSP_ROM_TRANSLATION_CACHE_SIZE}
     RAM_TRANSLATION_CACHE_SIZE=${CGBA_GPSP_RAM_TRANSLATION_CACHE_SIZE}
@@ -270,12 +287,12 @@ if(CGBA_DYNAREC)
   target_compile_definitions(cgba-gint-gpsp PRIVATE
     CGBA_SH4_RAM_SCAN_CAP_INITIAL=${CGBA_SH4_RAM_SCAN_CAP_INITIAL}
     CGBA_SH4_ROM_SCAN_CAP_INITIAL=${CGBA_SH4_ROM_SCAN_CAP_INITIAL})
-  # Re-sync the I-cache line for every INSTRUCTION patch (BT/BF/BRA rewrites).
-  # All such patches are in not-yet-synced memory by construction, so this is
-  # belt-and-suspenders — but it is translate-time-only (a few thousand patches
-  # per session, ~zero cost) and closes the last software coherency surface for
-  # overclocked hardware, where write-back/fetch races widen.
-  target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_SH4_PATCH_RESYNC=1)
+  # Instruction patches are made before final block publication, so the full
+  # range sync is sufficient for production. Keep the per-patch path as an
+  # explicit hardware/overclock qualification switch.
+  if(CGBA_SH4_PATCH_RESYNC)
+    target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_SH4_PATCH_RESYNC=1)
+  endif()
   if(CGBA_SH4_EXACT_CYCLE_BOUNDARIES)
     target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_SH4_EXACT_CYCLE_BOUNDARIES=1)
   endif()
@@ -308,11 +325,13 @@ if(CGBA_VIDEO_BLEND_PALETTE_CACHE)
     CGBA_VIDEO_BLEND_PALETTE_CACHE=1)
 endif()
 
-# Base-layer 4-bpp text backgrounds can replace each sub-palette's transparent
-# slot with the backdrop in a lazily rebuilt shadow, removing the per-pixel
-# transparency branch from the common Mode 0 FULLCOLOR path.
+# Base-layer 4-bpp text backgrounds replace each sub-palette's transparent slot
+# with the backdrop in a lazily rebuilt shadow, removing the per-pixel
+# transparency branch from the common Mode 0 FULLCOLOR path. Exhaustive host
+# differentials and representative saved-game framebuffer A/Bs make this an
+# exact production path; keep the broader palette blend cache experimental.
 option(CGBA_VIDEO_BACKDROP_SHADOW_PALETTE
-  "Branchless base-layer 4-bpp backdrop lookup (experimental performance A/B)" OFF)
+  "Branchless base-layer 4-bpp backdrop lookup (exact production path)" ON)
 if(CGBA_VIDEO_BACKDROP_SHADOW_PALETTE)
   target_compile_definitions(cgba-gint-gpsp PRIVATE
     CGBA_VIDEO_BACKDROP_SHADOW_PALETTE=1)
@@ -329,10 +348,21 @@ if(CGBA_VIDEO_OPAQUE_TILE_FASTPATH)
 endif()
 
 option(CGBA_VIDEO_OPAQUE_ROW_UNROLL
-  "Unroll hot opaque 4-bpp tile rows (experimental performance A/B)" OFF)
+  "Unroll the measured exact 4-bpp tile-row shapes" ON)
 if(CGBA_VIDEO_OPAQUE_ROW_UNROLL)
   target_compile_definitions(cgba-gint-gpsp PRIVATE
     CGBA_VIDEO_OPAQUE_ROW_UNROLL=1)
+endif()
+
+# In unscaled mode, publish each completed 16-row group from the renderer to
+# the double-buffered YRAM presenter. The previous strip's LCD DMA overlaps the
+# next group's emulation; scaled modes and the framebuffer FPS overlay retain
+# the existing end-of-frame blit so their post-processing remains exact.
+option(CGBA_LCD_SCANLINE_STREAM
+  "Stream completed unscaled scanline groups to LCD DMA" ON)
+if(CGBA_LCD_SCANLINE_STREAM)
+  target_compile_definitions(cgba-gint-gpsp PRIVATE
+    CGBA_LCD_SCANLINE_STREAM=1)
 endif()
 
 # Game-specific idle-loop metadata is isolated behind an option so the timing

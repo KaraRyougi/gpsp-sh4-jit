@@ -113,19 +113,28 @@ int main(void)
     sh4_codegen rg = { code + 2048, code + sizeof(code), 0 };
     uint8_t *b = rg.ptr;
 
+    sh4_emit_load_greg(&rg, 0, 3);    /* guest r0 cache -> MOV r11,r3      */
+    sh4_emit_store_greg(&rg, 2, 0);   /* guest r0 cache <- MOV r2,r11      */
     sh4_emit_load_greg(&rg, 5, 1);    /* r5: off 20 -> MOV.L @(5,base),r1  */
     sh4_emit_load_greg(&rg, 15, 2);   /* PC: off 60 -> MOV.L @(15,base),r2 */
     sh4_emit_store_greg(&rg, 3, 16);  /* CPSR: register-cached -> MOV r3,r8 */
     sh4_emit_load_greg(&rg, 16, 2);   /* CPSR read -> MOV r8,r2 */
     sh4_emit_store_greg(&rg, 3, 17);  /* CPU_MODE: off 68 -> @(R0,base), R0=68 */
 
-    uint16_t l5  = (uint16_t)((b[0] << 8) | b[1]);
-    uint16_t l15 = (uint16_t)((b[2] << 8) | b[3]);
-    uint16_t stc = (uint16_t)((b[4] << 8) | b[5]);   /* MOV r3,r8 */
-    uint16_t ldc = (uint16_t)((b[6] << 8) | b[7]);   /* MOV r8,r2 */
-    uint16_t mov = (uint16_t)((b[8] << 8) | b[9]);   /* MOV #68,r0 */
-    uint16_t st  = (uint16_t)((b[10] << 8) | b[11]); /* MOV.L r3,@(R0,base) */
+    uint16_t l0  = (uint16_t)((b[0] << 8) | b[1]);   /* MOV r11,r3 */
+    uint16_t st0 = (uint16_t)((b[2] << 8) | b[3]);   /* MOV r2,r11 */
+    uint16_t l5  = (uint16_t)((b[4] << 8) | b[5]);
+    uint16_t l15 = (uint16_t)((b[6] << 8) | b[7]);
+    uint16_t stc = (uint16_t)((b[8] << 8) | b[9]);   /* MOV r3,r8 */
+    uint16_t ldc = (uint16_t)((b[10] << 8) | b[11]); /* MOV r8,r2 */
+    uint16_t mov = (uint16_t)((b[12] << 8) | b[13]); /* MOV #68,r0 */
+    uint16_t st  = (uint16_t)((b[14] << 8) | b[15]); /* MOV.L r3,@(R0,base) */
 
+    /* MOV Rm,Rn = 0x6003 | rn<<8 | rm<<4. */
+    if (l0 != (0x6003 | (3 << 8) | (SH4_REG_GUEST_R0 << 4)))
+      { fprintf(stderr, "load_greg(0) mov from r11 wrong: %04x\n", l0); fail = 1; }
+    if (st0 != (0x6003 | (SH4_REG_GUEST_R0 << 8) | (2 << 4)))
+      { fprintf(stderr, "store_greg(0) mov to r11 wrong: %04x\n", st0); fail = 1; }
     /* MOV.L @(disp,Rm),Rn = 0x5000 | rn<<8 | rm<<4 | disp4 */
     if (l5 != (0x5000 | (1 << 8) | (SH4_REG_BASE << 4) | 5))
       { fprintf(stderr, "load_greg(5) wrong: %04x\n", l5); fail = 1; }

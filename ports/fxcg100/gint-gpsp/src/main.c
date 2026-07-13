@@ -40,10 +40,14 @@ extern uint32_t cgba_dynarec_lookup_thumb_count;
 extern uint32_t cgba_dynarec_lookup_dual_count;
 extern uint32_t cgba_dynarec_icache_sync_count;
 extern uint32_t cgba_dynarec_icache_sync_bytes;
+extern uint32_t cgba_dynarec_patch_sync_count;
+extern uint32_t cgba_dynarec_patch_sync_bytes;
 extern uint32_t cgba_dynarec_ibh_arm_hit_count;
 extern uint32_t cgba_dynarec_ibh_arm_slow_count;
+extern uint32_t cgba_dynarec_ibh_arm_hot_count;
 extern uint32_t cgba_dynarec_ibh_thumb_hit_count;
 extern uint32_t cgba_dynarec_ibh_thumb_slow_count;
+extern uint32_t cgba_dynarec_ibh_thumb_hot_count;
 extern uint32_t cgba_dynarec_ibh_dual_arm_hit_count;
 extern uint32_t cgba_dynarec_ibh_dual_thumb_hit_count;
 extern uint32_t cgba_dynarec_ibh_dual_slow_count;
@@ -302,10 +306,14 @@ static int start_gpsp(uint16_t *framebuffer, unsigned rom_id)
 	cgba_dynarec_lookup_dual_count = 0;
 	cgba_dynarec_icache_sync_count = 0;
 	cgba_dynarec_icache_sync_bytes = 0;
+	cgba_dynarec_patch_sync_count = 0;
+	cgba_dynarec_patch_sync_bytes = 0;
 	cgba_dynarec_ibh_arm_hit_count = 0;
 	cgba_dynarec_ibh_arm_slow_count = 0;
+	cgba_dynarec_ibh_arm_hot_count = 0;
 	cgba_dynarec_ibh_thumb_hit_count = 0;
 	cgba_dynarec_ibh_thumb_slow_count = 0;
+	cgba_dynarec_ibh_thumb_hot_count = 0;
 	cgba_dynarec_ibh_dual_arm_hit_count = 0;
 	cgba_dynarec_ibh_dual_thumb_hit_count = 0;
 	cgba_dynarec_ibh_dual_slow_count = 0;
@@ -1320,10 +1328,14 @@ static int cgba_headless_test(uint16_t *framebuffer)
 	cgba_dynarec_lookup_dual_count = 0;
 	cgba_dynarec_icache_sync_count = 0;
 	cgba_dynarec_icache_sync_bytes = 0;
+	cgba_dynarec_patch_sync_count = 0;
+	cgba_dynarec_patch_sync_bytes = 0;
 	cgba_dynarec_ibh_arm_hit_count = 0;
 	cgba_dynarec_ibh_arm_slow_count = 0;
+	cgba_dynarec_ibh_arm_hot_count = 0;
 	cgba_dynarec_ibh_thumb_hit_count = 0;
 	cgba_dynarec_ibh_thumb_slow_count = 0;
+	cgba_dynarec_ibh_thumb_hot_count = 0;
 	cgba_dynarec_ibh_dual_arm_hit_count = 0;
 	cgba_dynarec_ibh_dual_thumb_hit_count = 0;
 	cgba_dynarec_ibh_dual_slow_count = 0;
@@ -1530,6 +1542,15 @@ static int cgba_headless_test(uint16_t *framebuffer)
 	extern unsigned long cgba_em_pj_n, cgba_em_pj_bytes;
 	extern unsigned long cgba_em_fm_n, cgba_em_fm_bytes;
 	extern unsigned long cgba_em_blk_n, cgba_em_blk_bytes;
+	extern unsigned long cgba_em_pool_ref_n, cgba_em_pool_unique_n;
+	extern unsigned long cgba_em_pool_flush_n, cgba_em_pool_bytes;
+	extern unsigned long cgba_em_help_n, cgba_em_help_bytes;
+	extern unsigned long cgba_em_tuple_routine_b, cgba_em_tuple_tramp_b;
+	extern unsigned long cgba_em_tuple_fn_b, cgba_em_tuple_opcode_b;
+	extern unsigned long cgba_em_tuple_pc_b, cgba_em_tuple_cycle_b;
+	extern unsigned long cgba_em_tuple_params_b;
+	extern unsigned long cgba_em_blk_max_bytes, cgba_em_blk_hist[6];
+	extern unsigned long cgba_em_blk_mode_n[2], cgba_em_blk_mode_bytes[2];
 	#if CGBA_GPSP_HEADLESS_BENCH_FRAMES > 0 && defined(CGBA_SH4_DIFF_HARNESS)
 	snprintf(buf, sizeof buf,
 		"jit stats rom_flush=%lu ram_flush=%lu arm_tx=%lu thumb_tx=%lu "
@@ -1551,6 +1572,32 @@ static int cgba_headless_test(uint16_t *framebuffer)
 		cgba_em_fjmp_n, cgba_em_fjmp_bytes,
 		cgba_em_pj_n, cgba_em_pj_bytes,
 		cgba_em_fm_n, cgba_em_fm_bytes);
+	hputs_dbg(buf);
+	snprintf(buf, sizeof buf,
+		"jit pool ref=%lu uniq=%lu flush=%lu bytes=%lu helper=%lu/%luB",
+		cgba_em_pool_ref_n, cgba_em_pool_unique_n,
+		cgba_em_pool_flush_n, cgba_em_pool_bytes,
+		cgba_em_help_n, cgba_em_help_bytes);
+	hputs_dbg(buf);
+	snprintf(buf, sizeof buf,
+		"jit blocks max=%lu hist=%lu,%lu,%lu,%lu,%lu,%lu arm=%lu/%luB thumb=%lu/%luB",
+		cgba_em_blk_max_bytes, cgba_em_blk_hist[0], cgba_em_blk_hist[1],
+		cgba_em_blk_hist[2], cgba_em_blk_hist[3], cgba_em_blk_hist[4],
+		cgba_em_blk_hist[5], cgba_em_blk_mode_n[0], cgba_em_blk_mode_bytes[0],
+		cgba_em_blk_mode_n[1], cgba_em_blk_mode_bytes[1]);
+	hputs_dbg(buf);
+	snprintf(buf, sizeof buf,
+		"jit tuple routine=%lu tramp=%lu fn=%lu op=%lu pc=%lu cyc=%lu params=%lu",
+		cgba_em_tuple_routine_b, cgba_em_tuple_tramp_b,
+		cgba_em_tuple_fn_b, cgba_em_tuple_opcode_b, cgba_em_tuple_pc_b,
+		cgba_em_tuple_cycle_b, cgba_em_tuple_params_b);
+	hputs_dbg(buf);
+	snprintf(buf, sizeof buf,
+		"jit sync final=%lu/%luB patch=%lu/%luB",
+		(unsigned long)cgba_dynarec_icache_sync_count,
+		(unsigned long)cgba_dynarec_icache_sync_bytes,
+		(unsigned long)cgba_dynarec_patch_sync_count,
+		(unsigned long)cgba_dynarec_patch_sync_bytes);
 	hputs_dbg(buf);
 	{
 		extern unsigned long cgba_em_blk_n;   /* anchor: same block */
@@ -1792,6 +1839,25 @@ static int cgba_headless_test(uint16_t *framebuffer)
 		cgba_em_fjmp_n, cgba_em_fjmp_bytes,
 		cgba_em_pj_n, cgba_em_pj_bytes,
 		cgba_em_fm_n, cgba_em_fm_bytes);
+	hputs_dbg(buf);
+	snprintf(buf, sizeof buf,
+		"jit pool ref=%lu uniq=%lu flush=%lu bytes=%lu helper=%lu/%luB",
+		cgba_em_pool_ref_n, cgba_em_pool_unique_n,
+		cgba_em_pool_flush_n, cgba_em_pool_bytes,
+		cgba_em_help_n, cgba_em_help_bytes);
+	hputs_dbg(buf);
+	snprintf(buf, sizeof buf,
+		"jit blocks max=%lu hist=%lu,%lu,%lu,%lu,%lu,%lu arm=%lu/%luB thumb=%lu/%luB",
+		cgba_em_blk_max_bytes, cgba_em_blk_hist[0], cgba_em_blk_hist[1],
+		cgba_em_blk_hist[2], cgba_em_blk_hist[3], cgba_em_blk_hist[4],
+		cgba_em_blk_hist[5], cgba_em_blk_mode_n[0], cgba_em_blk_mode_bytes[0],
+		cgba_em_blk_mode_n[1], cgba_em_blk_mode_bytes[1]);
+	hputs_dbg(buf);
+	snprintf(buf, sizeof buf,
+		"jit tuple routine=%lu tramp=%lu fn=%lu op=%lu pc=%lu cyc=%lu params=%lu",
+		cgba_em_tuple_routine_b, cgba_em_tuple_tramp_b,
+		cgba_em_tuple_fn_b, cgba_em_tuple_opcode_b, cgba_em_tuple_pc_b,
+		cgba_em_tuple_cycle_b, cgba_em_tuple_params_b);
 	hputs_dbg(buf);
 	{
 		extern unsigned long cgba_em_blk_n;   /* anchor: same block */
@@ -2283,13 +2349,17 @@ int main(void)
 		else
 			render_video = fxcg100_menu_should_blit(&menu_state, frame);
 
+		int streamed = render_video && !menu_state.show_fps
+			? fxcg100_lcd_stream_begin() : 0;
 		cgba_gpsp_run_frame(gba_buttons, render_video);
 		cgba_fps_tick(&cgba_fps, render_video);
 		if(render_video) {
-			if(menu_state.show_fps)
-				fxcg100_lcd_overlay_fps(framebuffer,
-					cgba_fps.emu_fps, cgba_fps.draw_fps);
-			blit_gba_frame(framebuffer, frame, gba_buttons);
+			if(!streamed || !fxcg100_lcd_stream_end()) {
+				if(menu_state.show_fps)
+					fxcg100_lcd_overlay_fps(framebuffer,
+						cgba_fps.emu_fps, cgba_fps.draw_fps);
+				blit_gba_frame(framebuffer, frame, gba_buttons);
+			}
 		}
 		previous_app_keys = app_keys;
 		previous_hotkeys = hotkeys;

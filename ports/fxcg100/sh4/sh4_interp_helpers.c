@@ -90,6 +90,15 @@ unsigned long cgba_em_fjmp_n, cgba_em_fjmp_bytes;
 unsigned long cgba_em_pj_n, cgba_em_pj_bytes;
 unsigned long cgba_em_fm_n, cgba_em_fm_bytes;
 unsigned long cgba_em_blk_n, cgba_em_blk_bytes;
+unsigned long cgba_em_pool_ref_n, cgba_em_pool_unique_n;
+unsigned long cgba_em_pool_flush_n, cgba_em_pool_bytes;
+unsigned long cgba_em_help_n, cgba_em_help_bytes;
+unsigned long cgba_em_tuple_routine_b, cgba_em_tuple_tramp_b;
+unsigned long cgba_em_tuple_fn_b, cgba_em_tuple_opcode_b;
+unsigned long cgba_em_tuple_pc_b, cgba_em_tuple_cycle_b;
+unsigned long cgba_em_tuple_params_b;
+unsigned long cgba_em_blk_max_bytes, cgba_em_blk_hist[6];
+unsigned long cgba_em_blk_mode_n[2], cgba_em_blk_mode_bytes[2];
 #endif
 #endif
 extern int cgba_diff_stop_on_bios_exit;
@@ -159,6 +168,11 @@ static void sh4_headless_trace_op(char tag, u32 pc, u32 opcode)
 /* When set, sh4_block_exit returns to the C caller after one translated block
  * (the differential harness uses this to step the dynarec one block at a time). */
 int cgba_dynarec_single_block = 0;
+#ifdef CGBA_SH4_DIFF_HARNESS
+#define CGBA_SH4_DIFF_ACTIVE() (cgba_dynarec_single_block != 0)
+#else
+#define CGBA_SH4_DIFF_ACTIVE() 0
+#endif
 
 enum {
   CGBA_SH4_TLD_SRC_PC = 0,
@@ -1668,7 +1682,7 @@ int cgba_sh4_arm_mixer_loop_try(u32 unused, u32 pc)
 #if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
   cgba_sh4_arm_mixer_try_count++;
 #endif
-  if (cgba_dynarec_single_block || (reg[REG_CPSR] & 0x20u) ||
+  if (CGBA_SH4_DIFF_ACTIVE() || (reg[REG_CPSR] & 0x20u) ||
       cgba_sh4_arm_mixer_budget <= 0)
     return 0;
 
@@ -1770,7 +1784,7 @@ int cgba_sh4_thumb_udiv_loop_try(u32 unused, u32 pc)
 #if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
   cgba_sh4_thumb_udiv_try_count++;
 #endif
-  if (cgba_dynarec_single_block || !(reg[REG_CPSR] & 0x20u))
+  if (CGBA_SH4_DIFF_ACTIVE() || !(reg[REG_CPSR] & 0x20u))
     return 0;
 
   out = cgba_sh4_thumb_udiv_loop_run(
@@ -3632,7 +3646,7 @@ int cgba_sh4_interp_swi_hle(s32 *spent)
   (void)saved; (void)handled; (void)spent;
   return 0;
 #else
-  if (cgba_dynarec_single_block)
+  if (CGBA_SH4_DIFF_ACTIVE())
     return 0;
   cgba_sh4_extra_cycles = 0;
   handled = (cgba_hle_bios_swi(0) == 1);
@@ -3652,11 +3666,11 @@ u32 cgba_sh4_bios_fallback(u32 cycles)
    * the fallback itself. On success reg[REG_PC] is the game handler (or the
    * interrupted code) and the stub's lookup_pc redispatches natively. */
 #if CGBA_SH4_INTRWAIT_HLE
-  if (!cgba_dynarec_single_block && cgba_intrwait_state &&
+  if (!CGBA_SH4_DIFF_ACTIVE() && cgba_intrwait_state &&
       reg[REG_PC] == 0x00000004u && reg[CPU_MODE] == MODE_SYSTEM)
     return cgba_hle_intrwait_step(cycles);
 #endif
-  if (!cgba_dynarec_single_block && reg[REG_PC] == 0x00000008u &&
+  if (!CGBA_SH4_DIFF_ACTIVE() && reg[REG_PC] == 0x00000008u &&
       reg[CPU_MODE] == MODE_SUPERVISOR) {
     int h = cgba_hle_bios_swi(cycles);
     if (h == 3)
@@ -3666,7 +3680,7 @@ u32 cgba_sh4_bios_fallback(u32 cycles)
     if (h)
       return cycles;                 /* PC/mode restored; stub redispatches */
   }
-  if (!cgba_dynarec_single_block && reg[CPU_MODE] == MODE_SYSTEM &&
+  if (!CGBA_SH4_DIFF_ACTIVE() && reg[CPU_MODE] == MODE_SYSTEM &&
       (reg[REG_PC] == CGBA_FS_COPY_LOOP || reg[REG_PC] == CGBA_FS_FILL_LOOP)) {
     /* Re-entry at a canonical FastSet chunk top (ISR returned into a parked
      * copy, or the interpreter stopped exactly there). Declined -> the
@@ -3675,14 +3689,14 @@ u32 cgba_sh4_bios_fallback(u32 cycles)
     if (r != CGBA_FS_DECLINE)
       return r;
   }
-  if (!cgba_dynarec_single_block && reg[CPU_MODE] == MODE_SYSTEM &&
+  if (!CGBA_SH4_DIFF_ACTIVE() && reg[CPU_MODE] == MODE_SYSTEM &&
       (reg[REG_PC] == CGBA_CS_WCOPY_LOOP || reg[REG_PC] == CGBA_CS_HCOPY_LOOP)) {
     /* Re-entry at a canonical CpuSet chunk top (ISR returned mid-copy). */
     u32 r = cgba_swi_cpuset_engine((s32)cycles);
     if (r != CGBA_FS_DECLINE)
       return r;
   }
-  if (!cgba_dynarec_single_block && reg[CPU_MODE] == MODE_IRQ) {
+  if (!CGBA_SH4_DIFF_ACTIVE() && reg[CPU_MODE] == MODE_IRQ) {
     if (reg[REG_PC] == 0x00000018u) {
       if (cgba_hle_bios_irq_entry() != 0)
         return cycles;

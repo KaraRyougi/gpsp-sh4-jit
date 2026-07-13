@@ -537,18 +537,101 @@ winner: compiling `video.cc` alone at `-O3` added 41,248 bytes and changed this
 checkpoint from 36.080742 to 36.079399 fps in the earlier A/B.  The wins came
 from reducing exact hot-path work, not switching compiler families.
 
+**Renderer/R11/fastmem placement pass** (2026-07-12): the two exact Emerald
+renderer paths above are now production defaults:
+`CGBA_VIDEO_OPAQUE_ROW_UNROLL=ON` and
+`CGBA_VIDEO_BACKDROP_SHADOW_PALETTE=ON`. The broader stable-palette blend cache
+and opaque-tile classifier remain opt-in. Interpreter A/B runs from saved
+gameplay checkpoints produced identical FBSTAT streams for all 60 frames in
+Emerald, Advance Wars, SimCity 2000, and Yoshi's Island. Zelda matched all 34
+common frames before the slower control hit the 60-second instruction-level
+emulator cap; neither run produced a mismatch.
+
+The SH-4 backend now keeps guest ARM r0 in callee-saved R11 across translated
+code. Stub/helper boundaries explicitly publish and reload it, including HLE
+division and fastmem calls. Fastmem sites retain the already-classified GBA
+region for cycle charging, direct EWRAM paths use a fixed region charge, and
+palette stores use their fixed native charge. The EWRAM specialization also
+fixed a latent mirror-mask error (the full 256 KiB mirror is now selected,
+not only its low 16 KiB); the oracle includes a high mirrored address to keep
+that correction covered.
+
+Placement is now split by physical on-chip bank, accounting for the aliasing
+of all `e500xxxx` XRAM windows and all `e501xxxx` YRAM windows. The 2,064-byte
+dispatch-stub section links at `e5200000` in the 4 KiB ILRAM budget. The 8 KiB
+generated fastmem buffer occupies XRAM at `e500e000..e5010000`; the LCD
+presenter double-buffers smaller strips in the two 4 KiB halves of YRAM so it
+cannot overwrite fastmem. A 20 KiB main-RAM backup mode preserves both on-chip
+banks across gint world switches. Linker assertions enforce both budgets in
+the fx-CG100 and fx-CG50 scripts.
+
+The optimized JIT was compared with an otherwise-identical build with R11
+pinning and XYRAM fastmem disabled. Emerald, Advance Wars, SimCity 2000,
+Zelda, and Yoshi's Island each completed a six-frame saved-checkpoint run with
+byte-identical post-frame IWRAM/EWRAM/VRAM/palette/OAM/IO/framebuffer hashes.
+The host suite now includes 143,419 native execution-oracle cases, fixed-cycle
+debit assertions, the high EWRAM mirror case, and a resident-image size guard.
+Both production calculator cross-links pass with `.cgba.highbss` unchanged at
+`0x8c5d5300`. Physical fx-CG100 validation remains required for the new
+ILRAM/XRAM execution layout, world-switch preservation, and split-YRAM LCD DMA
+before treating the placement gain as field-proven.
+
+The first physical fx-CG100 run rejected that combined layout as substantially
+slower. The clearest coupled regression is display-side: reserving all of XRAM
+for fastmem reduced the scaled presenter from 12/8-row DMA strips to four rows,
+doubling or tripling DMA launch/wait frequency. `CGBA_SH4_FASTMEM_XYRAM` is now
+an opt-in hardware A/B again; the release candidate keeps generated fastmem in
+ordinary executable RAM and restores the full-bank 12/8-row strip geometry.
+ILRAM dispatch placement remains enabled for the next isolated hardware test.
+
+**Ranked priority 1–10 follow-on** (2026-07-12): the remaining code paths from
+the optimization review were implemented behind independently testable
+switches. The priority-2 survivor-generation experiment was subsequently
+removed: observed ROM thrashing is rare, while two semispaces halve the normal
+one-generation working set and add metadata, promotion, and chain-safety
+complexity. Production keeps one contiguous 1 MiB ROM JIT arena and performs a
+whole-cache reset only on the uncommon capacity or semantic flush.
+
+Production translation now uses bounded 704-byte literal-pool segments with
+per-segment constant deduplication, compact single-fastmem tuples, known ARM
+and Thumb target microcaches, classified-region immediate cycle debits, and
+native Thumb high-register PC operations. Release assembly and C paths compile
+the single-block differential checks away; per-patch I-cache resynchronization
+is optional and separately counted from final block publication. Emission
+telemetry reports literal-pool use, helper/tuple bytes, total bytes per block,
+ARM/Thumb totals, and six block-size buckets.
+
+The unscaled presenter now uses ten 16-row strips per frame. With
+`CGBA_LCD_SCANLINE_STREAM=ON`, each completed 16-row renderer group is copied
+to the DMA-safe YRAM bank immediately, allowing its LCD DMA to overlap
+emulation of the next group. Scaling, FPS-overlay frames, and incomplete
+streams fall back to the established end-of-frame presenter. This changes only
+when pixels are published, not framebuffer contents, but physical display
+timing/tearing and throughput still require qualification.
+
+The full host suite passes, including 148,963 native execution-oracle cases,
+1,407,616 opaque-row cases, 1,356,940 backdrop-shadow comparisons, the
+segmented-pool reach/dedup test, and the SH-4 assembler audit. Production and
+differential-harness calculator cross-links pass. No physical speedup is
+claimed for the streaming switch yet.
+
 ## State at HEAD
 
 Shipping default is the interpreter (`CGBA_DYNAREC=OFF`); the JIT is the
 opt-in hardware artifact with cold gate T=8, heat leak 4, faithful
 CpuSet/FastSet HLE on, experimental ObjAffine HLE off by default, all other
 infidel HLEs compiled out, IntrWait HLE off.
+Guest-r0 pinning, segmented pools, compact fastmem tuples, known-target caches,
+exact renderer paths, 16-row strips, and scanline streaming are enabled in JIT
+hardware candidates. XYRAM fastmem defaults off pending isolated physical A/Bs;
+dispatch stubs remain in ILRAM, and the ROM JIT remains one contiguous arena.
 Modeled numbers on the standing scenarios: AW 39.8 fps, Metroid movement
 32.4 fps, Metroid dense parity green, SMA2 from the 30fps-goal era 35.1
 (pre-demotion protocol — remeasure before quoting), the full-render Zelda
 checkpoint 14.65 fps with the new options off and 20.28 fps with them on, and
 Yoshi A/LEFT about 21.0 modeled fps. The Emerald held-Down checkpoint is 28.89
-modeled fps with the retained renderer options. The current Mario-specific
+modeled fps with the exact backdrop-shadow and opaque-row options now enabled
+by default. The current Mario-specific
 calcemu harness
 reaches 45 emulated fps with the clean frame-1996 hash `8BEF0CBC`. The Zelda
 45/60 targets have not been reached. Both corrected hardware-layout candidates
@@ -586,14 +669,15 @@ These are open or partial items, not a list completed by the Zelda work.
    single-block oracle deliberately bypasses these hooks. Gate the whole
    wrapper off for an exact JIT/interpreter run before pursuing affine,
    open-bus, or renderer suspects.
-4. **Renderer — partial.** With the JIT tail shrinking, `render_scanline_text` /
+4. **Renderer/presentation — partial.** With the JIT tail shrinking, `render_scanline_text` /
    `render_w_effects` / affine renderers total ~15% of host instructions
    in the historical AW profile and `update_gba` ~7%. The Zelda work added
-   opt-in stable-palette blend-term caching, an opaque 4-bpp tile fast path,
-   and an SH-4-oriented unrolled opaque row, with host differential tests.
+   opt-in stable-palette blend-term caching and an opaque 4-bpp tile fast path.
+   The exact unrolled opaque row and backdrop-shadow palette are now production
+   defaults after five-game checkpoint testing. The unscaled presenter now
+   streams completed 16-row groups to LCD DMA; physical qualification is open.
    Per-scanline dirty tracking, affine inner loops, and broader renderer work
-   remain unexplored; the renderer contribution has not yet been isolated in
-   the corrected full-render benchmark.
+   remain unexplored.
 5. **Cold-gate tuning by regime — partial.** The current global defaults are
    T=8, chunk 512, leak 4 after later Yoshi tuning, not the historical
    T=64/leak 16 quoted here previously. Existing feedback also heats by four
@@ -603,13 +687,16 @@ These are open or partial items, not a list completed by the Zelda work.
    isolated adaptive-versus-fixed A/B, per-game policy, or feedback-driven
    leak controller. Compare the current +4/+1 heat rule with fixed +1 under
    otherwise identical settings before adding more control dynamics.
-6. **Density round 3 candidates — open; one rejected experiment.** Per-block
-   caching of the top 1-2 guest registers was not implemented. A local Thumb
+6. **Density round 3 candidates — partial; one rejected experiment.** Guest r0
+   is now globally resident in R11, but per-block caching of 1-2 additional
+   guest registers was not implemented. A local Thumb
    constant-store experiment reduced helper calls but regressed the Mario
    checkpoint to 37 fps and was not retained. Constant-compare folding was not
    implemented. The existing CPSR cache and linear dead-flag pass predate this
-   TODO; no new block-local liveness across conditional runs was added. None of
-   the round-3 candidates is present in the Zelda build.
+   TODO; no new block-local liveness across conditional runs was added. No
+   Segmented literal pools and compact single-fastmem descriptors are now
+   present; a per-block descriptor table and additional pinned registers are
+   still open.
 7. **Audio**: sound is fully stubbed. Any future audio needs the
    sound-timer batching revisited (sample-accurate FIFO DMA re-caps the
    event slice) — budget for a real-time mixer is ~unknown on this CPU.

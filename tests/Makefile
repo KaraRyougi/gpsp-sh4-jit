@@ -17,11 +17,11 @@ comma   := ,
 DEAD_STRIP := $(if $(filter Darwin,$(shell uname -s)),\
 	-Wl$(comma)-dead_strip,-Wl$(comma)--gc-sections)
 
-.PHONY: all smoke audit core thumb cond native-ldst input lcd-cleanup rtc cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc \
+.PHONY: all smoke audit core litpool thumb cond native-ldst input lcd-cleanup scale rtc cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc \
 	swi-overlap swi-oam udiv udiv-emitter idle-signature video-opaque \
 	video-blend-cache video-backdrop-shadow arm-mixer clean
 
-all: smoke core thumb cond native-ldst rtc input lcd-cleanup cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc swi-overlap swi-oam udiv \
+all: smoke core litpool thumb cond native-ldst rtc input lcd-cleanup scale cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc swi-overlap swi-oam udiv \
 	udiv-emitter idle-signature video-opaque video-blend-cache \
 	video-backdrop-shadow arm-mixer audit
 
@@ -30,7 +30,8 @@ all: smoke core thumb cond native-ldst rtc input lcd-cleanup cycle exec jit-boun
 exec: $(ROOT)/tests/sh4_exec_oracle.c $(ROOT)/ports/fxcg100/sh4/sh4_thumb_dp_emit.h \
       $(ROOT)/ports/fxcg100/sh4/sh4_emit_glue.h $(ROOT)/ports/fxcg100/sh4/sh4_fastmem.h
 	$(CC) $(CFLAGS) -DCGBA_SH4_ARM_LDST_NATIVE=1 -DCGBA_SH4_THUMB_LDST_NATIVE=1 \
-	  -DCGBA_SH4_THUMB_BLOCK_NATIVE=1 -I$(ROOT) $(ROOT)/tests/sh4_exec_oracle.c -o $(BIN)-exec
+	  -DCGBA_SH4_THUMB_BLOCK_NATIVE=1 -DCGBA_SH4_COMPACT_FASTMEM_TUPLE=1 \
+	  -I$(ROOT) $(ROOT)/tests/sh4_exec_oracle.c -o $(BIN)-exec
 	$(BIN)-exec
 
 smoke: $(ROOT)/tests/sh4_codegen_smoke.c $(ROOT)/ports/fxcg100/sh4/sh4_codegen.h
@@ -42,6 +43,12 @@ core: $(ROOT)/tests/sh4_emit_core_audit.c $(ROOT)/ports/fxcg100/sh4/sh4_emit_cor
       $(ROOT)/ports/fxcg100/sh4/sh4_codegen.h
 	$(CC) $(CFLAGS) -I$(ROOT) $(ROOT)/tests/sh4_emit_core_audit.c -o $(BIN)-core
 	$(BIN)-core
+
+litpool: $(ROOT)/tests/sh4_segmented_pool_test.c \
+	 $(ROOT)/ports/fxcg100/sh4/sh4_emit_glue.h
+	$(CC) $(CFLAGS) -I$(ROOT) $(ROOT)/tests/sh4_segmented_pool_test.c \
+	  -o $(BIN)-litpool
+	$(BIN)-litpool
 
 # Reference Thumb -> SH4 data-processing translation (host-only).
 thumb: $(ROOT)/tests/sh4_thumb_mvp_audit.c $(ROOT)/ports/fxcg100/sh4/sh4_thumb_mvp.h \
@@ -64,6 +71,11 @@ lcd-cleanup: $(ROOT)/tests/fxcg100_lcd_cleanup_test.c \
 	$(CC) $(CFLAGS) -I$(ROOT) $(ROOT)/tests/fxcg100_lcd_cleanup_test.c \
 	  -o $(BIN)-lcd-cleanup
 	$(BIN)-lcd-cleanup
+
+scale: $(ROOT)/tests/scale_test.c $(ROOT)/ports/fxcg100/fxcg100_scale.h
+	$(CC) $(CFLAGS) -O2 -I$(ROOT)/ports/fxcg100 \
+	  $(ROOT)/tests/scale_test.c -o $(BIN)-scale
+	$(BIN)-scale
 
 # Production gpSP cartridge GPIO/RTC and calculator-specific ROM loaders. Dead
 # section elimination keeps the otherwise monolithic gba_memory.c host-linkable.
@@ -230,7 +242,7 @@ audit: $(ROOT)/tests/sh4_codegen_audit.c $(ROOT)/ports/fxcg100/sh4/sh4_codegen.h
 
 clean:
 	rm -f $(BIN)-smoke $(BIN)-core $(BIN)-thumb $(BIN)-cond $(BIN)-native-ldst \
-	  $(BIN)-input $(BIN)-input-cg50 $(BIN)-rtc $(BIN)-cycle $(BIN)-exec $(BIN)-jit-boundaries $(BIN)-jit-safety $(BIN)-jit-ram-flush $(BIN)-memory-pc $(BIN)-swi-overlap $(BIN)-udiv \
+	  $(BIN)-input $(BIN)-input-cg50 $(BIN)-rtc $(BIN)-scale $(BIN)-cycle $(BIN)-exec $(BIN)-jit-boundaries $(BIN)-jit-safety $(BIN)-jit-ram-flush $(BIN)-memory-pc $(BIN)-swi-overlap $(BIN)-udiv \
 	  $(BIN)-swi-oam $(BIN)-udiv-emitter $(BIN)-idle-signature \
 	  $(BIN)-video-opaque $(BIN)-video-blend-cache \
 	  $(BIN)-video-backdrop-shadow \

@@ -59,6 +59,7 @@ u8 *memory_map_read[8192];
 u32 gamepak_size;
 const u8 * const *cgba_gamepak_fragment_blocks;
 u8 iwram[0x10000];                 /* gpSP global (push_iwram fast path) */
+u8 ewram[0x80000];
 u8 vram[1024 * 96];
 u16 palette_ram[512];
 u16 palette_ram_converted[512];
@@ -71,6 +72,7 @@ int cgba_sh4_arm_psr(u32 o, u32 p){(void)o;(void)p;return 0;}
 void sh4_block_exit(u32 pc){(void)pc;}
 void sh4_helper_exit(u32 pc){(void)pc;}
 void sh4_op2_pc_mem_tramp(void){}
+void sh4_fastmem_pc_mem_tramp(void){}
 void sh4_op2_pc_tramp(void){}
 void sh4_op2_tramp(void){}
 void sh4_indirect_branch_thumb(u32 a){(void)a;}
@@ -89,7 +91,7 @@ u32 cgba_sh4_hle_div(u32 o, u32 p){(void)o;(void)p;return 0;}
  * the mini-interpreter's byte-wise MOV.L read returns the truncated host
  * address, matching the calculator layout. R9 points here; R10 holds
  * sh4_block_exit directly. Filled in orc_vec_init(). */
-static u8 orc_vec_table[13 * 4];
+static u8 orc_vec_table[16 * 4];    /* MOV.L @(disp4,R9) architectural cap */
 static void orc_vec_put(unsigned idx, const void *pf)
 {
   u32 v = (u32)(uintptr_t)pf;
@@ -130,6 +132,7 @@ static void orc_vec_init(void)
   orc_vec_put(SH4G_VEC_ws_cyc_seq, (const void *)ws_cyc_seq);
   orc_vec_put(SH4G_VEC_ws_cyc_nseq, (const void *)ws_cyc_nseq);
   orc_vec_put(SH4G_VEC_iwram_data, (const void *)(iwram + 0x8000));
+  orc_vec_put(SH4G_VEC_ewram_data, (const void *)ewram);
 }
 
 /* ---- guest state used by the interpreter ---- */
@@ -229,10 +232,12 @@ static void orc_write(u32 addr, u32 v, int size_log2, int *ok)
 
 static u32 orc_slow_target;        /* trunc(&sh4_op2_pc_mem_tramp) */
 static u32 orc_slow_target2;       /* trunc(&sh4_op2_pc_tramp) */
+static u32 orc_slow_target3;       /* trunc(&sh4_fastmem_pc_mem_tramp) */
 static int orc_took_slow;
+static u32 orc_final_cycles;
 
 static int orc_is_slow_target(u32 a)
-{ return a == orc_slow_target || a == orc_slow_target2; }
+{ return a == orc_slow_target || a == orc_slow_target2 || a == orc_slow_target3; }
 
 static int orc_fastmem_io16_direct_store(u32 addr)
 {
@@ -260,10 +265,14 @@ static int run_at(u32 pc, u32 pc_end)
 
   R[SH4_REG_BASE] = 0;
   R[SH4_REG_CPSR] = g_reg[SH4_GREG_CPSR];
+#if CGBA_SH4_PIN_GUEST_R0
+  R[SH4_REG_GUEST_R0] = g_reg[0];
+#endif
   R[SH4_REG_VEC] = (u32)(uintptr_t)orc_vec_table;
   R[SH4_REG_BEXIT] = (u32)(uintptr_t)sh4_block_exit;
   unmodeled[0] = 0;
   orc_took_slow = 0;
+  orc_final_cycles = 0;
 
   while (pc != pc_end) {
     int okf = 1;
@@ -298,6 +307,14 @@ static int run_at(u32 pc, u32 pc_end)
         orc_took_slow = 1;
         snprintf(unmodeled, sizeof unmodeled, "jmp/jsr (slow path taken)");
         return 0;
+      }
+      if (R[nn] == (u32)(uintptr_t)sh4_helper_exit) {
+        g_reg[SH4_GREG_CPSR] = R[SH4_REG_CPSR];
+#if CGBA_SH4_PIN_GUEST_R0
+        g_reg[0] = R[SH4_REG_GUEST_R0];
+#endif
+        orc_final_cycles = R[SH4_REG_CYCLES];
+        return 1;                                      /* expected PC redispatch */
       }
       snprintf(unmodeled, sizeof unmodeled, "jmp %08X", R[nn]);
       return 0;
@@ -471,6 +488,10 @@ static int run_at(u32 pc, u32 pc_end)
     pc = next;
   }
   g_reg[SH4_GREG_CPSR] = R[SH4_REG_CPSR];
+#if CGBA_SH4_PIN_GUEST_R0
+  g_reg[0] = R[SH4_REG_GUEST_R0];
+#endif
+  orc_final_cycles = R[SH4_REG_CYCLES];
   return 1;
 }
 
@@ -488,6 +509,7 @@ static int run_sh4x(const u8 *code, size_t n)
   orc_add_window(cpu_modes, sizeof cpu_modes, 0);
   orc_add_window(psr_rebank_buf, sizeof psr_rebank_buf, 0);
   orc_slow_target = (u32)(uintptr_t)sh4_op2_pc_mem_tramp;
+  orc_slow_target3 = (u32)(uintptr_t)sh4_fastmem_pc_mem_tramp;
   orc_slow_target2 = (u32)(uintptr_t)sh4_op2_pc_tramp;
   return run_at((u32)(uintptr_t)code, (u32)(uintptr_t)code + (u32)n);
 }
@@ -616,8 +638,7 @@ static int ref_thumb_dp(ref_state *st, u32 opcode, u32 pc)
     u32 a = (rd == 15) ? (pc + 4) : st->reg[rd];
     u32 b = (rs == 15) ? (pc + 4) : st->reg[rs];
     if (op == 1) { ref_addc(st, a, ~b, 1); return 1; }
-    if (rd == 15) return 0;                 /* PC-dest: not exercised here */
-    st->reg[rd] = (op == 0) ? (a + b) : b;  /* no flags */
+    st->reg[rd] = ((op == 0) ? (a + b) : b) & ((rd == 15) ? ~1u : ~0u);
     return 1;
   }
   return 0;
@@ -701,6 +722,16 @@ static void check(const char *what, u32 opcode, u32 mask, const u32 init[16],
 
 int main(void)
 {
+  static const u8 init_seq[16][2] = {
+    {1,1}, {1,1}, {3,6}, {1,1}, {1,1}, {1,2}, {1,2}, {1,2},
+    {3,6}, {3,6}, {5,10}, {5,10}, {9,18}, {9,18}, {1,1}, {1,1}
+  };
+  static const u8 init_nseq[16][2] = {
+    {1,1}, {1,1}, {3,6}, {1,1}, {1,1}, {1,2}, {1,2}, {1,2},
+    {5,9}, {5,9}, {5,11}, {5,11}, {5,15}, {5,15}, {1,1}, {1,1}
+  };
+  memcpy(ws_cyc_seq, init_seq, sizeof init_seq);
+  memcpy(ws_cyc_nseq, init_nseq, sizeof init_nseq);
   orc_vec_init();
   static const u32 vals[] = {
     0, 1, 2, 0x80000000u, 0x80000001u, 0x7FFFFFFFu, 0xFFFFFFFFu,
@@ -743,8 +774,9 @@ int main(void)
     0x18D1, 0x1AD1, 0x1CD1, 0x1ED1,
     /* fmt3 MOV/CMP/ADD/SUB r3,#imm */
     0x2300, 0x23FF, 0x2B01, 0x2BFF, 0x3380, 0x3BFF, 0x3B01,
-    /* fmt5 hi-reg: ADD r8,r9 / CMP r8,r9 / MOV r8,r9 / vs pc (rs=15) */
-    0x44C8, 0x45C8, 0x46C8, 0x447D, 0x457D, 0x467D
+    /* fmt5 hi-reg: regular, source-PC, and destination-PC forms */
+    0x44C8, 0x45C8, 0x46C8, 0x447D, 0x457D, 0x467D,
+    0x448F, 0x458F, 0x468F, 0x44FF, 0x45FF, 0x46FF, 0x46F7
   };
   for (unsigned oi = 0; oi < sizeof dp_ops / sizeof *dp_ops; oi++)
     for (unsigned vi = 0; vi < sizeof vals / sizeof *vals; vi++)
@@ -1306,7 +1338,6 @@ int main(void)
     static u8 fm_buf[8192];
     u8 *giwram = iwram;          /* tags 0..0x7FFF, data 0x8000.. */
     const u32 giwram_size = 0x10000;
-    static u8 ewram[0x48000];    /* data page 0, tag mirror at +0x40000 */
     static u8 rom[0x8000];
     u8 *tp = fm_buf;
     const u32 pc = 0x08000100;
@@ -1315,10 +1346,19 @@ int main(void)
       cgba_sh4_fastmem_routine[fm] = sh4g_fastmem_emit_routine(&tp, fm);
     for (int fm = CGBA_FMB_LDM; fm < CGBA_FM_TOTAL; fm++)
       cgba_sh4_fastmem_routine[fm] = sh4g_fastmem_emit_block_routine(&tp, fm);
+    cgba_sh4_psr_rebank_routine = sh4g_psr_emit_rebank_routine(&tp);
+    if (tp > fm_buf + sizeof fm_buf) {
+      printf("FAIL fastmem resident image uses %zu bytes (budget %zu)\n",
+             (size_t)(tp - fm_buf), sizeof fm_buf);
+      fails++;
+    }
     if (getenv("ORC_PRINT_FM"))
       for (int fm = 0; fm < CGBA_FM_TOTAL; fm++)
         fprintf(stderr, "fm[%d] off=0x%zx\n", fm,
                 (size_t)(cgba_sh4_fastmem_routine[fm] - fm_buf));
+    if (getenv("ORC_PRINT_FM"))
+      fprintf(stderr, "fm resident used=0x%zx / 0x%zx\n",
+              (size_t)(tp - fm_buf), sizeof fm_buf);
 
     memset(memory_map_read, 0, sizeof memory_map_read);
     memset(giwram, 0, 0x10000);
@@ -1331,9 +1371,10 @@ int main(void)
     for (unsigned i = 0; i < sizeof rom; i++)   rom[i]   = (u8)(0x11 + i * 7);
     for (unsigned i = 0; i < 0x8000; i++) {
       giwram[0x8000 + i] = (u8)(0x23 + i * 3);
-      ewram[i]          = (u8)(0x35 + i * 5);
       vram[i]           = (u8)(0x47 + i * 11);
     }
+    for (unsigned i = 0; i < 0x40000; i++)
+      ewram[i] = (u8)(0x35 + i * 5 + (i >> 14));
     for (unsigned i = 0x1230; i < 0x1260; i++)  /* SMC tag range: covers the
         pre/post/reg-offset effective addresses of the smc targets */
       giwram[i] = 1;
@@ -1343,6 +1384,7 @@ int main(void)
     struct tgt { u32 base; int slow_ld; int slow_st; const char *nm; } tgts[] = {
       { 0x03000100u, 0, 0, "iwram" },
       { 0x02000200u, 0, 0, "ewram" },
+      { 0x02052340u, 0, 1, "ewram-mirror-high" },
       { 0x06000300u, 0, -1, "vram" },           /* -1: word/half ok, byte slow */
       { 0x04000000u, 0, 1, "io" },
       { 0x08000400u, 0, 1, "rom" },
@@ -1406,7 +1448,7 @@ int main(void)
           /* fresh copies of mutable memory for the reference diff */
           u8 mem_before[8]; const u8 *page = NULL; u32 poff = 0;
           u32 reg = eff >> 24;
-          if (reg == 2) { page = ewram; poff = eff & 0x7FFF; }
+          if (reg == 2) { page = ewram; poff = eff & 0x3FFFF; }
           else if (reg == 3) { page = giwram + 0x8000; poff = eff & 0x7FFF; }
           else if (reg == 6) { page = vram; poff = eff & 0x7FFF; }
           if (page) memcpy(mem_before, page + poff, 4);
@@ -1455,6 +1497,16 @@ int main(void)
             continue;
           }
           if (slow) { if (page) memcpy((void *)(page + poff), mem_before, 4); continue; }
+
+          {
+            u32 cost = ws_cyc_nseq[(eff >> 24) & 0xFu]
+                                      [kind == LDK_W ? 1 : 0];
+            if (orc_final_cycles != 0u - cost) {
+              printf("FAIL fm %s @%s: cycles=%u want %u\n",
+                     forms[fi].nm, tgts[ti].nm, orc_final_cycles, 0u - cost);
+              fails++;
+            }
+          }
 
           /* fast path: check rd / writeback / memory / other regs */
           u32 want_rd = g_reg[3];
@@ -2149,6 +2201,13 @@ int main(void)
           goto brestore;
         }
         if (!slow) {
+          u32 cost = count * (u32)ws_cyc_seq[regn & 0xFu][1];
+          if (orc_final_cycles != 0u - cost) {
+            printf("FAIL bfm %s @%s: cycles=%u want %u\n",
+                   bforms[fi].nm, btgts[ti].nm,
+                   orc_final_cycles, 0u - cost);
+            fails++;
+          }
           u32 off2 = poff, gi2 = 0;
           for (int b = 0; b < 16; b++) {
             if (!(rlist & (1u << b))) continue;

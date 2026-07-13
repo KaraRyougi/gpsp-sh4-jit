@@ -6,8 +6,7 @@
  * verified instruction encoder (sh4_codegen.h):
  *
  *   - the host register model the dynarec reserves,
- *   - guest reg[] load/store addressing (the MVP keeps every guest ARM
- *     register in the reg[] state array; nothing is pinned yet),
+ *   - guest reg[] load/store addressing, with guest ARM r0 pinned in SH-4 R11,
  *   - 32-bit constant materialization via per-block PC-relative literal pools.
  *
  * The literal pool is the central SH4 codegen problem: there is no 32-bit
@@ -41,6 +40,14 @@
                                  authoritative reg[REG_CPSR]; memory is synced
                                  by the stub funnels and helper trampolines
                                  around every C call (sh4_stub.S).           */
+#ifndef CGBA_SH4_PIN_GUEST_R0
+#define CGBA_SH4_PIN_GUEST_R0 1
+#endif
+#if CGBA_SH4_PIN_GUEST_R0
+#define SH4_REG_GUEST_R0 11   /* authoritative guest ARM r0 (callee-saved).
+                                 reg[0] is synchronized by stub/helper funnels
+                                 and around descriptor-driven fastmem calls. */
+#endif
 #define SH4_REG_RET       0   /* C-call return / general scratch          */
 #define SH4_REG_T0        1   /* scratch temporaries                      */
 #define SH4_REG_T1        2
@@ -49,6 +56,7 @@
 #define SH4_REG_ARG1      5
 #define SH4_REG_ARG2      6
 #define SH4_REG_ARG3      7
+#define SH4_REG_FM_REGION 12   /* fastmem-only preserved region / tramp cursor */
 
 /* ---- guest reg[] indices (mirror of vendor/gpsp/cpu.h ext_reg_numbers) ---- */
 #define SH4_GREG_SP        13
@@ -180,20 +188,23 @@ static inline void sh4_emit_flush_pool(sh4_emitter *e)
   e->nrefs = 0;
 }
 
-/* ---- guest reg[] access (MVP: everything spilled to reg[] off SH4_REG_BASE) */
+/* ---- guest reg[] access -------------------------------------------------- */
 
 /* Byte offset of guest reg[idx] from the base pointer. */
 static inline unsigned sh4_greg_off(unsigned idx) { return idx * 4; }
 
-/* Load guest reg[idx] -> host rn. CPSR is register-cached in R8 (a plain MOV,
- * strictly less clobbering than the old R0-indexed form). Other indices use
- * @(disp,base) for the ARM r0..r15 window (offsets 0..60), else @(R0,base)
- * with R0 set to the offset (<=127). */
+/* Load guest reg[idx] -> host rn. CPSR is cached in R8 and guest r0 in R11.
+ * Other indices use @(disp,base) for the ARM r0..r15 window (offsets 0..60),
+ * else @(R0,base) with R0 set to the offset (<=127). */
 static inline void sh4_emit_load_greg(sh4_codegen *cg, unsigned idx, unsigned rn)
 {
   unsigned off = sh4_greg_off(idx);
   if (idx == SH4_GREG_CPSR) {
     sh4_emit_mov_reg(cg, SH4_REG_CPSR, rn);          /* rn = cached CPSR */
+#if CGBA_SH4_PIN_GUEST_R0
+  } else if (idx == 0) {
+    sh4_emit_mov_reg(cg, SH4_REG_GUEST_R0, rn);      /* rn = cached guest r0 */
+#endif
   } else if (off <= 60) {
     sh4_emit_mov_l_load_disp(cg, SH4_REG_BASE, rn, off >> 2);
   } else {
@@ -202,12 +213,16 @@ static inline void sh4_emit_load_greg(sh4_codegen *cg, unsigned idx, unsigned rn
   }
 }
 
-/* Store host rn -> guest reg[idx]. Same addressing rules; CPSR goes to R8. */
+/* Store host rn -> guest reg[idx]. CPSR goes to R8 and guest r0 to R11. */
 static inline void sh4_emit_store_greg(sh4_codegen *cg, unsigned rn, unsigned idx)
 {
   unsigned off = sh4_greg_off(idx);
   if (idx == SH4_GREG_CPSR) {
     sh4_emit_mov_reg(cg, rn, SH4_REG_CPSR);          /* cached CPSR = rn */
+#if CGBA_SH4_PIN_GUEST_R0
+  } else if (idx == 0) {
+    sh4_emit_mov_reg(cg, rn, SH4_REG_GUEST_R0);      /* cached guest r0 = rn */
+#endif
   } else if (off <= 60) {
     sh4_emit_mov_l_store_disp(cg, rn, SH4_REG_BASE, off >> 2);
   } else {
