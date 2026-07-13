@@ -56,7 +56,19 @@ SECTIONS
 		_gint_tlbh_end = . ;
 		_gint_tlbh_size = ABSOLUTE(. - _gint_tlbh_start);
 
-		*(.text .text.*)
+		/*
+			The CG50 executes normal add-in text from fragmented NOR. Keep the
+			large gameplay working set out of this section so it can be copied
+			into the proven high-RAM arena below. These basename patterns are
+			unique within this target; port startup/main code deliberately stays
+			in ROM so it can perform the copy before any relocated function runs.
+		*/
+		*(EXCLUDE_FILE (*cpu_threaded.c.obj *cpu.cc.obj
+			*gba_memory.c.obj *video.cc.obj *sh4_interp_helpers.c.obj
+			*sh4_stub.S.obj) .text)
+		*(EXCLUDE_FILE (*cpu_threaded.c.obj *cpu.cc.obj
+			*gba_memory.c.obj *video.cc.obj *sh4_interp_helpers.c.obj
+			*sh4_stub.S.obj) .text.*)
 	} > rom
 
 	.gint.blocks : {
@@ -139,8 +151,30 @@ SECTIONS
 		_cgba_highbss_end = . ;
 	} > highram :NONE
 
+	/*
+		CG50-only RAM-resident gameplay code. The load image remains in the
+		G3A/NOR file; cgba_hottext_init() copies it to this linked P1 address
+		and synchronizes D/I caches before the emulator is initialized.
+	*/
+	.cgba.hottext ALIGN(32) : ALIGN(32) {
+		_lcgba_hottext = LOADADDR(.cgba.hottext);
+		_rcgba_hottext = . ;
+		*cpu_threaded.c.obj(.text .text.*)
+		*cpu.cc.obj(.text .text.*)
+		*gba_memory.c.obj(.text .text.*)
+		*video.cc.obj(.text .text.*)
+		*sh4_interp_helpers.c.obj(.text .text.*)
+		*sh4_stub.S.obj(.text .text.*)
+		. = ALIGN(32);
+		_ecgba_hottext = . ;
+	} > highram AT> rom
+
+	_scgba_hottext = SIZEOF(.cgba.hottext);
+
 	ASSERT(_cgba_highbss_end <= 0x8c6F0000,
 		"fx-CG50 gpSP high RAM arena exceeds the conservative 0x8c6f0000 cap (raise after emulator/hardware validation)")
+	ASSERT(_ecgba_hottext <= 0x8c6F0000,
+		"fx-CG50 RAM-resident hot text exceeds the hardware-proven 0x8c6f0000 cap")
 
 	/DISCARD/ : {
 		*(.gint.rodata.sh3 .gint.data.sh3 .gint.bss.sh3)

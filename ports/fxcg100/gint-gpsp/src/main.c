@@ -7,6 +7,10 @@
 #include "fxcg100_platform.h"
 #include "frame_pacing.h"
 #include "gpsp_runner.h"
+
+#ifdef CGBA_FXCG50
+extern int cgba_hottext_init(void);
+#endif
 #ifdef CGBA_GPSP_HEADLESS_TEST
 #define CGBA_HEADLESS_STATE_SIZE CGBA_STATE_RAW_SIZE
 extern unsigned char *cgba_gamepak_scratch_acquire(unsigned int min_size);
@@ -137,6 +141,9 @@ extern uint32_t cgba_sh4_arm_mixer_first_reg[10];
 
 extern char cgba_highbss_start[];
 extern char cgba_highbss_end[];
+#ifdef CGBA_FXCG50
+extern char ecgba_hottext[];
+#endif
 
 /* 4-byte aligned: the scaled presenters read rows as packed u32 pairs. */
 static uint16_t cgba_framebuffer[CGBA_GBA_BUFFER_PIXELS] CGBA_HIGH_BSS
@@ -167,7 +174,11 @@ static uint32_t read_stack_pointer(void)
 static int gpsp_highbss_range_ok(void)
 {
 	uintptr_t start = (uintptr_t)cgba_highbss_start;
+	#ifdef CGBA_FXCG50
+	uintptr_t end = (uintptr_t)ecgba_hottext;
+	#else
 	uintptr_t end = (uintptr_t)cgba_highbss_end;
+	#endif
 
 	return start >= CGBA_HIGHRAM_SAFE_START &&
 		end > start &&
@@ -2036,6 +2047,15 @@ static int cgba_headless_test(uint16_t *framebuffer)
 
 int main(void)
 {
+	#ifdef CGBA_FXCG50
+	if(!cgba_hottext_init()) {
+		dclear(C_WHITE);
+		dtext(8, 8, C_BLACK, "gpSP RAM-code copy failed");
+		dtext(8, 36, C_BLACK, "No emulator code was executed.");
+		dupdate();
+		return 1;
+	}
+	#endif
 	uint16_t *framebuffer = cgba_framebuffer;
 	#ifdef CGBA_GPSP_HEADLESS_TEST
 	return cgba_headless_test(framebuffer);
