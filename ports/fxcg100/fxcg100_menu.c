@@ -43,8 +43,7 @@ typedef enum menu_value_id {
   MENU_VALUE_FRAMESKIP_VALUE,
   MENU_VALUE_FRAMESKIP_VARIATION,
   MENU_VALUE_SHOW_FPS,
-  MENU_VALUE_SAVE_SLOT,
-  MENU_VALUE_BACKUP_UPDATE
+  MENU_VALUE_SAVE_SLOT
 } menu_value_id;
 
 typedef enum menu_item_kind {
@@ -133,11 +132,6 @@ static const char * const frameskip_variation_options[] = {
 static const char * const on_off_options[] = {
   "OFF",
   "ON"
-};
-
-static const char * const backup_options[] = {
-  "EXIT ONLY",
-  "AUTOMATIC"
 };
 
 static const menu_item main_items[] = {
@@ -330,8 +324,6 @@ static const menu_item cheats_items[] = {
     MENU_PAGE_CHEATS, MENU_VALUE_NONE, NULL, 0, "NONE" },
   { "CHEAT 9", MENU_ITEM_INFO, MENU_ACTION_CHEAT,
     MENU_PAGE_CHEATS, MENU_VALUE_NONE, NULL, 0, "NONE" },
-  { "UPDATE BACKUP", MENU_ITEM_CHOICE, MENU_ACTION_NONE,
-    MENU_PAGE_CHEATS, MENU_VALUE_BACKUP_UPDATE, backup_options, 2, NULL },
   { "BACK", MENU_ITEM_ACTION, MENU_ACTION_BACK,
     MENU_PAGE_MAIN, MENU_VALUE_NONE, NULL, 0, NULL }
 };
@@ -355,8 +347,6 @@ static uint32_t *menu_value_ptr(fxcg100_menu_state *state, menu_value_id id)
     return &state->show_fps;
   case MENU_VALUE_SAVE_SLOT:
     return &state->savestate_slot;
-  case MENU_VALUE_BACKUP_UPDATE:
-    return &state->backup_update;
   default:
     return NULL;
   }
@@ -778,7 +768,6 @@ void fxcg100_menu_init(fxcg100_menu_state *state)
   state->frameskip_type = 1;
   state->frameskip_value = 1;
   state->frameskip_variation = 0;
-  state->backup_update = 0;
   state->show_fps = 0;
   fxcg100_keymap_defaults(state->keymap);
   fxcg100_hotkey_defaults(state->hotkey_map);

@@ -17,11 +17,11 @@ comma   := ,
 DEAD_STRIP := $(if $(filter Darwin,$(shell uname -s)),\
 	-Wl$(comma)-dead_strip,-Wl$(comma)--gc-sections)
 
-.PHONY: all smoke audit core thumb cond native-ldst input rtc cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc \
+.PHONY: all smoke audit core thumb cond native-ldst input lcd-cleanup rtc cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc \
 	swi-overlap swi-oam udiv udiv-emitter idle-signature video-opaque \
 	video-blend-cache video-backdrop-shadow arm-mixer clean
 
-all: smoke core thumb cond native-ldst rtc input cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc swi-overlap swi-oam udiv \
+all: smoke core thumb cond native-ldst rtc input lcd-cleanup cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc swi-overlap swi-oam udiv \
 	udiv-emitter idle-signature video-opaque video-blend-cache \
 	video-backdrop-shadow arm-mixer audit
 
@@ -58,6 +58,12 @@ input: $(ROOT)/tests/fxcg100_input_maps_test.c \
 	$(CC) $(CFLAGS) -DCGBA_FXCG50=1 -I$(ROOT)/tests/stubs -I$(ROOT) \
 	  $(ROOT)/tests/fxcg100_input_maps_test.c -o $(BIN)-input-cg50
 	$(BIN)-input-cg50
+
+lcd-cleanup: $(ROOT)/tests/fxcg100_lcd_cleanup_test.c \
+	     $(ROOT)/ports/fxcg100/fxcg100_lcd_cleanup.h
+	$(CC) $(CFLAGS) -I$(ROOT) $(ROOT)/tests/fxcg100_lcd_cleanup_test.c \
+	  -o $(BIN)-lcd-cleanup
+	$(BIN)-lcd-cleanup
 
 # Production gpSP cartridge GPIO/RTC and calculator-specific ROM loaders. Dead
 # section elimination keeps the otherwise monolithic gba_memory.c host-linkable.

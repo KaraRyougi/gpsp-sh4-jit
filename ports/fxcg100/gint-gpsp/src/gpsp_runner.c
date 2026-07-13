@@ -1254,7 +1254,7 @@ void cgba_gpsp_backup_load(void)
 	cgba_backup_dirty = 0;
 }
 
-void cgba_gpsp_backup_flush(int force)
+static void cgba_gpsp_backup_flush(void)
 {
 	unsigned sz = cgba_backup_size();
 	uint16_t path[24];
@@ -1262,7 +1262,7 @@ void cgba_gpsp_backup_flush(int force)
 
 	if (sz == 0)
 		return;                       /* game never touched its backup */
-	if (!force && !cgba_backup_dirty)
+	if (!cgba_backup_dirty)
 		return;                       /* nothing new since the last flush */
 	cgba_backup_path(path);
 	wrote = fxcg100_storage_write_blob(path, gamepak_backup, sz);
@@ -1646,7 +1646,7 @@ void cgba_gpsp_shutdown(void)
 	cgba_rom_mapping_failed = 0;
 	/* No guest can resume now, so persist backup only after closing the ROM;
 	 * this avoids a pointless full-ROM block refresh on exit. */
-	cgba_gpsp_backup_flush(0);
+	cgba_gpsp_backup_flush();
 	cgba_lcd_test_active = 0;
 	cgba_mode3_debug_copy_active = 0;
 	cgba_active_framebuffer = NULL;

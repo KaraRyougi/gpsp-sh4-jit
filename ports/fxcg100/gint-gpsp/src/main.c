@@ -15,10 +15,6 @@ extern void gba_save_state(void *dst);
 extern _Bool gba_load_state(const void *src);
 #endif
 
-/* AUTOMATIC backup-save flush cadence (guest frames). ~10s at 60fps; only
- * writes NOR when the save is dirty, so idle play never touches flash. */
-#define CGBA_BACKUP_AUTO_FRAMES 600u
-
 #if defined(CGBA_DYNAREC) && defined(CGBA_SH4_DIFF_HARNESS)
 #include "sh4/sh4_diff_harness.h"
 #endif
@@ -2268,12 +2264,6 @@ int main(void)
 			render_video = fxcg100_menu_should_blit(&menu_state, frame);
 
 		cgba_gpsp_run_frame(gba_buttons, render_video);
-		/* AUTOMATIC backup mode: flush the game's save to NOR when it has
-		 * changed, ~every CGBA_BACKUP_AUTO_FRAMES frames. EXIT ONLY (default)
-		 * relies solely on the shutdown flush. */
-		if(menu_state.backup_update &&
-				(frame % CGBA_BACKUP_AUTO_FRAMES) == 0)
-			cgba_gpsp_backup_flush(0);
 		cgba_fps_tick(&cgba_fps, render_video);
 		if(render_video) {
 			if(menu_state.show_fps)

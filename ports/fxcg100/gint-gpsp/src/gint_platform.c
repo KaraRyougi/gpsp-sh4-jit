@@ -1,5 +1,6 @@
 #include "fxcg100_platform.h"
 #include "../../fxcg100_scale.h"
+#include "../../fxcg100_lcd_cleanup.h"
 
 #include <gint/dma.h>
 #include <gint/display.h>
@@ -45,6 +46,10 @@ static int lcd_dma_pending;
  * full 396x224 window, so we must restore it before any gint push or the menu
  * shows a black screen with a stray line. Tracked here, healed at push time. */
 static int lcd_window_partial;
+/* The OS paints its BFile busy indicator directly into LCD GRAM during a
+ * world switch. Centered gameplay does not cover that top-right border, so
+ * remember the activity until a full update or gameplay blit removes it. */
+static int lcd_os_overlay_dirty;
 
 static void wait_lcd_dma(void)
 {
@@ -173,6 +178,7 @@ uint32_t fxcg100_poll_app_keys(void)
 
 void fxcg100_lcd_init(void)
 {
+	lcd_os_overlay_dirty = 0;
 }
 
 void fxcg100_lcd_shutdown(void)
@@ -216,6 +222,7 @@ void fxcg100_lcd_update(void)
 	restore_full_window();
 	wait_lcd_dma();
 	dupdate();
+	lcd_os_overlay_dirty = 0;
 }
 
 void fxcg100_lcd_status(const char *text)
@@ -228,6 +235,12 @@ void fxcg100_lcd_status(const char *text)
 	drect(0, 0, DWIDTH - 1, 13, bg);
 	dtext_opt(4, 2, fg, bg, DTEXT_LEFT, DTEXT_TOP, text ? text : "");
 	dupdate();
+	lcd_os_overlay_dirty = 0;
+}
+
+void fxcg100_lcd_note_os_activity(void)
+{
+	lcd_os_overlay_dirty = 1;
 }
 
 /* Start the DMA of one prepared strip (in on-chip RAM) to the LCD window.
@@ -263,6 +276,31 @@ static void start_strip_dma(const uint16_t *strip, int x, int y,
 
 static uint32_t lcd_scale_mode;
 static uint32_t lcd_scale_filter;   /* CGBA_SCALE_FILTER_{SMOOTH,SHARP,CRISP} */
+
+/* Erase only the top-right border that can retain the OS BFile icon. In
+ * fullscreen the next frame covers the icon itself, so that mode has no extra
+ * LCD traffic. The 32-row bound comfortably covers the indicator while keeping
+ * the one-shot cleanup far smaller than a full-screen push. */
+static void clear_os_overlay_before_blit(void)
+{
+	int viewport_right;
+	int rows = (int)fxcg100_lcd_cleanup_rows(DHEIGHT);
+	volatile uint16_t *display = (volatile uint16_t *)LCD_DATA_REGISTER;
+
+	if(!lcd_os_overlay_dirty)
+		return;
+	lcd_os_overlay_dirty = 0;
+	viewport_right = (int)fxcg100_lcd_cleanup_right_start(lcd_scale_mode,
+		DWIDTH);
+	if(viewport_right >= DWIDTH)
+		return;
+
+	wait_lcd_dma();
+	r61524_start_frame(viewport_right, DWIDTH - 1, 0, rows - 1);
+	for(int i = 0; i < (DWIDTH - viewport_right) * rows; i++)
+		display[0] = 0;
+	lcd_window_partial = 1;
+}
 
 void fxcg100_lcd_set_scale(uint32_t mode)
 {
@@ -422,6 +460,7 @@ void fxcg100_lcd_blit_gba(const uint16_t *pixels)
 
 	if(!pixels)
 		return;
+	clear_os_overlay_before_blit();
 	if(lcd_scale_mode == 1) {
 		blit_gba_scaled_43(pixels);
 		return;
