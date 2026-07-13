@@ -609,5 +609,5 @@ if(CGBA_GPSP_HEADLESS_TEST OR CGBA_SH4_DIFF_HARNESS)
 endif()
 
 generate_g3a(TARGET cgba-gint-gpsp OUTPUT "gpSP.g3a"
-  NAME "gpSP" VERSION "00.06.0712"
+  NAME "gpSP" VERSION "00.07.0713"
   ICONS icon-uns.png icon-sel.png)
