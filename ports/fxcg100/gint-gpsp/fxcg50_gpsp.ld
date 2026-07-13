@@ -32,8 +32,6 @@ MEMORY
 SECTIONS
 {
 	_brom = ORIGIN(rom);
-	_srom = SIZEOF(.text) + SIZEOF(.rodata)
-	      + SIZEOF(.gint.drivers) + SIZEOF(.gint.blocks);
 
 	.text : {
 		*(.text.entry)
@@ -170,6 +168,15 @@ SECTIONS
 	} > highram AT> rom
 
 	_scgba_hottext = SIZEOF(.cgba.hottext);
+	/*
+		The CG50 loader uses _srom to decide how much of the G3A's NOR image
+		to map. Include the RAM-resident section's complete load image; otherwise
+		the startup copy faults as soon as it crosses the old ROM mapping.
+	*/
+	_srom = LOADADDR(.cgba.hottext) + SIZEOF(.cgba.hottext) - ORIGIN(rom);
+
+	ASSERT(_brom + _srom >= _lcgba_hottext + _scgba_hottext,
+		"fx-CG50 ROM span does not cover the RAM-resident hot-text load image")
 
 	ASSERT(_cgba_highbss_end <= 0x8c6F0000,
 		"fx-CG50 gpSP high RAM arena exceeds the conservative 0x8c6f0000 cap (raise after emulator/hardware validation)")
