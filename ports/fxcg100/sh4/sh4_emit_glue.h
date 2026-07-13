@@ -11,22 +11,23 @@
  * the `u8 **tp` it is handed. Composition is fine: a higher helper calls lower
  * ones, each re-reading *tp.
  *
- * BRING-UP MODEL (correctness deferred to the differential harness):
- *   - All guest ARM registers live in reg[] (load -> op -> store per insn).
- *   - N and Z are materialized in REG_CPSR bits 31/30 (literal-free); C and V
- *     are NOT computed yet (a known follow-up; conditions that read C/V are
- *     wrong until flag synthesis lands).
- *   - 32-bit constants and all far targets use a SELF-CONTAINED inline literal
- *     (MOV.L @(disp,PC) + a BRA/JMP that leaves the literal out of the
- *     execution path). There is no deferred per-block literal pool here, so
- *     nothing is range-limited and there is no cross-macro emitter state.
- *   - Memory, block transfer, multiply-long, PSR, SWAP, SWI and HLE divide
- *     route to C helpers (generate_function_call); data-proc / shifts / simple
- *     branches emit real SH4.
+ * CURRENT MODEL:
+ *   - Guest ARM r0 is resident in SH-4 R11 and CPSR in R8 while translated
+ *     code runs; the assembly funnels synchronize both around C boundaries.
+ *     Other guest registers live in reg[].
+ *   - NZCV are materialized in the cached CPSR, with per-instruction liveness
+ *     allowing dead flag work to be omitted.
+ *   - Large 32-bit constants use bounded, forward segmented literal pools while
+ *     a block is being translated; equal constants share one word per segment.
+ *     Resident emitters and far targets retain self-contained literal islands.
+ *   - Common ARM/Thumb memory operations, block transfers, ALU/shift/multiply,
+ *     PSR and exact divide paths emit native SH-4; uncommon or side-effectful
+ *     cases retain compact C-helper fallbacks.
  *
- * Host register model (mirrors sh4_emit_core.h):
- *   R14 = reg[] base, R13 = cycle counter (both callee-saved, persistent),
- *   R0  = forced scratch / C return, R1..R3 = scratch, R4..R7 = C args.
+ * Host register model (mirrors sh4_emit_core.h): R14 = reg[] base, R13 = cycle
+ * counter, R11 = guest r0, R10 = block exit, R9 = vector table, R8 = CPSR;
+ * R0 = scratch/C return, R1..R3 = scratch, R4..R7 = C args. R12 is reserved
+ * for resident fastmem/trampoline state.
  */
 
 #include "ports/fxcg100/sh4/sh4_codegen.h"
@@ -53,8 +54,9 @@ extern u8 ws_cyc_nseq[16][2];  /* [region][word?1:0], live under WAITCNT.    */
  * new value with no flush; an OCBWB+ICBI there is pure waste on the hottest
  * (every-chain) path. The host build of the encoder has no caches: no-op. */
 #if (defined(CGBA_FXCG100) || defined(CGBA_FXCG50)) && defined(CGBA_SH4_PATCH_RESYNC)
-#include "ports/fxcg100/sh4/sh4_cache.h"
-#define SH4G_RESYNC(p, n) cgba_sh4_cache_sync((void *)(p), (void *)((u8 *)(p) + (n)))
+void cgba_sh4_patch_cache_sync(void *baseaddr, void *endptr);
+#define SH4G_RESYNC(p, n) \
+  cgba_sh4_patch_cache_sync((void *)(p), (void *)((u8 *)(p) + (n)))
 #else
 #define SH4G_RESYNC(p, n) ((void)0)
 #endif
@@ -112,6 +114,7 @@ enum {
   SH4G_VEC_ws_cyc_seq,
   SH4G_VEC_ws_cyc_nseq,
   SH4G_VEC_iwram_data,
+  SH4G_VEC_ewram_data,
 #if defined(CGBA_VIDEO_BLEND_PALETTE_CACHE) || \
     defined(CGBA_VIDEO_BACKDROP_SHADOW_PALETTE)
   SH4G_VEC_palette_dirty,
@@ -156,9 +159,159 @@ extern unsigned long cgba_em_const_small, cgba_em_const_large, cgba_em_const_byt
 extern unsigned long cgba_em_fcall_n, cgba_em_fcall_bytes;
 extern unsigned long cgba_em_fjmp_n, cgba_em_fjmp_bytes;
 extern unsigned long cgba_em_pj_n, cgba_em_pj_bytes;
+extern unsigned long cgba_em_help_n, cgba_em_help_bytes;
+extern unsigned long cgba_em_tuple_routine_b, cgba_em_tuple_tramp_b;
+extern unsigned long cgba_em_tuple_fn_b, cgba_em_tuple_opcode_b;
+extern unsigned long cgba_em_tuple_pc_b, cgba_em_tuple_cycle_b;
+extern unsigned long cgba_em_tuple_params_b;
 #define SH4G_EMSTAT(expr) (expr)
 #else
 #define SH4G_EMSTAT(expr) ((void)0)
+#endif
+
+/* ---- segmented production literal pool ---------------------------------
+ * Large constants normally carry a private BRA-skipped word. While translating
+ * a block, collect their MOV.L references into bounded forward segments. A
+ * segment closes at a guest-instruction boundary after 704 bytes, leaving room
+ * for its skip branch, alignment, and up to 48 unique words inside MOV.L's
+ * +1020-byte reach. Equal values share one word within the segment. Resident
+ * fastmem generation leaves this inactive and retains self-contained islands. */
+#ifndef CGBA_SH4_SEGMENTED_LITERAL_POOL
+#define CGBA_SH4_SEGMENTED_LITERAL_POOL 0
+#endif
+
+#if CGBA_SH4_SEGMENTED_LITERAL_POOL
+#define SH4G_LITSEG_MAX_REFS 48
+#define SH4G_LITSEG_FLUSH_DISTANCE 704
+typedef struct sh4g_litseg_ref {
+  u8 *site;
+  uint32_t value;
+} sh4g_litseg_ref;
+typedef struct sh4g_litseg_state {
+  int active;
+  int nrefs;
+  sh4g_litseg_ref refs[SH4G_LITSEG_MAX_REFS];
+} sh4g_litseg_state;
+static sh4g_litseg_state sh4g_litseg;
+
+#if defined(CGBA_GPSP_HEADLESS_TEST)
+extern unsigned long cgba_em_pool_ref_n, cgba_em_pool_unique_n;
+extern unsigned long cgba_em_pool_flush_n, cgba_em_pool_bytes;
+#define SH4G_POOLSTAT(expr) (expr)
+#else
+#define SH4G_POOLSTAT(expr) ((void)0)
+#endif
+
+static inline void sh4g_litseg_flush(u8 **tp)
+{
+  u8 *bra;
+  int i, j;
+  unsigned unique = 0;
+  unsigned long bytes0;
+
+  if (!sh4g_litseg.active || sh4g_litseg.nrefs == 0)
+    return;
+
+  bytes0 = (unsigned long)(uintptr_t)*tp;
+  bra = *tp;
+  sh4g_u16(tp, 0xA000);                              /* BRA over pool */
+  sh4g_u16(tp, 0x0009);                              /* delay NOP */
+  if ((uintptr_t)*tp & 3u)
+    sh4g_u16(tp, 0x0009);
+
+  for (i = 0; i < sh4g_litseg.nrefs; i++) {
+    u8 *entry;
+    int prior = 0;
+    for (j = 0; j < i; j++) {
+      if (sh4g_litseg.refs[j].value == sh4g_litseg.refs[i].value) {
+        prior = 1;
+        break;
+      }
+    }
+    if (prior)
+      continue;
+
+    entry = *tp;
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_u32_be(&cg, sh4g_litseg.refs[i].value);
+      sh4g_close(tp, &cg); }
+    unique++;
+
+    for (j = i; j < sh4g_litseg.nrefs; j++) {
+      u8 *site;
+      long disp;
+      if (sh4g_litseg.refs[j].value != sh4g_litseg.refs[i].value)
+        continue;
+      site = sh4g_litseg.refs[j].site;
+      disp = ((long)(uintptr_t)entry -
+              (((long)(uintptr_t)site & ~3L) + 4L)) / 4L;
+      if (disp >= 0 && disp <= 255) {
+        site[1] = (u8)disp;
+        SH4G_RESYNC(site, 2);
+      }
+    }
+  }
+
+  { long d = ((long)(uintptr_t)*tp - ((long)(uintptr_t)bra + 4L)) / 2L;
+    bra[0] = (u8)(0xA0 | ((d >> 8) & 0x0F));
+    bra[1] = (u8)d;
+    SH4G_RESYNC(bra, 2); }
+
+  SH4G_POOLSTAT((cgba_em_pool_flush_n++,
+                 cgba_em_pool_unique_n += unique,
+                 cgba_em_pool_bytes +=
+                   (unsigned long)(uintptr_t)*tp - bytes0));
+  (void)unique;
+  (void)bytes0;
+  sh4g_litseg.nrefs = 0;
+}
+
+static inline void sh4g_litseg_begin(void)
+{
+  sh4g_litseg.active = 1;
+  sh4g_litseg.nrefs = 0;
+}
+
+static inline void sh4g_litseg_maybe_flush(u8 **tp)
+{
+  if (sh4g_litseg.active && sh4g_litseg.nrefs &&
+      (size_t)(*tp - sh4g_litseg.refs[0].site) >=
+        SH4G_LITSEG_FLUSH_DISTANCE)
+    sh4g_litseg_flush(tp);
+}
+
+static inline void sh4g_litseg_end(u8 **tp)
+{
+  sh4g_litseg_flush(tp);
+  sh4g_litseg.active = 0;
+}
+
+static inline void sh4g_litseg_abort(void)
+{
+  sh4g_litseg.active = 0;
+  sh4g_litseg.nrefs = 0;
+}
+
+static inline int sh4g_litseg_add(u8 **tp, uint32_t value, unsigned rn)
+{
+  if (!sh4g_litseg.active)
+    return 0;
+  if (sh4g_litseg.nrefs == SH4G_LITSEG_MAX_REFS)
+    sh4g_litseg_flush(tp);
+  sh4g_litseg.refs[sh4g_litseg.nrefs].site = *tp;
+  sh4g_litseg.refs[sh4g_litseg.nrefs].value = value;
+  sh4g_litseg.nrefs++;
+  sh4g_u16(tp, (uint16_t)(0xD000 | (rn << 8)));       /* patched at flush */
+  SH4G_POOLSTAT((cgba_em_pool_ref_n++, cgba_em_pool_bytes += 2));
+  return 1;
+}
+#else
+static inline void sh4g_litseg_begin(void) {}
+static inline void sh4g_litseg_maybe_flush(u8 **tp) { (void)tp; }
+static inline void sh4g_litseg_end(u8 **tp) { (void)tp; }
+static inline void sh4g_litseg_abort(void) {}
+static inline int sh4g_litseg_add(u8 **tp, uint32_t value, unsigned rn)
+{ (void)tp; (void)value; (void)rn; return 0; }
 #endif
 
 static inline void sh4g_const(u8 **tp, uint32_t value, unsigned rn)
@@ -212,6 +365,11 @@ static inline void sh4g_const(u8 **tp, uint32_t value, unsigned rn)
         return;
       }
     }
+  }
+
+  if (sh4g_litseg_add(tp, value, rn)) {
+    SH4G_EMSTAT(cgba_em_const_large++);
+    return;
   }
 
   {
@@ -353,6 +511,7 @@ static inline void sh4g_op2_tramp_call(u8 **tp, const void *tramp,
                                        uint32_t pc, int with_cycles,
                                        int cycle_count)
 {
+  u8 *stat0 = *tp;
   u8 *site;
   u8 *lit;
   unsigned nlit = with_cycles ? 5 : 4;
@@ -378,6 +537,14 @@ static inline void sh4g_op2_tramp_call(u8 **tp, const void *tramp,
       sh4_emit_u32_be(&cg, (uint32_t)cycle_count);
     sh4g_close(tp, &cg);
   }
+  SH4G_EMSTAT((cgba_em_help_n++,
+               cgba_em_help_bytes += (unsigned long)(*tp - stat0),
+               cgba_em_tuple_tramp_b += 4,
+               cgba_em_tuple_fn_b += 4,
+               cgba_em_tuple_opcode_b += 4,
+               cgba_em_tuple_pc_b += 4,
+               cgba_em_tuple_cycle_b += with_cycles ? 4 : 0));
+  (void)stat0;
 }
 
 /* ---- N/Z/C/V materialization (masked, literal-free) into REG_CPSR -------- */
@@ -606,19 +773,18 @@ static inline void sh4g_cycle_debit_from_global(u8 **tp, const int *extra_cycles
  * block (LDM/STM) transfers sequentially and single transfers nonsequentially,
  * word vs byte/halfword by column; this mirrors that.
  *
- * `addr_reg` holds a guest address in the accessed region (region = addr >> 24)
- * and must not be R0/T1/T2. `seq` selects the seq vs nonseq table; `is_word`
+ * `region_reg` holds the already-classified guest region (address >> 24) and
+ * must not be T1/T2. `seq` selects the seq vs nonseq table; `is_word`
  * selects column 1 (32-bit) vs 0 (8/16-bit). Clobbers R0/T1/T2 (and T0 when
  * count > 1); only the cycle counter R13 changes. */
-static inline void sh4g_charge_mem_run(u8 **tp, unsigned addr_reg, int seq,
-                                       int is_word, unsigned count)
+static inline void sh4g_charge_mem_region(u8 **tp, unsigned region_reg, int seq,
+                                          int is_word, unsigned count)
 {
   if (count == 0)
     return;
   { sh4_codegen cg = sh4g_open(tp);
-    sh4_emit_mov_reg(&cg, addr_reg, SH4_REG_RET);
-    sh4_emit_shlr16(&cg, SH4_REG_RET);
-    sh4_emit_shlr8(&cg, SH4_REG_RET);            /* R0 = region = addr >> 24      */
+    if (region_reg != SH4_REG_RET)
+      sh4_emit_mov_reg(&cg, region_reg, SH4_REG_RET);
     sh4_emit_shll(&cg, SH4_REG_RET);             /* R0 = region * 2 (u8[16][2] row)*/
     if (is_word)
       sh4_emit_add_imm(&cg, 1, SH4_REG_RET);     /* + word column                 */
@@ -634,6 +800,17 @@ static inline void sh4g_charge_mem_run(u8 **tp, unsigned addr_reg, int seq,
     }
     sh4_emit_sub(&cg, SH4_REG_T1, SH4_REG_CYCLES);        /* R13 -= cost * count    */
     sh4g_close(tp, &cg); }
+}
+
+static inline void sh4g_charge_mem_run(u8 **tp, unsigned addr_reg, int seq,
+                                       int is_word, unsigned count)
+{
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_reg(&cg, addr_reg, SH4_REG_RET);
+    sh4_emit_shlr16(&cg, SH4_REG_RET);
+    sh4_emit_shlr8(&cg, SH4_REG_RET);             /* R0 = addr >> 24 */
+    sh4g_close(tp, &cg); }
+  sh4g_charge_mem_region(tp, SH4_REG_RET, seq, is_word, count);
 }
 
 /* Thumb BX-to-Thumb reaches the normal end-of-Thumb-instruction accounting in
@@ -1057,6 +1234,154 @@ static inline void sh4g_patch_bra(u8 *site, const void *target)
   site[0] = (uint8_t)(0xA0 | ((d >> 8) & 0x0F));
   site[1] = (uint8_t)(d & 0xFF);
   SH4G_RESYNC(site, 2);
+}
+
+/* Fixed GBA regions never change their wait-state costs. Avoid the vector load,
+ * byte-table lookup, and zero extension for those regions; only Game Pak and
+ * SRAM (8..15) need the live WAITCNT-derived table. The fastmem classifier has
+ * already preserved address>>24 in `region_reg`, so this adds no address work.
+ * Clobbers R0/T1/T2, like sh4g_charge_mem_region(). */
+static inline void sh4g_charge_mem_region_specialized(u8 **tp,
+                                                       unsigned region_reg,
+                                                       int seq, int is_word,
+                                                       unsigned count)
+{
+  u8 *ewram, *fixed_one, *fixed_two = NULL;
+  u8 *done[3];
+  int ndone = 0;
+
+  if (count == 0)
+    return;
+
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_reg(&cg, region_reg, SH4_REG_RET);
+    sh4_emit_cmpeq_imm(&cg, 2);                    /* EWRAM: 3/6 cycles */
+    sh4g_close(tp, &cg); }
+  ewram = sh4g_emit_bt_placeholder(tp);
+
+  if (is_word) {
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_imm(&cg, 5, SH4_REG_T1);
+      sh4_emit_cmphs(&cg, SH4_REG_T1, SH4_REG_RET); /* region >= 5 */
+      sh4g_close(tp, &cg); }
+    fixed_one = sh4g_emit_bf_placeholder(tp);      /* IWRAM / I/O */
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_imm(&cg, 8, SH4_REG_T1);
+      sh4_emit_cmphs(&cg, SH4_REG_T1, SH4_REG_RET); /* region >= 8 */
+      sh4g_close(tp, &cg); }
+    fixed_two = sh4g_emit_bf_placeholder(tp);      /* palette / VRAM / OAM */
+  } else {
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_imm(&cg, 8, SH4_REG_T1);
+      sh4_emit_cmphs(&cg, SH4_REG_T1, SH4_REG_RET); /* region >= 8 */
+      sh4g_close(tp, &cg); }
+    fixed_one = sh4g_emit_bf_placeholder(tp);      /* all fixed non-EWRAM */
+  }
+
+  sh4g_charge_mem_region(tp, region_reg, seq, is_word, count);
+  done[ndone++] = sh4g_emit_bra_placeholder(tp);
+
+  sh4g_patch_cond(ewram, *tp);
+  sh4g_cycle_debit(tp, (is_word ? 6 : 3) * (int)count);
+  done[ndone++] = sh4g_emit_bra_placeholder(tp);
+
+  if (fixed_two) {
+    sh4g_patch_cond(fixed_two, *tp);
+    sh4g_cycle_debit(tp, 2 * (int)count);
+    done[ndone++] = sh4g_emit_bra_placeholder(tp);
+  }
+
+  sh4g_patch_cond(fixed_one, *tp);
+  sh4g_cycle_debit(tp, (int)count);
+
+  while (ndone)
+    sh4g_patch_bra(done[--ndone], *tp);
+}
+
+/* Runtime-count twin used by shared LDM/STM routines. Fixed costs multiply by
+ * a tiny immediate in registers; dynamic Game Pak costs retain the exact live
+ * table lookup. `count_reg` is preserved on the fixed-one path and otherwise
+ * may be clobbered only through MACL side effects. */
+static inline void sh4g_charge_mem_region_count_specialized(u8 **tp,
+                                                             unsigned region_reg,
+                                                             unsigned count_reg,
+                                                             int seq,
+                                                             int is_word)
+{
+  unsigned cmp_reg = (count_reg == SH4_REG_T1) ? SH4_REG_ARG3 : SH4_REG_T1;
+  u8 *ewram, *fixed_one, *fixed_two = NULL;
+  u8 *done[3];
+  int ndone = 0;
+
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_reg(&cg, region_reg, SH4_REG_RET);
+    sh4_emit_cmpeq_imm(&cg, 2);
+    sh4g_close(tp, &cg); }
+  ewram = sh4g_emit_bt_placeholder(tp);
+
+  if (is_word) {
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_imm(&cg, 5, cmp_reg);
+      sh4_emit_cmphs(&cg, cmp_reg, SH4_REG_RET);
+      sh4g_close(tp, &cg); }
+    fixed_one = sh4g_emit_bf_placeholder(tp);
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_imm(&cg, 8, cmp_reg);
+      sh4_emit_cmphs(&cg, cmp_reg, SH4_REG_RET);
+      sh4g_close(tp, &cg); }
+    fixed_two = sh4g_emit_bf_placeholder(tp);
+  } else {
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_imm(&cg, 8, cmp_reg);
+      sh4_emit_cmphs(&cg, cmp_reg, SH4_REG_RET);
+      sh4g_close(tp, &cg); }
+    fixed_one = sh4g_emit_bf_placeholder(tp);
+  }
+
+  /* Dynamic WAITCNT path. */
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_reg(&cg, region_reg, SH4_REG_RET);
+    sh4_emit_shll(&cg, SH4_REG_RET);
+    if (is_word)
+      sh4_emit_add_imm(&cg, 1, SH4_REG_RET);
+    sh4g_close(tp, &cg); }
+  sh4g_vec_load(tp, seq ? SH4G_VEC_ws_cyc_seq : SH4G_VEC_ws_cyc_nseq,
+                SH4_REG_T2);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_b_load_r0(&cg, SH4_REG_T2, SH4_REG_ARG0);
+    sh4_emit_extu_b(&cg, SH4_REG_ARG0, SH4_REG_ARG0);
+    sh4_emit_mul_l(&cg, SH4_REG_ARG0, count_reg);
+    sh4_emit_sts_macl(&cg, SH4_REG_ARG0);
+    sh4_emit_sub(&cg, SH4_REG_ARG0, SH4_REG_CYCLES);
+    sh4g_close(tp, &cg); }
+  done[ndone++] = sh4g_emit_bra_placeholder(tp);
+
+  sh4g_patch_cond(ewram, *tp);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_imm(&cg, is_word ? 6 : 3, SH4_REG_RET);
+    sh4_emit_mul_l(&cg, SH4_REG_RET, count_reg);
+    sh4_emit_sts_macl(&cg, SH4_REG_RET);
+    sh4_emit_sub(&cg, SH4_REG_RET, SH4_REG_CYCLES);
+    sh4g_close(tp, &cg); }
+  done[ndone++] = sh4g_emit_bra_placeholder(tp);
+
+  if (fixed_two) {
+    sh4g_patch_cond(fixed_two, *tp);
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_reg(&cg, count_reg, SH4_REG_RET);
+      sh4_emit_shll(&cg, SH4_REG_RET);
+      sh4_emit_sub(&cg, SH4_REG_RET, SH4_REG_CYCLES);
+      sh4g_close(tp, &cg); }
+    done[ndone++] = sh4g_emit_bra_placeholder(tp);
+  }
+
+  sh4g_patch_cond(fixed_one, *tp);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_sub(&cg, count_reg, SH4_REG_CYCLES);
+    sh4g_close(tp, &cg); }
+
+  while (ndone)
+    sh4g_patch_bra(done[--ndone], *tp);
 }
 
 #endif /* CGBA_SH4_EMIT_GLUE_H */

@@ -20,13 +20,13 @@ under casio-emu.
 | Area | Artifact | How verified |
 |---|---|---|
 | **SH4 encoder** | [sh4_codegen.h](../ports/fxcg100/sh4/sh4_codegen.h) — full ISA subset (ALU, shifts, mul, mem, branches, system regs) | `tests/sh4_codegen_audit.c` diffs 106 instructions byte-for-byte vs `sh-elf-as`; smoke test for base ops |
-| **Literal pool + reg[] access** | [sh4_emit_core.h](../ports/fxcg100/sh4/sh4_emit_core.h) — 32-bit const materialization via PC-relative pools (dedup, back-patch), guest reg load/store | `tests/sh4_emit_core_audit.c` decodes each `MOV.L @(disp,PC)` to its pool entry; cross-checked with `sh-elf-objdump` |
+| **Literal pool + reg[] access** | [sh4_emit_core.h](../ports/fxcg100/sh4/sh4_emit_core.h) and [sh4_emit_glue.h](../ports/fxcg100/sh4/sh4_emit_glue.h) — bounded production pool segments (dedup/back-patch), guest reg load/store | core audit plus `tests/sh4_segmented_pool_test.c` verify each `MOV.L @(disp,PC)`, reach, branches, and deduplication |
 | **Thumb→SH4 data-proc translation** | [sh4_thumb_mvp.h](../ports/fxcg100/sh4/sh4_thumb_mvp.h) — MOV/CMP/ADD/SUB imm, ADD/SUB reg, shifts, ALU reg, N/Z flags into CPSR | `tests/sh4_thumb_mvp_audit.c` checks the emitted SH4 op per Thumb opcode; disassembly inspected |
 | **Entry/exit trampoline** | [sh4_stub.S](../vendor/gpsp/sh4/sh4_stub.S) — `execute_arm_translate_internal`, dispatch, `sh4_update_gba`, indirect branches, SMC flush, SWI | Assembles with `sh-elf-gcc`; disassembly reviewed |
 | **Build seam** | `SH4_ARCH` include in [cpu_threaded.c](../vendor/gpsp/cpu_threaded.c); [sh4_emit.h](../vendor/gpsp/sh4/sh4_emit.h) | `sh4_emit.h` cross-compiles standalone with `sh-elf-gcc` |
 | **Cache sync** | [sh4_cache.h](../ports/fxcg100/sh4/sh4_cache.h) — `OCBWB → SYNCO → ICBI` | Pre-existing; ordering confirmed correct vs SH-4A manual; [jit_probe.c](../ports/fxcg100/jit_probe.c) proves on-device execution |
 | **Phase 0 auto-frameskip** | [frame_pacing.c](../ports/fxcg100/gint-gpsp/src/frame_pacing.c) — RTC-windowed adaptive controller behind the menu's "AUTOMATIC" type | `fxsdk build-cg` → `CGBA-GPSP.g3a` builds + links clean |
-| **Phase 0 strip-DMA LCD** | already present in [gint_platform.c](../ports/fxcg100/gint-gpsp/src/gint_platform.c) (`r61524_start_frame` + `dma_transfer_async`, 32B blocks) | reviewed; builds |
+| **Phase 0 strip-DMA LCD** | [gint_platform.c](../ports/fxcg100/gint-gpsp/src/gint_platform.c): ten 16-row unscaled strips, with optional renderer-to-LCD scanline streaming | geometry tests; production cross-link; physical streaming qualification pending |
 | **Menu display handoff** | gameplay blit narrows the R61524 window; restore full 396×224 via `r61524_win_set` before any gint push ([gint_platform.c](../ports/fxcg100/gint-gpsp/src/gint_platform.c) `restore_full_window`) | builds; menu must render via gint only, never direct DMA |
 
 Run the host suite (needs `sh-elf-as`/`objcopy` on PATH for the audit):
@@ -41,22 +41,31 @@ Build the calculator add-in:
 cd ports/fxcg100/gint-gpsp && fxsdk build-cg   # -> CGBA-GPSP.g3a
 ```
 
-## MVP design choices (correctness first)
+## Backend design choices (correctness first)
 
-- **All guest ARM registers stay in `reg[]`**; load → op → store per instruction.
-  No host-resident hot registers yet.
+- **Guest ARM r0 stays resident in SH-4 R11** while translated code runs.
+  Every helper/interpreter boundary publishes it to `reg[]` and reloads it on
+  return; the remaining guest registers still use load → op → store.
 - **Flags materialized directly in `REG_CPSR`**. Native Thumb data-processing
   emits exact flags for the supported op set; unsupported/rarer forms route
   through the interpreter helpers.
-- **Memory mostly through C helpers** (`execute_load_*` / `execute_store_*`);
-  the native Thumb byte-load fast path is guarded by the diff harness
-  (`THUMB_LDST_NATIVE=OFF`) so it can be isolated.
-- Register model: `R14`=reg[] base, `R13`=cycle counter (both callee-saved),
-  `R0` kept free (forced index/operand), `R1–R7` scratch / C-args.
+- **Common memory forms use resident out-of-line fastmem routines**; uncommon
+  or side-effectful accesses route through `execute_load_*` / `execute_store_*`
+  helpers. ARM and Thumb native load/store families remain independently
+  switchable for differential tests.
+- **The ROM JIT uses one contiguous arena.** Capacity flushes reset the whole
+  cache above the resident watermark. The experimental survivor split was
+  removed because ROM thrashing is rare in observed play and halving the
+  normal working set penalizes the common case.
+- **Known ARM/Thumb indirect targets have small direct-mapped microcaches**
+  ahead of the branch hash. Release builds compile differential-harness tests
+  out, while patch and final-publication I-cache syncs have separate counters.
+- Register model: `R14`=reg[] base, `R13`=cycle counter, `R11`=guest r0
+  (all callee-saved), `R0` kept free (forced index/operand), and `R1–R7`
+  scratch / C-args.
 
-These are deliberately the simplest correct choices; the speed work
-(resident regs, lazy/dead flags, inline memory, block chaining, idle-loop emit)
-layers on top — see the optimization plan.
+These retain explicit correctness boundaries while the speed work layers on
+top — see the optimization plan.
 
 ## Current Metroid Fusion harness findings (2026-06-28)
 
@@ -137,11 +146,14 @@ fxsdk build-cg
 If the tested `.g3a` was built this way and still shows no gain, that is
 plausible for the current backend:
 
-- all guest ARM registers still spill through `reg[]` instead of resident host
-  registers;
-- many ARM/Thumb operations still route through C helpers;
-- memory fast paths, block chaining, lazy/dead flags, and idle-loop emit are not
-  implemented yet;
+- guest ARM r0 is resident in callee-saved SH-4 R11 while translated code is
+  running; the other guest registers still spill through `reg[]`, and helper /
+  interpreter boundaries explicitly publish and reload r0;
+- uncommon ARM/Thumb operations still route through C helpers; register-count
+  shifts and high-register PC data-processing forms are now native;
+- native scalar/block memory paths, direct chaining, dead flags, idle-loop
+  emit, and known-target microcaches are present, but uncommon memory forms
+  still fall back to C and broader guest-value liveness is not implemented;
 - cutscenes can be render/LCD/IRQ/timing-bound, so CPU recompilation alone may
   not move the user-visible FPS;
 - the focused JIT run by frame 4099 reported heavy translation activity
@@ -168,9 +180,9 @@ Build it: `cmake -B build-cg -DCGBA_DYNAREC=ON && cmake --build build-cg`
 (the default `OFF` build stays interpreter-only and is the shipping target).
 
 **Bring-up design choices (correctness deferred to the harness):**
-- Self-contained inline literals (`MOV.L @(disp,PC)` + branch-over) for every
-  constant/far target — no deferred pool, nothing range-limited, zero-size
-  block prologue. All block exits funnel through one `sh4_block_exit` stub entry.
+- Bounded segmented literal pools deduplicate large constants while keeping
+  every `MOV.L @(disp,PC)` in range; resident routines retain self-contained
+  literals. All block exits funnel through one `sh4_block_exit` stub entry.
 - Thumb data-proc / immediate-shifts / branches / conditions / cycle counter
   emit real SH4; memory, block transfers, register-amount shifts, ARM
   data-proc, multiply(-long), PSR, SWAP route to C helpers

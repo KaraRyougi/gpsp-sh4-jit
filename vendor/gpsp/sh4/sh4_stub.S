@@ -1,10 +1,8 @@
 /* gameplaySP — SH-4A (SH7305 / fx-CG100) dynarec entry/exit trampoline.
  *
- * Mirrors mips/mips_stub.S for the SH4 host. MVP register model
- * (see sh4/sh4_emit.h): all guest ARM registers and the NZCV flags live in the
- * reg[] state array; flags are kept materialized in REG_CPSR bits 28..31, so no
- * flag collapse/extract is needed at C-call boundaries. Guest memory accesses
- * go through the execute_load_* and execute_store_* C helpers.
+ * Mirrors mips/mips_stub.S for the SH4 host. Guest r0 is pinned in R11 and
+ * CPSR in R8 while translated code runs; both are synchronized with reg[] at
+ * C/helper boundaries. Other guest registers remain in the reg[] state array.
  *
  * SH4 ABI: integer args in R4..R7, return in R0, callee-saved R8..R15 + PR.
  *
@@ -12,11 +10,17 @@
  * C calls, since R8..R14 are callee-saved):
  *   R14 = reg[] base pointer
  *   R13 = cycle counter (counts down; block exits when it crosses 0)
+ *   R11 = guest ARM r0
  *
- * NOTE: assembled and checked with sh-elf-as; not yet validated on hardware.
+ * NOTE: assembled and checked with sh-elf-as. The new ILRAM/XYRAM placement
+ * still requires final physical-hardware boot and timing validation.
  */
 
 #include "../gpsp_config.h"
+
+#ifndef CGBA_SH4_PIN_GUEST_R0
+#define CGBA_SH4_PIN_GUEST_R0 1
+#endif
 
 /* The Casio sh-elf toolchain (fxSDK) uses a leading-underscore C ABI: a C
  * symbol `foo` is `_foo` at link time (cf. bios_data.S). Export both spellings
@@ -49,7 +53,7 @@
  * generated/extern layout the C side provides via separate symbols, so the
  * supervisor helpers below address them through their own externs. */
 
-.text
+.section .ilram.dispatch, "ax"
 .align 2
 
 /* Call a (possibly far) C function. Address is materialized from a
@@ -93,26 +97,36 @@
  * garbage). One flush+retry always suffices: a single block fits the fresh cache.
  * Without this, any cache overflow is a hard crash -- latent in upstream gpSP, hit
  * here once blocks grow large enough (e.g. the native Thumb byte-LDR fast path). */
-/* CPSR cache sync: R8 holds the authoritative guest CPSR while generated or
- * stub code runs (see sh4_emit_core.h SH4_REG_CPSR). reg[REG_CPSR] must be
- * made current before ANY C call (helpers read it; update_gba/SWI/the BIOS
- * fallback also write it) and R8 re-fetched after. CPSR_FLUSH/CPSR_RELOAD
- * clobber r0; CPSR_RELOAD_R1 clobbers r1 for sites where r0 carries a C
- * return value. */
+/* Persistent guest-state sync. R8 is authoritative CPSR and R11 is
+ * authoritative guest r0 while generated/stub code runs. Both memory cells
+ * must be current before every C call and re-fetched after it. The CPSR-named
+ * macros retain their established call sites but synchronize both caches. */
 .macro CPSR_FLUSH
+#if CGBA_SH4_PIN_GUEST_R0
+  mov.l   r11, @r14
+#endif
   mov     #REG_CPSR, r0
   mov.l   r8, @(r0,r14)
 .endm
 .macro CPSR_RELOAD
+#if CGBA_SH4_PIN_GUEST_R0
+  mov.l   @r14, r11
+#endif
   mov     #REG_CPSR, r0
   mov.l   @(r0,r14), r8
 .endm
 .macro CPSR_RELOAD_R1
+#if CGBA_SH4_PIN_GUEST_R0
+  mov.l   @r14, r11
+#endif
   mov     r14, r1
   add     #REG_CPSR, r1
   mov.l   @r1, r8
 .endm
 .macro CPSR_FLUSH_R1
+#if CGBA_SH4_PIN_GUEST_R0
+  mov.l   r11, @r14
+#endif
   mov     r14, r1
   add     #REG_CPSR, r1
   mov.l   r8, @r1
@@ -153,13 +167,14 @@ defsymbl(cgba_sh4_vec_table)
   .long   sh4_helper_exit                       /*  6 SH4G_VEC_helper_exit   */
   .long   execute_swi                           /*  7 SH4G_VEC_execute_swi   */
   .long   sh4_cheat_hook                        /*  8 SH4G_VEC_cheat_hook    */
-  .long   _cgba_sh4_hle_div                     /*  9 SH4G_VEC_hle_div       */
+  .long   sh4_hle_div                           /*  9 SH4G_VEC_hle_div       */
   .long   _ws_cyc_seq                           /* 10 SH4G_VEC_ws_cyc_seq    */
   .long   _ws_cyc_nseq                          /* 11 SH4G_VEC_ws_cyc_nseq   */
   .long   _iwram + 0x8000                       /* 12 SH4G_VEC_iwram_data    */
+  .long   _ewram                                /* 13 SH4G_VEC_ewram_data    */
 #if defined(CGBA_VIDEO_BLEND_PALETTE_CACHE) || \
     defined(CGBA_VIDEO_BACKDROP_SHADOW_PALETTE)
-  .long   _palette_ram_dirty                    /* 13 SH4G_VEC_palette_dirty */
+  .long   _palette_ram_dirty                    /* 14 SH4G_VEC_palette_dirty */
 #endif
 
 /* ---- main entry: execute_arm_translate_internal(cycles, reg_ptr) ---- */
@@ -181,13 +196,16 @@ defsymbl(execute_arm_translate_internal)
                                      sh4_emit_glue.h; callee-saved across all
                                      C calls, so loaded exactly once here) */
   mov.l   10f, r10                /* pin &sh4_block_exit for JMP @R10 exits */
-  CPSR_RELOAD                     /* prime the R8 CPSR cache */
+  CPSR_RELOAD                     /* prime R8 CPSR and R11 guest-r0 caches */
 
   /* CPU might be sleeping; do not wake it up. */
   mov     #CPU_HALT_STATE, r0
   mov.l   @(r0,r14), r0
   tst     r0, r0
-  bf      cpu_sleep_loop          /* halt_state != 0 -> sleep */
+  bt      .Lcpu_awake             /* halt_state == 0 -> normal dispatch */
+  bra     cpu_sleep_loop
+  nop
+.Lcpu_awake:
 
   bra     lookup_pc
   nop
@@ -199,7 +217,7 @@ defsymbl(execute_arm_translate_internal)
 
 /* ---- return to the main C caller; ARM state already saved ---- */
 return_to_main:
-  CPSR_FLUSH_R1                   /* commit the cached CPSR. R1-based: R0 is
+  CPSR_FLUSH_R1                   /* commit cached CPSR and guest r0. R1-based: R0 is
                                      the entry point's return value here
                                      (remaining cycles / frame-complete tag),
                                      loaded by the callers' delay slots. */
@@ -262,10 +280,12 @@ lookup_pc:
    * a miss. Single-block diff mode keeps the legacy direct C path: the
    * stubs' sb slow path returns to main after resolving, which is not what
    * lookup_pc's mid-run callers expect. */
+#ifdef CGBA_SH4_DIFF_HARNESS
   mov.l   lookup_sb, r1
   mov.l   @r1, r1
   tst     r1, r1
   bf      lookup_pc_c             /* single-block diff -> legacy C resolver */
+#endif
   mov     #REG_PC, r0
   mov.l   @(r0,r14), r4
   mov     #0x20, r0
@@ -276,6 +296,7 @@ lookup_pc:
 1:
   bra     sh4_indirect_branch_arm
   nop
+#ifdef CGBA_SH4_DIFF_HARNESS
   .align 2
 lookup_sb:
   .long   _cgba_dynarec_single_block
@@ -292,6 +313,7 @@ lookup_pc_c:
   REDISPATCH_IF_NULL
   jmp     @r0
   nop
+#endif
 1:
   mov     #REG_PC, r0
   mov.l   @(r0,r14), r4
@@ -309,7 +331,10 @@ cpu_sleep_loop:
   CALL    update_gba
   CPSR_RELOAD_R1
   cmp/pz  r0
-  bf      return_to_main          /* frame complete */
+  bt      .Lsleep_continue
+  bra     return_to_main          /* frame complete */
+  nop
+.Lsleep_continue:
   mov     r0, r13
   mov     #-1, r1
   shlr16  r1
@@ -333,6 +358,7 @@ defsymbl(sh4_block_exit)
      block (PC already committed) so the interpreter can be diffed lockstep.
      Local literal: the shared sb_flag pool drifted past MOV.L's +1KB forward
      reach when the CPSR-cache sync sequences grew this region. */
+#ifdef CGBA_SH4_DIFF_HARNESS
   mov.l   bx_sb, r0
   mov.l   @r0, r0
   tst     r0, r0
@@ -340,11 +366,15 @@ defsymbl(sh4_block_exit)
   bra     return_to_main
   mov     r13, r0                 /* single-block diff: return remaining cycles */
 1:
+#endif
   mov     r13, r4                 /* arg0 = remaining cycles */
   CALL    update_gba
   CPSR_RELOAD_R1                  /* update_gba may take an IRQ (CPSR write) */
   cmp/pz  r0
-  bf      return_to_main          /* bit31 set -> frame complete */
+  bt      .Lblock_continue
+  bra     return_to_main          /* bit31 set -> frame complete */
+  nop
+.Lblock_continue:
   mov     r0, r13
   mov     #-1, r1
   shlr16  r1
@@ -353,9 +383,11 @@ defsymbl(sh4_block_exit)
   bra     lookup_pc               /* always re-dispatch on reg[REG_PC] */
   nop
 
+#ifdef CGBA_SH4_DIFF_HARNESS
   .align 2
 bx_sb:
   .long   _cgba_dynarec_single_block
+#endif
 
 /* ---- indirect branches (BX, computed PC); R4 = target GBA address ----
  * block_lookup_address_* commits reg[REG_PC] (see cpu_threaded.c), so after the
@@ -367,10 +399,12 @@ bx_sb:
  * host block. Keep single-block diff mode on the old C path, and keep open-BIOS
  * targets on the interpreter fallback used by the Metroid cutscene fix. */
 defsymbl(sh4_indirect_branch_arm)
+#ifdef CGBA_SH4_DIFF_HARNESS
   mov.l   ibh_sb, r1
   mov.l   @r1, r1
   tst     r1, r1
   bf      iba_slow                /* single-block diff -> unchanged C path */
+#endif
   mov.l   ibh_bios_limit, r1
   cmp/hs  r1, r4                  /* T = target >= 0x4000 */
   bt      iba_hash
@@ -382,6 +416,26 @@ iba_hash:
   mov     r4, r2
   shlr2   r2
   shll2   r2                      /* key = pc & ~3 (ARM) */
+#if CGBA_SH4_KNOWN_TARGET_CACHE
+  mov     r2, r0
+  shlr2   r0
+  and     #0x3f, r0
+  shll2   r0
+  mov.l   ibh_ahot_key, r1
+  mov.l   @(r0,r1), r3
+  cmp/eq  r2, r3
+  bf      iba_hash_miss
+  mov.l   ibh_ahot_ptr, r1
+  mov.l   @(r0,r1), r7
+  tst     r7, r7
+  bt      iba_hash_miss
+  INC_COUNTER cgba_dynarec_ibh_arm_hot_count
+  mov     #REG_PC, r0
+  mov.l   r4, @(r0,r14)
+  jmp     @r7
+  nop
+iba_hash_miss:
+#endif
   mov.l   ibh_mul, r3
   dmulu.l r2, r3
   sts     macl, r0
@@ -404,9 +458,19 @@ iba_walk:
   nop
 iba_hit:
   INC_COUNTER cgba_dynarec_ibh_arm_hit_count
+  add     #8, r7                  /* sizeof(hashhdr_type) + prologue size */
+#if CGBA_SH4_KNOWN_TARGET_CACHE
+  mov     r2, r0
+  shlr2   r0
+  and     #0x3f, r0
+  shll2   r0
+  mov.l   ibh_ahot_key, r1
+  mov.l   r2, @(r0,r1)
+  mov.l   ibh_ahot_ptr, r1
+  mov.l   r7, @(r0,r1)
+#endif
   mov     #REG_PC, r0
   mov.l   r4, @(r0,r14)           /* commit reg[REG_PC] = pc */
-  add     #8, r7                  /* sizeof(hashhdr_type) + prologue size */
   jmp     @r7
   nop
 iba_slow:
@@ -414,6 +478,7 @@ iba_slow:
   CPSR_FLUSH
   CALL    block_lookup_address_arm
   CPSR_RELOAD_R1
+#ifdef CGBA_SH4_DIFF_HARNESS
   mov.l   ibh_sb, r1
   mov.l   @r1, r1
   tst     r1, r1
@@ -421,15 +486,18 @@ iba_slow:
   bra     return_to_main          /* single-block diff: stop after this block */
   mov     r13, r0                 /* delay slot: return remaining cycles */
 iba_disp:
+#endif
   REDISPATCH_IF_NULL
   jmp     @r0
   nop
 
 defsymbl(sh4_indirect_branch_thumb)
+#ifdef CGBA_SH4_DIFF_HARNESS
   mov.l   ibh_sb, r1
   mov.l   @r1, r1
   tst     r1, r1
   bf      ibt_slow
+#endif
   mov.l   ibh_bios_limit, r1
   cmp/hs  r1, r4                  /* T = target >= 0x4000 */
   bt      ibt_hash
@@ -441,6 +509,26 @@ ibt_hash:
   mov     r4, r0
   or      #1, r0
   mov     r0, r2                  /* key = pc | 1 (Thumb) */
+#if CGBA_SH4_KNOWN_TARGET_CACHE
+  mov     r2, r0
+  shlr    r0
+  and     #0x3f, r0
+  shll2   r0
+  mov.l   ibh_thot_key, r1
+  mov.l   @(r0,r1), r3
+  cmp/eq  r2, r3
+  bf      ibt_hash_miss
+  mov.l   ibh_thot_ptr, r1
+  mov.l   @(r0,r1), r7
+  tst     r7, r7
+  bt      ibt_hash_miss
+  INC_COUNTER cgba_dynarec_ibh_thumb_hot_count
+  mov     #REG_PC, r0
+  mov.l   r4, @(r0,r14)
+  jmp     @r7
+  nop
+ibt_hash_miss:
+#endif
   mov.l   ibh_mul, r3
   dmulu.l r2, r3
   sts     macl, r0
@@ -463,9 +551,19 @@ ibt_walk:
   nop
 ibt_hit:
   INC_COUNTER cgba_dynarec_ibh_thumb_hit_count
+  add     #8, r7
+#if CGBA_SH4_KNOWN_TARGET_CACHE
+  mov     r2, r0
+  shlr    r0
+  and     #0x3f, r0
+  shll2   r0
+  mov.l   ibh_thot_key, r1
+  mov.l   r2, @(r0,r1)
+  mov.l   ibh_thot_ptr, r1
+  mov.l   r7, @(r0,r1)
+#endif
   mov     #REG_PC, r0
   mov.l   r4, @(r0,r14)
-  add     #8, r7
   jmp     @r7
   nop
 ibt_slow:
@@ -473,6 +571,7 @@ ibt_slow:
   CPSR_FLUSH
   CALL    block_lookup_address_thumb
   CPSR_RELOAD_R1
+#ifdef CGBA_SH4_DIFF_HARNESS
   mov.l   ibh_sb, r1
   mov.l   @r1, r1
   tst     r1, r1
@@ -480,11 +579,13 @@ ibt_slow:
   bra     return_to_main
   mov     r13, r0
 ibt_disp:
+#endif
   REDISPATCH_IF_NULL
   jmp     @r0
   nop
 
 defsymbl(sh4_indirect_branch_dual)
+#ifdef CGBA_SH4_DIFF_HARNESS
   mov.l   ibh_sb, r1
   mov.l   @r1, r1
   tst     r1, r1
@@ -492,6 +593,7 @@ defsymbl(sh4_indirect_branch_dual)
   bra     ibd_slow                /* single-block diff -> unchanged C path */
   nop
 1:
+#endif
 
   mov     r4, r0
   tst     #1, r0                  /* T = ARM target (bit0 clear) */
@@ -591,6 +693,7 @@ ibd_arm_commit:
  * ARM/Thumb split and the redundant CPSR.T store. Misses and single-block diff
  * mode rejoin the exact generic dual resolver below. */
 defsymbl(sh4_indirect_branch_dual_thumb_current)
+#ifdef CGBA_SH4_DIFF_HARNESS
   mov.l   ibh_sb, r1
   mov.l   @r1, r1
   tst     r1, r1
@@ -598,6 +701,7 @@ defsymbl(sh4_indirect_branch_dual_thumb_current)
   bra     ibd_slow
   nop
 1:
+#endif
   mov     r4, r2
   mov     #-2, r0
   and     r0, r2                  /* r2 = pc = target & ~1 */
@@ -702,6 +806,7 @@ ibd_slow:
   CPSR_FLUSH
   CALL    block_lookup_address_dual
   CPSR_RELOAD_R1                  /* the dual resolver writes CPSR.T */
+#ifdef CGBA_SH4_DIFF_HARNESS
   mov.l   ibh_sb, r1
   mov.l   @r1, r1
   tst     r1, r1
@@ -709,13 +814,16 @@ ibd_slow:
   bra     return_to_main
   mov     r13, r0
 1:
+#endif
   REDISPATCH_IF_NULL
   jmp     @r0
   nop
 
   .align 2
+#ifdef CGBA_SH4_DIFF_HARNESS
 ibh_sb:
   .long   _cgba_dynarec_single_block
+#endif
 ibh_bios_limit:
   .long   0x00004000
 ibh_mul:
@@ -724,6 +832,16 @@ ibh_hash:
   .long   _rom_branch_hash
 ibh_tcache:
   .long   _rom_translation_cache
+#if CGBA_SH4_KNOWN_TARGET_CACHE
+ibh_ahot_key:
+  .long   _cgba_dynarec_arm_hot_key
+ibh_ahot_ptr:
+  .long   _cgba_dynarec_arm_hot_ptr
+ibh_thot_key:
+  .long   _cgba_dynarec_thumb_hot_key
+ibh_thot_ptr:
+  .long   _cgba_dynarec_thumb_hot_ptr
+#endif
 ibh_dhot_key:
   .long   _cgba_dynarec_dual_hot_key
 ibh_dhot_ptr:
@@ -777,6 +895,17 @@ defsymbl(execute_read_cpsr)
   mov     r8, r0                  /* delay slot: cached CPSR */
 
 /* ---- software interrupt; R4 = return PC (next instruction) ---- */
+/* Exact divide HLE is a direct generated-code call, so bracket its C body with
+ * the same persistent-state synchronization used by the shared trampolines. */
+defsymbl(sh4_hle_div)
+  sts.l   pr, @-r15
+  CPSR_FLUSH
+  CALL    cgba_sh4_hle_div
+  CPSR_RELOAD
+  lds.l   @r15+, pr
+  rts
+  nop
+
 defsymbl(execute_swi)
   sts.l   pr, @-r15
   mov     #REG_PC, r0
@@ -798,10 +927,6 @@ defsymbl(sh4_cheat_hook)
   rts
   nop
 
-.align 2
-sb_flag:
-  .long   _cgba_dynarec_single_block
-
 /* ---- helper exit: dispatch on the C helper's return code ----
  * R4 = target PC (already committed to reg[REG_PC] by the helper),
  * R1 = helper return code: bit1 set = a store raised an alert (IRQ unmask,
@@ -821,6 +946,7 @@ defsymbl(sh4_helper_exit)
 defsymbl(sh4_pc_redispatch)
   mov     #REG_PC, r0
   mov.l   r4, @(r0,r14)           /* reg[REG_PC] = target PC */
+#ifdef CGBA_SH4_DIFF_HARNESS
   mov.l   sb_flag2, r0
   mov.l   @r0, r0
   tst     r0, r0
@@ -828,12 +954,15 @@ defsymbl(sh4_pc_redispatch)
   bra     return_to_main          /* single-block diff: stop after this block */
   mov     r13, r0                 /* delay slot: return remaining cycles */
 1:
+#endif
   bra     lookup_pc
   nop
 
+#ifdef CGBA_SH4_DIFF_HARNESS
 .align 2
 sb_flag2:
   .long   _cgba_dynarec_single_block
+#endif
 
 /* ---- compact per-instruction C-helper calls -------------------------------
  * Call sites in translated code are the FOOTPRINT problem: the classic glue
@@ -854,8 +983,9 @@ sb_flag2:
  * The trampolines read (fn, opcode, pc[, cycles]) through PR, run the helper,
  * apply the memory-cycle debit and the PC-change redispatch generically, and
  * `rts` back to the site's `bra 2f` on the continue path. R12 is callee-saved
- * and unused by generated code, so it carries the literal cursor across the
- * C call. Semantics mirror the old inline glue exactly: the extra-cycles
+ * and reserved from ordinary translated instructions, so it carries the
+ * literal cursor across the C call (resident fastmem uses it only within its
+ * own routines). Semantics mirror the old inline glue exactly: the extra-cycles
  * debit is unconditional (MEM forms), the accumulated cycle_count is debited
  * only on the PC-change exit, and helper return codes route through
  * sh4_helper_exit (1 = pure PC change, 2 = store alert). */
@@ -903,7 +1033,7 @@ defsymbl(sh4_op2_pc_tramp)          /* + redispatch when the helper moved PC */
   mov.l   @r12+, r5                 /* pc; r12 -> cycle_count literal */
   CPSR_RELOAD_R1
   bra     op2_pc_common
-  nop
+  mov     #0, r7                    /* full-width cycle descriptor */
 
 defsymbl(sh4_op2_pc_mem_tramp)      /* + memory debit + PC redispatch */
   sts     pr, r1
@@ -919,10 +1049,39 @@ defsymbl(sh4_op2_pc_mem_tramp)      /* + memory debit + PC redispatch */
   mov.l   tram_extra, r1
   mov.l   @r1, r1
   sub     r1, r13                   /* memory cycles: both paths (as before) */
+  bra     op2_pc_common
+  mov     #0, r7                    /* full-width cycle descriptor */
+
+#if CGBA_SH4_COMPACT_FASTMEM_TUPLE
+/* Compact fastmem descriptors pack the 16-bit cycle debit into the low half
+ * of the word at PR+20. Single-transfer params occupy the high half; block
+ * descriptors keep their full params word at PR+24. */
+defsymbl(sh4_fastmem_pc_mem_tramp)
+  sts     pr, r1
+  sts.l   pr, @-r15
+  CPSR_FLUSH
+  add     #8, r1
+  mov.l   @r1+, r0
+  mov.l   @r1+, r4
+  mov     r1, r12
+  jsr     @r0
+  mov.l   @r12+, r5
+  CPSR_RELOAD_R1
+  mov.l   tram_extra, r1
+  mov.l   @r1, r1
+  sub     r1, r13
+  bra     op2_pc_common
+  mov     #1, r7                    /* low-16 cycle descriptor */
+#endif
+
 op2_pc_common:
   tst     r0, r0
   bt      1f                        /* R0 == 0: continue the block */
   mov.l   @r12, r1
+  tst     r7, r7
+  bt      2f
+  extu.w  r1, r1
+2:
   sub     r1, r13                   /* accumulated cycles: exit path only */
   mov     r0, r1                    /* helper code for sh4_helper_exit */
   mov     #REG_PC, r0

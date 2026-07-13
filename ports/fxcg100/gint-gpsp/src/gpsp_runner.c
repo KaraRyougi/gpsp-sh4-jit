@@ -39,10 +39,14 @@ extern uint32_t cgba_dynarec_lookup_thumb_count;
 extern uint32_t cgba_dynarec_lookup_dual_count;
 extern uint32_t cgba_dynarec_icache_sync_count;
 extern uint32_t cgba_dynarec_icache_sync_bytes;
+extern uint32_t cgba_dynarec_patch_sync_count;
+extern uint32_t cgba_dynarec_patch_sync_bytes;
 extern uint32_t cgba_dynarec_ibh_arm_hit_count;
 extern uint32_t cgba_dynarec_ibh_arm_slow_count;
+extern uint32_t cgba_dynarec_ibh_arm_hot_count;
 extern uint32_t cgba_dynarec_ibh_thumb_hit_count;
 extern uint32_t cgba_dynarec_ibh_thumb_slow_count;
+extern uint32_t cgba_dynarec_ibh_thumb_hot_count;
 extern uint32_t cgba_dynarec_ibh_dual_arm_hit_count;
 extern uint32_t cgba_dynarec_ibh_dual_thumb_hit_count;
 extern uint32_t cgba_dynarec_ibh_dual_slow_count;
@@ -123,10 +127,14 @@ void cgba_sh4_prof_reset(void);   /* cpu_threaded.c */
 	X(cgba_dynarec_lookup_dual_count) \
 	X(cgba_dynarec_icache_sync_count) \
 	X(cgba_dynarec_icache_sync_bytes) \
+	X(cgba_dynarec_patch_sync_count) \
+	X(cgba_dynarec_patch_sync_bytes) \
 	X(cgba_dynarec_ibh_arm_hit_count) \
 	X(cgba_dynarec_ibh_arm_slow_count) \
+	X(cgba_dynarec_ibh_arm_hot_count) \
 	X(cgba_dynarec_ibh_thumb_hit_count) \
 	X(cgba_dynarec_ibh_thumb_slow_count) \
+	X(cgba_dynarec_ibh_thumb_hot_count) \
 	X(cgba_dynarec_ibh_dual_arm_hit_count) \
 	X(cgba_dynarec_ibh_dual_thumb_hit_count) \
 	X(cgba_dynarec_ibh_dual_slow_count) \
@@ -1487,6 +1495,9 @@ void cgba_gpsp_debug_menu(fxcg100_debug_info *debug, unsigned frame,
 			WV(cgba_dynarec_lookup_dual_count),
 			WV(cgba_dynarec_icache_sync_count),
 			(unsigned long)(WV(cgba_dynarec_icache_sync_bytes) / 1024u));
+		debug_line(debug, "JIT patch sync %lu/%luB",
+			WV(cgba_dynarec_patch_sync_count),
+			WV(cgba_dynarec_patch_sync_bytes));
 		debug_line(debug, "JIT IH hit A%lu T%lu DA%lu DT%lu",
 			WV(cgba_dynarec_ibh_arm_hit_count),
 			WV(cgba_dynarec_ibh_thumb_hit_count),
@@ -1496,7 +1507,9 @@ void cgba_gpsp_debug_menu(fxcg100_debug_info *debug, unsigned frame,
 			WV(cgba_dynarec_ibh_arm_slow_count),
 			WV(cgba_dynarec_ibh_thumb_slow_count),
 			WV(cgba_dynarec_ibh_dual_slow_count));
-		debug_line(debug, "JIT IH hot DA%lu DT%lu",
+		debug_line(debug, "JIT IH hot A%lu T%lu DA%lu DT%lu",
+			WV(cgba_dynarec_ibh_arm_hot_count),
+			WV(cgba_dynarec_ibh_thumb_hot_count),
 			WV(cgba_dynarec_ibh_dual_hot_arm_count),
 			WV(cgba_dynarec_ibh_dual_hot_thumb_count));
 		debug_line(debug, "PROF entries=%lu ovf=%lu",

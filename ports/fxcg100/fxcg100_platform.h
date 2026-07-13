@@ -151,6 +151,12 @@ void fxcg100_lcd_status(const char *text);
  * activity so the next gameplay presentation removes any stale border pixels. */
 void fxcg100_lcd_note_os_activity(void);
 void fxcg100_lcd_blit_gba(const uint16_t *pixels);
+/* Exact unscaled streaming presenter. begin() returns zero for a scaled mode;
+ * scanline() is called after a completed GBA row; end() returns one only when
+ * all 160 rows were queued, otherwise the caller performs the normal blit. */
+int fxcg100_lcd_stream_begin(void);
+void fxcg100_lcd_stream_scanline(const uint16_t *row, unsigned y);
+int fxcg100_lcd_stream_end(void);
 /* Display scaling for the gameplay blit (menu DISPLAY SCALING):
  * 0 = 1:1 centered, 1 = 4:3 320x212, 2 = fullscreen 384x216. */
 void fxcg100_lcd_set_scale(uint32_t mode);

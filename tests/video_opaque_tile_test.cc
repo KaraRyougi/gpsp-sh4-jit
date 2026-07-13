@@ -3,7 +3,8 @@
 #include <string.h>
 
 /* Include the production template in this translation unit so the test calls
- * the exact opt-in path.  --gc-sections discards the rest of video.cc. */
+ * the exact row path plus the broader opt-in tile classifier. --gc-sections
+ * discards the rest of video.cc. */
 #define CGBA_VIDEO_OPAQUE_TILE_FASTPATH 1
 #define CGBA_VIDEO_OPAQUE_ROW_UNROLL 1
 #include "../vendor/gpsp/video.cc"

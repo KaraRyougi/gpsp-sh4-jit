@@ -23,6 +23,11 @@
 
 #include "common.h"
 #include "sh4/sh4_jit_safety.h"
+#ifdef CGBA_SH4_DIFF_HARNESS
+#define CGBA_SH4_DIFF_ACTIVE() (cgba_dynarec_single_block != 0)
+#else
+#define CGBA_SH4_DIFF_ACTIVE() 0
+#endif
 #ifdef SH4_ARCH
 #if RAM_TRANSLATION_CACHE_SIZE <= \
     CGBA_SH4_RAM_CACHE_WATERMARK + TRANSLATION_CACHE_LIMIT_THRESHOLD + \
@@ -95,6 +100,10 @@ typedef struct
 } hashhdr_type;
 
 u32 rom_branch_hash[ROM_BRANCH_HASH_SIZE] CGBA_HIGH_BSS;
+u32 cgba_dynarec_arm_hot_key[64] CGBA_HIGH_BSS;
+u32 cgba_dynarec_arm_hot_ptr[64] CGBA_HIGH_BSS;
+u32 cgba_dynarec_thumb_hot_key[64] CGBA_HIGH_BSS;
+u32 cgba_dynarec_thumb_hot_ptr[64] CGBA_HIGH_BSS;
 u32 cgba_dynarec_dual_hot_key[64] CGBA_HIGH_BSS;
 u32 cgba_dynarec_dual_hot_ptr[64] CGBA_HIGH_BSS;
 
@@ -115,10 +124,14 @@ u32 cgba_dynarec_lookup_thumb_count;
 u32 cgba_dynarec_lookup_dual_count;
 u32 cgba_dynarec_icache_sync_count;
 u32 cgba_dynarec_icache_sync_bytes;
+u32 cgba_dynarec_patch_sync_count;
+u32 cgba_dynarec_patch_sync_bytes;
 u32 cgba_dynarec_ibh_arm_hit_count;
 u32 cgba_dynarec_ibh_arm_slow_count;
+u32 cgba_dynarec_ibh_arm_hot_count;
 u32 cgba_dynarec_ibh_thumb_hit_count;
 u32 cgba_dynarec_ibh_thumb_slow_count;
+u32 cgba_dynarec_ibh_thumb_hot_count;
 u32 cgba_dynarec_ibh_dual_arm_hit_count;
 u32 cgba_dynarec_ibh_dual_thumb_hit_count;
 u32 cgba_dynarec_ibh_dual_slow_count;
@@ -425,6 +438,15 @@ typedef struct
   void platform_cache_sync(void *baseaddr, void *endptr) {
     cgba_sh4_cache_sync(baseaddr, endptr);
   }
+#if defined(CGBA_SH4_PATCH_RESYNC)
+  void cgba_sh4_patch_cache_sync(void *baseaddr, void *endptr) {
+    cgba_sh4_cache_sync(baseaddr, endptr);
+#if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
+    cgba_dynarec_patch_sync_count++;
+    cgba_dynarec_patch_sync_bytes += (u32)((u8 *)endptr - (u8 *)baseaddr);
+#endif
+  }
+#endif
 #else
   /* x86 CPUs have icache consistency checks */
   void platform_cache_sync(void *baseaddr, void *endptr) {}
@@ -2897,10 +2919,21 @@ inline static ramtag_type* get_ram_tag(u16 tagval) {
 
 #if defined(SH4_ARCH) && defined(CGBA_GPSP_HEADLESS_TEST)
 extern unsigned long cgba_em_blk_n, cgba_em_blk_bytes;
-#define CGBA_EM_BLK_STAT(nbytes) \
-  (cgba_em_blk_n++, cgba_em_blk_bytes += (unsigned long)(nbytes))
+extern unsigned long cgba_em_blk_max_bytes, cgba_em_blk_hist[6];
+extern unsigned long cgba_em_blk_mode_n[2], cgba_em_blk_mode_bytes[2];
+#define CGBA_EM_BLK_STAT(nbytes, is_thumb) do {                              \
+  unsigned long _b = (unsigned long)(nbytes);                                \
+  unsigned _m = (is_thumb) ? 1u : 0u;                                        \
+  unsigned _h = (_b <= 64) ? 0u : (_b <= 128) ? 1u :                        \
+                (_b <= 256) ? 2u : (_b <= 512) ? 3u :                       \
+                (_b <= 1024) ? 4u : 5u;                                     \
+  cgba_em_blk_n++; cgba_em_blk_bytes += _b;                                  \
+  if (_b > cgba_em_blk_max_bytes) cgba_em_blk_max_bytes = _b;                \
+  cgba_em_blk_hist[_h]++;                                                     \
+  cgba_em_blk_mode_n[_m]++; cgba_em_blk_mode_bytes[_m] += _b;                \
+} while (0)
 #else
-#define CGBA_EM_BLK_STAT(nbytes) ((void)0)
+#define CGBA_EM_BLK_STAT(nbytes, is_thumb) ((void)0)
 #endif
 
 #ifndef CGBA_SH4_HOT_THRESHOLD
@@ -2929,8 +2962,6 @@ extern int cgba_cold_gate_probe;
 u8 function_cc *block_lookup_translate_##type(u32 pc)                         \
 {                                                                             \
   u8 pcregion = (pc >> 24);                                                   \
-  u16 *location;                                                              \
-  u32 block_tag;                                                              \
                                                                               \
   block_lookup_address_pc_##type();                                           \
   if(!cgba_sh4_jit_exec_domain(pc))                                           \
@@ -2981,9 +3012,10 @@ u8 function_cc *block_lookup_translate_##type(u32 pc)                         \
       while(blk_offset)                                                       \
       {                                                                       \
         bhdr = (hashhdr_type*)&rom_translation_cache[blk_offset];             \
-        if(bhdr->pc_value == key)                                             \
+        if(bhdr->pc_value == key) {                                           \
           return &rom_translation_cache[                                      \
                   blk_offset + sizeof(hashhdr_type) + block_prologue_size];   \
+        }                                                                     \
                                                                               \
         blk_offset = bhdr->next_entry;                                        \
         blk_offset_addr = &bhdr->next_entry;                                  \
@@ -2996,7 +3028,7 @@ u8 function_cc *block_lookup_translate_##type(u32 pc)                         \
          diff harness translate unconditionally. */                          \
       if(CGBA_SH4_HOT_THRESHOLD > 0 &&                                        \
          cgba_cold_gate_enable && pcregion >= 0x8 &&                          \
-         !cgba_dynarec_single_block) {                                        \
+         !CGBA_SH4_DIFF_ACTIVE()) {                                           \
         u32 hot_idx = (key * 2654435761U) >> 18;                              \
         if(cgba_hot_count[hot_idx] < CGBA_SH4_HOT_THRESHOLD) {                \
           /* Heat only on real dispatch (resolver path). External-exit        \
@@ -3125,13 +3157,13 @@ u8 function_cc *block_lookup_address_arm(u32 pc)
   /* BIOS IRQ wrapper HLE (sh4_interp_helpers.c): dispatch the vector and the
    * epilogue natively instead of two interpreter round-trips per IRQ. */
   if(pc == 0x00000018u && reg[CPU_MODE] == MODE_IRQ &&
-     !cgba_dynarec_single_block) {
+     !CGBA_SH4_DIFF_ACTIVE()) {
     u32 handler = cgba_hle_bios_irq_entry();
     if(handler != 0)
       pc = handler;                /* resolve the game handler directly */
   }
   else if(pc == 0x00000030u && reg[CPU_MODE] == MODE_IRQ &&
-          !cgba_dynarec_single_block) {
+          !CGBA_SH4_DIFF_ACTIVE()) {
     u32 np = cgba_hle_bios_irq_exit();
     if(np == 0x00000018u)          /* pending IRQ re-entry */
       np = cgba_hle_bios_irq_entry();
@@ -3582,7 +3614,7 @@ extern int cgba_dynarec_single_block;
 #define CGBA_DIAG_BLK_PC 0xB5Cu
 #endif
 #define CGBA_DIAG_ONE_INSN_BLOCK(start) \
-  (cgba_dynarec_single_block && (start) >= 0xB5Cu && (start) < 0xC10u)
+  (CGBA_SH4_DIFF_ACTIVE() && (start) >= 0xB5Cu && (start) < 0xC10u)
 #else
 #define CGBA_DIAG_ONE_INSN_BLOCK(start) ((void)(start), 0)
 #endif
@@ -3768,6 +3800,9 @@ bool translate_block_arm(u32 pc, bool ram_region)
   }
   attempt_base = translation_ptr;
 
+#ifdef SH4_ARCH
+  sh4g_litseg_begin();
+#endif
   generate_block_prologue();
 
   /* This is a function because it's used a lot more than it might seem (all
@@ -3853,6 +3888,9 @@ bool translate_block_arm(u32 pc, bool ram_region)
 
     update_pc_limits();
     translate_arm_instruction();
+#ifdef SH4_ARCH
+    sh4g_litseg_maybe_flush(&translation_ptr);
+#endif
 #ifdef CGBA_SH4_EXACT_CYCLE_BOUNDARIES
     generate_cycle_update();
 #endif
@@ -3869,6 +3907,9 @@ bool translate_block_arm(u32 pc, bool ram_region)
         (unsigned long)block_end_pc, (long)block_data_position,
         (unsigned long)CGBA_BLOCK_SCAN_CAP_EXPR);
       cgba_block_overflow_shrink(attempt_base, translation_ptr, ram_region);
+#ifdef SH4_ARCH
+      sh4g_litseg_abort();
+#endif
       if (ram_region)
         flush_translation_cache_ram();
       else
@@ -3886,6 +3927,10 @@ bool translate_block_arm(u32 pc, bool ram_region)
     }
 #endif
   }
+
+#ifdef SH4_ARCH
+  sh4g_litseg_end(&translation_ptr);
+#endif
 
   /* This can happen if the last instruction is *not* inconditional */
   if ((last_condition & 0x0F) != 0x0E) {
@@ -3947,7 +3992,7 @@ bool translate_block_arm(u32 pc, bool ram_region)
        here, before external-exit resolution recursively translates other
        blocks, so nested emission isn't double-counted into the stat. */
     CGBA_EM_BLK_STAT((translation_ptr - rom_translation_ptr) +
-                     sizeof(hashhdr_type));
+                     sizeof(hashhdr_type), 0);
     rom_translation_ptr = translation_ptr;
   }
 
@@ -3955,7 +4000,7 @@ bool translate_block_arm(u32 pc, bool ram_region)
   /* Single-block diff mode: skip external-branch resolution to avoid gpSP's
      recursive translate-the-whole-reachable-graph cascade; unresolved exits
      simply redispatch through sh4_block_exit. */
-  if (!cgba_dynarec_single_block)
+  if (!CGBA_SH4_DIFF_ACTIVE())
 #endif
   for(i = 0; i < external_block_exit_position; i++)
   {
@@ -4064,6 +4109,9 @@ bool translate_block_thumb(u32 pc, bool ram_region)
   }
   attempt_base = translation_ptr;
 
+#ifdef SH4_ARCH
+  sh4g_litseg_begin();
+#endif
   generate_block_prologue();
 
   /* This is a function because it's used a lot more than it might seem (all
@@ -4139,6 +4187,9 @@ bool translate_block_thumb(u32 pc, bool ram_region)
 
     update_pc_limits();
     translate_thumb_instruction();
+#ifdef SH4_ARCH
+    sh4g_litseg_maybe_flush(&translation_ptr);
+#endif
 #ifdef CGBA_SH4_EXACT_CYCLE_BOUNDARIES
     generate_cycle_update();
 #endif
@@ -4156,6 +4207,9 @@ bool translate_block_thumb(u32 pc, bool ram_region)
         (unsigned long)block_end_pc, (long)block_data_position,
         (unsigned long)CGBA_BLOCK_SCAN_CAP_EXPR);
       cgba_block_overflow_shrink(attempt_base, translation_ptr, ram_region);
+#ifdef SH4_ARCH
+      sh4g_litseg_abort();
+#endif
       if (ram_region)
         flush_translation_cache_ram();
       else
@@ -4173,6 +4227,10 @@ bool translate_block_thumb(u32 pc, bool ram_region)
     }
 #endif
   }
+
+#ifdef SH4_ARCH
+  sh4g_litseg_end(&translation_ptr);
+#endif
 
   /* See translate_block_arm: the gate is dead code after a clean
      unconditional-branch block end. */
@@ -4226,14 +4284,14 @@ bool translate_block_thumb(u32 pc, bool ram_region)
        here, before external-exit resolution recursively translates other
        blocks, so nested emission isn't double-counted into the stat. */
     CGBA_EM_BLK_STAT((translation_ptr - rom_translation_ptr) +
-                     sizeof(hashhdr_type));
+                     sizeof(hashhdr_type), 1);
     rom_translation_ptr = translation_ptr;
   }
 
 #ifdef SH4_ARCH
   /* See translate_block_arm: skip external-branch resolution in single-block
      diff mode so we translate only the entered block. */
-  if (!cgba_dynarec_single_block)
+  if (!CGBA_SH4_DIFF_ACTIVE())
 #endif
   for(i = 0; i < external_block_exit_position; i++)
   {
@@ -4439,8 +4497,11 @@ void flush_translation_cache_rom(void)
 
   last_rom_translation_ptr = &rom_translation_cache[rom_cache_watermark];
   rom_translation_ptr      = &rom_translation_cache[rom_cache_watermark];
-
   memset(rom_branch_hash, 0, sizeof(rom_branch_hash));
+  memset(cgba_dynarec_arm_hot_key, 0, sizeof(cgba_dynarec_arm_hot_key));
+  memset(cgba_dynarec_arm_hot_ptr, 0, sizeof(cgba_dynarec_arm_hot_ptr));
+  memset(cgba_dynarec_thumb_hot_key, 0, sizeof(cgba_dynarec_thumb_hot_key));
+  memset(cgba_dynarec_thumb_hot_ptr, 0, sizeof(cgba_dynarec_thumb_hot_ptr));
   memset(cgba_dynarec_dual_hot_key, 0, sizeof(cgba_dynarec_dual_hot_key));
   memset(cgba_dynarec_dual_hot_ptr, 0, sizeof(cgba_dynarec_dual_hot_ptr));
 }
@@ -4462,6 +4523,10 @@ void init_dynarec_caches(void)
   /* Initialize caches so that we can start initalizing the emitter. */
   rom_translation_ptr = last_rom_translation_ptr = &rom_translation_cache[0];
   memset(rom_branch_hash, 0, sizeof(rom_branch_hash));
+  memset(cgba_dynarec_arm_hot_key, 0, sizeof(cgba_dynarec_arm_hot_key));
+  memset(cgba_dynarec_arm_hot_ptr, 0, sizeof(cgba_dynarec_arm_hot_ptr));
+  memset(cgba_dynarec_thumb_hot_key, 0, sizeof(cgba_dynarec_thumb_hot_key));
+  memset(cgba_dynarec_thumb_hot_ptr, 0, sizeof(cgba_dynarec_thumb_hot_ptr));
   memset(cgba_dynarec_dual_hot_key, 0, sizeof(cgba_dynarec_dual_hot_key));
   memset(cgba_dynarec_dual_hot_ptr, 0, sizeof(cgba_dynarec_dual_hot_ptr));
 

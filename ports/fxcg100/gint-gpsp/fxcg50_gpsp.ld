@@ -113,12 +113,19 @@ SECTIONS
 	.ilram ALIGN(4) : ALIGN(4) {
 		_lilram = LOADADDR(.ilram);
 		_rilram = . ;
+		*(.ilram.dispatch .ilram.dispatch.*)
 		*(.ilram)
 		*(.gint.mapped)
 		. = ALIGN(16);
 	} > ilram AT> rom
 
 	. = ORIGIN(xyram);
+	.xyram.fastmem (NOLOAD) : ALIGN(32) {
+		_cgba_fastmem_start = . ;
+		KEEP(*(.xyram.fastmem .xyram.fastmem.*))
+		_cgba_fastmem_end = . ;
+	} > xyram :NONE
+
 	.xyram ALIGN(4) : ALIGN(4) {
 		_lxyram = LOADADDR(.xyram);
 		_rxyram = . ;
@@ -128,6 +135,10 @@ SECTIONS
 
 	_silram = SIZEOF(.ilram);
 	_sxyram = SIZEOF(.xyram);
+	ASSERT(_silram <= 4k,
+		"SH4 dispatch stubs exceed the 4 KiB ILRAM budget")
+	ASSERT(SIZEOF(.xyram.fastmem) <= 8k,
+		"SH4 resident fastmem exceeds its 8 KiB XYRAM budget")
 
 	_lgmapped = ABSOLUTE(0);
 	_sgmapped = ABSOLUTE(0);

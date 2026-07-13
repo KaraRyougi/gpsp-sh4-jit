@@ -20,25 +20,34 @@
 #define GBA_FRAME_DMA_BLOCKS (GBA_FRAME_BYTES / 32)
 
 /*
- * Direct-LCD strip DMA from on-chip XY-RAM (uncached, DMA-safe), mirroring the
- * working cgbc / prizoop presenter. DMAing the frame out of gint_vram is what
- * produced the white screen on real hardware: gint_vram is in cached RAM, so
- * the DMAC reads stale memory (casio-emu has no cache model, which is why it
- * looked fine in the emulator). XY-RAM is on-chip and uncached, so the DMA sees
- * the bytes we just wrote. Strips keep the R61524 4-row DMA window alignment
- * (the GBA frame origin oy=32 and STRIP_LINES are both multiples of 4).
+ * The hardware-proven presenter gives each DMA buffer a full 8 KiB on-chip
+ * bank. If the experimental resident fastmem image claims XRAM, fall back to
+ * two 4 KiB halves of YRAM; that layout costs substantially more DMA launches
+ * in the scaled modes and is therefore not the release default.
  */
-#define STRIP_LINES 12
-#define STRIP_BUF0  ((uintptr_t)0xe5007000u)
-#define STRIP_BUF1  ((uintptr_t)0xe5017000u)
-_Static_assert(STRIP_LINES * GBA_W * 2 <= 0x2000,
-	"GBA strip must fit one 8KB on-chip XY-RAM bank");
+#if defined(CGBA_SH4_FASTMEM_XYRAM) && CGBA_SH4_FASTMEM_XYRAM
+# define STRIP_LINES 8
+# define STRIP_43_LINES 4
+# define STRIP_FULL_LINES 4
+# define STRIP_BANK_BYTES 0x1000
+# define STRIP_BUF0 ((uintptr_t)0xe5010000u)
+# define STRIP_BUF1 ((uintptr_t)0xe5011000u)
+#else
+# define STRIP_LINES 16
+# define STRIP_43_LINES 12
+# define STRIP_FULL_LINES 8
+# define STRIP_BANK_BYTES 0x2000
+# define STRIP_BUF0 ((uintptr_t)0xe5007000u)
+# define STRIP_BUF1 ((uintptr_t)0xe5017000u)
+#endif
+_Static_assert(STRIP_LINES * GBA_W * 2 <= STRIP_BANK_BYTES,
+	"GBA strip must fit its on-chip DMA bank");
 _Static_assert(STRIP_LINES % 4 == 0,
 	"strip height must stay 4-row aligned for the R61524 DMA window");
-_Static_assert(12 * 320 * 2 <= 0x2000,
-	"4:3 12-row strip must fit one XY-RAM bank");
-_Static_assert(8 * 384 * 2 <= 0x2000,
-	"fullscreen 8-row strip must fit one XY-RAM bank");
+_Static_assert(STRIP_43_LINES * 320 * 2 <= STRIP_BANK_BYTES,
+	"4:3 strip must fit its on-chip DMA bank");
+_Static_assert(STRIP_FULL_LINES * 384 * 2 <= STRIP_BANK_BYTES,
+	"fullscreen strip must fit its on-chip DMA bank");
 
 static int lcd_dma_pending;
 /* The gameplay blit narrows the R61524 GRAM window to the GBA rectangle via
@@ -243,8 +252,8 @@ void fxcg100_lcd_note_os_activity(void)
 	lcd_os_overlay_dirty = 1;
 }
 
-/* Start the DMA of one prepared strip (in on-chip RAM) to the LCD window.
- * Falls back to CPU writes if the DMA channel is unavailable. */
+/* Start the DMA of one prepared YRAM strip to the LCD window. Falls back to CPU
+ * writes if the DMA channel is unavailable. */
 static void start_strip_dma(const uint16_t *strip, int x, int y,
 	int width, int rows)
 {
@@ -353,7 +362,7 @@ static void blit_gba_scaled_43(const uint16_t *pixels)
 
 	wait_lcd_dma();
 	while (y < 212) {
-		int rows = (212 - y >= 12) ? 12 : 8;   /* 3 or 2 groups */
+		int rows = (212 - y < STRIP_43_LINES) ? 212 - y : STRIP_43_LINES;
 		uint16_t *sp = strips[bi];
 		int g;
 
@@ -424,9 +433,11 @@ static void blit_gba_scaled_full(const uint16_t *pixels)
 	wait_lcd_dma();
 	while (y < LCD_H) {
 		uint16_t *sp = strips[bi];
+		int rows = (LCD_H - y < STRIP_FULL_LINES)
+			? LCD_H - y : STRIP_FULL_LINES;
 		int r;
 
-		for (r = 0; r < 8; r++) {
+		for (r = 0; r < rows; r++) {
 			uint16_t v = vmap[y + r];
 			unsigned src = v & CGBA_SCALE_VROW;
 			uint16_t *out = sp + r * LCD_W;
@@ -440,9 +451,9 @@ static void blit_gba_scaled_full(const uint16_t *pixels)
 		}
 		if (y > 0)
 			wait_lcd_dma();
-		start_strip_dma(strips[bi], ox, oy + y, LCD_W, 8);
+		start_strip_dma(strips[bi], ox, oy + y, LCD_W, rows);
 		bi ^= 1;
-		y += 8;
+		y += rows;
 	}
 	lcd_window_partial = 1;
 }
@@ -471,9 +482,8 @@ void fxcg100_lcd_blit_gba(const uint16_t *pixels)
 	}
 
 	/*
-	 * Present the frame as 12-row strips DMA'd out of on-chip XY-RAM (see the
-	 * note by STRIP_LINES). Double-buffered: copy the next strip into the
-	 * other on-chip bank while the current strip's DMA runs.
+	 * Present the frame as strips DMA'd out of the on-chip banks selected above.
+	 * Double-buffered: prepare the next strip while the current DMA runs.
 	 */
 	wait_lcd_dma();
 
@@ -497,15 +507,86 @@ void fxcg100_lcd_blit_gba(const uint16_t *pixels)
 
 	/*
 	 * Do NOT wait for the final strip's DMA here. The whole frame is already
-	 * copied into the XY-RAM strips, so we leave the last DMA in flight and
+	 * copied into the on-chip strips, so we leave the last DMA in flight and
 	 * return -- the next frame's run_frame() then overlaps it (the prizoop
 	 * trick). Every consumer that could collide already waits first: the next
 	 * blit's leading wait_lcd_dma() before it reuses a strip bank, and the
 	 * menu/status path's restore_full_window() before any gint push. The frame
-	 * buffer itself is free to be overwritten (the DMA reads XY-RAM, not it).
+	 * buffer itself is free to be overwritten (the DMA reads on-chip RAM).
 	 */
 	lcd_window_partial = 1;   /* window narrowed; menu restores it */
 }
+
+/* ---- Scanline-streamed unscaled presentation ---------------------------
+ * update_scanline() calls us only after a row is architecturally complete.
+ * A 16-row group is therefore byte-for-byte the same data that the normal
+ * end-of-frame blit copies, but its LCD DMA overlaps emulation of the next
+ * group. The final DMA remains in flight under the same ownership contract as
+ * fxcg100_lcd_blit_gba(). */
+#ifdef CGBA_LCD_SCANLINE_STREAM
+static int lcd_stream_active;
+static unsigned lcd_stream_next_y;
+static unsigned lcd_stream_bank;
+
+int fxcg100_lcd_stream_begin(void)
+{
+	if(lcd_scale_mode != 0)
+		return 0;
+	wait_lcd_dma();
+	clear_os_overlay_before_blit();
+	lcd_stream_next_y = 0;
+	lcd_stream_bank = 0;
+	lcd_stream_active = 1;
+	return 1;
+}
+
+void fxcg100_lcd_stream_scanline(const uint16_t *row, unsigned y)
+{
+	uint16_t *const strips[2] = {
+		(uint16_t *)STRIP_BUF0,
+		(uint16_t *)STRIP_BUF1,
+	};
+	unsigned rows;
+	int ox = (DWIDTH - GBA_W) / 2;
+	int oy = (DHEIGHT - GBA_H) / 2;
+
+	if(!lcd_stream_active || !row || y >= GBA_H)
+		return;
+	if(y + 1 < lcd_stream_next_y + STRIP_LINES && y + 1 != GBA_H)
+		return;
+	if(y + 1 > lcd_stream_next_y + STRIP_LINES && y + 1 != GBA_H) {
+		lcd_stream_active = 0;       /* out-of-order/missing row: fall back */
+		return;
+	}
+
+	rows = y + 1 - lcd_stream_next_y;
+	if(rows == 0 || rows > STRIP_LINES) {
+		lcd_stream_active = 0;
+		return;
+	}
+	memcpy(strips[lcd_stream_bank], row - (rows - 1) * GBA_W,
+		(size_t)rows * GBA_W * sizeof(uint16_t));
+	if(lcd_stream_next_y != 0)
+		wait_lcd_dma();
+	start_strip_dma(strips[lcd_stream_bank], ox,
+		oy + (int)lcd_stream_next_y, GBA_W, (int)rows);
+	lcd_stream_bank ^= 1;
+	lcd_stream_next_y += rows;
+	lcd_window_partial = 1;
+}
+
+int fxcg100_lcd_stream_end(void)
+{
+	int complete = lcd_stream_active && lcd_stream_next_y == GBA_H;
+	lcd_stream_active = 0;
+	return complete;
+}
+#else
+int fxcg100_lcd_stream_begin(void) { return 0; }
+void fxcg100_lcd_stream_scanline(const uint16_t *row, unsigned y)
+{ (void)row; (void)y; }
+int fxcg100_lcd_stream_end(void) { return 0; }
+#endif
 
 uint32_t fxcg100_frame_hash(const uint16_t *pixels)
 {

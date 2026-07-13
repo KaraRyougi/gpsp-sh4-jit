@@ -18,7 +18,8 @@
  *                    V via `subv` on a copy.
  *   logical        : N/Z only; C and V are left untouched (the op doesn't move
  *                    them — the shifter does, handled elsewhere).
- * Register-specified shifts and hi-reg-PC forms stay on the C path for now.
+ * Register-specified shifts and hi-register PC forms are emitted natively;
+ * both have execution-oracle coverage for their ARM-defined corner cases.
  *
  * Correctness gate: the single-block lockstep and the frame diff both compare
  * reg[REG_CPSR], so C and V must be exact, not just N/Z.
@@ -155,8 +156,6 @@ static inline int sh4g_thumb_dp_native(u8 **tp, u32 opcode, u32 pc, u32 flag_sta
 {
   u32 hi = (opcode >> 8) & 0xFF;
   u32 fm = flag_status & 0xF;
-  (void)pc;
-
   if (opcode == 0x46C0u)                                /* MOV r8,r8: Thumb NOP */
     return 1;
 
@@ -258,24 +257,48 @@ static inline int sh4g_thumb_dp_native(u8 **tp, u32 opcode, u32 pc, u32 flag_sta
     return 1;
   }
 
-  /* fmt5 hi-reg ADD/CMP/MOV. rs==15 reads the translate-time constant PC+4.
-   * rd==15 MOV — the `mov pc, lr` return idiom, hot in BX-less BIOS-era code
-   * such as the MP2K sound engine — exits through the same contract the C
-   * helper uses (R4 = new PC, R1 = 1: pure PC change -> sh4_pc_redispatch).
-   * ADD pc and MOV pc,pc stay on the C path. */
+  /* fmt5 hi-reg ADD/CMP/MOV. Any source or ALU operand R15 reads the
+   * translate-time constant PC+4. A PC destination exits through the same
+   * contract as the C helper (R4 = new PC, R1 = 1: pure PC change ->
+   * sh4_pc_redispatch); this includes ADD pc,Rs and MOV pc,pc, not only the
+   * common MOV pc,lr return idiom. */
   if (hi >= 0x44 && hi <= 0x46) {
     unsigned op = (opcode >> 8) & 3;                     /* 0 ADD, 1 CMP, 2 MOV */
     unsigned rd = (opcode & 7) | ((opcode >> 4) & 8);
     unsigned rs = (opcode >> 3) & 0xF;
     if (rd == 15) {
-      if (op != 2 || rs == 15)
+      if (op == 1) {                                    /* CMP pc,Rs */
+        if (!fm)
+          return 1;                                     /* flags dead: nop */
+        sh4g_const(tp, pc + 4, SH4_REG_T0);
+        if (rs == 15) sh4g_const(tp, pc + 4, SH4_REG_T1);
+        else { sh4_codegen cg = sh4g_open(tp);
+          sh4_emit_load_greg(&cg, rs, SH4_REG_T1);
+          sh4g_close(tp, &cg); }
+        sh4g_dp_addsub(tp, 1, 0, 0, fm);
+        return 1;
+      }
+      if (op > 2)
         return 0;
-      sh4g_load_greg(tp, rs, SH4_REG_RET);
-      sh4g_cycle_debit(tp, cycles);   /* PC-change exit: debit the accumulated
-                                       * run, exactly like the op2_pc tramp
-                                       * path this replaced (dropping it let
-                                       * the budget drift long on every
-                                       * mov pc,lr return) */
+
+      /* Debit before calculating the target: a large debit materializes an
+       * immediate through R1, while the target is deliberately kept in R0. */
+      sh4g_cycle_debit(tp, cycles);
+      if (op == 0) {                                    /* ADD pc,Rs */
+        sh4g_const(tp, pc + 4, SH4_REG_RET);
+        if (rs == 15) sh4g_const(tp, pc + 4, SH4_REG_T1);
+        else { sh4_codegen cg = sh4g_open(tp);
+          sh4_emit_load_greg(&cg, rs, SH4_REG_T1);
+          sh4_emit_add_reg(&cg, SH4_REG_T1, SH4_REG_RET);
+          sh4g_close(tp, &cg); }
+        if (rs == 15) { sh4_codegen cg = sh4g_open(tp);
+          sh4_emit_add_reg(&cg, SH4_REG_T1, SH4_REG_RET);
+          sh4g_close(tp, &cg); }
+      } else if (rs == 15) {                            /* MOV pc,pc */
+        sh4g_const(tp, pc + 4, SH4_REG_RET);
+      } else {
+        sh4g_load_greg(tp, rs, SH4_REG_RET);            /* MOV pc,Rs */
+      }
       { sh4_codegen cg = sh4g_open(tp);
         sh4_emit_mov_imm(&cg, -2, SH4_REG_T1);
         sh4_emit_and(&cg, SH4_REG_T1, SH4_REG_RET);      /* new PC = rs & ~1 */

@@ -261,10 +261,18 @@ static void test_43_geometry(void)
 {
 	CHECK(53 * 3 == 159, "4:3 consumes 159 source rows");
 	CHECK(53 * 4 == 212, "4:3 produces 212 output rows");
-	CHECK(17 * 12 + 8 == 212, "17 full strips + one 8-row strip");
-	CHECK(12 * 320 * 2 <= 0x2000, "12-row 320px strip fits an XY bank");
-	CHECK(8 * 384 * 2 <= 0x2000, "8-row 384px strip fits an XY bank");
-	CHECK(27 * 8 == 216, "fullscreen: 27 strips of 8 rows");
+	CHECK(10 * 16 == 160, "release centered: 10 strips of 16 rows");
+	CHECK(16 * 240 * 2 <= 0x2000, "release 16-row centered strip fits YRAM");
+	CHECK(17 * 12 + 8 == 212, "release 4:3: 18 strips at 12 rows max");
+	CHECK(12 * 320 * 2 <= 0x2000, "release 12-row 4:3 strip fits YRAM");
+	CHECK(26 * 8 + 8 == 216, "release fullscreen: 27 strips of 8 rows");
+	CHECK(8 * 384 * 2 <= 0x2000, "release 8-row fullscreen strip fits YRAM");
+	CHECK(20 * 8 == 160, "centered: 20 strips of 8 rows");
+	CHECK(8 * 240 * 2 <= 0x1000, "8-row 240px strip fits half of YRAM");
+	CHECK(53 * 4 == 212, "4:3: 53 strips of 4 rows");
+	CHECK(4 * 320 * 2 <= 0x1000, "4-row 320px strip fits half of YRAM");
+	CHECK(54 * 4 == 216, "fullscreen: 54 strips of 4 rows");
+	CHECK(4 * 384 * 2 <= 0x1000, "4-row 384px strip fits half of YRAM");
 }
 
 int main(void)

@@ -22,6 +22,10 @@ extern "C" {
   #include "common.h"
 }
 
+#ifdef CGBA_LCD_SCANLINE_STREAM
+extern "C" void fxcg100_lcd_stream_scanline(const u16 *row, unsigned y);
+#endif
+
 u16* gba_screen_pixels = NULL;
 
 #define get_screen_pixels()   gba_screen_pixels
@@ -2654,6 +2658,12 @@ void update_scanline(void)
     memset(screen_offset, 0xff, 240*sizeof(u16));
   else
     render_scanline_window(screen_offset);
+
+#ifdef CGBA_LCD_SCANLINE_STREAM
+  /* The renderer has finished every write to this row. In unscaled streaming
+   * mode the platform batches it into a DMA-safe 16-row YRAM strip. */
+  fxcg100_lcd_stream_scanline(screen_offset, vcount);
+#endif
 
   // Mode 0 does not use any affine params at all.
   if (video_mode) {
