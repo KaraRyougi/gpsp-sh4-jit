@@ -178,7 +178,9 @@ target_compile_definitions(cgba-gint-gpsp PRIVATE
 )
 if(CGBA_FXCG50)
   target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_FXCG50=1)
-  target_sources(cgba-gint-gpsp PRIVATE src/cg50_syscall.S)  # Bfile_GetBlockAddress syscall trampoline
+  target_sources(cgba-gint-gpsp PRIVATE
+    src/cg50_syscall.S
+    src/hottext.c)  # BFile trampoline + RAM-resident native-code loader
 else()
   target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_FXCG100=1)
 endif()
@@ -577,5 +579,5 @@ if(CGBA_GPSP_HEADLESS_TEST OR CGBA_SH4_DIFF_HARNESS)
 endif()
 
 generate_g3a(TARGET cgba-gint-gpsp OUTPUT "gpSP.g3a"
-  NAME "gpSP" VERSION "00.05.0712"
+  NAME "gpSP" VERSION "00.06.0712"
   ICONS icon-uns.png icon-sel.png)
