@@ -3,6 +3,8 @@ ports/fxcg100/build-full/
 ports/fxcg100/build-*/
 ports/fxcg100/gint-smoke/build-cg*/
 ports/fxcg100/gint-smoke/*.g3a
+ports/fxcg100/ramprobe/build-cg*/
+ports/fxcg100/ramprobe/*.g3a
 # build-cg (shipping), build-cg-headless-* (dynarec soak/diff harness builds),
 # build-calc-jit (hand-held JIT build, ports/fxcg100/build-calc-jit.sh)
 ports/fxcg100/gint-gpsp/build-cg*/
