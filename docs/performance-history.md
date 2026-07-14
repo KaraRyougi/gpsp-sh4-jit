@@ -706,6 +706,9 @@ These are open or partial items, not a list completed by the Zelda work.
 8. **calcemu alignment checking**: an opt-in mode that faults misaligned
    host-pointer loads would have caught the EXC=0E0 class in soaks
    instead of on hardware.
-9. **Overclock support**: cgba targets whatever clock Ptune sets; the
-   canary exists, but a menu-visible "memory margin self-test" would cut
-   the support burden of overclock-induced EXC=1A0 reports.
+9. **Overclock support — integrated, hardware qualification open.** Calculator
+   builds now apply Ptune 4 F5 (236 MHz CPU / 118 MHz SDRAM) by default through
+   gint's clock lifecycle, with `CGBA_DEFAULT_OVERCLOCK=OFF` retaining a stock
+   build for A/B and triage. The canary exists, but a menu-visible "memory
+   margin self-test" would still cut the support burden of overclock-induced
+   EXC=1A0 reports.
