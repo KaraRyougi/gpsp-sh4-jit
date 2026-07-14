@@ -28,6 +28,7 @@ set(PORT_SOURCES
   src/gint_platform.c
   src/nor_rom.c
   src/nor_filestream.c
+  src/overclock.c
   src/gpsp_runner.c
   src/frame_pacing.c
   src/no_osheap.c
@@ -120,6 +121,8 @@ option(CGBA_SH4_PROFILE_COUNTERS
   "Hardware/debug: count SH4 JIT translations, cache flushes, and helper calls for the ON-menu debug page" OFF)
 option(CGBA_FXCG100_STORAGE
   "Enable gint_world_switch-backed fx-CG100 BFile storage for ROM/config files" ON)
+option(CGBA_DEFAULT_OVERCLOCK
+  "Apply the Ptune 4 F5 profile while gpSP is running" ON)
 # The .cgba.highbss arena must end at or below 0x8c655300, the ONLY layout
 # proven safe on real hardware. Growing the arena hard-reset the calculator
 # twice: a 1.5 MB ROM cache (arena end 0x8c715300) overwrote the resident MPM
@@ -198,6 +201,9 @@ else()
 endif()
 if(CGBA_FXCG100_STORAGE)
   target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_FXCG100_STORAGE=1)
+endif()
+if(CGBA_DEFAULT_OVERCLOCK)
+  target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_DEFAULT_OVERCLOCK=1)
 endif()
 if(CGBA_DEBUG_MENU)
   target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_DEBUG_MENU=1)

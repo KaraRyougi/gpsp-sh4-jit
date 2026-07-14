@@ -85,6 +85,11 @@ fxsdk build-cg -c -DCGBA_DYNAREC=ON
 fxsdk build-cg
 ```
 
+Calculator builds apply Ptune 4 Preset 5 by default while gpSP is running
+(235.93 MHz CPU, 117.96 MHz SDRAM/bus). gint restores the launcher's original
+clock around OS world switches and when gpSP exits. Configure with
+`-DCGBA_DEFAULT_OVERCLOCK=OFF` to build a stock-clock artifact.
+
 Runtime shape:
 
 - Uses stock gint startup and hardware detection, matching the physical-safe

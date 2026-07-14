@@ -7,6 +7,7 @@
 #include "fxcg100_platform.h"
 #include "frame_pacing.h"
 #include "gpsp_runner.h"
+#include "overclock.h"
 
 #ifdef CGBA_FXCG50
 extern int cgba_hottext_init(void);
@@ -2126,6 +2127,7 @@ int main(void)
 	#ifdef CGBA_GPSP_HEADLESS_TEST
 	return cgba_headless_test(framebuffer);
 	#endif
+	cgba_overclock_init();
 	fxcg100_menu_state menu_state;
 	uint32_t previous_app_keys = 0;
 	uint32_t previous_hotkeys = 0;
