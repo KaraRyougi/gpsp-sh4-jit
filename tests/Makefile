@@ -17,11 +17,11 @@ comma   := ,
 DEAD_STRIP := $(if $(filter Darwin,$(shell uname -s)),\
 	-Wl$(comma)-dead_strip,-Wl$(comma)--gc-sections)
 
-.PHONY: all smoke audit core litpool thumb cond native-ldst input lcd-cleanup scale rtc cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc \
+.PHONY: all smoke audit core litpool thumb cond native-ldst input lcd-cleanup scale rtc nor-world-switch cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc \
 	swi-overlap swi-oam udiv udiv-emitter idle-signature video-opaque \
 	video-blend-cache video-backdrop-shadow arm-mixer clean
 
-all: smoke core litpool thumb cond native-ldst rtc input lcd-cleanup scale cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc swi-overlap swi-oam udiv \
+all: smoke core litpool thumb cond native-ldst rtc nor-world-switch input lcd-cleanup scale cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc swi-overlap swi-oam udiv \
 	udiv-emitter idle-signature video-opaque video-blend-cache \
 	video-backdrop-shadow arm-mixer audit
 
@@ -95,6 +95,18 @@ rtc: $(ROOT)/tests/rtc_test.c $(ROOT)/vendor/gpsp/gba_memory.c \
 	  -I$(ROOT)/vendor/gpsp/libretro/libretro-common/include \
 	  $(ROOT)/tests/rtc_test.c $(DEAD_STRIP) -o $(BIN)-rtc-fxcg100
 	$(BIN)-rtc-fxcg100
+
+# A 32 MiB ROM has 8192 Fugue blocks. Resolve all of them during one OS-world
+# visit so overclock restore/reapply does not accumulate RTC tick loss.
+nor-world-switch: $(ROOT)/tests/nor_rom_world_switch_test.c \
+		  $(ROOT)/ports/fxcg100/gint-gpsp/src/nor_rom.c \
+		  $(ROOT)/tests/stubs/gint/bfile.h \
+		  $(ROOT)/tests/stubs/gint/gint.h
+	$(CC) $(CFLAGS) -Wno-unused-function -ffunction-sections -fdata-sections \
+	  -I$(ROOT)/tests/stubs -I$(ROOT)/ports/fxcg100 -I$(ROOT) \
+	  $(ROOT)/tests/nor_rom_world_switch_test.c $(DEAD_STRIP) \
+	  -o $(BIN)-nor-world-switch
+	$(BIN)-nor-world-switch
 
 # ARM condition-code -> SH4 T-bit emission, every cond x every NZCV (host-only).
 cond: $(ROOT)/tests/sh4_cond_audit.c $(ROOT)/ports/fxcg100/sh4/sh4_emit_glue.h \
@@ -242,7 +254,10 @@ audit: $(ROOT)/tests/sh4_codegen_audit.c $(ROOT)/ports/fxcg100/sh4/sh4_codegen.h
 
 clean:
 	rm -f $(BIN)-smoke $(BIN)-core $(BIN)-thumb $(BIN)-cond $(BIN)-native-ldst \
-	  $(BIN)-input $(BIN)-input-cg50 $(BIN)-rtc $(BIN)-scale $(BIN)-cycle $(BIN)-exec $(BIN)-jit-boundaries $(BIN)-jit-safety $(BIN)-jit-ram-flush $(BIN)-memory-pc $(BIN)-swi-overlap $(BIN)-udiv \
+	  $(BIN)-input $(BIN)-input-cg50 $(BIN)-rtc $(BIN)-rtc-fxcg100 \
+	  $(BIN)-nor-world-switch $(BIN)-scale $(BIN)-cycle $(BIN)-exec \
+	  $(BIN)-jit-boundaries $(BIN)-jit-safety $(BIN)-jit-ram-flush \
+	  $(BIN)-memory-pc $(BIN)-swi-overlap $(BIN)-udiv \
 	  $(BIN)-swi-oam $(BIN)-udiv-emitter $(BIN)-idle-signature \
 	  $(BIN)-video-opaque $(BIN)-video-blend-cache \
 	  $(BIN)-video-backdrop-shadow \

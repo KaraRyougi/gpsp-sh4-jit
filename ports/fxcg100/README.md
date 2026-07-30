@@ -99,7 +99,9 @@ Runtime shape:
   returning to the game
 - Builds with storage access enabled by default. BFile calls are wrapped in
   `gint_world_switch()` so ROM scanning/config I/O do not run inside gint's
-  hardware world.
+  hardware world. The per-4 KiB NOR address scan is batched into one world
+  switch per ROM load; switching once per block while overclocked can otherwise
+  make the calculator RTC lose about 1-2 minutes on a 16-32 MiB ROM.
 - Reserves only the model's menu key (`ON` on fx-CG100, `AC/ON` on fx-CG50);
   every other physical key is bindable as a GBA input or gpSP hotkey, including
   the fx-CG50 arithmetic, punctuation, power, and parenthesis keys
