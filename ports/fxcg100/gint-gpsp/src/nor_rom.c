@@ -21,6 +21,7 @@
  * gint does not wrap. The wrappers below and the NOR block-gather / P2->P1
  * mapping are model-independent. */
 extern int cgba_cg50_bfile_get_block_address(int fd, int offset, void **addr);
+#ifndef CGBA_BFILE_OPEN
 #define CGBA_BFILE_OPEN              BFile_Open
 #define CGBA_BFILE_SIZE              BFile_Size
 #define CGBA_BFILE_READ             BFile_Read
@@ -29,7 +30,9 @@ extern int cgba_cg50_bfile_get_block_address(int fd, int offset, void **addr);
 #define CGBA_BFILE_FIND_FIRST       BFile_FindFirst
 #define CGBA_BFILE_FIND_NEXT        BFile_FindNext
 #define CGBA_BFILE_FIND_CLOSE       BFile_FindClose
+#endif
 #else
+#ifndef CGBA_BFILE_OPEN
 #define CGBA_BFILE_OPEN              ((uintptr_t)0x803338d0u)
 #define CGBA_BFILE_SIZE              ((uintptr_t)0x80333b04u)
 #define CGBA_BFILE_READ              ((uintptr_t)0x80333dc2u)
@@ -38,6 +41,7 @@ extern int cgba_cg50_bfile_get_block_address(int fd, int offset, void **addr);
 #define CGBA_BFILE_FIND_FIRST        ((uintptr_t)0x803345c8u)
 #define CGBA_BFILE_FIND_NEXT         ((uintptr_t)0x80334846u)
 #define CGBA_BFILE_FIND_CLOSE        ((uintptr_t)0x80334950u)
+#endif
 #endif
 
 #ifndef CGBA_FXCG100_STORAGE
@@ -147,17 +151,64 @@ static void os_bfile_close(int fd)
 #endif
 }
 
-static int os_bfile_get_block_address(int fd, int offset,
-	unsigned char **address)
+typedef struct cgba_block_query {
+	int fd;
+	uint32_t block_count;
+	int first_result;
+	uint32_t first_failed_block;
+	int first_failed_result;
+} cgba_block_query;
+
+#if CGBA_FXCG100_STORAGE
+/*
+ * BFile_GetBlockAddress is needed once per 4 KiB Fugue block. Do the complete
+ * query while already in the OS world instead of wrapping every block in its
+ * own gint_world_switch().
+ *
+ * Besides being much faster, this is important when gpSP is overclocked:
+ * every world switch restores the OS clock and then reapplies gpSP's profile.
+ * A 16/32 MiB ROM previously caused 8,192/16,384 CPG transitions. Losing one
+ * 128 Hz RTC tick per transition produces the reported 64/128-second drift.
+ */
+static int os_bfile_query_blocks(void *opaque)
+{
+	cgba_block_query *query = opaque;
+	typedef int (*get_block_address_fn)(int, int, void **);
+	get_block_address_fn get_block_address =
+		(get_block_address_fn)(uintptr_t)CGBA_BFILE_GET_BLOCK_ADDRESS;
+
+	for(uint32_t block = 0; block < query->block_count; block++) {
+		void *raw = NULL;
+		int result = get_block_address(query->fd,
+			(int)(block * CGBA_FLASH_BLOCK_SIZE), &raw);
+
+		cgba_block_addr[block] = raw;
+		if(block == 0)
+			query->first_result = result;
+		if(query->first_failed_block == UINT32_MAX &&
+				(result < 0 || raw == NULL)) {
+			query->first_failed_block = block;
+			query->first_failed_result = result;
+		}
+	}
+	return 0;
+}
+#endif
+
+static int os_bfile_get_block_addresses(int fd, uint32_t block_count,
+	cgba_block_query *query)
 {
 #if CGBA_FXCG100_STORAGE
-	return os_bfile_call(GINT_CALL(
-		(void *)CGBA_BFILE_GET_BLOCK_ADDRESS,
-		fd, offset, (void *)address));
+	query->fd = fd;
+	query->block_count = block_count;
+	query->first_result = 0;
+	query->first_failed_block = UINT32_MAX;
+	query->first_failed_result = 0;
+	return os_bfile_call(GINT_CALL(os_bfile_query_blocks, (void *)query));
 #else
 	(void)fd;
-	(void)offset;
-	(void)address;
+	(void)block_count;
+	(void)query;
 	return -1;
 #endif
 }
@@ -371,12 +422,16 @@ static const uint8_t *cached_nor_pointer(unsigned char *address)
  * without writeback, then synchronize once after all changed blocks. */
 static void invalidate_nor_block(const uint8_t *address)
 {
+#ifdef CGBA_HOST_TEST
+	(void)address;
+#else
 	uintptr_t first = (uintptr_t)address & ~(uintptr_t)31u;
 	uintptr_t end = ((uintptr_t)address + CGBA_FLASH_BLOCK_SIZE + 31u) &
 		~(uintptr_t)31u;
 
 	for(uintptr_t p = first; p < end; p += 32u)
 		__asm__ volatile("ocbi @%0" :: "r"(p) : "memory");
+#endif
 }
 
 static int make_root_path(uint16_t *path, size_t path_count,
@@ -554,16 +609,28 @@ int cgba_nor_rom_read(cgba_nor_rom *rom, void *dst, uint32_t offset, uint32_t le
 static int build_block_table(cgba_nor_rom *rom)
 {
 	uint32_t total = rom->page_count * CGBA_FLASH_BLOCKS_PER_PAGE;
+	uint32_t file_blocks =
+		(rom->size + CGBA_FLASH_BLOCK_SIZE - 1u) / CGBA_FLASH_BLOCK_SIZE;
+	cgba_block_query query;
 	uint32_t p;
 	int cache_invalidated = 0;
 
-	if(total > CGBA_NOR_ROM_MAX_BLOCKS)
+	if(total > CGBA_NOR_ROM_MAX_BLOCKS || file_blocks > total)
+		return -1;
+
+	/*
+	 * One synchronous OS-world visit resolves every live Fugue block. Clear
+	 * the padded tail first because a refresh may reuse a table that belonged
+	 * to a larger ROM.
+	 */
+	memset(cgba_block_addr, 0, total * sizeof(*cgba_block_addr));
+	if(os_bfile_get_block_addresses(rom->fd, file_blocks, &query) < 0)
 		return -1;
 
 	rom->direct_page_count = 0;
 	for(uint32_t b = 0; b < total; b++) {
-		unsigned char *raw = NULL;
-		int result;
+		unsigned char *raw = (unsigned char *)cgba_block_addr[b];
+		int result = 0;
 		const uint8_t *ptr;
 
 		/* Block entirely past the file end (the partial last page's
@@ -575,8 +642,10 @@ static int build_block_table(cgba_nor_rom *rom)
 			continue;
 		}
 
-		result = os_bfile_get_block_address(rom->fd,
-			(int)(b * CGBA_FLASH_BLOCK_SIZE), &raw);
+		if(b == 0)
+			result = query.first_result;
+		else if(b == query.first_failed_block)
+			result = query.first_failed_result;
 		ptr = result < 0 ? NULL : cached_nor_pointer(raw);
 		/* The core performs native 16/32-bit SH4 loads from published blocks.
 		 * Reject an unaligned payload pointer, and never publish the partial
@@ -609,8 +678,11 @@ static int build_block_table(cgba_nor_rom *rom)
 		}
 		cgba_block_addr[b] = ptr;
 	}
-	if(cache_invalidated)
+	if(cache_invalidated) {
+#ifndef CGBA_HOST_TEST
 		__asm__ volatile("synco" ::: "memory");
+#endif
+	}
 	cgba_block_total = total;
 	/* GBA cartridge regions mirror the physical ROM throughout a 32 MiB
 	 * window. Expanding the already-resolved table removes a modulo operation
