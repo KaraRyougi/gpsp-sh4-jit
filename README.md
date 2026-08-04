@@ -26,8 +26,8 @@ This project is fully vibe-coded using GPT-5.5 / Opus 4.8, and later GPT-5.6 Sol
 
 1. Open the [Releases page](https://github.com/KaraRyougi/gpsp-sh4-jit/releases) and download the `.g3a` file for your calculator. Choose the file containing `CG50` or `CG100` in its name, as appropriate. You can also [build gpSP from source](#building-from-source).
 2. Copy the `.g3a` file to the root of the calculator's main storage.
-3. Copy your `.gba` ROM files to the same root directory.
-4. Disconnect the calculator safely, then launch **gpSP** from the main menu.
+3. (**fx-CG100 / Graph Math+ only**) Download and copy the `mpm.bin` file to the root of the calculator’s main storage. This version of mpm is built from the [dynload branch](https://git.planet-casio.com/PlaneteCasio/mpm/src/branch/dynload), which provides more usable RAM for gpSP.
+5. Disconnect the calculator safely, then launch **gpSP** from the main menu.
 
 The two calculator builds are model-specific, so make sure you download the right one. gpSP scans for ROMs when it starts; if you add another ROM while gpSP is open, simply restart the emulator to refresh the list. The ROM picker can show up to 48 games, with a maximum size of 16 MiB per ROM.
 
