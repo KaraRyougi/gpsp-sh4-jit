@@ -1,10 +1,49 @@
 #include "frame_pacing.h"
 
 #include <gint/rtc.h>
+#include <gint/timer.h>
 
 #define RTC_HZ          128u
 #define DEFAULT_TARGET   60
 #define DEFAULT_MAX_SKIP  9
+/* One native GBA frame is about 16743 us (59.7275 Hz).  TIMER_ANY normally
+ * selects a 32768 Hz ETMU for this delay; timer quantization plus loop overhead
+ * therefore keeps normal play below, rather than just above, 60 fps. */
+#define FRAME_LIMIT_US 16743u
+
+void cgba_frame_limiter_init(cgba_frame_limiter *limiter)
+{
+	limiter->timer = -1;
+	limiter->elapsed = 1;
+}
+
+void cgba_frame_limiter_begin(cgba_frame_limiter *limiter, int enabled)
+{
+	limiter->timer = -1;
+	limiter->elapsed = 1;
+	if(!enabled)
+		return;
+
+	limiter->elapsed = 0;
+	limiter->timer = timer_configure(TIMER_ANY, FRAME_LIMIT_US,
+		GINT_CALL_SET_STOP(&limiter->elapsed));
+	if(limiter->timer < 0) {
+		/* No timer is available.  Running uncapped is safer than stalling the
+		 * emulator; the next frame will try to acquire a timer again. */
+		limiter->elapsed = 1;
+		return;
+	}
+	timer_start(limiter->timer);
+}
+
+void cgba_frame_limiter_wait(cgba_frame_limiter *limiter)
+{
+	/* If emulation took longer than one frame, the callback has already stopped
+	 * and released the timer and there is nothing to wait for. */
+	if(limiter->timer >= 0 && !limiter->elapsed)
+		timer_wait(limiter->timer);
+	limiter->timer = -1;
+}
 
 static int clampi(int v, int lo, int hi)
 {

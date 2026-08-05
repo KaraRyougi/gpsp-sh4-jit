@@ -17,11 +17,11 @@ comma   := ,
 DEAD_STRIP := $(if $(filter Darwin,$(shell uname -s)),\
 	-Wl$(comma)-dead_strip,-Wl$(comma)--gc-sections)
 
-.PHONY: all smoke audit core litpool thumb cond native-ldst input lcd-cleanup scale rtc nor-world-switch cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc \
+.PHONY: all smoke audit core litpool thumb cond native-ldst input config-version lcd-cleanup scale rtc nor-world-switch cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc \
 	swi-overlap swi-oam udiv udiv-emitter idle-signature video-opaque \
 	video-blend-cache video-backdrop-shadow arm-mixer clean
 
-all: smoke core litpool thumb cond native-ldst rtc nor-world-switch input lcd-cleanup scale cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc swi-overlap swi-oam udiv \
+all: smoke core litpool thumb cond native-ldst rtc nor-world-switch input config-version lcd-cleanup scale cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc swi-overlap swi-oam udiv \
 	udiv-emitter idle-signature video-opaque video-blend-cache \
 	video-backdrop-shadow arm-mixer audit
 
@@ -65,6 +65,13 @@ input: $(ROOT)/tests/fxcg100_input_maps_test.c \
 	$(CC) $(CFLAGS) -DCGBA_FXCG50=1 -I$(ROOT)/tests/stubs -I$(ROOT) \
 	  $(ROOT)/tests/fxcg100_input_maps_test.c -o $(BIN)-input-cg50
 	$(BIN)-input-cg50
+
+config-version: $(ROOT)/tests/fxcg100_config_version_test.c \
+		$(ROOT)/ports/fxcg100/fxcg100_config.c \
+		$(ROOT)/ports/fxcg100/fxcg100_platform.h
+	$(CC) $(CFLAGS) -I$(ROOT) \
+	  $(ROOT)/tests/fxcg100_config_version_test.c -o $(BIN)-config-version
+	$(BIN)-config-version
 
 lcd-cleanup: $(ROOT)/tests/fxcg100_lcd_cleanup_test.c \
 	     $(ROOT)/ports/fxcg100/fxcg100_lcd_cleanup.h
@@ -254,7 +261,8 @@ audit: $(ROOT)/tests/sh4_codegen_audit.c $(ROOT)/ports/fxcg100/sh4/sh4_codegen.h
 
 clean:
 	rm -f $(BIN)-smoke $(BIN)-core $(BIN)-thumb $(BIN)-cond $(BIN)-native-ldst \
-	  $(BIN)-input $(BIN)-input-cg50 $(BIN)-rtc $(BIN)-rtc-fxcg100 \
+	  $(BIN)-input $(BIN)-input-cg50 $(BIN)-config-version \
+	  $(BIN)-rtc $(BIN)-rtc-fxcg100 \
 	  $(BIN)-nor-world-switch $(BIN)-scale $(BIN)-cycle $(BIN)-exec \
 	  $(BIN)-jit-boundaries $(BIN)-jit-safety $(BIN)-jit-ram-flush \
 	  $(BIN)-memory-pc $(BIN)-swi-overlap $(BIN)-udiv \

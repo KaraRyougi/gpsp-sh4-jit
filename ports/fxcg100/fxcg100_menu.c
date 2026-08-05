@@ -42,6 +42,7 @@ typedef enum menu_value_id {
   MENU_VALUE_FRAMESKIP_TYPE,
   MENU_VALUE_FRAMESKIP_VALUE,
   MENU_VALUE_FRAMESKIP_VARIATION,
+  MENU_VALUE_FRAME_LIMIT,
   MENU_VALUE_SHOW_FPS,
   MENU_VALUE_SAVE_SLOT
 } menu_value_id;
@@ -178,6 +179,8 @@ static const menu_item graphics_items[] = {
   { "FRAMESKIP VARIATION", MENU_ITEM_CHOICE, MENU_ACTION_NONE,
     MENU_PAGE_GRAPHICS, MENU_VALUE_FRAMESKIP_VARIATION,
     frameskip_variation_options, 2, NULL },
+  { "60 FPS LIMIT", MENU_ITEM_CHOICE, MENU_ACTION_NONE,
+    MENU_PAGE_GRAPHICS, MENU_VALUE_FRAME_LIMIT, on_off_options, 2, NULL },
   { "SHOW FPS", MENU_ITEM_CHOICE, MENU_ACTION_NONE,
     MENU_PAGE_GRAPHICS, MENU_VALUE_SHOW_FPS, on_off_options, 2, NULL },
   { "BACK", MENU_ITEM_ACTION, MENU_ACTION_BACK,
@@ -343,6 +346,8 @@ static uint32_t *menu_value_ptr(fxcg100_menu_state *state, menu_value_id id)
     return &state->frameskip_value;
   case MENU_VALUE_FRAMESKIP_VARIATION:
     return &state->frameskip_variation;
+  case MENU_VALUE_FRAME_LIMIT:
+    return &state->frame_limit;
   case MENU_VALUE_SHOW_FPS:
     return &state->show_fps;
   case MENU_VALUE_SAVE_SLOT:
@@ -768,6 +773,7 @@ void fxcg100_menu_init(fxcg100_menu_state *state)
   state->frameskip_type = 1;
   state->frameskip_value = 1;
   state->frameskip_variation = 0;
+  state->frame_limit = 1;
   state->show_fps = 0;
   fxcg100_keymap_defaults(state->keymap);
   fxcg100_hotkey_defaults(state->hotkey_map);
