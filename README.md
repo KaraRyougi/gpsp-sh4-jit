@@ -98,6 +98,8 @@ For either scaled mode, you can choose the look you prefer:
 
 If a game feels slow, try **Automatic** frameskip first. **Manual** gives you a fixed frameskip value, while **Off** draws every frame. The optional FPS overlay shows both the emulation rate (`E`) and the number of frames actually drawn to the screen (`D`).
 
+The **60 FPS LIMIT** option is enabled by default. It keeps games from running faster than the GBA’s native rate. This limit is global regardless of the frameskip setting. It only caps games that would otherwise run too quickly. It cannot speed up a game running below 60 FPS. **Fast Forward** temporarily bypasses the limit. Turn the option off if you want unrestricted speed or are benchmarking performance.
+
 ## Save data and savestates
 
 Regular in-game GBA saves are supported and stored in `.SAV` files named after the ROM. gpSP writes new save data to storage when you change games or exit the emulator.
