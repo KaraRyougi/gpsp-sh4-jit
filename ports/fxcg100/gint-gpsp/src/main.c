@@ -2135,9 +2135,11 @@ int main(void)
 	unsigned current_rom;
 	unsigned frame = 1;
 	fxcg100_menu_result menu_result;
+	cgba_frame_limiter frame_limiter;
 	cgba_pacer pacer;
 	static fxcg100_debug_info debug_info;
 
+	cgba_frame_limiter_init(&frame_limiter);
 	cgba_pacer_init(&pacer, 60, 9);
 
 	fxcg100_lcd_init();
@@ -2338,10 +2340,14 @@ int main(void)
 			enter_gameplay_display(framebuffer, frame);
 		}
 
+		int fast_forward = hotkeys &
+			FXCG100_HOTKEY_BIT(FXCG100_HOTKEY_FAST_FORWARD);
+		cgba_frame_limiter_begin(&frame_limiter,
+			menu_state.frame_limit && !fast_forward);
 		gba_buttons = fxcg100_poll_gba_buttons_mapped(menu_state.keymap);
 
 		int render_video;
-		if(hotkeys & FXCG100_HOTKEY_BIT(FXCG100_HOTKEY_FAST_FORWARD))
+		if(fast_forward)
 			render_video = frame == 1 ||
 				(frame % CGBA_FAST_FORWARD_RENDER_PERIOD) == 0;
 		else if(frame == 1)
@@ -2365,6 +2371,7 @@ int main(void)
 		}
 		previous_app_keys = app_keys;
 		previous_hotkeys = hotkeys;
+		cgba_frame_limiter_wait(&frame_limiter);
 	}
 
 	return shutdown_gpsp_and_exit(1);

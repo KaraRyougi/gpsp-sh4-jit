@@ -48,7 +48,8 @@ int fxcg100_storage_write_blob(const uint16_t *path, const void *src, unsigned s
 #endif
 
 #define CGBA_CONFIG_MAGIC 0x43474241u
-#define CGBA_CONFIG_VERSION 2u
+#define CGBA_CONFIG_VERSION 3u
+#define CGBA_CONFIG_VERSION_LEGACY 2u
 
 #define CGBA_BFILE_FILE 1
 #define CGBA_BFILE_READ_ONLY 0x01
@@ -94,7 +95,8 @@ typedef struct fxcg100_config_file {
    * backup policy here; keep the word so existing CGBA.CFG files still load. */
   uint32_t reserved_backup_update;
   uint32_t show_fps;
-  uint32_t reserved[8];
+  uint32_t frame_limit;
+  uint32_t reserved[7];
 } fxcg100_config_file;
 
 static const uint16_t config_path[] = {
@@ -206,7 +208,9 @@ static int config_options_valid(const fxcg100_config_file *config)
     config->frameskip_variation < 2 &&
     config->savestate_slot < 10 &&
     config->quick_save_slot < 10 &&
-    config->show_fps < 2;
+    config->show_fps < 2 &&
+    (config->version == CGBA_CONFIG_VERSION_LEGACY ||
+      config->frame_limit < 2);
 }
 
 static int config_valid(const fxcg100_config_file *config)
@@ -214,7 +218,8 @@ static int config_valid(const fxcg100_config_file *config)
   if (!config)
     return 0;
   if (config->magic != CGBA_CONFIG_MAGIC ||
-      config->version != CGBA_CONFIG_VERSION ||
+      (config->version != CGBA_CONFIG_VERSION &&
+       config->version != CGBA_CONFIG_VERSION_LEGACY) ||
       config->size != sizeof(*config))
     return 0;
   return fxcg100_input_maps_valid(config->keymap, config->hotkey_map) &&
@@ -239,6 +244,7 @@ static void config_from_state(fxcg100_config_file *config,
   config->savestate_slot = state->savestate_slot;
   config->quick_save_slot = state->quick_save_slot;
   config->show_fps = state->show_fps;
+  config->frame_limit = state->frame_limit;
 }
 
 static void state_from_config(fxcg100_menu_state *state,
@@ -255,6 +261,10 @@ static void state_from_config(fxcg100_menu_state *state,
   state->savestate_slot = config->savestate_slot;
   state->quick_save_slot = config->quick_save_slot;
   state->show_fps = config->show_fps;
+  /* Version 2 used this word as zeroed reserved space.  Preserve the new
+   * normal-play default when loading an existing configuration. */
+  state->frame_limit = config->version >= CGBA_CONFIG_VERSION
+    ? config->frame_limit : 1;
 }
 
 static int read_config(fxcg100_config_file *config)

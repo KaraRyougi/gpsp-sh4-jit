@@ -4,6 +4,20 @@
 #include <stdint.h>
 
 /*
+ * Normal-play speed limiter.  A one-shot hardware timer is started before an
+ * emulated frame and waited on afterwards, so only frames that finish early
+ * sleep.  Fast-forward bypasses the limiter at the call site.
+ */
+typedef struct cgba_frame_limiter {
+	int timer;
+	volatile int elapsed;
+} cgba_frame_limiter;
+
+void cgba_frame_limiter_init(cgba_frame_limiter *limiter);
+void cgba_frame_limiter_begin(cgba_frame_limiter *limiter, int enabled);
+void cgba_frame_limiter_wait(cgba_frame_limiter *limiter);
+
+/*
  * Adaptive ("automatic") frameskip controller for the gint gpSP port.
  *
  * The emulator advances one emulated GBA frame per main-loop iteration and the
