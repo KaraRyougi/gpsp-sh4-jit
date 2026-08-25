@@ -1,6 +1,6 @@
 <img src="./assets/readme-header.png" alt="gpSP for CASIO" width="100%">
 
-# gpSP for CASIO
+# gpSP for CASIO: A GBA Emulator
 
 gpSP for CASIO brings Game Boy Advance games to the **fx-CG50 / Graph 90+E** and **fx-CG100 / Graph Math+** graphing calculators. It builds on the popular [gpSP emulator maintained by libretro](https://github.com/libretro/gpsp) and adds a dynamic recompiler (JIT) designed for the calculators' SH-4A CPU.
 
