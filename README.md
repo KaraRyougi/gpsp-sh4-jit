@@ -1,16 +1,14 @@
 <img src="./assets/readme-header.png" alt="gpSP for CASIO" width="100%">
 
-# gpSP for CASIO: A GBA Emulator
+# gpSP for CASIO: A GBA Emulator for CASIO Graphing Calculators
 
-gpSP for CASIO brings Game Boy Advance games to the **fx-CG50 / Graph 90+E** and **fx-CG100 / Graph Math+** graphing calculators. It builds on the popular [gpSP emulator maintained by libretro](https://github.com/libretro/gpsp) and adds a dynamic recompiler (JIT) designed for the calculators' SH-4A CPU.
+gpSP for CASIO brings Game Boy Advance games to the **CASIO fx-CG50 / Graph 90+E** and **fx-CG100 / Graph Math+** graphing calculators. This port is based on [gpSP emulator maintained by libretro](https://github.com/libretro/gpsp), with an added dynamic recompiler ("dynarec" / "JIT") for the calculators' SH-4A CPU. It also includes a built-in overclocking profile. With dynarec and overclocking, many GBA games will run at or close to full speed on the calculator. For more demanding games, automatic or manual frameskip can help keep gameplay smooth.
 
-Together with the built-in overclocking profile, the JIT lets many games run at or close to full speed. For more demanding games, automatic or manual frameskip can help keep gameplay smooth.
-
-This project is fully vibe-coded using GPT-5.5 / Opus 4.8, and later GPT-5.6 Sol / Fable 5. It has been extensively tested on physical calculators to ensure it works properly.
+The dynarec is *fully* vibe-coded using GPT-5.5 / Opus 4.8, and later GPT-5.6 Sol / Fable 5. It has been extensively tested to ensure compatibility, although there still can be issues.
 
 ## Features
 
-- SH-4A dynamic recompiler (JIT) - it's a first!
+- SH-4A dynamic recompiler (JIT) - it's the first GBA dynarec for the SuperH architecture!
 - Built-in overclocking while the emulator is running
 - ROM picker for `.gba` files in main storage
 - Three display sizes and three scaling filters
