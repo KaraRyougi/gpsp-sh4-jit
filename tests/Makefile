@@ -17,11 +17,11 @@ comma   := ,
 DEAD_STRIP := $(if $(filter Darwin,$(shell uname -s)),\
 	-Wl$(comma)-dead_strip,-Wl$(comma)--gc-sections)
 
-.PHONY: all smoke audit core litpool thumb cond native-ldst input config-version lcd-cleanup scale rtc backup-dirty nor-world-switch cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc \
+.PHONY: all smoke audit core litpool thumb cond native-ldst input config-version storage lcd-cleanup scale rtc backup-dirty nor-world-switch cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc \
 	swi-overlap swi-oam udiv udiv-emitter idle-signature video-opaque \
 	video-blend-cache video-backdrop-shadow arm-mixer clean
 
-all: smoke core litpool thumb cond native-ldst rtc backup-dirty nor-world-switch input config-version lcd-cleanup scale cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc swi-overlap swi-oam udiv \
+all: smoke core litpool thumb cond native-ldst rtc backup-dirty nor-world-switch input config-version storage lcd-cleanup scale cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc swi-overlap swi-oam udiv \
 	udiv-emitter idle-signature video-opaque video-blend-cache \
 	video-backdrop-shadow arm-mixer audit
 
@@ -72,6 +72,14 @@ config-version: $(ROOT)/tests/fxcg100_config_version_test.c \
 	$(CC) $(CFLAGS) -I$(ROOT) \
 	  $(ROOT)/tests/fxcg100_config_version_test.c -o $(BIN)-config-version
 	$(BIN)-config-version
+
+storage: $(ROOT)/tests/fxcg100_storage_test.c $(ROOT)/ports/fxcg100/fxcg100_config.c
+	$(CC) $(CFLAGS) -I$(ROOT)/tests/stubs -I$(ROOT) \
+	  $(ROOT)/tests/fxcg100_storage_test.c -o $(BIN)-storage
+	$(BIN)-storage
+	$(CC) $(CFLAGS) -DCGBA_FXCG50=1 -I$(ROOT)/tests/stubs -I$(ROOT) \
+	  $(ROOT)/tests/fxcg100_storage_test.c -o $(BIN)-storage-cg50
+	$(BIN)-storage-cg50
 
 lcd-cleanup: $(ROOT)/tests/fxcg100_lcd_cleanup_test.c \
 	     $(ROOT)/ports/fxcg100/fxcg100_lcd_cleanup.h
@@ -271,6 +279,7 @@ clean:
 	rm -f $(BIN)-smoke $(BIN)-core $(BIN)-thumb $(BIN)-cond $(BIN)-native-ldst \
 	  $(BIN)-input $(BIN)-input-cg50 $(BIN)-config-version \
 	  $(BIN)-rtc $(BIN)-rtc-fxcg100 $(BIN)-backup-dirty \
+	  $(BIN)-storage $(BIN)-storage-cg50 \
 	  $(BIN)-nor-world-switch $(BIN)-scale $(BIN)-cycle $(BIN)-exec \
 	  $(BIN)-jit-boundaries $(BIN)-jit-safety $(BIN)-jit-ram-flush \
 	  $(BIN)-memory-pc $(BIN)-swi-overlap $(BIN)-udiv \

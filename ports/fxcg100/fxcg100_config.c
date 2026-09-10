@@ -1,5 +1,6 @@
 #include "fxcg100_platform.h"
 
+#include <limits.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
@@ -54,12 +55,11 @@ int fxcg100_storage_write_blob(const uint16_t *path, const void *src, unsigned s
 #define CGBA_BFILE_FILE 1
 #define CGBA_BFILE_READ_ONLY 0x01
 #define CGBA_BFILE_WRITE_ONLY 0x02
+#define CGBA_BFILE_READ_WRITE 0x03
 
 #ifdef CGBA_FXCG50
-/* fx-CG50: the OS BFile addresses differ per model, so use gint's portable
- * BFile_* wrappers instead. They still must run in OS mode, so the existing
- * gint_world_switch(GINT_CALL(...)) call sites work unchanged once the
- * CGBA_BFILE_* names point at the functions. */
+/* fx-CG50 uses gint's portable BFile entry points. Both models run all
+ * calls inside the same OS-world transaction below. */
 #include <gint/bfile.h>
 #define CGBA_BFILE_OPEN   BFile_Open
 #define CGBA_BFILE_SIZE   BFile_Size
@@ -68,7 +68,9 @@ int fxcg100_storage_write_blob(const uint16_t *path, const void *src, unsigned s
 #define CGBA_BFILE_READ   BFile_Read
 #define CGBA_BFILE_WRITE  BFile_Write
 #define CGBA_BFILE_CLOSE  BFile_Close
+#define CGBA_BFILE_SEEK   BFile_Seek
 #else
+#ifndef CGBA_BFILE_OPEN
 #define CGBA_BFILE_OPEN   ((uintptr_t)0x803338d0u)
 #define CGBA_BFILE_SIZE   ((uintptr_t)0x80333b04u)
 #define CGBA_BFILE_CREATE ((uintptr_t)0x80333ef0u)
@@ -76,6 +78,8 @@ int fxcg100_storage_write_blob(const uint16_t *path, const void *src, unsigned s
 #define CGBA_BFILE_READ   ((uintptr_t)0x80333dc2u)
 #define CGBA_BFILE_WRITE  ((uintptr_t)0x80333f9eu)
 #define CGBA_BFILE_CLOSE  ((uintptr_t)0x80333a4eu)
+#define CGBA_BFILE_SEEK   ((uintptr_t)0x80333c6cu)
+#endif
 #endif
 
 typedef struct fxcg100_config_file {
@@ -104,98 +108,75 @@ static const uint16_t config_path[] = {
   'C', 'G', 'B', 'A', '.', 'C', 'F', 'G', 0
 };
 
-#if CGBA_FXCG100_STORAGE
-static int os_bfile_call(gint_call_t call)
-{
-  int result = gint_world_switch(call);
-
-  fxcg100_lcd_note_os_activity();
-  return result;
-}
-#endif
-
+/* These helpers run only inside storage_transaction(), already in the OS
+ * world. Never wrap individual BFile calls in another world switch. */
 static int os_bfile_open(const uint16_t *path, int mode)
 {
 #if CGBA_FXCG100_STORAGE
-  return os_bfile_call(GINT_CALL((void *)CGBA_BFILE_OPEN, path, mode));
+  return ((int (*)(const uint16_t *, int))CGBA_BFILE_OPEN)(path, mode);
 #else
-  (void)path;
-  (void)mode;
-  return -1;
+  (void)path; (void)mode; return -1;
 #endif
 }
-
 static int os_bfile_size(int fd)
 {
 #if CGBA_FXCG100_STORAGE
-  return os_bfile_call(GINT_CALL((void *)CGBA_BFILE_SIZE, fd));
+  return ((int (*)(int))CGBA_BFILE_SIZE)(fd);
 #else
-  (void)fd;
-  return -1;
+  (void)fd; return -1;
 #endif
 }
-
 static int os_bfile_create(const uint16_t *path, int type, int *size)
 {
 #if CGBA_FXCG100_STORAGE
-  return os_bfile_call(GINT_CALL((void *)CGBA_BFILE_CREATE,
-                                 path, type, size));
+  return ((int (*)(const uint16_t *, int, int *))CGBA_BFILE_CREATE)(path, type, size);
 #else
-  (void)path;
-  (void)type;
-  (void)size;
-  return -1;
+  (void)path; (void)type; (void)size; return -1;
 #endif
 }
-
-static void os_bfile_remove(const uint16_t *path)
+static int os_bfile_remove(const uint16_t *path)
 {
 #if CGBA_FXCG100_STORAGE
-  (void)os_bfile_call(GINT_CALL((void *)CGBA_BFILE_REMOVE, path));
+  return ((int (*)(const uint16_t *))CGBA_BFILE_REMOVE)(path);
 #else
-  (void)path;
+  (void)path; return -1;
 #endif
 }
-
 static int os_bfile_read(int fd, void *dst, int size, int offset)
 {
 #if CGBA_FXCG100_STORAGE
-  return os_bfile_call(GINT_CALL((void *)CGBA_BFILE_READ,
-                                 fd, dst, size, offset));
+  return ((int (*)(int, void *, int, int))CGBA_BFILE_READ)(fd, dst, size, offset);
 #else
-  (void)fd;
-  (void)dst;
-  (void)size;
-  (void)offset;
-  return -1;
+  (void)fd; (void)dst; (void)size; (void)offset; return -1;
 #endif
 }
-
 static int bfile_read_exact_ok(int result, int size)
 {
   /* Fugue returns bytes read; CASIOWIN returns bytes remaining after read. */
   return result == size || result == 0;
 }
-
 static int os_bfile_write(int fd, const void *src, int size)
 {
 #if CGBA_FXCG100_STORAGE
-  return os_bfile_call(GINT_CALL((void *)CGBA_BFILE_WRITE,
-                                 fd, src, size));
+  return ((int (*)(int, const void *, int))CGBA_BFILE_WRITE)(fd, src, size);
 #else
-  (void)fd;
-  (void)src;
-  (void)size;
-  return -1;
+  (void)fd; (void)src; (void)size; return -1;
 #endif
 }
-
-static void os_bfile_close(int fd)
+static int os_bfile_seek(int fd, int offset)
 {
 #if CGBA_FXCG100_STORAGE
-  (void)os_bfile_call(GINT_CALL((void *)CGBA_BFILE_CLOSE, fd));
+  return ((int (*)(int, int))CGBA_BFILE_SEEK)(fd, offset);
 #else
-  (void)fd;
+  (void)fd; (void)offset; return -1;
+#endif
+}
+static int os_bfile_close(int fd)
+{
+#if CGBA_FXCG100_STORAGE
+  return ((int (*)(int))CGBA_BFILE_CLOSE)(fd);
+#else
+  (void)fd; return -1;
 #endif
 }
 
@@ -267,123 +248,154 @@ static void state_from_config(fxcg100_menu_state *state,
     ? config->frame_limit : 1;
 }
 
-static int read_config(fxcg100_config_file *config)
+enum storage_operation { STORAGE_SIZE, STORAGE_READ, STORAGE_WRITE };
+typedef struct storage_request {
+  enum storage_operation operation;
+  const uint16_t *path;
+  void *dst;
+  const void *src;
+  unsigned size;
+  int mutated;
+} storage_request;
+
+/* One Fugue allocation block. Static scratch avoids adding 4 KiB to the
+ * world-switch stack; storage is synchronous and non-reentrant. */
+#define STORAGE_COMPARE_BLOCK 4096u
+static uint32_t storage_compare_buffer[STORAGE_COMPARE_BLOCK / sizeof(uint32_t)];
+
+static void storage_will_mutate(storage_request *request)
 {
-  int fd;
-  int file_size;
-  int ok = 0;
-
-  fd = os_bfile_open(config_path, CGBA_BFILE_READ_ONLY);
-  if (fd < 0)
-    return 0;
-
-  file_size = os_bfile_size(fd);
-  memset(config, 0, sizeof(*config));
-
-  if (file_size == (int)sizeof(*config)) {
-    int read_result = os_bfile_read(fd, config, (int)sizeof(*config), 0);
-
-    ok = bfile_read_exact_ok(read_result, (int)sizeof(*config));
+  if (!request->mutated) {
+    fxcg100_storage_note_mutation();
+    request->mutated = 1;
   }
-
-  os_bfile_close(fd);
-  return ok;
 }
 
-static int storage_blob_size(const uint16_t *path)
+static int write_range(storage_request *request, int fd,
+                       unsigned offset, unsigned size)
 {
-  int fd;
-  int size;
-
-  fd = os_bfile_open(path, CGBA_BFILE_READ_ONLY);
-  if (fd < 0)
-    return -1;
-  size = os_bfile_size(fd);
-  os_bfile_close(fd);
-  return size;
-}
-
-static int write_blob_contents(const uint16_t *path, const void *src,
-                               unsigned size)
-{
-  int fd;
-  int ok;
-
-  fd = os_bfile_open(path, CGBA_BFILE_WRITE_ONLY);
-  if (fd < 0)
+  if (os_bfile_seek(fd, (int)offset) < 0)
     return 0;
-  ok = os_bfile_write(fd, src, (int)size) == (int)size;
-  os_bfile_close(fd);
-  return ok;
+  /* Even a failed/short write can have relocated storage. */
+  storage_will_mutate(request);
+  return os_bfile_write(fd, (const uint8_t *)request->src + offset,
+                        (int)size) == (int)size;
 }
 
-static int create_blob(const uint16_t *path, unsigned size)
+static int update_existing_blob(storage_request *request, int fd)
 {
-  int create_size = (int)size;
-  return os_bfile_create(path, CGBA_BFILE_FILE, &create_size) >= 0;
-}
-
-static int write_config(const fxcg100_config_file *config)
-{
-  int existing_size = storage_blob_size(config_path);
-
-  if (existing_size == (int)sizeof(*config))
-    return write_blob_contents(config_path, config, sizeof(*config));
-
-  if (existing_size >= 0)
-    os_bfile_remove(config_path);
-
-  if (!create_blob(config_path, sizeof(*config))) {
-    if (existing_size < 0) {
-      os_bfile_remove(config_path);
-      if (!create_blob(config_path, sizeof(*config)))
+  unsigned run_start = 0, run_size = 0;
+  for (unsigned offset = 0; offset < request->size;) {
+    unsigned size = request->size - offset;
+    if (size > STORAGE_COMPARE_BLOCK)
+      size = STORAGE_COMPARE_BLOCK;
+    /* Both supported calculators use Fugue (byte-count return value).
+     * Never compare an incompletely filled scratch buffer. */
+    if (os_bfile_read(fd, storage_compare_buffer, (int)size,
+                      (int)offset) != (int)size)
+      return 0;
+    if (memcmp(storage_compare_buffer,
+               (const uint8_t *)request->src + offset, size) != 0) {
+      if (!run_size)
+        run_start = offset;
+      run_size += size;
+    } else if (run_size) {
+      if (!write_range(request, fd, run_start, run_size))
         return 0;
-    } else {
+      run_size = 0;
+    }
+    offset += size;
+  }
+  return !run_size || write_range(request, fd, run_start, run_size);
+}
+
+/* The entire operation runs in one OS-world visit, including all changed
+ * ranges. Absolute reads remain correct after a preceding range write. */
+static int storage_transaction(void *opaque)
+{
+  storage_request *request = opaque;
+  int writing = request->operation == STORAGE_WRITE;
+  int fd = os_bfile_open(request->path,
+    writing ? CGBA_BFILE_READ_WRITE : CGBA_BFILE_READ_ONLY);
+  if (fd >= 0) {
+    int size = os_bfile_size(fd);
+    int ok = 0;
+    if (request->operation == STORAGE_SIZE) {
+      int closed = os_bfile_close(fd);
+      return closed >= 0 ? size : -1;
+    }
+    if (size < 0) {
+      os_bfile_close(fd);
       return 0;
     }
+    if (size == (int)request->size) {
+      if (writing)
+        ok = update_existing_blob(request, fd);
+      else
+        ok = bfile_read_exact_ok(os_bfile_read(fd, request->dst,
+          size, 0), size);
+      int closed = os_bfile_close(fd);
+      return ok && closed >= 0;
+    }
+    if (os_bfile_close(fd) < 0 || !writing)
+      return 0;
+    storage_will_mutate(request);
+    if (os_bfile_remove(request->path) < 0)
+      return 0;
+  } else if (!writing) {
+    return request->operation == STORAGE_SIZE ? -1 : 0;
+  } else if (fd != -1) {
+    /* Fugue -1 is EntryNotFound. Permission/locking/I/O errors must not
+     * cause an existing save to be deleted. */
+    return 0;
   }
 
-  return write_blob_contents(config_path, config, sizeof(*config));
+  int create_size = (int)request->size;
+  storage_will_mutate(request);
+  if (os_bfile_create(request->path, CGBA_BFILE_FILE, &create_size) < 0)
+    return 0;
+  fd = os_bfile_open(request->path, CGBA_BFILE_WRITE_ONLY);
+  if (fd < 0)
+    return 0;
+  int ok = os_bfile_write(fd, request->src, (int)request->size)
+    == (int)request->size;
+  int closed = os_bfile_close(fd);
+  return ok && closed >= 0;
 }
 
-/* Generic whole-file storage blobs (savestates): world-switched BFile. */
+static int run_storage_request(storage_request *request)
+{
+  if (!request->path || request->size > INT_MAX)
+    return request->operation == STORAGE_SIZE ? -1 : 0;
+#if CGBA_FXCG100_STORAGE
+  int result = gint_world_switch(GINT_CALL(storage_transaction, (void *)request));
+  fxcg100_lcd_note_os_activity();
+  return result;
+#else
+  return storage_transaction(request);
+#endif
+}
+
 int fxcg100_storage_blob_size(const uint16_t *path)
 {
-  return storage_blob_size(path);
+  storage_request request = { .operation = STORAGE_SIZE, .path = path };
+  return run_storage_request(&request);
 }
 
 int fxcg100_storage_read_blob(const uint16_t *path, void *dst, unsigned size)
 {
-  int fd;
-  int ok = 0;
-
-  fd = os_bfile_open(path, CGBA_BFILE_READ_ONLY);
-  if (fd < 0)
-    return 0;
-  if (os_bfile_size(fd) == (int)size) {
-    int r = os_bfile_read(fd, dst, (int)size, 0);
-    ok = bfile_read_exact_ok(r, (int)size);
-  }
-  os_bfile_close(fd);
-  return ok;
+  storage_request request = {
+    .operation = STORAGE_READ, .path = path, .dst = dst, .size = size
+  };
+  return dst && run_storage_request(&request);
 }
 
 int fxcg100_storage_write_blob(const uint16_t *path, const void *src, unsigned size)
 {
-  int existing_size = storage_blob_size(path);
-
-  fxcg100_storage_note_mutation();
-
-  if (existing_size == (int)size)
-    return write_blob_contents(path, src, size);
-  if (existing_size >= 0)
-    os_bfile_remove(path);
-  if (!create_blob(path, size)) {
-    os_bfile_remove(path);
-    if (!create_blob(path, size))
-      return 0;
-  }
-  return write_blob_contents(path, src, size);
+  storage_request request = {
+    .operation = STORAGE_WRITE, .path = path, .src = src, .size = size
+  };
+  return src && run_storage_request(&request);
 }
 
 int fxcg100_config_load(fxcg100_menu_state *state)
@@ -392,7 +404,8 @@ int fxcg100_config_load(fxcg100_menu_state *state)
 
   if (!state)
     return 0;
-  if (!read_config(&config) || !config_valid(&config))
+  if (!fxcg100_storage_read_blob(config_path, &config, sizeof(config)) ||
+      !config_valid(&config))
     return 0;
 
   state_from_config(state, &config);
@@ -410,8 +423,7 @@ int fxcg100_config_save(const fxcg100_menu_state *state)
   config_from_state(&config, state);
   if (!config_valid(&config))
     return 0;
-  fxcg100_storage_note_mutation();
-  return write_config(&config);
+  return fxcg100_storage_write_blob(config_path, &config, sizeof(config));
 }
 
 #endif
