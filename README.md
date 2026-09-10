@@ -145,6 +145,23 @@ Keep a backup of the original ROM before trimming it.
 
 Calculator builds require [fxSDK](https://git.planet-casio.com/Lephenixnoir/fxsdk) and [gint](https://git.planet-casio.com/Lephenixnoir/gint).
 
+Alternatively, use the pinned Docker toolchain (SH GCC 14.1.0 and gint's
+CG100-capable development revision). Start Docker first; on macOS with Colima,
+run `colima start`. No host fxSDK installation is needed:
+
+```sh
+ports/fxcg100/build-docker.sh cg100
+ports/fxcg100/build-docker.sh cg50
+```
+
+The first run builds the toolchain image; later runs reuse its cached layers.
+Model-specific outputs are in
+`ports/fxcg100/gint-gpsp/build-docker-cg100/gpSP-cg100.g3a` and
+`ports/fxcg100/gint-gpsp/build-docker-cg50/gpSP-cg50.g3a`.
+The base image digest and gint commit are pinned in
+`ports/fxcg100/toolchain/Dockerfile`. The container mounts only this repository
+and leaves the host compiler and shell configuration unchanged.
+
 For an fx-CG100 JIT build:
 
 ```sh

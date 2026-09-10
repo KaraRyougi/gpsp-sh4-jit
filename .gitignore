@@ -9,6 +9,7 @@ ports/fxcg100/ramprobe/*.g3a
 # build-calc-jit (hand-held JIT build, ports/fxcg100/build-calc-jit.sh)
 ports/fxcg100/gint-gpsp/build-cg*/
 ports/fxcg100/gint-gpsp/build-calc-jit*/
+ports/fxcg100/gint-gpsp/build-docker-*/
 # all g3a build outputs (shipping, -profile/-release variants, Finder "N.g3a" dupes)
 ports/fxcg100/gint-gpsp/*.g3a
 release/
