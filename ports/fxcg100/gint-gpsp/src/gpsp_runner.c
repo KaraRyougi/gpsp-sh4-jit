@@ -1149,9 +1149,9 @@ int cgba_gpsp_state_save(unsigned slot)
 	ok = fxcg100_storage_write_blob(path, buf, GBA_STATE_MEM_SIZE);
 #endif
 	cgba_state_buffer_release();
-	/* Refresh even after a reported write failure: remove/create may already
-	 * have triggered filesystem relocation before the final write failed. */
-	return cgba_refresh_rom_after_storage() && ok;
+	/* Refresh after any attempted mutation, even a failed write. An identical
+	 * file causes no mutation and needs no ROM block-address query. */
+	return cgba_gpsp_storage_sync() && ok;
 }
 
 static int cgba_state_load_from(const uint16_t *path)
@@ -1274,7 +1274,7 @@ static void cgba_gpsp_backup_flush(void)
 		return;                       /* nothing new since the last flush */
 	cgba_backup_path(path);
 	wrote = fxcg100_storage_write_blob(path, gamepak_backup, sz);
-	if (cgba_refresh_rom_after_storage() && wrote)
+	if (cgba_gpsp_storage_sync() && wrote)
 		cgba_backup_dirty = 0;
 }
 
