@@ -1182,6 +1182,33 @@ volatile u32 palette_ram_dirty = CGBA_PALETTE_DIRTY_ACTIVE;
 }                                                                             \
 
 
+/* Flash commands (ID queries, bank switches, unlocks) do not change the
+ * battery-backed bytes. Only actual mutations require an exit-time save. */
+static inline void write_backup_byte(u32 address, u8 value)
+{
+  if(gamepak_backup[address] != value)
+  {
+    gamepak_backup[address] = value;
+    cgba_backup_dirty = 1;
+  }
+}
+
+static void erase_backup(u32 address, u32 size)
+{
+  if(!cgba_backup_dirty)
+  {
+    for(u32 i = 0; i < size; i++)
+    {
+      if(gamepak_backup[address + i] != 0xFF)
+      {
+        cgba_backup_dirty = 1;
+        break;
+      }
+    }
+  }
+  memset(gamepak_backup + address, 0xFF, size);
+}
+
 void function_cc write_backup(u32 address, u32 value)
 {
   value &= 0xFF;
@@ -1191,8 +1218,6 @@ void function_cc write_backup(u32 address, u32 value)
 
   if(backup_type == BACKUP_UNKN)
     backup_type = BACKUP_SRAM;
-
-  cgba_backup_dirty = 1;   /* cgba: SRAM/Flash write -> persist the .SAV */
 
   // gamepak SRAM or Flash ROM
   if((address == 0x5555) && (flash_mode != FLASH_WRITE_MODE))
@@ -1246,7 +1271,7 @@ void function_cc write_backup(u32 address, u32 value)
           // Erase chip
           if(flash_mode == FLASH_ERASE_MODE)
           {
-            memset(gamepak_backup, 0xFF, 1024 * 128);
+            erase_backup(0, 1024 * 128);
             flash_mode = FLASH_BASE_MODE;
           }
           break;
@@ -1257,7 +1282,7 @@ void function_cc write_backup(u32 address, u32 value)
       flash_command_position = 0;
     }
     if(backup_type == BACKUP_SRAM)
-      gamepak_backup[0x5555] = value;
+      write_backup_byte(0x5555, value);
   }
   else
 
@@ -1271,7 +1296,7 @@ void function_cc write_backup(u32 address, u32 value)
     {
       // Erase sector
       u32 fulladdr = (address & 0xF000) + 64*1024*flash_bank_num;
-      memset(&gamepak_backup[fulladdr], 0xFF, 1024 * 4);
+      erase_backup(fulladdr, 1024 * 4);
       flash_mode = FLASH_BASE_MODE;
       flash_command_position = 0;
     }
@@ -1290,7 +1315,7 @@ void function_cc write_backup(u32 address, u32 value)
     {
       // Write value to flash ROM
       u32 fulladdr = address + 64*1024*flash_bank_num;
-      gamepak_backup[fulladdr] = value;
+      write_backup_byte(fulladdr, value);
       flash_mode = FLASH_BASE_MODE;
     }
     else
@@ -1298,7 +1323,7 @@ void function_cc write_backup(u32 address, u32 value)
     if(backup_type == BACKUP_SRAM)
     {
       // Write value to SRAM
-      gamepak_backup[address] = value;
+      write_backup_byte(address, value);
     }
   }
 }

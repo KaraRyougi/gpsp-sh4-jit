@@ -17,11 +17,11 @@ comma   := ,
 DEAD_STRIP := $(if $(filter Darwin,$(shell uname -s)),\
 	-Wl$(comma)-dead_strip,-Wl$(comma)--gc-sections)
 
-.PHONY: all smoke audit core litpool thumb cond native-ldst input config-version lcd-cleanup scale rtc nor-world-switch cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc \
+.PHONY: all smoke audit core litpool thumb cond native-ldst input config-version lcd-cleanup scale rtc backup-dirty nor-world-switch cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc \
 	swi-overlap swi-oam udiv udiv-emitter idle-signature video-opaque \
 	video-blend-cache video-backdrop-shadow arm-mixer clean
 
-all: smoke core litpool thumb cond native-ldst rtc nor-world-switch input config-version lcd-cleanup scale cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc swi-overlap swi-oam udiv \
+all: smoke core litpool thumb cond native-ldst rtc backup-dirty nor-world-switch input config-version lcd-cleanup scale cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc swi-overlap swi-oam udiv \
 	udiv-emitter idle-signature video-opaque video-blend-cache \
 	video-backdrop-shadow arm-mixer audit
 
@@ -102,6 +102,14 @@ rtc: $(ROOT)/tests/rtc_test.c $(ROOT)/vendor/gpsp/gba_memory.c \
 	  -I$(ROOT)/vendor/gpsp/libretro/libretro-common/include \
 	  $(ROOT)/tests/rtc_test.c $(DEAD_STRIP) -o $(BIN)-rtc-fxcg100
 	$(BIN)-rtc-fxcg100
+
+backup-dirty: $(ROOT)/tests/backup_dirty_test.c $(ROOT)/vendor/gpsp/gba_memory.c
+	$(CC) $(CFLAGS) -Wno-unused-parameter -Wno-sign-compare \
+	  -ffunction-sections -fdata-sections -DROM_BUFFER_SIZE=1 \
+	  -I$(ROOT) -I$(ROOT)/vendor/gpsp -I$(ROOT)/vendor/gpsp/libretro \
+	  -I$(ROOT)/vendor/gpsp/libretro/libretro-common/include \
+	  $(ROOT)/tests/backup_dirty_test.c $(DEAD_STRIP) -o $(BIN)-backup-dirty
+	$(BIN)-backup-dirty
 
 # A 32 MiB ROM has 8192 Fugue blocks. Resolve all of them during one OS-world
 # visit so overclock restore/reapply does not accumulate RTC tick loss.
@@ -262,7 +270,7 @@ audit: $(ROOT)/tests/sh4_codegen_audit.c $(ROOT)/ports/fxcg100/sh4/sh4_codegen.h
 clean:
 	rm -f $(BIN)-smoke $(BIN)-core $(BIN)-thumb $(BIN)-cond $(BIN)-native-ldst \
 	  $(BIN)-input $(BIN)-input-cg50 $(BIN)-config-version \
-	  $(BIN)-rtc $(BIN)-rtc-fxcg100 \
+	  $(BIN)-rtc $(BIN)-rtc-fxcg100 $(BIN)-backup-dirty \
 	  $(BIN)-nor-world-switch $(BIN)-scale $(BIN)-cycle $(BIN)-exec \
 	  $(BIN)-jit-boundaries $(BIN)-jit-safety $(BIN)-jit-ram-flush \
 	  $(BIN)-memory-pc $(BIN)-swi-overlap $(BIN)-udiv \
