@@ -97,7 +97,7 @@ static inline int sh4g_arm_block_native(u8 **tp, u32 opcode, u32 pc,
       sh4_emit_shll2(&cg, SH4_REG_T0);
       sh4_emit_add_imm(&cg, offset_a, SH4_REG_T0);
       sh4g_close(tp, &cg); }
-    sh4g_fastmem_site_raw(tp, cgba_sh4_fastmem_routine[fm],
+    sh4g_fastmem_site_raw(tp, fm,
                           (const void *)cgba_sh4_arm_block, (u32)opcode,
                           (u32)pc, cycle_count,
                           sh4g_fastmem_block_params(rlist, count,

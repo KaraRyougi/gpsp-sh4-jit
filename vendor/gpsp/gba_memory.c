@@ -2282,9 +2282,88 @@ dma_tf_loop_builder(32);
 
 static const int dma_stride[4] = {1, -1, 0, 1};
 
+#if defined(CGBA_BULK_DMA) && CGBA_BULK_DMA
+/* Resolve only one physically contiguous span. Mirrors, ROM-page boundaries,
+ * IO and backup accesses retain the element-wise path below. */
+static u8 *dma_bulk_span(u32 addr, u32 bytes, bool dest, u8 **tags)
+{
+  u32 off;
+  *tags = NULL;
+  switch (addr >> 24) {
+  case 2:
+    off = addr & 0x3FFFF;
+    if (bytes > 0x40000 - off) return NULL;
+    if (dest) *tags = ewram + 0x40000 + off;
+    return ewram + off;
+  case 3:
+    off = addr & 0x7FFF;
+    if (bytes > 0x8000 - off) return NULL;
+    if (dest) *tags = iwram + off;
+    return iwram + 0x8000 + off;
+  case 6:
+    off = addr & 0x1FFFF;
+    if (bytes > (off < 0x18000 ? 0x18000 : 0x20000) - off) return NULL;
+    return vram + (off < 0x18000 ? off : off - 0x8000);
+  case 7:
+    off = addr & 0x3FF;
+    return bytes <= 0x400 - off ? (u8 *)oam_ram + off : NULL;
+  case 8: case 9: case 10: case 11: case 12:
+    off = addr & 0x01FFFFFF;
+    if (dest || off >= gamepak_size || bytes > gamepak_size - off ||
+        bytes > 0x1000 - (addr & 0xFFF)) return NULL;
+    {
+      u8 *page = cgba_gamepak_resolve_4k(addr);
+      return page ? page + (addr & 0xFFF) : NULL;
+    }
+  default:
+    return NULL;
+  }
+}
+
+static bool dma_bulk_copy(dma_transfer_type *dmach, u32 src, u32 dst,
+                         u32 length, cpu_alert_type *alert)
+{
+  u32 width = dmach->length_type == DMA_16BIT ? 2 : 4;
+  u32 bytes = length * width;
+  u8 *st, *dt, *s, *d;
+  if (length < 8 || dmach->source_direction != 0 ||
+      (dmach->dest_direction != 0 && dmach->dest_direction != 3))
+    return false;
+  s = dma_bulk_span(src, bytes, false, &st);
+  d = dma_bulk_span(dst, bytes, true, &dt);
+  if (!s || !d) return false;
+  /* DMA copies in address order. memmove is not equivalent for overlapping
+   * guest aliases (some software deliberately propagates a fill pattern). */
+  if ((uintptr_t)s < (uintptr_t)d + bytes &&
+      (uintptr_t)d < (uintptr_t)s + bytes)
+    return false;
+
+  dma_bus_val = width == 2 ? readaddress16(s, bytes - 2) :
+                            readaddress32(s, bytes - 4);
+  memcpy(d, s, bytes);  /* Both spans have the same guest byte order. */
+  *alert = CPU_ALERT_NONE;
+  if (dt) {
+    for (u32 off = 0; off < bytes; off += 2)
+      if (address16(dt, off)) {
+        *alert |= CPU_ALERT_SMC;
+        break;
+      }
+  }
+  if ((dst >> 24) == 7) reg[OAM_UPDATED] = 1;
+  dmach->source_address = src + bytes;
+  if (dmach->dest_direction != 3) dmach->dest_address = dst + bytes;
+  return true;
+}
+#endif
+
 static cpu_alert_type dma_transfer_copy(
   dma_transfer_type *dmach, u32 src_ptr, u32 dest_ptr, u32 length)
 {
+#if defined(CGBA_BULK_DMA) && CGBA_BULK_DMA
+  cpu_alert_type alert;
+  if (dma_bulk_copy(dmach, src_ptr, dest_ptr, length, &alert))
+    return alert;
+#endif
   if (dmach->source_direction < 3)
   {
     int dst_stride = dma_stride[dmach->dest_direction];

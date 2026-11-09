@@ -77,6 +77,11 @@ option(CGBA_SH4_THUMB_LDST_NATIVE
   "Enable SH4 native Thumb RAM load fast path" ON)
 option(CGBA_SH4_THUMB_BLOCK_NATIVE
   "Enable SH4 native Thumb RAM block-load fast path" ON)
+option(CGBA_SH4_SELECTIVE_R0_SYNC
+  "Synchronize pinned r0 only when a fastmem transfer uses it" ON)
+option(CGBA_SH4_REG_FORWARD "Experimental adjacent ALU register forwarding" OFF)
+option(CGBA_SH4_BLOCK_PROFILE
+  "Emit block-entry counters in profiling/headless builds" ON)
 option(CGBA_SH4_PIN_GUEST_R0
   "Keep guest ARM r0 resident in callee-saved SH-4 R11" ON)
 option(CGBA_SH4_FASTMEM_XYRAM
@@ -203,6 +208,13 @@ target_compile_definitions(cgba-gint-gpsp PRIVATE
   ROM_BUFFER_SIZE=1
   dma_transfer=gpsp_dma_transfer
 )
+option(CGBA_SILENT_TIMERS "Batch timer overflows for the sound-stub calculator port" ON)
+option(CGBA_BULK_DMA "Bulk-copy contiguous ordinary-memory DMA spans" ON)
+option(CGBA_VIDEO_SPRITE_DECODE_CACHE "Reuse sprite attributes until OAM changes" ON)
+target_compile_definitions(cgba-gint-gpsp PRIVATE
+  CGBA_VIDEO_SPRITE_DECODE_CACHE=$<BOOL:${CGBA_VIDEO_SPRITE_DECODE_CACHE}>
+  CGBA_BULK_DMA=$<BOOL:${CGBA_BULK_DMA}>
+  CGBA_SILENT_TIMERS=$<BOOL:${CGBA_SILENT_TIMERS}>)
 if(CGBA_CLASSPAD)
   # gint uses the OS heap on this model (VRAM backup, the arena itself), so
   # the no_osheap.c stubs must not be linked.
@@ -245,6 +257,9 @@ if(CGBA_DYNAREC)
   target_compile_definitions(cgba-gint-gpsp PRIVATE
     CGBA_DYNAREC=1
     SH4_ARCH=1
+    CGBA_SH4_SELECTIVE_R0_SYNC=$<BOOL:${CGBA_SH4_SELECTIVE_R0_SYNC}>
+    CGBA_SH4_REG_FORWARD=$<BOOL:${CGBA_SH4_REG_FORWARD}>
+    CGBA_SH4_BLOCK_PROFILE=$<BOOL:${CGBA_SH4_BLOCK_PROFILE}>
     CGBA_SH4_PIN_GUEST_R0=$<BOOL:${CGBA_SH4_PIN_GUEST_R0}>
     CGBA_SH4_FASTMEM_XYRAM=$<BOOL:${CGBA_SH4_FASTMEM_XYRAM}>
     CGBA_SH4_KNOWN_TARGET_CACHE=$<BOOL:${CGBA_SH4_KNOWN_TARGET_CACHE}>

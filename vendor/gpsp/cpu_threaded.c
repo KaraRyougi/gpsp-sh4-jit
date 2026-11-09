@@ -3887,8 +3887,20 @@ bool translate_block_arm(u32 pc, bool ram_region)
     }
 
     update_pc_limits();
+#ifdef SH4_ARCH
+    if (block_data_position == 0 || block_data[block_data_position].update_cycles)
+      sh4_greg_forward_reset();
+    u8 *forward_start = translation_ptr;
+#endif
     translate_arm_instruction();
 #ifdef SH4_ARCH
+    /* Unconditional, non-S ALU with immediate or unshifted register operand.
+     * Exclude multiply/PSR encodings and all control-flow destinations. */
+    sh4_greg_forward_finish(forward_start, translation_ptr,
+      (opcode >> 28) == 14 && (opcode & 0x0C100000) == 0 &&
+      ((opcode & 0x02000000) || !(opcode & 0xFF0)) &&
+      ((opcode >> 12) & 15) != 15 &&
+      (((opcode >> 21) & 15) < 8 || ((opcode >> 21) & 15) >= 12));
     sh4g_litseg_maybe_flush(&translation_ptr);
 #endif
 #ifdef CGBA_SH4_EXACT_CYCLE_BOUNDARIES
@@ -4186,8 +4198,18 @@ bool translate_block_thumb(u32 pc, bool ram_region)
     }
 
     update_pc_limits();
+#ifdef SH4_ARCH
+    if (block_data_position == 0 || block_data[block_data_position].update_cycles)
+      sh4_greg_forward_reset();
+    u8 *forward_start = translation_ptr;
+#endif
     translate_thumb_instruction();
 #ifdef SH4_ARCH
+    /* Dead-flag MOV/ADD/SUB: no helper, branch, or partially executed store. */
+    sh4_greg_forward_finish(forward_start, translation_ptr,
+      !(flag_status & 15) &&
+      ((opcode & 0xF800) == 0x1800 || (opcode & 0xF800) == 0x2000 ||
+       (opcode & 0xF000) == 0x3000));
     sh4g_litseg_maybe_flush(&translation_ptr);
 #endif
 #ifdef CGBA_SH4_EXACT_CYCLE_BOUNDARIES

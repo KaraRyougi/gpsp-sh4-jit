@@ -79,7 +79,7 @@ calculator can be copied in and used as the deep-gameplay checkpoint). The
 
 ## 2. Host unit tests (`tests/`)
 
-- **`sh4_exec_oracle.c`** — the JIT's semantic oracle, 148,963 cases at
+- **`sh4_exec_oracle.c`** — the JIT's semantic oracle, 149,515 cases at
   HEAD. It emits *real* native code through the production emitter headers
   and executes it in a built-in mini SH-4 interpreter (big-endian memory
   windows, JSR/RTS/delay slots, PC-relative literals, trampoline
@@ -92,6 +92,11 @@ calculator can be copied in and used as the deep-gameplay checkpoint). The
   stores, IWRAM-vector fastmem loads, and the fastmem single/block
   routines and sites. Sound is stubbed in the port, so MP2K audio ALU bugs
   never show in frame hashes — the oracle is the layer that catches them.
+- **`video_sprite_decode_test.cc`** — 153,600 cached-versus-direct sprite
+  scanline comparisons, including affine, mosaic, windows and render modes.
+- **`emerald_speed_bench.py`** — checkpoint-based A/B runner using exact
+  casio-emu measurement-window markers; see
+  [emerald-speed-pass.md](emerald-speed-pass.md) for build flags and results.
 - **`sh4_codegen_audit.c`** — every encoder byte-for-byte against
   `sh-elf-as` output.
 - **`scale_test.c`** — the RGB565 upscaling cores against a per-channel

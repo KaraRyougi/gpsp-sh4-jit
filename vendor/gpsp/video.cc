@@ -1193,6 +1193,31 @@ typedef struct {
   bool is_double;
 } t_sprite;
 
+#ifndef CGBA_VIDEO_SPRITE_DECODE_CACHE
+#define CGBA_VIDEO_SPRITE_DECODE_CACHE 0
+#endif
+
+static t_sprite decode_sprite(const t_oam *entry)
+{
+  u16 a0 = eswap16(entry->attr0), a1 = eswap16(entry->attr1);
+  u32 shape = a0 >> 14, size = a1 >> 14;
+  t_sprite obj = {
+    .obj_x = (s32)(a1 << 23) >> 23,
+    .obj_y = (a0 & 255) > 160 ? (a0 & 255) - 256 : (a0 & 255),
+    .obj_w = obj_dim_table[shape][size][0],
+    .obj_h = obj_dim_table[shape][size][1],
+    .attr1 = a1, .attr2 = eswap16(entry->attr2),
+    .is_double = (a0 & 0x200) != 0,
+  };
+  return obj;
+}
+
+#if CGBA_VIDEO_SPRITE_DECODE_CACHE
+/* Rebuilt with the visibility lists on every OAM mutation, including native
+ * stores, DMA, reset and savestate load. Affine matrices remain live OAM reads. */
+static struct { t_sprite sprite; u16 attr0; } decoded_objs[128];
+#endif
+
 // Renders a tile row (8 pixels) for a regular (non-affine) object/sprite.
 // tile_offset points to the VRAM offset where the data lives.
 template<typename dsttype, rendtype rdtype, bool is8bpp, bool hflip>
@@ -1651,7 +1676,7 @@ inline static void render_sprite(
 
 // Renders objects on a scanline for a given priority.
 // This function assumes that order_obj has been called to prepare the objects.
-template <typename stype, rendtype rdtype>
+template <typename stype, rendtype rdtype, bool cached = CGBA_VIDEO_SPRITE_DECODE_CACHE>
 void render_scanline_objs(
   u32 priority, u32 start, u32 end, void *raw_ptr, const u16* palptr
 ) {
@@ -1666,23 +1691,17 @@ void render_scanline_objs(
     // Objects in the list are pre-filtered and sorted in the appropriate order
     u32 objoff = objlist[objn];
     const t_oam *oamentry = &((t_oam*)oam_ram)[objoff];
-
+#if CGBA_VIDEO_SPRITE_DECODE_CACHE
+    u16 obj_attr0 = cached ? decoded_objs[objoff].attr0 : eswap16(oamentry->attr0);
+    t_sprite direct;
+    if (!cached) direct = decode_sprite(oamentry);
+    const t_sprite &obji = cached ? decoded_objs[objoff].sprite : direct;
+#else
     u16 obj_attr0 = eswap16(oamentry->attr0);
-    u16 obj_attr1 = eswap16(oamentry->attr1);
-    u16 obj_shape = obj_attr0 >> 14;
-    u16 obj_size = (obj_attr1 >> 14);
+    const t_sprite obji = decode_sprite(oamentry);
+#endif
     bool is_affine = obj_attr0 & 0x100;
     bool is_trans = ((obj_attr0 >> 10) & 0x3) == OBJ_MOD_SEMITRAN;
-
-    t_sprite obji = {
-      .obj_x = (s32)(obj_attr1 << 23) >> 23,
-      .obj_y = obj_attr0 & 0xFF,
-      .obj_w = obj_dim_table[obj_shape][obj_size][0],
-      .obj_h = obj_dim_table[obj_shape][obj_size][1],
-      .attr1 = obj_attr1,
-      .attr2 = eswap16(oamentry->attr2),
-      .is_double = (obj_attr0 & 0x200) != 0,
-    };
 
     s32 obj_maxw = (is_affine && obji.is_double) ? obji.obj_w * 2 : obji.obj_w;
 
@@ -1692,9 +1711,6 @@ void render_scanline_objs(
 
     // ST-OBJs force 1st target bit (forced blending)
     bool forcebld = is_trans && rdtype != FULLCOLOR;
-
-    if (obji.obj_y > 160)
-      obji.obj_y -= 256;
 
     // In PIXCOPY mode, we have already some stuff rendered (winout) and now
     // we render the "win-in" area for this object. The PIXCOPY function will
@@ -1805,6 +1821,10 @@ static void order_obj(u32 video_mode)
 
       if(((obj_x + obj_width) > 0) && (obj_x < 240))
       {
+#if CGBA_VIDEO_SPRITE_DECODE_CACHE
+        decoded_objs[obj_num].sprite = decode_sprite(oam_ptr);
+        decoded_objs[obj_num].attr0 = obj_attr0;
+#endif
         u32 obj_priority = (obj_attr2 >> 10) & 0x03;
         bool is_affine = obj_attr0 & 0x100;
         // Clip Y coord and height to the 0..159 interval

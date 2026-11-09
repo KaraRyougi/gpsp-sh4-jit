@@ -101,6 +101,7 @@ static void orc_vec_put(unsigned idx, const void *pf)
   orc_vec_table[idx * 4 + 3] = (u8)v;
 }
 
+#define CGBA_SH4_REG_FORWARD 1
 #include "ports/fxcg100/sh4/sh4_thumb_dp_emit.h"
 #include "ports/fxcg100/sh4/sh4_arm_ldst_emit.h"
 int cgba_sh4_arm_block(u32 o, u32 p);
@@ -720,6 +721,52 @@ static void check(const char *what, u32 opcode, u32 mask, const u32 init[16],
   }
 }
 
+
+/* Execute adjacent guest ALU instructions with and without the driver opening
+ * a forwarding window. Include explicit boundary resets and pinned r0. */
+static void check_register_forwarding(void)
+{
+  static u8 buf[4096];
+  const u32 values[] = {0, 1, 0xffffffff, 0x7fffffff, 0x80000000, 0xa5a5a5a5};
+  for (unsigned arm = 0; arm < 2; arm++)
+  for (unsigned rd = 0; rd < (arm ? 15u : 8u); rd++)
+    for (unsigned v = 0; v < sizeof(values)/sizeof(values[0]); v++)
+      for (unsigned boundary = 0; boundary < 2; boundary++) {
+        size_t sizes[2];
+        for (unsigned enabled = 0; enabled < 2; enabled++) {
+          u8 *p = buf;
+          sh4_greg_forward_reset();
+          /* ADD rd,#7; ADD r7,rd,#3; both flags dead. */
+          if (arm)
+            sh4g_arm_dp_native(&p, 0xe2800007 | (rd << 16) | (rd << 12), 0x8000100, 0);
+          else
+            sh4g_thumb_dp_native(&p, 0x3007 | (rd << 8), 0x8000100, 0, 0);
+          if (enabled) sh4_greg_forward_finish(buf, p, 1);
+          if (boundary) sh4_greg_forward_reset();
+          if (arm)
+            sh4g_arm_dp_native(&p, 0xe2807003 | (rd << 16), 0x8000104, 0);
+          else
+            sh4g_thumb_dp_native(&p, 0x1c00 | (3 << 6) | (rd << 3) | 7,
+                                 0x8000102, 0, 0);
+          sh4_greg_forward_reset();
+          sizes[enabled] = p - buf;
+          for (unsigned i = 0; i < 16; i++) g_reg[i] = values[v] + i;
+          g_reg[SH4_GREG_CPSR] = 0xa000003f;
+          u32 expected[16]; memcpy(expected, g_reg, sizeof(expected));
+          expected[rd] += 7; expected[7] = expected[rd] + 3;
+          cases++;
+          if (!run_sh4x(buf, p-buf) || memcmp(expected, g_reg, sizeof(expected)) ||
+              g_reg[SH4_GREG_CPSR] != 0xa000003f) {
+            printf("FAIL register forwarding rd=%u v=%u boundary=%u enabled=%u\n",
+                   rd, v, boundary, enabled); fails++;
+          }
+        }
+        if (sizes[0] - sizes[1] != (rd && !boundary ? 2u : 0u)) {
+          printf("FAIL register forwarding size rd=%u boundary=%u\n", rd, boundary); fails++;
+        }
+      }
+}
+
 int main(void)
 {
   static const u8 init_seq[16][2] = {
@@ -733,6 +780,7 @@ int main(void)
   memcpy(ws_cyc_seq, init_seq, sizeof init_seq);
   memcpy(ws_cyc_nseq, init_nseq, sizeof init_nseq);
   orc_vec_init();
+  check_register_forwarding();
   static const u32 vals[] = {
     0, 1, 2, 0x80000000u, 0x80000001u, 0x7FFFFFFFu, 0xFFFFFFFFu,
     0x12345678u, 0xA5A5A5A5u, 0x00000100u, 0xFFFFFF00u
