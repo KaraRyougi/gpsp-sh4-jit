@@ -7,6 +7,9 @@
 
 #define CGBA_SILENT_TIMERS 1
 #define CGBA_BULK_DMA 1
+#define CGBA_VIDEO_TILE_ROW_CACHE 1
+#define CGBA_VIDEO_BACKDROP_SHADOW_PALETTE 1
+#define CGBA_VIDEO_BLEND_PALETTE_CACHE 1
 #define HAVE_DYNAREC 1
 #define CGBA_DYNAREC 1
 #define ROM_TRANSLATION_CACHE_SIZE (64 * 1024)
@@ -559,8 +562,30 @@ static void test_bulk_dma_equivalence(void)
         }
 }
 
+static void test_palette_cache_notifications(void)
+{
+  reset_fixture();
+  palette_ram_dirty = 0;
+  write_memory8(0x05000001, 0x12);
+  CHECK(palette_ram_dirty == CGBA_PALETTE_DIRTY_ACTIVE, "palette byte cache notification");
+  palette_ram_dirty = 0;
+  write_memory16(0x05000022, 0x3210);
+  CHECK(palette_ram_dirty == CGBA_PALETTE_DIRTY_ACTIVE, "palette halfword cache notification");
+  palette_ram_dirty = 0;
+  write_memory32(0x05000024, 0x12345678);
+  CHECK(palette_ram_dirty == CGBA_PALETTE_DIRTY_ACTIVE, "palette word cache notification");
+  dma_transfer_type d = {0};
+  d.source_address = 0x02000000;
+  d.dest_address = 0x05000000;
+  d.length_type = DMA_32BIT;
+  palette_ram_dirty = 0;
+  dma_transfer_copy(&d, d.source_address, d.dest_address, 16);
+  CHECK(palette_ram_dirty == CGBA_PALETTE_DIRTY_ACTIVE, "palette DMA cache notification");
+}
+
 int main(void)
 {
+  test_palette_cache_notifications();
   test_silent_timer_batch();
   test_bulk_dma_equivalence();
   test_waitcnt_invalidation();

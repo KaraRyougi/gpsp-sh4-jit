@@ -16,6 +16,8 @@ As-built (current):
   state at HEAD, future directions.
 - [emerald-speed-pass.md](emerald-speed-pass.md) — five speed experiments,
   selected defaults, Emerald cache-model measurements and reproduction.
+- [mode0-tile-row-cache.md](mode0-tile-row-cache.md) — default-off background
+  row-cache experiment, inconclusive performance results and regression tests.
 
 - [classpad-port.md](classpad-port.md) — the fx-CP400 (ClassPad II) port:
   screen-scale choices, landscape, touch keys, the heap-backed memory layout,
