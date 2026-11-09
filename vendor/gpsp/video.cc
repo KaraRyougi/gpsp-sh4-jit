@@ -168,6 +168,106 @@ static const u16 *get_backdrop_shadow_palette(void)
 }
 #endif
 
+#ifdef CGBA_VIDEO_TILE_ROW_CACHE
+#ifndef CGBA_VIDEO_TILE_ROW_CACHE_ENTRIES
+#define CGBA_VIDEO_TILE_ROW_CACHE_ENTRIES 128
+#endif
+static_assert(CGBA_VIDEO_TILE_ROW_CACHE_ENTRIES > 0 &&
+  !(CGBA_VIDEO_TILE_ROW_CACHE_ENTRIES & (CGBA_VIDEO_TILE_ROW_CACHE_ENTRIES - 1)),
+  "tile row cache size must be a power of two");
+
+/* Content keys observe all VRAM writers without instrumenting their hot paths.
+ * One entry fits one SH4 cache line. Base and overlay layers share entries;
+ * zero pixels contain the backdrop, and overlay writers honor the mask. */
+struct alignas(32) cgba_tile_row_entry {
+  u32 packed, tag;
+  u16 pixels[8];
+  u32 mask;
+  u32 padding;
+};
+static cgba_tile_row_entry tile_rows[CGBA_VIDEO_TILE_ROW_CACHE_ENTRIES];
+static u16 tile_row_palette[256] __attribute__((aligned(4)));
+static u32 tile_row_epoch = 0x10000;
+#ifdef CGBA_VIDEO_TILE_ROW_PROFILE
+extern "C" { u32 cgba_tile_row_hits, cgba_tile_row_misses; }
+#endif
+
+static void tile_row_observe_palette(void)
+{
+  if (!(palette_ram_dirty & CGBA_PALETTE_DIRTY_TILE_ROW)) return;
+  /* Repeated identical palette DMA and OBJ-only writes must not evict BG rows. */
+  if (memcmp(tile_row_palette, palette_ram_converted, sizeof(tile_row_palette))) {
+    memcpy(tile_row_palette, palette_ram_converted, sizeof(tile_row_palette));
+    tile_row_epoch += 0x10000;
+    if (!tile_row_epoch) {
+      memset(tile_rows, 0, sizeof(tile_rows));
+      tile_row_epoch = 0x10000;
+    }
+  }
+  palette_ram_dirty &= ~CGBA_PALETTE_DIRTY_TILE_ROW;
+}
+
+static __attribute__((noinline)) void tile_row_fill(cgba_tile_row_entry *row,
+                                                   u32 packed, u32 tag)
+{
+  u32 data = eswap32(packed), mask = 0;
+  const u16 *pal = tile_row_palette + ((tag >> 8) & 0xf0);
+  for (unsigned i = 0; i < 8; i++) {
+    unsigned color = tag & 0x400 ? data >> 28 : data & 15;
+    row->pixels[i] = color ? pal[color] : tile_row_palette[0];
+    if (color) mask |= 1u << i;
+    if (tag & 0x400) data <<= 4; else data >>= 4;
+  }
+  row->mask = mask == 255 ? ~0u : mask;
+  row->packed = packed;
+  row->tag = tag;
+}
+
+template<bool isbase>
+static inline __attribute__((always_inline)) void render_cached_tile_row(
+  u32 packed, unsigned tile, u16 *__restrict dst)
+{
+  /* Tile number is already decoded by the map walker. Use it only as a
+   * cheap index; raw VRAM content and palette/flip tags remain the key. */
+  unsigned index = tile & (CGBA_VIDEO_TILE_ROW_CACHE_ENTRIES - 1);
+  cgba_tile_row_entry &row = tile_rows[index];
+  u32 tag = tile_row_epoch | (tile & 0xf400);
+  if (row.tag != tag || row.packed != packed) {
+#ifdef CGBA_VIDEO_TILE_ROW_PROFILE
+    cgba_tile_row_misses++;
+#endif
+    tile_row_fill(&row, packed, tag);
+  } else {
+#ifdef CGBA_VIDEO_TILE_ROW_PROFILE
+    cgba_tile_row_hits++;
+#endif
+  }
+  const u32 mask = row.mask;
+  if (isbase || mask == ~0u) {
+    /* Scanline spans can start on an odd pixel. Never issue an unaligned
+     * SH4 longword store; the halfword fallback has the same pixel order. */
+    if (!((uintptr_t)dst & 3)) {
+      typedef u32 alias_u32 __attribute__((may_alias));
+      alias_u32 *out = (alias_u32 *)dst;
+      const alias_u32 *in = (const alias_u32 *)row.pixels;
+      out[0] = in[0]; out[1] = in[1]; out[2] = in[2]; out[3] = in[3];
+    } else {
+      dst[0] = row.pixels[0]; dst[1] = row.pixels[1];
+      dst[2] = row.pixels[2]; dst[3] = row.pixels[3];
+      dst[4] = row.pixels[4]; dst[5] = row.pixels[5];
+      dst[6] = row.pixels[6]; dst[7] = row.pixels[7];
+    }
+  } else {
+#define CGBA_TILE_ROW_PIXEL(i) if (mask & (1u << (i))) dst[i] = row.pixels[i]
+    CGBA_TILE_ROW_PIXEL(0); CGBA_TILE_ROW_PIXEL(1);
+    CGBA_TILE_ROW_PIXEL(2); CGBA_TILE_ROW_PIXEL(3);
+    CGBA_TILE_ROW_PIXEL(4); CGBA_TILE_ROW_PIXEL(5);
+    CGBA_TILE_ROW_PIXEL(6); CGBA_TILE_ROW_PIXEL(7);
+#undef CGBA_TILE_ROW_PIXEL
+  }
+}
+#endif
+
 // Renders non-affine tiled background layer.
 // Will process a full or partial tile (start and end within 0..8) and draw
 // it in either 8 or 4 bpp mode. Honors vertical and horizontal flip.
@@ -463,10 +563,39 @@ static inline void render_tile_Nbpp(
 }
 
 
-template<typename stype, rendtype rdtype, bool isbase, bool is8bpp>
+/* Keep the cached and generic full-row loops separate at compile time. */
+template<typename dtype, rendtype rdtype, bool is8bpp, bool isbase, bool hflip, bool cached>
+static inline __attribute__((always_inline)) void render_text_tile(
+  u32 bg_comb, u32 px_comb, dtype *dest_ptr, u16 tile,
+  const u8 *tile_base, int vertical_pixel_flip, const u16 *paltbl)
+{
+#ifdef CGBA_VIDEO_TILE_ROW_CACHE
+  if (cached) {
+    const u8 *tile_ptr = tile_base + (tile & 0x3ff) * 32;
+    if (tile & 0x800) tile_ptr += vertical_pixel_flip;
+    u32 raw = *(const u32 *)tile_ptr;
+    if (!raw) {
+      if (isbase) {
+        u16 backdrop = paltbl[0];
+        for (unsigned i = 0; i < 8; i++) dest_ptr[i] = backdrop;
+      }
+      return;
+    }
+    render_cached_tile_row<isbase>(raw, tile, (u16 *)dest_ptr);
+    return;
+  }
+#endif
+  render_tile_Nbpp<dtype, rdtype, is8bpp, isbase, hflip>(
+    bg_comb, px_comb, dest_ptr, tile, tile_base, vertical_pixel_flip, paltbl);
+}
+
+template<typename stype, rendtype rdtype, bool isbase, bool is8bpp, bool cached = false>
 static void render_scanline_text_fast(u32 layer,
  u32 start, u32 end, void *scanline, const u16 * paltbl)
 {
+#ifdef CGBA_VIDEO_TILE_ROW_CACHE
+  if (cached) tile_row_observe_palette();
+#endif
   u32 bg_control = read_ioreg(REG_BGxCNT(layer));
   u16 vcount = read_ioreg(REG_VCOUNT);
   u32 map_size = (bg_control >> 14) & 0x03;
@@ -567,10 +696,10 @@ static void render_scanline_text_fast(u32 layer,
   for (u32 i = 0; i < todraw; i++, dest_ptr += 8) {
     u16 tile = eswap16(*map_ptr++);
     if (tile & 0x400)   // Tile horizontal flip
-      render_tile_Nbpp<stype, rdtype, is8bpp, isbase, true>(
+      render_text_tile<stype, rdtype, is8bpp, isbase, true, cached>(
         bg_comb, px_comb, dest_ptr, tile, tile_base, vflip_off, paltbl);
     else
-      render_tile_Nbpp<stype, rdtype, is8bpp, isbase, false>(
+      render_text_tile<stype, rdtype, is8bpp, isbase, false, cached>(
         bg_comb, px_comb, dest_ptr, tile, tile_base, vflip_off, paltbl);
   }
 
@@ -588,10 +717,10 @@ static void render_scanline_text_fast(u32 layer,
   for (u32 i = 0; i < todraw; i++, dest_ptr += 8) {
     u16 tile = eswap16(*map_ptr++);
     if (tile & 0x400)   // Tile horizontal flip
-      render_tile_Nbpp<stype, rdtype, is8bpp, isbase, true>(
+      render_text_tile<stype, rdtype, is8bpp, isbase, true, cached>(
         bg_comb, px_comb, dest_ptr, tile, tile_base, vflip_off, paltbl);
     else
-      render_tile_Nbpp<stype, rdtype, is8bpp, isbase, false>(
+      render_text_tile<stype, rdtype, is8bpp, isbase, false, cached>(
         bg_comb, px_comb, dest_ptr, tile, tile_base, vflip_off, paltbl);
   }
 
@@ -749,6 +878,17 @@ static void render_scanline_text(u32 layer,
   bool is8bpp = (bg_control & 0x80);
   const u32 mosamount = read_ioreg(REG_MOSAIC) & 0xFF;
   bool has_mosaic = (bg_control & 0x40) && (mosamount != 0);
+
+#ifdef CGBA_VIDEO_TILE_ROW_CACHE
+  /* Dispatch once per span. A separate instantiation keeps the cache hit
+   * path inlined without pulling the generic renderer into every tile. */
+  if (sizeof(stype) == sizeof(u16) && rdtype == FULLCOLOR && !is8bpp &&
+      !has_mosaic && !(read_ioreg(REG_DISPCNT) & 7) && paltbl == palette_ram_converted) {
+    render_scanline_text_fast<stype, rdtype, isbase, false, true>(
+      layer, start, end, scanline, paltbl);
+    return;
+  }
+#endif
 
   if (has_mosaic) {
     if (is8bpp)

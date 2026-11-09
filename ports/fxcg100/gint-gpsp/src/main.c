@@ -1613,6 +1613,15 @@ static int cgba_headless_test(uint16_t *framebuffer)
 		headless_log_phase(frame, "loop-end");
 	}
 
+#ifdef CGBA_VIDEO_TILE_ROW_PROFILE
+  {
+    extern uint32_t cgba_tile_row_hits, cgba_tile_row_misses;
+    snprintf(buf, sizeof buf, "@@CGBA_TILE_ROWS hits=%lu misses=%lu",
+      (unsigned long)cgba_tile_row_hits, (unsigned long)cgba_tile_row_misses);
+    hputs_dbg(buf);
+  }
+#endif
+
 #ifdef CGBA_GPSP_HEADLESS_PROFILE_STOP
 	/* casio-emu's PC profiler stops on the "=== done ===" suffix. Emit an
 	 * opt-in marker here so post-run diagnostics (notably the one-frame

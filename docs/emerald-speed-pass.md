@@ -114,8 +114,10 @@ The event scheduler is a third candidate: represent next timer/IRQ deadlines
 explicitly and avoid rescanning state on each ordinary event slice. Existing
 idle and timer batching must be preserved, with exact guest-visible counter
 values at IO reads. Its measured instruction share suggests a smaller ceiling
-than the background renderer in this scene. No speedup is claimed for these
-unimplemented refactors.
+than the background renderer in this scene. The tile-row experiment was
+subsequently implemented; see [mode0-tile-row-cache.md](mode0-tile-row-cache.md)
+for its measured result. The register allocator and scheduler proposals remain
+unimplemented.
 
 ## Validation
 

@@ -101,6 +101,11 @@ static void orc_vec_put(unsigned idx, const void *pf)
   orc_vec_table[idx * 4 + 3] = (u8)v;
 }
 
+/* Exercise the renderer-cache invalidation ABI of native palette stores.
+ * This standalone emitter harness does not include the full memory header. */
+#define CGBA_VIDEO_TILE_ROW_CACHE 1
+#define CGBA_PALETTE_DIRTY_ACTIVE 7u
+volatile u32 palette_ram_dirty;
 #define CGBA_SH4_REG_FORWARD 1
 #include "ports/fxcg100/sh4/sh4_thumb_dp_emit.h"
 #include "ports/fxcg100/sh4/sh4_arm_ldst_emit.h"
@@ -134,6 +139,7 @@ static void orc_vec_init(void)
   orc_vec_put(SH4G_VEC_ws_cyc_nseq, (const void *)ws_cyc_nseq);
   orc_vec_put(SH4G_VEC_iwram_data, (const void *)(iwram + 0x8000));
   orc_vec_put(SH4G_VEC_ewram_data, (const void *)ewram);
+  orc_vec_put(SH4G_VEC_palette_dirty, (const void *)&palette_ram_dirty);
 }
 
 /* ---- guest state used by the interpreter ---- */
@@ -1407,6 +1413,35 @@ int main(void)
     if (getenv("ORC_PRINT_FM"))
       fprintf(stderr, "fm resident used=0x%zx / 0x%zx\n",
               (size_t)(tp - fm_buf), sizeof fm_buf);
+
+    /* Native STR/STRH notify every palette consumer, including cached BG
+     * rows; test both ordinary and mirrored palette addresses. */
+    for (unsigned word = 0; word < 2; word++)
+      for (unsigned mirror = 0; mirror < 2; mirror++) {
+        u8 sbuf[512], *sp = sbuf;
+        u32 op = word ? 0xe5823000u : 0xe1c230b0u;
+        memset(g_reg, 0, sizeof(g_reg));
+        g_reg[2] = 0x05000020u + mirror * 0x400;
+        g_reg[3] = 0x12345678;
+        palette_ram_dirty = 0;
+        int emitted = sh4g_arm_ldst_native(&sp, op, pc, 0);
+        orc_reset_windows();
+        orc_add_window(sbuf, sizeof(sbuf), ORC_WIN_BYTES);
+        orc_add_window(fm_buf, sizeof(fm_buf), ORC_WIN_BYTES);
+        orc_add_window(palette_ram, sizeof(palette_ram), ORC_WIN_BYTES);
+        orc_add_window(palette_ram_converted, sizeof(palette_ram_converted), ORC_WIN_BYTES);
+        orc_add_window((const void *)&palette_ram_dirty, sizeof(palette_ram_dirty), ORC_WIN_BYTES);
+        orc_add_window(orc_vec_table, sizeof(orc_vec_table), ORC_WIN_BYTES);
+        orc_add_window(ws_cyc_seq, sizeof(ws_cyc_seq), ORC_WIN_BYTES);
+        orc_add_window(ws_cyc_nseq, sizeof(ws_cyc_nseq), ORC_WIN_BYTES);
+        int ok = 1;
+        cases++;
+        if (!emitted || !run_at((u32)(uintptr_t)sbuf, (u32)(uintptr_t)sp) ||
+            orc_read((u32)(uintptr_t)&palette_ram_dirty, 2, &ok) != CGBA_PALETTE_DIRTY_ACTIVE || !ok) {
+          printf("FAIL native palette cache notification word=%u mirror=%u (%s)\n", word, mirror, unmodeled);
+          fails++;
+        }
+      }
 
     memset(memory_map_read, 0, sizeof memory_map_read);
     memset(giwram, 0, 0x10000);

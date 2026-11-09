@@ -173,7 +173,8 @@ defsymbl(cgba_sh4_vec_table)
   .long   _iwram + 0x8000                       /* 12 SH4G_VEC_iwram_data    */
   .long   _ewram                                /* 13 SH4G_VEC_ewram_data    */
 #if defined(CGBA_VIDEO_BLEND_PALETTE_CACHE) || \
-    defined(CGBA_VIDEO_BACKDROP_SHADOW_PALETTE)
+    defined(CGBA_VIDEO_BACKDROP_SHADOW_PALETTE) || \
+    defined(CGBA_VIDEO_TILE_ROW_CACHE)
   .long   _palette_ram_dirty                    /* 14 SH4G_VEC_palette_dirty */
 #endif
 

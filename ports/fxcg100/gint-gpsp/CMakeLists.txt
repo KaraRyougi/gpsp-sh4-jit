@@ -388,6 +388,20 @@ if(CGBA_VIDEO_BACKDROP_SHADOW_PALETTE)
     CGBA_VIDEO_BACKDROP_SHADOW_PALETTE=1)
 endif()
 
+option(CGBA_VIDEO_TILE_ROW_CACHE
+  "Experimental Mode 0 FULLCOLOR 4-bpp background tile-row cache" OFF)
+set(CGBA_VIDEO_TILE_ROW_CACHE_ENTRIES "128" CACHE STRING
+  "Number of direct-mapped tile row entries (power of two)")
+option(CGBA_VIDEO_TILE_ROW_PROFILE "Count tile-row cache hits and misses" OFF)
+if(CGBA_VIDEO_TILE_ROW_CACHE)
+  target_compile_definitions(cgba-gint-gpsp PRIVATE
+    CGBA_VIDEO_TILE_ROW_CACHE=1
+    CGBA_VIDEO_TILE_ROW_CACHE_ENTRIES=${CGBA_VIDEO_TILE_ROW_CACHE_ENTRIES})
+  if(CGBA_VIDEO_TILE_ROW_PROFILE)
+    target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_VIDEO_TILE_ROW_PROFILE=1)
+  endif()
+endif()
+
 # Fully opaque 4-bpp tile rows need neither transparency tests nor per-pixel
 # branches.  Keep the specialized renderer opt-in until representative-game
 # and device cache behavior have both been measured.
