@@ -206,7 +206,7 @@ static inline int sh4g_thumb_block_native(u8 **tp, u32 opcode, u32 pc,
       if (is_push)
         sh4_emit_add_imm(&cg, -(int)(count * 4), SH4_REG_T0);  /* R1 = A */
       sh4g_close(tp, &cg); }
-    sh4g_fastmem_site_raw(tp, cgba_sh4_fastmem_routine[fm],
+    sh4g_fastmem_site_raw(tp, fm,
                           (const void *)cgba_sh4_thumb_block, (u32)opcode,
                           (u32)pc, cycle_count,
                           sh4g_fastmem_block_params(rlist16, count,

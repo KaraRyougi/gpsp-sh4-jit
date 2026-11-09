@@ -332,7 +332,8 @@ static inline unsigned sh4g_thumb_ldst_reg_index(u32 opcode)
   return opcode & 7u;
 }
 
-#if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
+#if (defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)) && \
+    (!defined(CGBA_SH4_BLOCK_PROFILE) || CGBA_SH4_BLOCK_PROFILE)
 static inline void sh4g_prof_block_entry(u8 **tp, u32 pc, int thumb)
 {
   u32 *counter = cgba_sh4_prof_counter_for_key((pc & ~1u) | (thumb ? 1u : 0u));

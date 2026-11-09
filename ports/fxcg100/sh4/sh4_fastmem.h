@@ -75,6 +75,8 @@ enum {
   CGBA_FM_TOTAL
 };
 
+extern u8 *cgba_sh4_fastmem_routine[CGBA_FM_TOTAL];
+
 extern u8 *memory_map_read[];
 extern u32 gamepak_size;
 extern const u8 * const *cgba_gamepak_fragment_blocks;
@@ -1036,10 +1038,27 @@ static inline u8 *sh4g_fastmem_emit_routine(u8 **tp, int fm)
 extern unsigned long cgba_em_fm_n, cgba_em_fm_bytes;
 #endif
 
-static inline void sh4g_fastmem_site_raw(u8 **tp, const u8 *routine,
+static inline void sh4g_fastmem_site_raw(u8 **tp, int fm,
                                          const void *helper_fn, u32 opcode,
                                          u32 pc, int cycle_count, u32 params)
 {
+  const u8 *routine = cgba_sh4_fastmem_routine[fm];
+#if CGBA_SH4_PIN_GUEST_R0
+  int publish_r0 = 1, reload_r0 = 1;
+#if !defined(CGBA_SH4_SELECTIVE_R0_SYNC) || CGBA_SH4_SELECTIVE_R0_SYNC
+  int block = fm >= CGBA_FM_COUNT;
+  int load = block ? !(fm & 1) : (fm % CGBA_FM_BASE_COUNT < CGBA_FM_STORE_W);
+  int wb = block ? fm >= CGBA_FMB_LDM_WB : fm >= CGBA_FM_WB;
+  int transfers_r0 = block ? (params & 1) != 0 : (params & 255) == 0;
+  int writes_r0 = wb && (block ? (params >> 24) == 0 : (params & 0xFF00) == 0);
+  /* Address/writeback operands were already read through the pinned-register
+   * accessors. Only store data needs publishing; only a load or base writeback
+   * needs reloading. Slow trampolines synchronize r0 themselves, including on
+   * exits that never return to this continuation. */
+  publish_r0 = !load && transfers_r0;
+  reload_r0 = (load && transfers_r0) || writes_r0;
+#endif
+#endif
   u8 *site;
   u8 *lit;
   unsigned nlit = 6;
@@ -1062,11 +1081,7 @@ static inline void sh4g_fastmem_site_raw(u8 **tp, const u8 *routine,
 #endif
 
 #if CGBA_SH4_PIN_GUEST_R0
-  /* Descriptor-driven routines can name guest r0 as a source, destination or
-   * writeback register. Publish R11 once before the shared routine and reload
-   * it at the continuation after the tuple; this preserves one common routine
-   * shape without runtime register-number branches inside every transfer. */
-  { sh4_codegen cg = sh4g_open(tp);
+  if (publish_r0) { sh4_codegen cg = sh4g_open(tp);
     sh4_emit_mov_l_store_disp(&cg, SH4_REG_GUEST_R0, SH4_REG_BASE, 0);
     sh4g_close(tp, &cg); }
 #endif
@@ -1100,7 +1115,7 @@ static inline void sh4g_fastmem_site_raw(u8 **tp, const u8 *routine,
     sh4g_close(tp, &cg);
   }
 #if CGBA_SH4_PIN_GUEST_R0
-  { sh4_codegen cg = sh4g_open(tp);
+  if (reload_r0) { sh4_codegen cg = sh4g_open(tp);
     sh4_emit_mov_l_load_disp(&cg, SH4_REG_BASE, SH4_REG_GUEST_R0, 0);
     sh4g_close(tp, &cg); }                                     /* 2: R11 */
 #endif
@@ -1120,12 +1135,12 @@ static inline void sh4g_fastmem_site_raw(u8 **tp, const u8 *routine,
 #endif
 }
 
-static inline void sh4g_fastmem_site(u8 **tp, const u8 *routine,
+static inline void sh4g_fastmem_site(u8 **tp, int fm,
                                      const void *helper_fn, u32 opcode, u32 pc,
                                      int cycle_count, unsigned rd, int wb_rn)
 {
   u32 params = (rd * 4u) | (wb_rn >= 0 ? ((u32)wb_rn * 4u) << 8 : 0);
-  sh4g_fastmem_site_raw(tp, routine, helper_fn, opcode, pc, cycle_count, params);
+  sh4g_fastmem_site_raw(tp, fm, helper_fn, opcode, pc, cycle_count, params);
 }
 
 /* Block-site params: rlist (16-bit ARM layout, LR = bit14) | count << 16 |
@@ -1529,7 +1544,6 @@ static inline u8 *sh4g_psr_emit_rebank_routine(u8 **tp)
 }
 
 /* Routine table, filled by cgba_sh4_fastmem_init() (sh4_fastmem.c). */
-extern u8 *cgba_sh4_fastmem_routine[CGBA_FM_TOTAL];
 extern u8 *cgba_sh4_psr_rebank_routine;
 void cgba_sh4_fastmem_init(void);
 

@@ -199,7 +199,7 @@ have_address:
            : kind == LDK_UH ? CGBA_FM_STORE_UH : CGBA_FM_STORE_B);
       if (effective_wb)
         fm += CGBA_FM_WB;
-      sh4g_fastmem_site(tp, cgba_sh4_fastmem_routine[fm],
+      sh4g_fastmem_site(tp, fm,
                         (const void *)cgba_sh4_arm_ldst, (u32)opcode, (u32)pc,
                         cycle_count, rd, effective_wb ? (int)rn : -1);
     }
