@@ -1,7 +1,9 @@
 cmake_minimum_required(VERSION 3.15)
 project(cgba_gint_gpsp C CXX ASM)
 
-include(GenerateG3A)
+if(NOT "${FXSDK_PLATFORM_LONG}" STREQUAL "fxCP")
+  include(GenerateG3A)
+endif()
 find_package(Gint 2.9 REQUIRED)
 
 set(CGBA_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../..")
@@ -12,7 +14,19 @@ set(GPSP "${CGBA_ROOT}/vendor/gpsp")
 # the JIT; they differ in keyboard codes, storage backing, and the ROM source
 # (CG100 memory-maps NOR; CG50 streams the .gba via BFile).
 option(CGBA_FXCG50 "Build for fx-CG50 / Graph 90+E instead of fx-CG100" OFF)
-if(CGBA_FXCG50)
+# fx-CP400 / ClassPad II under HollyHock-3 (configure with the FXCP toolchain).
+# Same SH7305, but 16 MiB of RAM that belongs to the OS heap, a 320x528
+# touchscreen, and a POSIX-like file API. The core is configured
+# like the fx-CG50 one (gint key codes, RAM-resident hot code), so this option
+# implies the CGBA_FXCG50 define and overrides the platform layer.
+option(CGBA_CLASSPAD "Build for fx-CP400 / ClassPad II (HollyHock-3 .hh3)" OFF)
+if(CGBA_CLASSPAD)
+  if(NOT "${FXSDK_PLATFORM_LONG}" STREQUAL "fxCP")
+    message(FATAL_ERROR "CGBA_CLASSPAD requires the fxSDK FXCP toolchain file")
+  endif()
+  set(CGBA_FXCG50 ON)
+  set(CGBA_GPSP_LINKER "${CMAKE_CURRENT_SOURCE_DIR}/classpad_gpsp.ld")
+elseif(CGBA_FXCG50)
   set(CGBA_GPSP_LINKER "${CMAKE_CURRENT_SOURCE_DIR}/fxcg50_gpsp.ld")
 else()
   set(CGBA_GPSP_LINKER "${CMAKE_CURRENT_SOURCE_DIR}/fxcg100_gpsp.ld")
@@ -25,17 +39,15 @@ set_target_properties(Gint::Gint PROPERTIES
 
 set(PORT_SOURCES
   src/main.c
-  src/gint_platform.c
+  src/frame_overlay.c
   src/nor_rom.c
   src/nor_filestream.c
   src/overclock.c
   src/gpsp_runner.c
   src/frame_pacing.c
-  src/no_osheap.c
   src/crash_panic.c
   ${FXCG100}/fxcg100_keys.c
   ${FXCG100}/fxcg100_config.c
-  ${FXCG100}/fxcg100_menu.c
   ${FXCG100}/fxcg100_gpsp_stubs.c
   ${FXCG100}/fxcg100_sound_stub.c
 )
@@ -191,18 +203,36 @@ target_compile_definitions(cgba-gint-gpsp PRIVATE
   ROM_BUFFER_SIZE=1
   dma_transfer=gpsp_dma_transfer
 )
-if(CGBA_FXCG50)
-  target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_FXCG50=1)
+if(CGBA_CLASSPAD)
+  # gint uses the OS heap on this model (VRAM backup, the arena itself), so
+  # the no_osheap.c stubs must not be linked.
+  target_compile_definitions(cgba-gint-gpsp PRIVATE
+    CGBA_CLASSPAD=1 CGBA_FXCG50=1)
+  # The ClassPad has its own touch interface in place of the fx-CG menu.
   target_sources(cgba-gint-gpsp PRIVATE
-    src/cg50_syscall.S
-    src/hottext.c)  # BFile trampoline + RAM-resident native-code loader
+    src/classpad_platform.c
+    src/classpad_loader.c
+    ${FXCG100}/classpad_ui.c)
 else()
-  target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_FXCG100=1)
+  target_sources(cgba-gint-gpsp PRIVATE
+    src/gint_platform.c
+    src/no_osheap.c
+    ${FXCG100}/fxcg100_menu.c)
+  if(CGBA_FXCG50)
+    target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_FXCG50=1)
+    target_sources(cgba-gint-gpsp PRIVATE
+      src/cg50_syscall.S
+      src/hottext.c)  # BFile trampoline + RAM-resident native-code loader
+  else()
+    target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_FXCG100=1)
+  endif()
 endif()
 if(CGBA_FXCG100_STORAGE)
   target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_FXCG100_STORAGE=1)
 endif()
-if(CGBA_DEFAULT_OVERCLOCK)
+# The Ptune profile is tuned for the fx-CG bus and SDRAM; it is not applied on
+# the fx-CP400, whose memory timings have not been characterised.
+if(CGBA_DEFAULT_OVERCLOCK AND NOT CGBA_CLASSPAD)
   target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_DEFAULT_OVERCLOCK=1)
 endif()
 if(CGBA_DEBUG_MENU)
@@ -614,6 +644,15 @@ if(CGBA_GPSP_HEADLESS_TEST OR CGBA_SH4_DIFF_HARNESS)
     -Wl,--defsym=cgba_highram_limit=0x8c6F0000)
 endif()
 
-generate_g3a(TARGET cgba-gint-gpsp OUTPUT "gpSP.g3a"
-  NAME "gpSP" VERSION "00.10.0804"
-  ICONS icon-uns.png icon-sel.png)
+if(CGBA_CLASSPAD)
+  # A HollyHock-3 add-in is the stripped ELF itself. Section headers must
+  # survive (strip -s keeps them): gpSP finds its own .cgba.core through them.
+  string(REPLACE "gcc" "strip" CGBA_STRIP "${CMAKE_C_COMPILER}")
+  add_custom_command(TARGET cgba-gint-gpsp POST_BUILD
+    COMMAND ${CGBA_STRIP} -s -o "${CMAKE_CURRENT_SOURCE_DIR}/gpSP.hh3"
+      "$<TARGET_FILE:cgba-gint-gpsp>")
+else()
+  generate_g3a(TARGET cgba-gint-gpsp OUTPUT "gpSP.g3a"
+    NAME "gpSP" VERSION "00.10.0804"
+    ICONS icon-uns.png icon-sel.png)
+endif()

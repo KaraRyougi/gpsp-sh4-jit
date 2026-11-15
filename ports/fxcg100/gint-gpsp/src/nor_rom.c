@@ -15,7 +15,22 @@
 #define CGBA_SH4_P2_BASE ((uintptr_t)0xa0000000u)
 #define CGBA_SH4_P2_END  ((uintptr_t)0xc0000000u)
 
-#ifdef CGBA_FXCG50
+#if defined(CGBA_CLASSPAD)
+/* fx-CP400: there is no memory-mapped view of a stored file, so no block has
+ * a direct address. The leading part of the ROM is instead copied into the
+ * RAM pool left over below the emulator arena (classpad_loader.c) and those
+ * copies are published as the "direct" blocks; whatever does not fit is
+ * demand-paged through file reads like a rejected block on the fx-CG. */
+#include "classpad_bfile.h"
+#include "classpad_loader.h"
+#define CGBA_BFILE_OPEN              cp_bfile_open
+#define CGBA_BFILE_SIZE              cp_bfile_size
+#define CGBA_BFILE_READ              cp_bfile_read
+#define CGBA_BFILE_CLOSE             cp_bfile_close
+#define CGBA_BFILE_FIND_FIRST        cp_bfile_find_first
+#define CGBA_BFILE_FIND_NEXT         cp_bfile_find_next
+#define CGBA_BFILE_FIND_CLOSE        cp_bfile_find_close
+#elif defined(CGBA_FXCG50)
 /* fx-CG50: use gint's portable BFile_* for the ordinary calls, and OS syscall
  * 0x1DAA (via the cg50_syscall.S trampoline) for Bfile_GetBlockAddress, which
  * gint does not wrap. The wrappers below and the NOR block-gather / P2->P1
@@ -138,8 +153,12 @@ static int os_bfile_read(int fd, void *dst, int size, int offset)
 
 static int bfile_read_exact_ok(int result, int size)
 {
+#ifdef CGBA_CLASSPAD
+	return result == size;
+#else
 	/* Fugue returns bytes read; CASIOWIN returns bytes remaining after read. */
 	return result == size || result == 0;
+#endif
 }
 
 static void os_bfile_close(int fd)
@@ -170,6 +189,50 @@ typedef struct cgba_block_query {
  * A 16/32 MiB ROM previously caused 8,192/16,384 CPG transitions. Losing one
  * 128 Hz RTC tick per transition produces the reported 64/128-second drift.
  */
+#ifdef CGBA_CLASSPAD
+/* Copy as many whole 4 KiB blocks as fit into the RAM pool and publish their
+ * RAM addresses. Runs in the OS world; one sequential pass over the file. */
+static int os_bfile_query_blocks(void *opaque)
+{
+	cgba_block_query *query = opaque;
+	uint8_t *pool;
+	uint32_t pool_size, pool_blocks, block = 0;
+
+	cgba_classpad_rom_pool(&pool, &pool_size);
+	pool_blocks = pool_size / CGBA_FLASH_BLOCK_SIZE;
+	if(pool_blocks > query->block_count)
+		pool_blocks = query->block_count;
+
+	while(block < pool_blocks) {
+		uint32_t blocks = pool_blocks - block;
+		uint8_t *dst = pool + block * CGBA_FLASH_BLOCK_SIZE;
+		int bytes, got;
+
+		if(blocks > CGBA_FLASH_BLOCKS_PER_PAGE)
+			blocks = CGBA_FLASH_BLOCKS_PER_PAGE;
+		bytes = (int)(blocks * CGBA_FLASH_BLOCK_SIZE);
+		got = cp_bfile_read(query->fd, dst, bytes,
+			(int)(block * CGBA_FLASH_BLOCK_SIZE));
+		/* Publish only blocks that were read in full. The short last block
+		 * of a file is left unpublished and served by the gather path. */
+		blocks = got > 0 ? (uint32_t)got / CGBA_FLASH_BLOCK_SIZE : 0;
+		for(uint32_t i = 0; i < blocks; i++)
+			cgba_block_addr[block + i] = dst + i * CGBA_FLASH_BLOCK_SIZE;
+		block += blocks;
+		if(got != bytes)
+			break;
+	}
+	for(uint32_t rest = block; rest < query->block_count; rest++)
+		cgba_block_addr[rest] = NULL;
+	if(block < query->block_count) {
+		query->first_failed_block = block;
+		query->first_failed_result = -1;
+		if(block == 0)
+			query->first_result = -1;
+	}
+	return 0;
+}
+#else
 static int os_bfile_query_blocks(void *opaque)
 {
 	cgba_block_query *query = opaque;
@@ -193,6 +256,7 @@ static int os_bfile_query_blocks(void *opaque)
 	}
 	return 0;
 }
+#endif /* !CGBA_CLASSPAD */
 #endif
 
 static int os_bfile_get_block_addresses(int fd, uint32_t block_count,
@@ -737,6 +801,11 @@ int cgba_nor_rom_refresh(cgba_nor_rom *rom)
 		return -1;
 	if(os_bfile_size(rom->fd) != (int)rom->size)
 		return -2;
+#ifdef CGBA_CLASSPAD
+	/* The published blocks are private RAM copies; writing other files
+	 * cannot move or invalidate them, so there is nothing to re-query. */
+	return 0;
+#endif
 	total = rom->page_count * CGBA_FLASH_BLOCKS_PER_PAGE;
 	if(total > CGBA_NOR_ROM_MAX_BLOCKS)
 		return -1;

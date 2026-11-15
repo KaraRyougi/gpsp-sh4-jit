@@ -17,11 +17,11 @@ comma   := ,
 DEAD_STRIP := $(if $(filter Darwin,$(shell uname -s)),\
 	-Wl$(comma)-dead_strip,-Wl$(comma)--gc-sections)
 
-.PHONY: all smoke audit core litpool thumb cond native-ldst input config-version storage lcd-cleanup scale rtc backup-dirty nor-world-switch cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc \
+.PHONY: all smoke audit core litpool thumb cond native-ldst input config-version storage lcd-cleanup scale classpad rtc backup-dirty nor-world-switch cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc \
 	swi-overlap swi-oam udiv udiv-emitter idle-signature video-opaque \
 	video-blend-cache video-backdrop-shadow arm-mixer clean
 
-all: smoke core litpool thumb cond native-ldst rtc backup-dirty nor-world-switch input config-version storage lcd-cleanup scale cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc swi-overlap swi-oam udiv \
+all: smoke core litpool thumb cond native-ldst rtc backup-dirty nor-world-switch input config-version storage lcd-cleanup scale classpad cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc swi-overlap swi-oam udiv \
 	udiv-emitter idle-signature video-opaque video-blend-cache \
 	video-backdrop-shadow arm-mixer audit
 
@@ -91,6 +91,30 @@ scale: $(ROOT)/tests/scale_test.c $(ROOT)/ports/fxcg100/fxcg100_scale.h
 	$(CC) $(CFLAGS) -O2 -I$(ROOT)/ports/fxcg100 \
 	  $(ROOT)/tests/scale_test.c -o $(BIN)-scale
 	$(BIN)-scale
+
+# fx-CP400 / ClassPad II: the real presenter against a simulated R61523 and
+# stub gint (layouts, rotation, scaler taps, touch keys and their highlight,
+# and the touch interface: library, pause menu, settings, key mapping),
+# plus the lookup that finds the RAM-resident core inside the .hh3.
+#   make -C tests classpad CLASSPAD_RENDER_DIR=/some/dir   also writes PPMs
+classpad: $(ROOT)/tests/classpad_render_test.c $(ROOT)/tests/classpad_elf_test.c \
+	  $(ROOT)/ports/fxcg100/gint-gpsp/src/classpad_platform.c \
+	  $(ROOT)/ports/fxcg100/classpad_layout.h \
+	  $(ROOT)/ports/fxcg100/classpad_gfx.h \
+	  $(ROOT)/ports/fxcg100/classpad_theme.h \
+	  $(ROOT)/ports/fxcg100/classpad_clock.h \
+	  $(ROOT)/ports/fxcg100/classpad_font.h \
+	  $(ROOT)/ports/fxcg100/classpad_ui.c \
+	  $(ROOT)/ports/fxcg100/classpad_scale.h \
+	  $(ROOT)/ports/fxcg100/classpad_elf.h \
+	  $(ROOT)/ports/fxcg100/fxcg100_keys.c
+	$(CC) $(CFLAGS) -O2 -DCGBA_HOST_TEST=1 -DCGBA_CLASSPAD=1 -DCGBA_FXCG50=1 \
+	  -I$(ROOT)/tests/stubs -I$(ROOT)/ports/fxcg100 -I$(ROOT) \
+	  $(ROOT)/tests/classpad_render_test.c -o $(BIN)-classpad-render
+	$(BIN)-classpad-render $(CLASSPAD_RENDER_DIR)
+	$(CC) $(CFLAGS) -I$(ROOT) $(ROOT)/tests/classpad_elf_test.c \
+	  -o $(BIN)-classpad-elf
+	$(BIN)-classpad-elf
 
 # Production gpSP cartridge GPIO/RTC and calculator-specific ROM loaders. Dead
 # section elimination keeps the otherwise monolithic gba_memory.c host-linkable.

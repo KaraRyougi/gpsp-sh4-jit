@@ -9,7 +9,14 @@
 #include "gpsp_runner.h"
 #include "overclock.h"
 
-#ifdef CGBA_FXCG50
+#if defined(CGBA_CLASSPAD)
+#include <gint/keyboard.h>
+#include "classpad_loader.h"
+HHK_NAME("gpSP")
+HHK_DESCRIPTION("Game Boy Advance emulator with an SH4 JIT")
+HHK_AUTHOR("KaraRyougi")
+HHK_VERSION("0.10.0804")
+#elif defined(CGBA_FXCG50)
 extern int cgba_hottext_init(void);
 #endif
 #ifdef CGBA_GPSP_HEADLESS_TEST
@@ -146,7 +153,10 @@ extern uint32_t cgba_sh4_arm_mixer_first_reg[10];
 
 extern char cgba_highbss_start[];
 extern char cgba_highbss_end[];
-#ifdef CGBA_FXCG50
+#if defined(CGBA_CLASSPAD)
+extern char cgba_arena_start[];
+extern char cgba_arena_end[];
+#elif defined(CGBA_FXCG50)
 extern char ecgba_hottext[];
 #endif
 
@@ -179,7 +189,14 @@ static uint32_t read_stack_pointer(void)
 static int gpsp_highbss_range_ok(void)
 {
 	uintptr_t start = (uintptr_t)cgba_highbss_start;
-	#ifdef CGBA_FXCG50
+	#if defined(CGBA_CLASSPAD)
+	/* fx-CP400: the arena is a heap block that classpad_loader.c verified
+	 * to contain the linked range, so the link-time bounds are the proof. */
+	uintptr_t end = (uintptr_t)cgba_highbss_end;
+
+	return start >= (uintptr_t)cgba_arena_start && end > start &&
+		end <= (uintptr_t)cgba_arena_end;
+	#elif defined(CGBA_FXCG50)
 	uintptr_t end = (uintptr_t)ecgba_hottext;
 	#else
 	uintptr_t end = (uintptr_t)cgba_highbss_end;
@@ -196,8 +213,20 @@ static void clear_gpsp_highbss(void)
 		(size_t)(cgba_highbss_end - cgba_highbss_start));
 }
 
+#ifdef CGBA_CLASSPAD
+/* The display options the status card should follow; set once the menu state
+ * exists. Before that the card is shown upright. */
+static const fxcg100_menu_state *status_state;
+static const fxcg100_menu_state status_default_state;
+#endif
+
 static void draw_status(const char *line1, const char *line2)
 {
+#ifdef CGBA_CLASSPAD
+	cp_ui_status(status_state ? status_state : &status_default_state, line1,
+		line2);
+	return;
+#endif
 	dclear(C_WHITE);
 	drect(0, 0, DWIDTH - 1, 21, C_RGB(0, 10, 22));
 	dtext(8, 5, C_WHITE, "gpSP");
@@ -206,6 +235,61 @@ static void draw_status(const char *line1, const char *line2)
 		dtext(16, 62, C_BLACK, line2);
 	fxcg100_lcd_update();   /* restores the full gint window then dupdate() */
 }
+
+/* Push the menu's display options to the presenter. */
+static void apply_display_options(const fxcg100_menu_state *state)
+{
+	fxcg100_lcd_set_scale(state->screen_scale);
+	fxcg100_lcd_set_filter(state->screen_filter);
+#ifdef CGBA_CLASSPAD
+	fxcg100_lcd_set_rotation(state->rotation);
+	fxcg100_lcd_set_touch_keys(state->touch_keys);
+	fxcg100_lcd_set_transfer(state->lcd_cpu);
+	fxcg100_lcd_set_theme(state->theme);
+	{
+		/* Clear is the menu key only while nothing else is mapped to it. */
+		uint32_t i, free_key = 1;
+
+		for(i = 0; i < FXCG100_GBA_KEY_COUNT; i++)
+			if(state->keymap[i] == FXCG100_PHYSKEY_ON)
+				free_key = 0;
+		for(i = 0; i < FXCG100_HOTKEY_COUNT; i++)
+			if(state->hotkey_map[i] == FXCG100_PHYSKEY_ON)
+				free_key = 0;
+		fxcg100_lcd_set_menu_key(free_key);
+	}
+#endif
+}
+
+#ifdef CGBA_CLASSPAD
+#include "classpad_layout.h"
+
+/* Display shortcuts on the icon strip under the screen, acted on when an
+ * icon is first touched:
+ *   Rotate  portrait -> clockwise -> counter-clockwise -> portrait, keeping
+ *           the smaller/larger choice
+ *   Resize  the other scale of the current orientation
+ *   Swap    which side the keypad is on in landscape
+ * The display modes are CP_VIEW_* (classpad_layout.h): once bit 1 was the
+ * orientation, bit 0 the larger scale. */
+static void classpad_strip_shortcuts(fxcg100_menu_state *state,
+	uint32_t *previous)
+{
+	uint32_t strip = fxcg100_touch_strip_icons();
+	uint32_t edge = strip & ~*previous;
+
+	*previous = strip;
+	if(edge & FXCG100_STRIP_ROTATE)
+		cp_rotate_next(&state->screen_scale, &state->rotation);
+	if(edge & FXCG100_STRIP_RESIZE)
+		state->screen_scale = cp_view_resized(state->screen_scale);
+	if(edge & FXCG100_STRIP_SWAP)
+		state->rotation ^= 1u;
+	if(edge & (FXCG100_STRIP_ROTATE | FXCG100_STRIP_RESIZE |
+			FXCG100_STRIP_SWAP))
+		apply_display_options(state);
+}
+#endif
 
 static void blit_gba_frame(const uint16_t *pixels, unsigned frame,
 	uint32_t gba_buttons)
@@ -217,6 +301,14 @@ static void blit_gba_frame(const uint16_t *pixels, unsigned frame,
 
 static void enter_gameplay_display(const uint16_t *framebuffer, unsigned frame)
 {
+#ifdef CGBA_CLASSPAD
+	/* The interface may have been drawn another way round than the game is
+	 * set to be (it starts upright): the game gets its own view back. */
+	if(status_state) {
+		cp_ui_game_starting();
+		apply_display_options(status_state);
+	}
+#endif
 	cgba_fps_init(&cgba_fps);
 	fxcg100_lcd_clear(C_BLACK);
 	fxcg100_lcd_update();
@@ -2112,9 +2204,9 @@ static int cgba_headless_test(uint16_t *framebuffer)
 }
 #endif
 
-int main(void)
+static int gpsp_main(void)
 {
-	#ifdef CGBA_FXCG50
+	#if defined(CGBA_FXCG50) && !defined(CGBA_CLASSPAD)
 	if(!cgba_hottext_init()) {
 		dclear(C_WHITE);
 		dtext(8, 8, C_BLACK, "gpSP RAM-code copy failed");
@@ -2131,6 +2223,9 @@ int main(void)
 	fxcg100_menu_state menu_state;
 	uint32_t previous_app_keys = 0;
 	uint32_t previous_hotkeys = 0;
+#ifdef CGBA_CLASSPAD
+	uint32_t previous_strip = 0;
+#endif
 	uint32_t last_hash = 0;
 	unsigned current_rom;
 	unsigned frame = 1;
@@ -2158,12 +2253,15 @@ int main(void)
 #endif
 	cgba_gpsp_refresh_roms();
 	fxcg100_menu_init(&menu_state);
+#ifdef CGBA_CLASSPAD
+	status_state = &menu_state;
+	cp_ui_apply_saved_clock();
+#endif
 	if(cgba_gpsp_rom_count() > CGBA_GPSP_ROM_BUILTIN_COUNT)
 		menu_state.rom_source = CGBA_GPSP_ROM_BUILTIN_COUNT;
 
 	menu_result = fxcg100_menu_run(&menu_state, 0, 0, NULL);
-	fxcg100_lcd_set_scale(menu_state.screen_scale);
-	fxcg100_lcd_set_filter(menu_state.screen_filter);
+	apply_display_options(&menu_state);
 	if(menu_result == FXCG100_MENU_QUIT)
 		return exit_to_os(1);
 	wait_for_keys_released();
@@ -2215,8 +2313,7 @@ int main(void)
 				read_stack_pointer());
 			fxcg100_menu_result result =
 				fxcg100_menu_run(&menu_state, frame, last_hash, &debug_info);
-			fxcg100_lcd_set_scale(menu_state.screen_scale);
-			fxcg100_lcd_set_filter(menu_state.screen_filter);
+			apply_display_options(&menu_state);
 
 			wait_for_keys_released();
 			previous_app_keys = fxcg100_poll_app_keys();
@@ -2274,6 +2371,10 @@ int main(void)
 			enter_gameplay_display(framebuffer, frame);
 			continue;
 		}
+
+#ifdef CGBA_CLASSPAD
+		classpad_strip_shortcuts(&menu_state, &previous_strip);
+#endif
 
 		if((previous_hotkeys &
 				FXCG100_HOTKEY_BIT(FXCG100_HOTKEY_FAST_FORWARD)) &&
@@ -2375,4 +2476,30 @@ int main(void)
 	}
 
 	return shutdown_gpsp_and_exit(1);
+}
+
+int main(void)
+{
+#ifdef CGBA_CLASSPAD
+	/* Nothing but gint may be used until the arena is reserved and the core
+	 * is loaded, and nothing in the arena after it is released. */
+	const char *error = cgba_classpad_arena_init();
+	int code;
+
+	if(error) {
+		dclear(C_WHITE);
+		dtext(8, 8, C_BLACK, "gpSP cannot start:");
+		dtext(8, 28, C_BLACK, error);
+		dtext(8, 56, C_BLACK, "No emulator code was executed.");
+		dtext(8, 76, C_BLACK, "Press any key to exit.");
+		dupdate();
+		getkey();
+		return 1;
+	}
+	code = gpsp_main();
+	cgba_classpad_arena_release();
+	return code;
+#else
+	return gpsp_main();
+#endif
 }
