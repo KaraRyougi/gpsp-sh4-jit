@@ -108,6 +108,8 @@ option(CGBA_SH4_THUMB_UDIV_FASTPATH
   "Experimental exact fast path for the Zelda/libgcc Thumb unsigned divide suffix" OFF)
 option(CGBA_SH4_ARM_MIXER_FASTPATH
   "Experimental exact fast path for the Zelda/m4a ARM four-sample mixer loop" OFF)
+option(CGBA_SH4_M4A_MIX_SKIP
+  "Skip discarded PCM arithmetic and buffer access in the signature-matched m4a mixer (only valid with the no-op sound backend)" ON)
 option(CGBA_SH4_SWI_OBJAFFINE_HLE
   "Experimental SH4 HLE for BIOS ObjAffineSet (SWI 0x0F); default off until event-slice parity is fixed" OFF)
 set(CGBA_SH4_HEAT_QUIET_FRAMES "180" CACHE STRING
@@ -319,6 +321,9 @@ if(CGBA_DYNAREC)
     target_compile_definitions(cgba-gint-gpsp PRIVATE
       CGBA_SH4_ARM_MIXER_FASTPATH=1)
   endif()
+  if(CGBA_SH4_M4A_MIX_SKIP)
+    target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_SH4_M4A_MIX_SKIP=1)
+  endif()
   if(CGBA_SH4_SWI_OBJAFFINE_HLE)
     target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_SH4_SWI_OBJAFFINE_HLE=1)
   endif()
@@ -412,11 +417,30 @@ if(CGBA_VIDEO_OPAQUE_TILE_FASTPATH)
     CGBA_VIDEO_OPAQUE_TILE_FASTPATH=1)
 endif()
 
+# Overlay text layers are mostly transparent: step over runs of identical map
+# entries whose tile row is empty instead of decoding every tile.
+option(CGBA_VIDEO_EMPTY_RUN_SKIP
+  "Skip runs of repeated empty overlay tiles in 4-bpp text backgrounds" ON)
+if(CGBA_VIDEO_EMPTY_RUN_SKIP)
+  target_compile_definitions(cgba-gint-gpsp PRIVATE
+    CGBA_VIDEO_EMPTY_RUN_SKIP=1)
+endif()
+
 option(CGBA_VIDEO_OPAQUE_ROW_UNROLL
   "Unroll the measured exact 4-bpp tile-row shapes" ON)
 if(CGBA_VIDEO_OPAQUE_ROW_UNROLL)
   target_compile_definitions(cgba-gint-gpsp PRIVATE
     CGBA_VIDEO_OPAQUE_ROW_UNROLL=1)
+endif()
+
+# Base-layer 4-bpp rows: one table load per packed byte (two pixels) instead
+# of two nibble extractions and two palette loads. 16 KiB of BSS.
+option(CGBA_VIDEO_PAIR_PALETTE
+  "Two-pixel palette table for 4-bpp FULLCOLOR text rows" ON)
+if(CGBA_VIDEO_PAIR_PALETTE AND CGBA_VIDEO_BACKDROP_SHADOW_PALETTE AND
+   CGBA_VIDEO_OPAQUE_ROW_UNROLL)
+  target_compile_definitions(cgba-gint-gpsp PRIVATE
+    CGBA_VIDEO_PAIR_PALETTE=1)
 endif()
 
 # Experimental unscaled-mode path that publishes each completed 16-row group

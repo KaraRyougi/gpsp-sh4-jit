@@ -2177,6 +2177,16 @@ static int cgba_headless_test(uint16_t *framebuffer)
 		(unsigned long)cgba_sh4_helper_arm_block_store_count);
 	hputs_dbg(buf);
 	#endif
+	#ifdef CGBA_SH4_M4A_MIX_SKIP
+	{
+		extern uint32_t cgba_sh4_m4a_skip_drop_count;
+		extern uint32_t cgba_sh4_m4a_skip_mem_count;
+		snprintf(buf, sizeof buf, "jit m4a-skip drop=%lu mem=%lu",
+			(unsigned long)cgba_sh4_m4a_skip_drop_count,
+			(unsigned long)cgba_sh4_m4a_skip_mem_count);
+		hputs_dbg(buf);
+	}
+	#endif
 	#ifdef CGBA_SH4_ARM_MIXER_FASTPATH
 	snprintf(buf, sizeof buf,
 		"jit mixer try=%lu hit=%lu batch=%lu guard=%lu budget=%lu",

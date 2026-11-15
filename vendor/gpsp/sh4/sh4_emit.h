@@ -38,6 +38,9 @@
 #ifdef CGBA_GBA_OVER_AZLE_IDLE
 #include "ports/fxcg100/sh4/sh4_idle_signature.h"
 #endif
+#ifdef CGBA_SH4_M4A_MIX_SKIP
+#include "ports/fxcg100/sh4/sh4_m4a_skip.h"
+#endif
 
 /* ------------------------------------------------------------------ */
 /* Runtime symbols (sh4/sh4_stub.S, cpu.cc, cpu_threaded.c, helpers).  */
@@ -273,6 +276,137 @@ static inline void sh4g_arm_mixer_entry(u8 **tp, const u8 *map, u32 pc)
 }
 #endif /* CGBA_SH4_ARM_MIXER_FASTPATH */
 
+#ifdef CGBA_SH4_M4A_MIX_SKIP
+/* See sh4_m4a_skip.h.  The image is re-hashed for every ARM RAM block that
+ * could lie inside it, so a block is only ever specialized against the bytes
+ * it is being translated from; later guest writes go through the ordinary SMC
+ * invalidation and retranslate (and re-verify). */
+static u32 sh4g_m4a_skip_base;         /* last verified image base, 0 = none */
+#if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
+u32 cgba_sh4_m4a_skip_drop_count;
+u32 cgba_sh4_m4a_skip_mem_count;
+#define SH4G_M4A_SKIP_STAT(expr) ((void)(expr))
+#else
+#define SH4G_M4A_SKIP_STAT(expr) ((void)0)
+#endif
+
+static inline int sh4g_m4a_skip_verify(u32 base)
+{
+  u32 hash = CGBA_SH4_M4A_SKIP_HASH_INIT;
+  u32 page = 0xFFFFFFFFu;
+  const u8 *map = NULL;
+  u32 i;
+
+  if ((base & 3u) || ((base >> 24) != 0x02u && (base >> 24) != 0x03u) ||
+      ((base + CGBA_SH4_M4A_SKIP_BYTES - 1u) >> 24) != (base >> 24))
+    return 0;
+  for (i = 0; i < CGBA_SH4_M4A_SKIP_WORDS; i++) {
+    u32 address = base + i * 4u;
+    u32 word;
+    if ((address >> 12) != page) {
+      page = address >> 12;
+      map = cgba_memory_map_read_4k(address);
+      if (!map)
+        return 0;
+    }
+    word = readaddress32(map, address & 0x0FFFu);
+    if (i == 0 && word != CGBA_SH4_M4A_SKIP_FIRST_WORD)
+      return 0;
+    hash = cgba_sh4_m4a_skip_hash_word(hash, word);
+  }
+  return hash == CGBA_SH4_M4A_SKIP_HASH;
+}
+
+/* Image base for an ARM block starting at `pc`, or 0.  A block can start
+ * anywhere inside the routine (budget exits redispatch at loop heads), and
+ * those inner blocks usually turn hot before the BX entries do, so search
+ * backwards for the first word rather than relying on the entry offsets. */
+static inline u32 sh4g_m4a_skip_locate(u32 pc)
+{
+  u32 base, lowest;
+
+  pc &= ~3u;
+  if (cgba_dynarec_single_block ||
+      ((pc >> 24) != 0x02u && (pc >> 24) != 0x03u))
+    return 0;
+  base = sh4g_m4a_skip_base;
+  if (base && pc - base < CGBA_SH4_M4A_SKIP_BYTES) {
+    if (sh4g_m4a_skip_verify(base))
+      return base;
+    sh4g_m4a_skip_base = 0;
+  }
+  lowest = pc - (CGBA_SH4_M4A_SKIP_BYTES - 4u);
+  if ((lowest >> 24) != (pc >> 24))
+    lowest = pc & 0xFF000000u;
+  for (base = pc; ; base -= 4u) {
+    if (sh4g_m4a_skip_verify(base)) {
+      sh4g_m4a_skip_base = base;
+      return base;
+    }
+    if (base == lowest)
+      break;
+  }
+  return 0;
+}
+
+/* Returns 1 when the instruction at `pc` was handled here (nothing, or
+ * writeback + memory cycle charge, emitted); 0 to translate it normally. */
+static inline int sh4g_m4a_skip_emit(u8 **tp, u32 base, u32 pc, u32 opcode)
+{
+  cgba_sh4_m4a_skip_mem m;
+  unsigned cls;
+
+  if (!base)
+    return 0;
+  cls = cgba_sh4_m4a_skip_class(pc - base, opcode);
+  if (cls == CGBA_SH4_M4A_SKIP_DROP) {
+    SH4G_M4A_SKIP_STAT(cgba_sh4_m4a_skip_drop_count++);
+    return 1;
+  }
+  if (cls != CGBA_SH4_M4A_SKIP_MEM ||
+      !cgba_sh4_m4a_skip_mem_decode(opcode, &m))
+    return 0;
+
+  /* T0 = transfer address.  Post-indexed forms transfer at the old base. */
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_load_greg(&cg, m.rn, SH4_REG_T0);
+    sh4g_close(tp, &cg); }
+  if (m.reg_offset || m.offset) {
+    if (m.reg_offset) {
+      sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_load_greg(&cg, m.rm, SH4_REG_T1);
+      sh4g_close(tp, &cg);
+    } else {
+      sh4g_const(tp, m.offset, SH4_REG_T1);
+    }
+    { sh4_codegen cg = sh4g_open(tp);
+      unsigned dst = m.pre ? SH4_REG_T0 : SH4_REG_ARG2;
+      if (!m.pre)
+        sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_ARG2);
+      if (m.up)
+        sh4_emit_add_reg(&cg, SH4_REG_T1, dst);
+      else
+        sh4_emit_sub(&cg, SH4_REG_T1, dst);
+      if (m.writeback)
+        sh4_emit_store_greg(&cg, dst, m.rn);
+      sh4g_close(tp, &cg); }
+  }
+  /* Same table and column as cgba_sh4_charge_mem(): one nonsequential access
+   * priced by the transfer address's region. */
+  sh4g_charge_mem_run(tp, SH4_REG_T0, /*seq=*/0, (int)m.is_word, 1);
+  SH4G_M4A_SKIP_STAT(cgba_sh4_m4a_skip_mem_count++);
+  return 1;
+}
+
+#define arm_translate_override()                                             \
+  sh4g_m4a_skip_emit(&translation_ptr, sh4_m4a_skip_image, (u32)pc,          \
+                     (u32)opcode)
+#define SH4_M4A_SKIP_BLOCK_VARS                                              \
+  ; u32 sh4_m4a_skip_image = sh4g_m4a_skip_locate((u32)pc)
+#else
+#define SH4_M4A_SKIP_BLOCK_VARS
+#endif /* CGBA_SH4_M4A_MIX_SKIP */
+
 static inline void sh4g_block_entry_fastpaths(u8 **tp, const u8 *map,
                                                u32 pc, int thumb)
 {
@@ -291,7 +425,7 @@ static inline void sh4g_block_entry_fastpaths(u8 **tp, const u8 *map,
 }
 
 #define generate_block_extra_vars_arm()                                      \
-  int sh4_block_is_thumb = 0
+  int sh4_block_is_thumb = 0 SH4_M4A_SKIP_BLOCK_VARS
 #define generate_block_extra_vars_thumb()                                    \
   int sh4_block_is_thumb = 1;                                                \
   u32 sh4_thumb_const_mask = 0;                                              \

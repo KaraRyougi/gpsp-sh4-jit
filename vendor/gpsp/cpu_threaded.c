@@ -486,6 +486,10 @@ void translate_icache_sync() {
       return false;                                                           \
   }                                                                           \
 
+#ifndef arm_translate_override
+#define arm_translate_override() 0
+#endif
+
 #define translate_arm_instruction()                                           \
   arm_load_flag_status()                                                      \
   check_pc_region(pc);                                                        \
@@ -510,6 +514,12 @@ void translate_icache_sync() {
   }                                                                           \
   emit_trace_arm_instruction(pc);                                             \
                                                                               \
+  /* A backend may fully handle (or elide) an instruction here; the condition \
+   * guard above and the cycle accounting around this macro still apply. */   \
+  if(arm_translate_override())                                                \
+  {                                                                           \
+  }                                                                           \
+  else                                                                        \
   switch((opcode >> 20) & 0xFF)                                               \
   {                                                                           \
     case 0x00:                                                                \
