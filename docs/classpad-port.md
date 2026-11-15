@@ -294,6 +294,28 @@ At start-up `gint-gpsp/src/classpad_loader.c`:
 4. tells gint to save/restore ILRAM (the JIT dispatch stubs) around OS calls,
    since gint cannot reload it from the image on this model.
 
+### ROM
+
+`\fls0` is the same Fugue file system as on the fx-CG: FAT16 with 4 KiB
+clusters, placed so that a cluster is one 4 KiB flash unit. The OS also has
+the routine that returns the flash address of the block at a file offset,
+which is what `Bfile_GetBlockAddress` is on the fx-CG. It is not in any
+published API. In OS 02.01.7003 (fx-CP400 and fx-CG500):
+
+| Address | What |
+|---|---|
+| 0x80058c88 | `int f(int fd, int offset, void **address)`; masks interrupts, calls the next |
+| 0x8005876a | checks and splits the fd (as the read call does), calls the next |
+| 0x80047c18 | Fugue core routine; the same instructions as 0x80167358 in the fx-CG100 OS, which is what `Bfile_GetBlockAddress` ends in there |
+
+`nor_rom.c` compares the code at those three places with what this was
+worked out from before it calls the first (`cp_block_address_call`). If it
+matches, every block of the ROM is mapped where it lies in flash, as on the
+fx-CG100, and the addresses are asked for again after anything is written
+to storage. No RAM is used for the ROM and nothing is paged.
+
+On any other OS the RAM pool below is used instead.
+
 The part of the block below the arena is the ROM pool. Its size depends on
 how much heap the OS already uses, up to about 5.7 MiB when the heap is
 nearly empty:
@@ -589,6 +611,10 @@ simulated panel, and the fx-CG50/CG100 builds are unaffected. Still open:
   the column-offset rule, DMA from on-chip RAM through gint, and the timings
   above are confirmed there. The emulator build has not been run yet, and
   the older panel family has not been tried at all.
+- **Flash-mapped ROM.** The OS routine was found by comparing the OS image
+  with the fx-CG100's; it has not been called on a calculator. Unknown: what
+  it returns for the fd `File_Open` gives (the read call takes the same
+  one), and whether the addresses are in P1/P2 as on the fx-CG.
 - **Which transfer is faster in real games**, DMA or CPU.
 - **Clock speed page.** No setting other than stock has been run on this
   model, including the CPU x2 preset. Which bus speeds and memory timings
