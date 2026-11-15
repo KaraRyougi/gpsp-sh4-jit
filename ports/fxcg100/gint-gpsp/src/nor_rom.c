@@ -16,13 +16,27 @@
 #define CGBA_SH4_P2_END  ((uintptr_t)0xc0000000u)
 
 #if defined(CGBA_CLASSPAD)
-/* fx-CP400: there is no memory-mapped view of a stored file, so no block has
- * a direct address. The leading part of the ROM is instead copied into the
- * RAM pool left over below the emulator arena (classpad_loader.c) and those
- * copies are published as the "direct" blocks; whatever does not fit is
+/* fx-CP400: \fls0 is the same Fugue file system as on the fx-CG (4 KiB
+ * clusters laid out on 4 KiB flash units), and the OS has the same
+ * "address of the block at this file offset" call; it is just not part of
+ * any published API. In OS 02.01.7003 (fx-CP400 and fx-CG500 alike):
+ *
+ *   0x80058c88  int f(int fd, int offset, void **address)
+ *               masks interrupts and calls
+ *   0x8005876a  the same with the fd checked and split, which calls
+ *   0x80047c18  the Fugue core routine. Its code is the fx-CG100's
+ *               0x80167358 instruction for instruction: the routine under
+ *               Bfile_GetBlockAddress there.
+ *
+ * The address is only used after the code there has been compared with what
+ * this was worked out from (cp_block_address_call). On any other OS the old
+ * scheme applies: the leading part of the ROM is copied into the RAM pool
+ * left over below the emulator arena (classpad_loader.c), those copies are
+ * published as the "direct" blocks, and whatever does not fit is
  * demand-paged through file reads like a rejected block on the fx-CG. */
 #include "classpad_bfile.h"
 #include "classpad_loader.h"
+#define CGBA_CP_GET_BLOCK_ADDRESS ((uintptr_t)0x80058c88u)
 #define CGBA_BFILE_OPEN              cp_bfile_open
 #define CGBA_BFILE_SIZE              cp_bfile_size
 #define CGBA_BFILE_READ              cp_bfile_read
@@ -190,13 +204,79 @@ typedef struct cgba_block_query {
  * 128 Hz RTC tick per transition produces the reported 64/128-second drift.
  */
 #ifdef CGBA_CLASSPAD
-/* Copy as many whole 4 KiB blocks as fit into the RAM pool and publish their
- * RAM addresses. Runs in the OS world; one sequential pass over the file. */
+/* Nonzero while the published blocks are flash addresses from the OS rather
+ * than copies in the RAM pool. Flash blocks can move when a file is written,
+ * so they are queried again afterwards (cgba_nor_rom_refresh). */
+static int cp_direct_nor;
+
+/* The OS block-address call, or NULL if this OS is not the one it was found
+ * in. Compared: the whole entry routine, the two routines it leads to, and
+ * the literals that link the three. */
+typedef int (*cp_block_address_fn)(int, int, void **);
+
+static cp_block_address_fn cp_block_address_call(void)
+{
+#ifdef CGBA_HOST_TEST
+	return NULL;
+#else
+	static const uint8_t entry[46] = {
+		0x4f,0x22, 0x7f,0xec, 0x1f,0x62, 0x1f,0x51, 0x2f,0x42, 0x04,0x02,
+		0xd1,0x12, 0x1f,0x43, 0x24,0x1b, 0x44,0x0e, 0xd7,0x24, 0x64,0xf2,
+		0x55,0xf1, 0x47,0x0b, 0x56,0xf2, 0x54,0xf3, 0x1f,0x04, 0x44,0x0e,
+		0x50,0xf4, 0x7f,0x14, 0x4f,0x26, 0x00,0x0b, 0x00,0x09
+	};
+	static const uint8_t checked[16] = {
+		0x4f,0x22, 0x7f,0xf0, 0x26,0x68, 0x1f,0x62, 0x1f,0x51, 0xe0,0xfe,
+		0x8d,0x12, 0x2f,0x42
+	};
+	/* cluster -> sector arithmetic in the core routine */
+	static const uint8_t core[24] = {
+		0x75,0xfe, 0x56,0xf4, 0x52,0x42, 0x57,0x47, 0x05,0x27, 0x05,0x1a,
+		0x51,0x4d, 0x35,0x6c, 0x56,0xf1, 0x35,0x7c, 0x57,0xf8, 0x35,0x1c
+	};
+
+	if(memcmp((const void *)CGBA_CP_GET_BLOCK_ADDRESS, entry,
+			sizeof(entry)) != 0 ||
+			*(const uint32_t *)0x80058ce0u != 0x100000f0u ||
+			*(const uint32_t *)0x80058d30u != 0x8005876au ||
+			memcmp((const void *)0x8005876au, checked,
+				sizeof(checked)) != 0 ||
+			*(const uint32_t *)0x800587ecu != 0x80047c18u ||
+			memcmp((const void *)0x80047cacu, core, sizeof(core)) != 0)
+		return NULL;
+	return (cp_block_address_fn)CGBA_CP_GET_BLOCK_ADDRESS;
+#endif
+}
+
+/* Runs in the OS world. With the OS call: ask for the flash address of every
+ * 4 KiB block, as on the fx-CG. Without it: copy as many whole blocks as fit
+ * into the RAM pool, in one sequential pass over the file, and publish their
+ * RAM addresses. */
 static int os_bfile_query_blocks(void *opaque)
 {
 	cgba_block_query *query = opaque;
+	cp_block_address_fn get_block_address = cp_block_address_call();
 	uint8_t *pool;
 	uint32_t pool_size, pool_blocks, block = 0;
+
+	cp_direct_nor = get_block_address != NULL;
+	if(get_block_address) {
+		for(block = 0; block < query->block_count; block++) {
+			void *raw = NULL;
+			int result = get_block_address(query->fd,
+				(int)(block * CGBA_FLASH_BLOCK_SIZE), &raw);
+
+			cgba_block_addr[block] = raw;
+			if(block == 0)
+				query->first_result = result;
+			if(query->first_failed_block == UINT32_MAX &&
+					(result < 0 || raw == NULL)) {
+				query->first_failed_block = block;
+				query->first_failed_result = result;
+			}
+		}
+		return 0;
+	}
 
 	cgba_classpad_rom_pool(&pool, &pool_size);
 	pool_blocks = pool_size / CGBA_FLASH_BLOCK_SIZE;
@@ -648,9 +728,27 @@ int cgba_nor_rom_read(cgba_nor_rom *rom, void *dst, uint32_t offset, uint32_t le
 			memcpy(out, src + intra, chunk);
 		} else if(block < cgba_block_total && rom && rom->fd >= 0) {
 			/* Block exists but has no durable direct pointer (rejected
-			 * non-P1/P2 address): a world-switched BFile read is always
-			 * safe, if slow — this only runs for the rare bad blocks. */
-			int got = os_bfile_read(rom->fd, out, (int)chunk, (int)offset);
+			 * non-P1/P2 address, or on the fx-CP400 without the OS call,
+			 * everything past the RAM pool): a world-switched BFile read
+			 * is always safe, if slow. Take the blocks that follow in the
+			 * same state along, so a 32 KiB page costs one OS visit rather
+			 * than eight. */
+			int got;
+
+			while(chunk < len && rom->size &&
+					offset + chunk < rom->size) {
+				uint32_t next = (offset + chunk) / CGBA_FLASH_BLOCK_SIZE;
+				uint32_t more = CGBA_FLASH_BLOCK_SIZE;
+
+				if(next >= cgba_block_total || cgba_block_addr[next])
+					break;
+				if(more > len - chunk)
+					more = len - chunk;
+				if(more > rom->size - (offset + chunk))
+					more = rom->size - (offset + chunk);
+				chunk += more;
+			}
+			got = os_bfile_read(rom->fd, out, (int)chunk, (int)offset);
 			if(!bfile_read_exact_ok(got, (int)chunk))
 				memset(out, 0xff, chunk);
 		} else {
@@ -802,9 +900,10 @@ int cgba_nor_rom_refresh(cgba_nor_rom *rom)
 	if(os_bfile_size(rom->fd) != (int)rom->size)
 		return -2;
 #ifdef CGBA_CLASSPAD
-	/* The published blocks are private RAM copies; writing other files
-	 * cannot move or invalidate them, so there is nothing to re-query. */
-	return 0;
+	/* RAM-pool copies are private: writing other files cannot move or
+	 * invalidate them. Flash addresses are queried again like on the fx-CG. */
+	if(!cp_direct_nor)
+		return 0;
 #endif
 	total = rom->page_count * CGBA_FLASH_BLOCKS_PER_PAGE;
 	if(total > CGBA_NOR_ROM_MAX_BLOCKS)
