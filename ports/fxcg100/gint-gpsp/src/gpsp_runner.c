@@ -828,6 +828,41 @@ unsigned cgba_gpsp_state_lines(unsigned frame, const char *phase,
 			(unsigned long)dma[3].source_address,
 			(unsigned long)dma[3].dest_address,
 			(unsigned long)dma[3].length);
+	if(n < max_lines) {
+		/* IWRAM hash with the m4a/MP2K PCM mix buffer masked out, for A/B
+		 * runs of options that deliberately stop producing discarded PCM
+		 * (CGBA_SH4_M4A_MIX_SKIP). The driver publishes its SoundInfo
+		 * pointer at 0x03007FF0; SoundInfo starts with the "Smsh" ident
+		 * (+1 while SoundMain holds it) and keeps the stereo mix buffer
+		 * at +0x350, 2 * 0x630 bytes. Without a driver the whole of IWRAM
+		 * is hashed and si=0. */
+		const uint8_t *iw = iwram + 0x8000;
+		uint32_t si = (uint32_t)iw[0x7FF0] | ((uint32_t)iw[0x7FF1] << 8) |
+			((uint32_t)iw[0x7FF2] << 16) | ((uint32_t)iw[0x7FF3] << 24);
+		uint32_t lo = 0x8000, hi = 0x8000, h = 2166136261u;
+
+		if((si >> 24) == 0x03u && (si & 0x00FFFFFFu) <= 0x8000u - 0xFB0u) {
+			const uint8_t *q = iw + (si & 0x7FFFu);
+			uint32_t ident = (uint32_t)q[0] | ((uint32_t)q[1] << 8) |
+				((uint32_t)q[2] << 16) | ((uint32_t)q[3] << 24);
+			if(ident == 0x68736D53u || ident == 0x68736D54u) {
+				lo = (si & 0x7FFFu) + 0x350u;
+				hi = lo + 2u * 0x630u;
+			}
+		}
+		if(lo == 0x8000u)
+			si = 0;
+		for(uint32_t i = 0; i < 0x8000u; i++) {
+			if(i >= lo && i < hi)
+				continue;
+			h ^= iw[i];
+			h *= 16777619u;
+		}
+		snprintf(out[n++], CGBA_STATE_LINE_MAX,
+			"@@CGBA_M4A frame=%u phase=%s si=%08lX iwx=%08lX pcm=%08lX",
+			frame, phase, (unsigned long)si, (unsigned long)h,
+			(unsigned long)(lo < hi ? cgba_fnv1a32(iw + lo, hi - lo) : 0));
+	}
 	return n;
 }
 #endif

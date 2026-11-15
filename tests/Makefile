@@ -19,11 +19,11 @@ DEAD_STRIP := $(if $(filter Darwin,$(shell uname -s)),\
 
 .PHONY: all smoke audit core litpool thumb cond native-ldst input config-version storage lcd-cleanup scale classpad rtc backup-dirty nor-world-switch cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc \
 	swi-overlap swi-oam udiv udiv-emitter idle-signature video-opaque \
-	video-blend-cache video-backdrop-shadow video-sprite-decode video-tile-row-cache arm-mixer clean
+	video-blend-cache video-backdrop-shadow video-sprite-decode video-tile-row-cache video-text-fastpaths arm-mixer m4a-skip clean
 
 all: smoke core litpool thumb cond native-ldst rtc backup-dirty nor-world-switch input config-version storage lcd-cleanup scale classpad cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc swi-overlap swi-oam udiv \
 	udiv-emitter idle-signature video-opaque video-blend-cache \
-	video-backdrop-shadow video-sprite-decode video-tile-row-cache arm-mixer audit
+	video-backdrop-shadow video-sprite-decode video-tile-row-cache video-text-fastpaths arm-mixer m4a-skip audit
 
 # Execution oracle: run emitted native code in a mini SH4 interpreter against
 # the C-helper semantics (closes the pixel-soak blind spot on the audio path).
@@ -309,6 +309,20 @@ video-tile-row-cache: $(ROOT)/tests/video_tile_row_cache_test.cc $(ROOT)/vendor/
 	  $(DEAD_STRIP) $(ROOT)/tests/video_tile_row_cache_test.cc \
 	  -o $(BIN)-video-tile-row-cache
 	$(BIN)-video-tile-row-cache
+
+video-text-fastpaths: $(ROOT)/tests/video_text_fastpaths_test.cc $(ROOT)/vendor/gpsp/video.cc
+	$(CXX) $(CXXFLAGS) -ffunction-sections -fdata-sections \
+	  -I$(ROOT)/vendor/gpsp -I$(ROOT)/vendor/gpsp/libretro \
+	  -I$(ROOT)/vendor/gpsp/libretro/libretro-common/include \
+	  $(DEAD_STRIP) $(ROOT)/tests/video_text_fastpaths_test.cc \
+	  -o $(BIN)-video-text-fastpaths
+	$(BIN)-video-text-fastpaths
+
+m4a-skip: $(ROOT)/tests/sh4_m4a_skip_test.c \
+	$(ROOT)/ports/fxcg100/sh4/sh4_m4a_skip.h
+	$(CC) $(CFLAGS) -I$(ROOT) $(ROOT)/tests/sh4_m4a_skip_test.c \
+	  -o $(BIN)-m4a-skip
+	$(BIN)-m4a-skip
 
 # Requires sh-elf-as + sh-elf-objcopy on PATH.
 audit: $(ROOT)/tests/sh4_codegen_audit.c $(ROOT)/ports/fxcg100/sh4/sh4_codegen.h
