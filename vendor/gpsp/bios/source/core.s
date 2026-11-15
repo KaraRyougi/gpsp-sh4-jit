@@ -124,8 +124,8 @@ swi_branch_table:
 	.word swi_Stop						@ 0x03_Stop
 	.word swi_IntrWait					@ 0x04_IntrWait
 	.word swi_VBlankIntrWait				@ 0x05_VBlankIntrWait
-	.word swi_Div						@ 0x06_Div
-	.word swi_DivARM					@ 0x07_DivARM
+	.word swi_Div_r3					@ 0x06_Div
+	.word swi_DivARM_r3					@ 0x07_DivARM
 	.word swi_Sqrt						@ 0x08_Sqrt
 	.word swi_ArcTan						@ 0x09_ArcTan
 	.word swi_ArcTan2					@ 0x0A_ArcTan2
@@ -163,6 +163,23 @@ swi_branch_table:
 	.word swi_Invalid						@ 0x29_SoundDriverVSyncOn
 	.word swi_SoundGetJumpList			@ 0x2A_SoundGetJumpList
 	
+@---------------------------------------------------------------------------------
+@ Div and DivArm return ABS(quotient) in r3, like the official BIOS. Games rely
+@ on it (Minish Cap's movement-direction helper reads r3 after SWI 6). The
+@ dispatcher above pops the caller's r2/r3/lr from the system-mode stack, so
+@ write the result over the saved r3 slot. In the shipped open_gba_bios.bin
+@ these wrappers are patched in at 0x3E00 and 0x3E0C.
+@---------------------------------------------------------------------------------
+swi_Div_r3:
+	bl swi_Div
+	str r3, [sp, #4]
+	b swi_complete
+
+swi_DivARM_r3:
+	bl swi_DivARM
+	str r3, [sp, #4]
+	b swi_complete
+
 @---------------------------------------------------------------------------------
 .global swi_Invalid
 .type swi_Invalid STT_FUNC
