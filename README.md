@@ -76,6 +76,64 @@ Want a different layout? You can remap every GBA button under **CONFIGURE GAMEPA
 
 You can also assign hotkeys for **Fast Forward**, **Load State**, **Save State**, and **Display FPS**. **Save+Exit** appears in the menu, but it is not implemented yet.
 
+## fx-CP400 / ClassPad II (experimental)
+
+There is also a build for the **fx-CP400 (ClassPad II)** running
+[HollyHock-3](https://github.com/ClasspadDev/hollyhock-3). It has been built
+and host-tested but **not yet run on a calculator**; treat it as a first
+hardware test, and see [docs/classpad-port.md](docs/classpad-port.md) for what
+is unverified.
+
+Copy `gpSP.hh3` (keep that name) and your `.gba` files to the root of the
+calculator's storage and start gpSP from the HollyHock launcher.
+
+gpSP opens on the list of games; tap one to play. Everything can be done by
+touch, and the keypad works as well (cursor keys, `EXE`, backspace for back).
+
+| Layout (Settings → Orientation and Picture size) | Picture | Touch keys |
+| ------------------------------------------------ | ------: | ---------- |
+| Portrait, 1:1                                    | 240×160 | Full pad below the picture |
+| Portrait, fit width (default)                    | 320×212 | Full pad below the picture |
+| Landscape, 1.5x                                  | 360×240 | L/R and D-pad on the left; Select/Start and B/A below the picture |
+| Landscape, 2x                                    | 480×320 | L, R, Select, Start strip; D-pad and A/B on the keypad |
+
+The printed icons under the screen are shortcuts:
+
+| Icon | During play | In the menus |
+| ---- | ----------- | ------------ |
+| Menu | Pause menu | Games list |
+| Settings | Settings | Settings |
+| Esc | | Back |
+| Rotate | Portrait ↔ landscape | same |
+| Resize | The other picture size | same |
+| Swap | Keypad side in landscape | same |
+| Main | Fast forward while held | |
+
+The Clear key also opens the pause menu, where you can save or load a state,
+restart, pick another game or exit.
+
+- **Keypad side** chooses which way you turn the calculator in landscape. The
+  interface and the cursor keys turn with the picture.
+- **Touch keys** shows or hides the on-screen keys. A key lights up while it
+  is held.
+- **Screen transfer** chooses how the picture is sent to the panel: DMA runs
+  in the background, CPU is faster pixel for pixel but blocks. Which gives
+  more frames depends on the game; compare with **Show frame rate**.
+- Landscape 2x is pixel-exact but is the slowest layout to draw; use automatic
+  frame skipping with it.
+
+Default keys: A=`EXE`, B=`+`, Select=`=`, Start=`x`, L=`Shift`, R=backspace,
+D-pad=cursor keys. All of them can be changed under Settings → Change key
+mapping, and every GBA button is also a touch key.
+
+**Clock speed** (under Settings) is a built-in Ptune-style page: PLL, FLL,
+dividers and memory wait settings, a memory test, and a "keep this?" prompt
+that goes back by itself after ten seconds. Changes apply only while gpSP is
+running, so the calculator's own software is never left overclocked. No
+setting other than stock has been tried on hardware; a setting that is too
+fast freezes the calculator until it is reset. If a saved start-up setting
+stops gpSP from starting, hold Clear while launching it.
+
 ## Display modes
 
 The **GRAPHICS OPTIONS** menu offers three ways to fit the GBA picture onto the calculator's 396×224 display:
@@ -152,12 +210,15 @@ run `colima start`. No host fxSDK installation is needed:
 ```sh
 ports/fxcg100/build-docker.sh cg100
 ports/fxcg100/build-docker.sh cg50
+ports/fxcg100/build-docker.sh classpad
 ```
 
 The first run builds the toolchain image; later runs reuse its cached layers.
 Model-specific outputs are in
-`ports/fxcg100/gint-gpsp/build-docker-cg100/gpSP-cg100.g3a` and
-`ports/fxcg100/gint-gpsp/build-docker-cg50/gpSP-cg50.g3a`.
+`ports/fxcg100/gint-gpsp/build-docker-cg100/gpSP-cg100.g3a`,
+`ports/fxcg100/gint-gpsp/build-docker-cg50/gpSP-cg50.g3a` and
+`ports/fxcg100/gint-gpsp/build-docker-classpad/gpSP-classpad.hh3` (rename the
+last one to `gpSP.hh3` on the calculator).
 The base image digest and gint commit are pinned in
 `ports/fxcg100/toolchain/Dockerfile`. The container mounts only this repository
 and leaves the host compiler and shell configuration unchanged.
@@ -179,6 +240,17 @@ fxsdk build-cg
 ```
 
 The resulting add-in is `ports/fxcg100/gint-gpsp/gpSP.g3a`.
+
+For an fx-CP400 / ClassPad II build (gint must be installed for the `cp`
+target):
+
+```sh
+cd ports/fxcg100/gint-gpsp
+fxsdk build-cp -c -DCGBA_CLASSPAD=ON -DCGBA_DYNAREC=ON
+fxsdk build-cp
+```
+
+The resulting add-in is `ports/fxcg100/gint-gpsp/gpSP.hh3`.
 
 Developers can find the SH-4 JIT design, BIOS/SWI implementation, performance history, and test procedures in the [technical documentation](docs/README.md).
 

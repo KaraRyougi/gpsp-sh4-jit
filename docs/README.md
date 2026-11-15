@@ -15,6 +15,10 @@ As-built (current):
   methodology and its traps, the commit-anchored optimization chronology,
   state at HEAD, future directions.
 
+- [classpad-port.md](classpad-port.md) — the fx-CP400 (ClassPad II) port:
+  screen-scale choices, landscape, touch keys, the heap-backed memory layout,
+  and what is still unverified on hardware.
+
 Historical (bring-up era):
 
 - [sh4-jit-optimization-plan.md](sh4-jit-optimization-plan.md) — the

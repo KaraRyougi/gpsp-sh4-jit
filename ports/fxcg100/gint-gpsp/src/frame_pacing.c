@@ -3,6 +3,15 @@
 #include <gint/rtc.h>
 #include <gint/timer.h>
 
+/* The 128 Hz count the pacing is measured against. On the fx-CP400 it comes
+ * from the platform, which does not depend on the RTC running. */
+#ifdef CGBA_CLASSPAD
+uint32_t fxcg100_ticks(void);
+#define pace_ticks() fxcg100_ticks()
+#else
+#define pace_ticks() rtc_ticks()
+#endif
+
 #define RTC_HZ          128u
 #define DEFAULT_TARGET   60
 #define DEFAULT_MAX_SKIP  9
@@ -70,7 +79,7 @@ void cgba_pacer_reset(cgba_pacer *p)
 	p->skip = 0;
 	p->since_render = 0;
 	p->in_window = 0;
-	p->start_ticks = rtc_ticks();
+	p->start_ticks = pace_ticks();
 }
 
 /* RTC ticks since midnight wrap once per day; use modular subtraction and
@@ -86,7 +95,7 @@ static uint32_t ticks_elapsed(uint32_t start, uint32_t now)
 
 static void update_window(cgba_pacer *p)
 {
-	uint32_t now = rtc_ticks();
+	uint32_t now = pace_ticks();
 	uint32_t elapsed = ticks_elapsed(p->start_ticks, now);
 
 	if(elapsed > 0) {
@@ -129,12 +138,12 @@ void cgba_fps_init(cgba_fps_meter *m)
 	m->draw_frames = 0;
 	m->emu_fps = 0;
 	m->draw_fps = 0;
-	m->start_ticks = rtc_ticks();
+	m->start_ticks = pace_ticks();
 }
 
 int cgba_fps_tick(cgba_fps_meter *m, int drawn)
 {
-	uint32_t now = rtc_ticks();
+	uint32_t now = pace_ticks();
 	uint32_t elapsed;
 
 	m->emu_frames++;
