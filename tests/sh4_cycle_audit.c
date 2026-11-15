@@ -92,7 +92,9 @@ static int swi_dispatch_cycles(int sp_region, int lr_region, int thumb)
 static int hle_div_cycles(const insn *in)
 {
   int align = in->width;
+  /* + the open BIOS r3 wrapper: BL, STR r3 to the saved stack slot, B. */
   return swi_dispatch_cycles((int)in->data, REGION(in->target), 1) +
+    3 * ws_seq[0][1] + 2 * ws_nseq[0][1] + ws_nseq[(int)in->data & 0xF][1] +
     (22 + 10 * align) * ws_seq[0][1] + (2 * align) * ws_nseq[0][1] - 1;
 }
 

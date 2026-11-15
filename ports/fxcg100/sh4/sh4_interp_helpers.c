@@ -1415,6 +1415,12 @@ static u32 cgba_sh4_hle_div_cycles(u32 divarm, u32 pc, s32 num, s32 den)
   if (divarm)
     cycles += 4u * s0 + n0;   /* 1798..17A4 operand swap + B Div */
 
+  /* r3 wrapper 3E00..3E08 / 3E0C..3E14: BL into the routine, STR r3 over
+   * the dispatcher's saved r3 slot (a nonsequential stack word), and
+   * B swi_complete. */
+  cycles += 3u * s0 + 2u * n0 +
+            (u32)ws_cyc_nseq[(reg[REG_SP] >> 24) & 0xFu][1];
+
   if (den == 0)
     return 64u;               /* legacy undefined-input charge */
 
@@ -1837,6 +1843,9 @@ void cgba_sh4_hle_div(u32 divarm, u32 pc)
     s32 q = num / den, r = num % den;
     reg[0] = (u32)q;
     reg[1] = (u32)r;
+    /* Like the official BIOS (and the patched open BIOS), r3 = ABS(quotient).
+     * Minish Cap's direction helper reads r3 after SWI 6. */
+    reg[3] = cgba_sh4_abs_s32_bits(num) / cgba_sh4_abs_s32_bits(den);
   }
 }
 
