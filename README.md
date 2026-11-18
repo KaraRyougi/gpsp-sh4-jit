@@ -106,14 +106,15 @@ The printed icons under the screen are shortcuts:
 | Esc | | Back |
 | Rotate | Portrait ↔ landscape | same |
 | Resize | The other picture size | same |
-| Swap | Keypad side in landscape | same |
+| Swap | Keypad side in landscape; upside down in portrait | same |
 | Main | Fast forward while held | |
 
 The Clear key also opens the pause menu, where you can save or load a state,
 restart, pick another game or exit.
 
-- **Keypad side** chooses which way you turn the calculator in landscape. The
-  interface and the cursor keys turn with the picture.
+- **Device rotation** chooses how you hold the calculator: Portrait, turned
+  CW or CCW (landscape), or 180 (portrait with the keypad above the screen).
+  The interface and the cursor keys turn with the picture.
 - **Touch keys** shows or hides the on-screen keys. A key lights up while it
   is held.
 - **Screen transfer** chooses how the picture is sent to the panel: DMA runs
