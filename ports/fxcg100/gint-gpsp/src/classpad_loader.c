@@ -27,6 +27,7 @@
 #include "classpad_loader.h"
 #include "classpad_elf.h"
 #include "classpad_heap.h"
+#include "classpad_hhk.h"
 #include "ports/fxcg100/sh4/sh4_cache.h"
 
 #include <gint/gint.h>
@@ -69,13 +70,20 @@ static uint8_t *reserved_block LOW_DATA = NULL;
 static uint32_t reserved_size LOW_DATA = 0;
 static uint32_t heap_mark LOW_DATA = 0;
 static char self_path[SELF_PATH_MAX] LOW_DATA = "\\fls0\\gpSP.hh3";
+static uint32_t file_getaddr LOW_DATA = 0;
 
-/* ELF entry point: remember which file the launcher started, then continue
- * into gint's normal HollyHock entry. */
+/* OS guard string; HollyHock-3's symbol table starts with the same one. */
+#define OS_GUARD ((const char *)0x814fffe0u)
+
+/* ELF entry point: remember which file the launcher started and where the
+ * launcher's symbol table puts File_GetAddr (gint binds only the calls it
+ * wraps, and the table may be overwritten once the arena is in use), then
+ * continue into gint's normal HollyHock entry. */
 extern int hhk3_entry(int argc, char **argv, char **envp);
 
 int cgba_hhk3_entry(int argc, char **argv, char **envp)
 {
+	file_getaddr = cp_hhk_env_symbol(envp, OS_GUARD, "File_GetAddr");
 	if(argc > 0 && argv && argv[0] && argv[0][0] == '\\') {
 		unsigned i = 0;
 
@@ -266,6 +274,11 @@ void cgba_classpad_rom_pool(uint8_t **base, uint32_t *size)
 	}
 	*base = (uint8_t *)first;
 	*size = (uint32_t)(end - first);
+}
+
+uint32_t cgba_classpad_file_getaddr(void)
+{
+	return file_getaddr;
 }
 
 /* ---- loading the core ----------------------------------------------------- */

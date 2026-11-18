@@ -18,25 +18,28 @@
 #if defined(CGBA_CLASSPAD)
 /* fx-CP400: \fls0 is the same Fugue file system as on the fx-CG (4 KiB
  * clusters laid out on 4 KiB flash units), and the OS has the same
- * "address of the block at this file offset" call; it is just not part of
- * any published API. In OS 02.01.7003 (fx-CP400 and fx-CG500 alike):
+ * "address of the block at this file offset" call. HollyHock-3's symbol
+ * table names it File_GetAddr; gint does not bind it. In OS 02.01.7002 and
+ * 02.01.7003 (fx-CP400 and fx-CG500 alike):
  *
- *   0x80058c88  int f(int fd, int offset, void **address)
+ *   0x80058c88  File_GetAddr(fd, offset, &address)
  *               masks interrupts and calls
  *   0x8005876a  the same with the fd checked and split, which calls
  *   0x80047c18  the Fugue core routine. Its code is the fx-CG100's
  *               0x80167358 instruction for instruction: the routine under
  *               Bfile_GetBlockAddress there.
  *
- * The address is only used after the code there has been compared with what
- * this was worked out from (cp_block_address_call). On any other OS the old
- * scheme applies: the leading part of the ROM is copied into the RAM pool
- * left over below the emulator arena (classpad_loader.c), those copies are
- * published as the "direct" blocks, and whatever does not fit is
- * demand-paged through file reads like a rejected block on the fx-CG. */
+ * The address comes from the launcher's symbol table (classpad_loader.c),
+ * or is the one above if the table has no entry, and is used only after the
+ * code there has been compared with what this was worked out from
+ * (cp_hhk_file_getaddr_ok). Otherwise the old scheme applies: the leading
+ * part of the ROM is copied into the RAM pool left over below the emulator
+ * arena (classpad_loader.c), those copies are published as the "direct"
+ * blocks, and whatever does not fit is demand-paged through file reads like
+ * a rejected block on the fx-CG. */
 #include "classpad_bfile.h"
+#include "classpad_hhk.h"
 #include "classpad_loader.h"
-#define CGBA_CP_GET_BLOCK_ADDRESS ((uintptr_t)0x80058c88u)
 #define CGBA_BFILE_OPEN              cp_bfile_open
 #define CGBA_BFILE_SIZE              cp_bfile_size
 #define CGBA_BFILE_READ              cp_bfile_read
@@ -209,42 +212,33 @@ typedef struct cgba_block_query {
  * so they are queried again afterwards (cgba_nor_rom_refresh). */
 static int cp_direct_nor;
 
-/* The OS block-address call, or NULL if this OS is not the one it was found
- * in. Compared: the whole entry routine, the two routines it leads to, and
- * the literals that link the three. */
+/* File_GetAddr, or NULL if neither the address in the launcher's symbol
+ * table nor the known one holds the code this was written against. */
 typedef int (*cp_block_address_fn)(int, int, void **);
+
+#ifndef CGBA_HOST_TEST
+/* OS code is read in place, within the first 32 MiB of flash (P1). */
+static const uint8_t *cp_os_code(void *ctx, uint32_t address, uint32_t size)
+{
+	(void)ctx;
+	if(address < 0x80000000u || address >= 0x82000000u ||
+			size > 0x82000000u - address)
+		return NULL;
+	return (const uint8_t *)(uintptr_t)address;
+}
+#endif
 
 static cp_block_address_fn cp_block_address_call(void)
 {
 #ifdef CGBA_HOST_TEST
 	return NULL;
 #else
-	static const uint8_t entry[46] = {
-		0x4f,0x22, 0x7f,0xec, 0x1f,0x62, 0x1f,0x51, 0x2f,0x42, 0x04,0x02,
-		0xd1,0x12, 0x1f,0x43, 0x24,0x1b, 0x44,0x0e, 0xd7,0x24, 0x64,0xf2,
-		0x55,0xf1, 0x47,0x0b, 0x56,0xf2, 0x54,0xf3, 0x1f,0x04, 0x44,0x0e,
-		0x50,0xf4, 0x7f,0x14, 0x4f,0x26, 0x00,0x0b, 0x00,0x09
-	};
-	static const uint8_t checked[16] = {
-		0x4f,0x22, 0x7f,0xf0, 0x26,0x68, 0x1f,0x62, 0x1f,0x51, 0xe0,0xfe,
-		0x8d,0x12, 0x2f,0x42
-	};
-	/* cluster -> sector arithmetic in the core routine */
-	static const uint8_t core[24] = {
-		0x75,0xfe, 0x56,0xf4, 0x52,0x42, 0x57,0x47, 0x05,0x27, 0x05,0x1a,
-		0x51,0x4d, 0x35,0x6c, 0x56,0xf1, 0x35,0x7c, 0x57,0xf8, 0x35,0x1c
-	};
+	uint32_t named = cgba_classpad_file_getaddr();
+	uint32_t entry = named ? named : CP_FILE_GETADDR_KNOWN;
 
-	if(memcmp((const void *)CGBA_CP_GET_BLOCK_ADDRESS, entry,
-			sizeof(entry)) != 0 ||
-			*(const uint32_t *)0x80058ce0u != 0x100000f0u ||
-			*(const uint32_t *)0x80058d30u != 0x8005876au ||
-			memcmp((const void *)0x8005876au, checked,
-				sizeof(checked)) != 0 ||
-			*(const uint32_t *)0x800587ecu != 0x80047c18u ||
-			memcmp((const void *)0x80047cacu, core, sizeof(core)) != 0)
+	if(!cp_hhk_file_getaddr_ok(cp_os_code, NULL, entry))
 		return NULL;
-	return (cp_block_address_fn)CGBA_CP_GET_BLOCK_ADDRESS;
+	return (cp_block_address_fn)(uintptr_t)entry;
 #endif
 }
 

@@ -365,22 +365,35 @@ At start-up `gint-gpsp/src/classpad_loader.c`:
 `\fls0` is the same Fugue file system as on the fx-CG: FAT16 with 4 KiB
 clusters, placed so that a cluster is one 4 KiB flash unit. The OS also has
 the routine that returns the flash address of the block at a file offset,
-which is what `Bfile_GetBlockAddress` is on the fx-CG. It is not in any
-published API. In OS 02.01.7003 (fx-CP400 and fx-CG500):
+which is what `Bfile_GetBlockAddress` is on the fx-CG. HollyHock-3's symbol
+table calls it `File_GetAddr`. In OS 02.01.7002 and 02.01.7003 (fx-CP400
+and fx-CG500) it is at the same address with the same code:
 
 | Address | What |
 |---|---|
-| 0x80058c88 | `int f(int fd, int offset, void **address)`; masks interrupts, calls the next |
+| 0x80058c88 | `File_GetAddr(int fd, int offset, void **address)`; masks interrupts, calls the next |
 | 0x8005876a | checks and splits the fd (as the read call does), calls the next |
 | 0x80047c18 | Fugue core routine; the same instructions as 0x80167358 in the fx-CG100 OS, which is what `Bfile_GetBlockAddress` ends in there |
 
-`nor_rom.c` compares the code at those three places with what this was
-worked out from before it calls the first (`cp_block_address_call`). If it
+gint binds only the symbols it wraps (`Mem_Malloc`, `Mem_Free` and 14
+`File_*` calls), not `File_GetAddr`. So the ELF entry
+(`cgba_hhk3_entry`) looks the name up in the table the launcher passes in
+`envp` (`HHK_SYMBOL_TABLE`, `HHK_SYMBOL_TABLE_LEN`), before gint starts and
+before the arena can overwrite the launcher's memory. The table must start
+with the OS guard string at 0x814fffe0; a later entry with the same name
+(from the launcher's override file) wins, as in gint. If the table has no
+`File_GetAddr`, 0x80058c88 is tried.
+
+Before the address is called, `classpad_hhk.h` checks the code there: the
+whole entry routine, that it sets SR.BL and IMASK, the forwarding routine
+up to its jump into the core, and the core's cluster-to-sector arithmetic.
+It follows the PC-relative literals that link the three rather than using
+fixed addresses, so the same code at another address passes. If it
 matches, every block of the ROM is mapped where it lies in flash, as on the
 fx-CG100, and the addresses are asked for again after anything is written
 to storage. No RAM is used for the ROM and nothing is paged.
 
-On any other OS the RAM pool below is used instead.
+If it does not match, the RAM pool below is used instead.
 
 The part of the block below the arena is the ROM pool. Its size depends on
 how much heap the OS already uses, up to about 5.7 MiB when the heap is
@@ -684,10 +697,12 @@ simulated panel, and the fx-CG50/CG100 builds are unaffected. Still open:
   the column-offset rule, DMA from on-chip RAM through gint, and the timings
   above are confirmed there. The emulator build has not been run yet, and
   the older panel family has not been tried at all.
-- **Flash-mapped ROM.** The OS routine was found by comparing the OS image
-  with the fx-CG100's; it has not been called on a calculator. Unknown: what
-  it returns for the fd `File_Open` gives (the read call takes the same
-  one), and whether the addresses are in P1/P2 as on the fx-CG.
+- **Flash-mapped ROM.** `File_GetAddr` has not been called on a
+  calculator. Its name and the fact that it checks the fd as the read call
+  does suggest it takes the fd `File_Open` gives. Unknown: whether the
+  addresses are in P1/P2 as on the fx-CG, and whether the symbol table of
+  the HollyHock-3 build for OS 02.01.7003 has a `File_GetAddr` entry (the
+  one for 02.01.7002 does). Without the entry the known address is used.
 - **Which transfer is faster in real games**, DMA or CPU.
 - **Clock speed page.** No setting other than stock has been run on this
   model, including the CPU x2 preset. Which bus speeds and memory timings
@@ -703,3 +718,9 @@ simulated R61523 and checks every layout × rotation × filter, the touch keys
 scheme), the interface (found by what its controls say, including the
 transitions coming to rest and stopping all redraws) and the ELF lookup. `CLASSPAD_RENDER_DIR=/some/dir` also writes each layout
 as a PPM as the player would see it.
+
+The same target runs `classpad_hhk_test`: the symbol-table lookup
+(prefix names, wrong guard, override, truncated tables) and the
+`File_GetAddr` check on a synthetic OS image, as laid out in 02.01.7003 and
+moved to other addresses and alignments. `CLASSPAD_OS_DUMP=nor.bin` also
+checks a flash dump (OS image at offset 0) at 0x80058c88.

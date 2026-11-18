@@ -95,9 +95,12 @@ scale: $(ROOT)/tests/scale_test.c $(ROOT)/ports/fxcg100/fxcg100_scale.h
 # fx-CP400 / ClassPad II: the real presenter against a simulated R61523 and
 # stub gint (layouts, rotation, scaler taps, touch keys and their highlight,
 # and the touch interface: library, pause menu, settings, key mapping),
-# plus the lookup that finds the RAM-resident core inside the .hh3.
+# plus the lookup that finds the RAM-resident core inside the .hh3, and the
+# File_GetAddr symbol lookup and code check.
 #   make -C tests classpad CLASSPAD_RENDER_DIR=/some/dir   also writes PPMs
+#   make -C tests classpad CLASSPAD_OS_DUMP=nor.bin        also checks a dump
 classpad: $(ROOT)/tests/classpad_render_test.c $(ROOT)/tests/classpad_elf_test.c \
+	  $(ROOT)/tests/classpad_hhk_test.c $(ROOT)/ports/fxcg100/classpad_hhk.h \
 	  $(ROOT)/ports/fxcg100/gint-gpsp/src/classpad_platform.c \
 	  $(ROOT)/ports/fxcg100/classpad_layout.h \
 	  $(ROOT)/ports/fxcg100/classpad_gfx.h \
@@ -125,7 +128,9 @@ classpad: $(ROOT)/tests/classpad_render_test.c $(ROOT)/tests/classpad_elf_test.c
 	$(CC) $(CFLAGS) -O2 -I$(ROOT) $(ROOT)/tests/classpad_sync_test.c \
 	  -o $(BIN)-classpad-sync
 	$(BIN)-classpad-sync
-
+	$(CC) $(CFLAGS) -I$(ROOT) $(ROOT)/tests/classpad_hhk_test.c \
+	  -o $(BIN)-classpad-hhk
+	$(BIN)-classpad-hhk $(CLASSPAD_OS_DUMP)
 # The speed limiter and automatic frame skipping, on a virtual clock.
 pacing: $(ROOT)/tests/frame_pacing_test.c \
 	  $(ROOT)/ports/fxcg100/gint-gpsp/src/frame_pacing.c \
