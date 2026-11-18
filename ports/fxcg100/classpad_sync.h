@@ -64,6 +64,21 @@ static inline uint32_t cp_scan_probe_result(const cp_scan_probe *p,
 	return p->max + 1u;
 }
 
+/* ---- reading the counter -------------------------------------------------- */
+
+/* The counter is read as two bytes while it runs, and nothing says the
+ * controller holds it still between them: a read across a carry can come
+ * out a few hundred rows wrong, enough to start a frame at the wrong moment
+ * or to make one look torn. So a row is believed only when two reads in a
+ * row agree: the second at the first or a few rows after it. */
+#define CP_SCAN_STEP 12u
+
+static inline int cp_scan_agree(uint32_t first, uint32_t second,
+	uint32_t total)
+{
+	return (second % total + total - first % total) % total <= CP_SCAN_STEP;
+}
+
 /* ---- when to start a frame ------------------------------------------------ */
 
 /* The positions [*lo, *hi) of the row being shown from which a frame can be
@@ -77,9 +92,15 @@ static inline uint32_t cp_scan_probe_result(const cp_scan_probe *p,
  * An eighth of a refresh where there is room, a third of what room there is
  * otherwise. More than that only makes more frames wait, and longer: with
  * a quarter, nine interface frames in ten waited on an fx-CP400, and the
- * motion became uneven. */
-static inline int cp_sync_window(uint32_t total, uint32_t rows, uint32_t lines,
-	int descending, uint32_t *lo, uint32_t *hi)
+ * motion became uneven.
+ *
+ * `part` is that share of a refresh: 8 for an eighth. The game's picture is
+ * given a sixth (cp_sync_window_game): on an fx-CG500 with an eighth, a
+ * picture that changed colour every frame still tore for a few seconds
+ * every ten or so, always at the same rows, while the phase of the game's
+ * frames against the panel's drifted past an end of the window. */
+static inline int cp_sync_window_part(uint32_t total, uint32_t rows,
+	uint32_t lines, int descending, uint32_t part, uint32_t *lo, uint32_t *hi)
 {
 	uint32_t taken, clear;
 
@@ -92,8 +113,8 @@ static inline int cp_sync_window(uint32_t total, uint32_t rows, uint32_t lines,
 	if(taken + 3u * CP_SYNC_MARGIN > total)
 		return 0;
 	clear = (total - taken) / 3u;
-	if(clear > total / 8u)
-		clear = total / 8u;
+	if(clear > total / part)
+		clear = total / part;
 
 	if(descending) {
 		*lo = rows + clear;
@@ -107,12 +128,34 @@ static inline int cp_sync_window(uint32_t total, uint32_t rows, uint32_t lines,
 	return *lo < *hi;
 }
 
+/* The share kept clear: by the interface, by the game, and while the offset
+ * is being set by eye, when what is wanted is the opposite of safety: an
+ * offset one step out (a sixteenth of a refresh) should already tear. */
+#define CP_SYNC_PART 8u
+#define CP_SYNC_PART_GAME 6u
+#define CP_SYNC_PART_CALIBRATE 48u
+
+static inline int cp_sync_window(uint32_t total, uint32_t rows, uint32_t lines,
+	int descending, uint32_t *lo, uint32_t *hi)
+{
+	return cp_sync_window_part(total, rows, lines, descending, CP_SYNC_PART,
+		lo, hi);
+}
+
+static inline int cp_sync_window_game(uint32_t total, uint32_t rows,
+	uint32_t lines, int descending, uint32_t *lo, uint32_t *hi)
+{
+	return cp_sync_window_part(total, rows, lines, descending,
+		CP_SYNC_PART_GAME, lo, hi);
+}
+
 /* ---- watching one frame go out -------------------------------------------- */
 
 typedef struct cp_sync_track {
 	uint32_t total;
 	uint32_t strips, first, last, wraps;
 	uint32_t gap;        /* shown row minus written row, modulo total */
+	uint32_t near;       /* the least rows there were between the two */
 	int crossed;
 } cp_sync_track;
 
@@ -121,6 +164,7 @@ static inline void cp_sync_track_begin(cp_sync_track *t, uint32_t total)
 	t->total = total;
 	t->strips = 0;
 	t->wraps = 0;
+	t->near = total;
 	t->crossed = 0;
 }
 
@@ -143,6 +187,10 @@ static inline void cp_sync_track_strip(cp_sync_track *t, uint32_t shown,
 	} else {
 		t->first = shown;
 	}
+	if(gap < t->near)
+		t->near = gap;
+	if(t->total - gap < t->near)
+		t->near = t->total - gap;
 	t->last = shown;
 	t->gap = gap;
 	t->strips++;

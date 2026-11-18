@@ -471,6 +471,43 @@ static inline int cp_clock_cpu_x2(const cp_clock *stock, cp_clock *out)
 	return cp_clock_problem(out, cp_clock_limit) == NULL;
 }
 
+/* What gpSP runs on unless the player has chosen otherwise: the clocks of
+ * Ptune 4's F5 profile for the fx-CG50, which the emulator is tuned on:
+ *
+ *   PLL output 471.86 MHz
+ *   CPU /2          235.93 MHz
+ *   SuperHyway /4   117.96 MHz
+ *   bus /4          117.96 MHz
+ *   peripherals /16  29.49 MHz
+ *
+ * The PLL is set from the calculator's own FLL, so that register is left
+ * alone; the waits follow the bus clock as for any other setting, and the
+ * idle cycles are the fast ones. Returns zero if the stock setting does not
+ * allow it. */
+#define CP_CLK_F5_PLL_HZ 471859200u
+
+static inline int cp_clock_f5(const cp_clock *stock, cp_clock *out)
+{
+	cp_chain ch;
+	uint32_t hz[CP_CLK_COUNT];
+
+	cp_chain_decode(stock, &ch);
+	cp_chain_hz(&ch, hz);
+	if (!hz[CP_CLK_FLL] || CP_CLK_F5_PLL_HZ % hz[CP_CLK_FLL] != 0u)
+		return 0;
+	ch.pll = CP_CLK_F5_PLL_HZ / hz[CP_CLK_FLL];
+	if (ch.pll < 1u || ch.pll > CP_CLK_PLL_MAX)
+		return 0;
+	ch.div[0] = 2u;
+	ch.div[1] = 4u;
+	ch.div[2] = 4u;
+	ch.div[3] = 16u;
+	*out = cp_clock_for_chain(stock, &ch);
+	out->CS3BCR = cp_clock_fast_sdram_idle(stock);
+	out->CS0BCR = cp_clock_fast_flash_idle(stock);
+	return cp_clock_problem(out, cp_clock_limit) == NULL;
+}
+
 /* ---- saved setting -------------------------------------------------------- */
 
 #define CP_CLOCK_FILE_MAGIC 0x47504f45u   /* "GPOE" */

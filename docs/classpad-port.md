@@ -151,15 +151,25 @@ one frame goes out (measured on the frame before), the two do not meet.
 - The row count includes blanking rows (856 and 924 rows a refresh were
   seen on one unit, at 112 and 92 Hz), and where in the count the picture
   lies is not known. `Refresh position` (0..15, sixteenths of a refresh)
-  is set by eye.
+  is set by eye on a page of its own (Settings → Refresh position, shown
+  when the waiting is on): the whole screen changes colour with every
+  frame (strong colours, each unlike the one before), with only a round
+  back button at the top and a pill for the slider at the bottom,
+  both leaving the colour showing beside them, so a line can be seen on
+  any row of the panel. While the page is open frames wait with almost
+  no room to spare (a 48th of a refresh instead of an eighth), so only the
+  right position or the one beside it gives a screen without a line across
+  it. The page is behind a photosensitive-epilepsy warning.
+- The counter is read as two bytes while it runs, and the first read after
+  pixels were written is often wrong: a row is believed only when two reads
+  in a row agree (`cp_scan_agree`).
+- The game's picture keeps a sixth of a refresh clear at both ends of its
+  window, the interface an eighth.
 - The first gameplay frame spends a quarter of a second reading 0x45 to see
   whether it is a row counter at all, how many rows a refresh has and how
   often it comes round. If it is not, nothing else is done.
-- `Wait for screen refresh` (Settings, off by default) turns the waiting on.
+- `VSync` (Settings, off by default) turns the waiting on.
   It can cost up to one refresh per frame drawn.
-- Whether a frame tore is worked out for every frame, from the row shown
-  before each strip, with the option on or off. Settings shows the share:
-  `Screen refresh: 560 rows 60 Hz, torn 12%`.
 - A frame that takes much longer than one refresh to write (landscape 2x)
   cannot be placed and is sent as before.
 
@@ -540,14 +550,15 @@ everything that has to follow the resulting clocks is worked out from it.
   does not follow the clock settings), compared with the same count taken
   on the stock setting. The other figures are only what the registers say; if
   the two differ by more than a tenth the line is in the warning colour.
-- **Limits** (on by default) keeps the chain inside those limits, which
-  are Xtune's default settings: the same for every model except for the
-  peripheral clock, and meant as a cautious range rather than as what the
-  hardware can do. Switching them off, after a warning, leaves only Xtune's
-  outer limits: PLL output 1000 MHz, CPU 350, SuperHyway 200, bus 200,
-  peripherals 60. Between the two nothing has been measured; the wait
-  tables end at a 130 MHz bus, and the page shows "Bus above 130 MHz" in the
-  warning colour when the bus is set above that. The switch is saved with the clock setting.
+- The chain is always kept inside Xtune's default limits (PLL output
+  800 MHz, CPU 275, SuperHyway 180, bus 134, peripherals 50): the same for
+  every model except for the peripheral clock, and meant as a cautious range
+  rather than as what the hardware can do. There is no switch to go past
+  them; the wait tables end at a 130 MHz bus.
+- A setting made on the page always has the fx-CG F5 profile's idle cycles
+  on the SDRAM and flash buses (none between accesses of one kind, two
+  around a change of direction or device). Only **Restore stock** gives the
+  calculator's own.
 - **Restore stock** puts back the chain the calculator had when gpSP
   started.
 - The multipliers have "−" and "+" (the FLL moves by ten), and a tap on the
@@ -566,9 +577,15 @@ everything that has to follow the resulting clocks is worked out from it.
 - **Apply** switches and asks "Keep this speed?" with a ten-second
   countdown; doing nothing restores the previous setting. A kept setting is
   saved to `GPSPOC.CFG`.
-- **Apply when gpSP starts** re-applies the saved setting at launch, only if
-  the calculator is in the same stock state it was saved on. Holding Clear
-  while gpSP starts skips it.
+- **Apply when gpSP starts** (on by default) re-applies the saved setting
+  at launch, only if the calculator is in the same stock state it was saved
+  on. Holding Clear while gpSP starts skips it.
+- Until a setting has been kept, gpSP starts on the clocks of Ptune 4's F5
+  profile for the fx-CG50, which the emulator is tuned on: CPU 235.93 MHz,
+  SuperHyway and bus 117.96 MHz, peripherals 29.49 MHz, with the waits this
+  page works out for that bus and the fast idle cycles (`cp_clock_f5`).
+  Holding Clear at start skips this too; keeping the stock setting on the
+  page, or switching the start-up option off, turns it off for good.
 
 A change is made in three writes so the bus is never faster than its waits
 allow: the slowest waits at the old clock, the new clock, then the new
