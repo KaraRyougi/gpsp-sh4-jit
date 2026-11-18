@@ -43,6 +43,15 @@
 #include <stdio.h>
 #include <string.h>
 
+#if defined(CGBA_DYNAREC) && !defined(CGBA_HOST_TEST)
+#define CP_UI_JIT_RESETS 1
+extern void cgba_gpsp_jit_flushes(uint32_t *rom, uint32_t *ram);  /* gpsp_runner.c */
+extern uint32_t cgba_gpsp_jit_ram_full(void);
+extern uint32_t cgba_classpad_heap_mark(void);        /* classpad_loader.c */
+extern uint32_t cgba_classpad_reserved_start(void);
+extern uint32_t cgba_classpad_heap_differs(void);
+#endif
+
 #define MARGIN 12              /* screen edge to a card */
 #define PAD 16                 /* card edge to its content */
 #define CARD_RADIUS 20
@@ -169,8 +178,12 @@ typedef struct cp_ui {
 	uint32_t clock_deadline, clock_at_startup;
 	uint32_t clock_unlocked;   /* the limits are switched off */
 	int clock_unlock_ask;      /* asking whether to switch them off */
+	int clock_fast_idle;       /* SDRAM idle cycles as on the fx-CG */
+	int clock_fast_flash;      /* flash idle cycles as on the fx-CG */
 	int redraw;
 } cp_ui;
+
+static void row_info(cp_ui *ui, int *y, const char *label, const char *value);
 
 /* The host test finds controls by what they say rather than by where they
  * are. */
@@ -350,8 +363,10 @@ static void ui_refresh_orientation(cp_ui *ui)
 {
 	unsigned view = ui->state->screen_scale, rotation = ui->state->rotation;
 
-	if(ui_start_upright && cp_view_is_landscape(view))
+	if(ui_start_upright && cp_view_is_landscape(view)) {
 		view = cp_view_turned(view);
+		rotation = CP_ROTATION_KEYS_RIGHT;     /* upright, not upside down */
+	}
 
 	fxcg100_lcd_set_scale(view);
 	fxcg100_lcd_set_rotation(rotation);
@@ -1577,9 +1592,10 @@ static fxcg100_menu_result screen_settings(cp_ui *ui)
 			size = cp_view_size(cp_view_turned(st->screen_scale));
 			landscape = held != 0;
 		}
-		if(landscape)
-			st->rotation = held == 2 ? CP_ROTATION_KEYS_RIGHT
-				: CP_ROTATION_KEYS_LEFT;
+		/* Upright here means upright: turning the picture over in portrait
+		 * is what Swap is for. */
+		st->rotation = held == 1 ? CP_ROTATION_KEYS_LEFT
+			: CP_ROTATION_KEYS_RIGHT;
 		changed = 1;
 	}
 	if(ui_segments(ui, setting_row(ui, &y, "Picture size"),
@@ -1594,6 +1610,20 @@ static fxcg100_menu_result screen_settings(cp_ui *ui)
 		transfer, transfer, 2, &st->lcd_cpu);
 	changed |= row_switch(ui, &y, "Touch keys",
 		"Show the on-screen buttons", &st->touch_keys);
+	changed |= row_switch(ui, &y, "Wait for screen refresh",
+		"Less tearing; can cost speed", &st->lcd_sync);
+	if(st->lcd_sync)
+		changed |= ui_number(ui, setting_row(ui, &y, "Refresh position"),
+			&st->lcd_sync_offset, 15);
+	/* At once: the interface is sent the same way, so the setting can be
+	 * judged here, on a scrolling page. */
+	fxcg100_lcd_set_sync(st->lcd_sync, st->lcd_sync_offset);
+	/* 0 is the system's own setting; its brightest is about 6 of 16. */
+	changed |= ui_number(ui, setting_row(ui, &y, "Backlight (0 = system)"),
+		&st->backlight, 16);
+	changed |= ui_number(ui, setting_row(ui, &y, "Backlight PWM rate"),
+		&st->backlight_pwm, 9);
+	fxcg100_lcd_set_backlight(st->backlight, st->backlight_pwm);
 	card_end(ui, &y);
 
 	section_label(ui, &y, "Appearance");
@@ -1619,6 +1649,47 @@ static fxcg100_menu_result screen_settings(cp_ui *ui)
 	megahertz(text, sizeof(text), "CPU", cp_clock_hz(&clock, CP_CLK_CPU));
 	if(row_nav(ui, &y, "Clock speed", text))
 		ui_goto(ui, SCREEN_CLOCK);
+	/* How often the JIT has had to throw its translations away since the
+	 * game was started. Each time costs a pause while code is translated
+	 * again; a count that keeps rising means the cache is too small. */
+#ifdef CP_UI_JIT_RESETS
+	{
+		uint32_t rom_resets, ram_resets;
+
+		cgba_gpsp_jit_flushes(&rom_resets, &ram_resets);
+		snprintf(text, sizeof(text), "ROM %u, RAM %u (full %u)",
+			(unsigned)rom_resets, (unsigned)ram_resets,
+			(unsigned)cgba_gpsp_jit_ram_full());
+		row_info(ui, &y, "JIT cache resets", text);
+		{
+			uint32_t usable, rows, hz, frames, torn;
+
+			fxcg100_lcd_sync_info(&usable, &rows, &hz, &frames, &torn);
+			if(usable)
+				snprintf(text, sizeof(text), "%u rows %u Hz, torn %u%%",
+					(unsigned)rows, (unsigned)hz,
+					(unsigned)(frames ? torn * 100u / frames : 0));
+			else
+				snprintf(text, sizeof(text), "no counter (%u, %u)",
+					(unsigned)rows, (unsigned)hz);
+			row_info(ui, &y, "Screen refresh", text);
+			if(usable) {
+				uint32_t d[4];
+
+				fxcg100_lcd_sync_detail(d);
+				snprintf(text, sizeof(text), "%u, %u-%u, waits %u%%",
+					(unsigned)d[0], (unsigned)d[1], (unsigned)d[2],
+					(unsigned)(frames ? d[3] * 100u / frames : 0));
+				row_info(ui, &y, "Frame timing", text);
+			}
+		}
+		snprintf(text, sizeof(text), "%08X %08X %02X",
+			(unsigned)cgba_classpad_heap_mark(),
+			(unsigned)cgba_classpad_reserved_start(),
+			(unsigned)cgba_classpad_heap_differs());
+		row_info(ui, &y, "Heap", text);
+	}
+#endif
 	card_end(ui, &y);
 
 	section_label(ui, &y, "Keys");
@@ -1899,6 +1970,8 @@ static void clock_page_open(cp_ui *ui)
 	fxcg100_clock_read(&ui->clock_running);
 	clock_measure(&ui->clock_running);
 	ui->clock_edit = ui->clock_running;
+	ui->clock_fast_idle = ui->clock_running.CS3BCR != clock_stock.CS3BCR;
+	ui->clock_fast_flash = ui->clock_running.CS0BCR != clock_stock.CS0BCR;
 	cp_chain_decode(&ui->clock_edit, &ui->clock_chain);
 	ui->clock_at_startup = 0;
 	ui->clock_unlocked = 0;
@@ -2021,8 +2094,13 @@ static int clock_chain_move(cp_ui *ui, int row, int dir, int steps)
 			(unsigned)(clock_limits(ui)[result] / 1000000u));
 		ui_snack(ui, text);
 	}
-	if(moved)
+	if(moved) {
 		ui->clock_edit = cp_clock_for_chain(&clock_stock, &ui->clock_chain);
+		if(ui->clock_fast_idle)
+			ui->clock_edit.CS3BCR = cp_clock_fast_sdram_idle(&clock_stock);
+		if(ui->clock_fast_flash)
+			ui->clock_edit.CS0BCR = cp_clock_fast_flash_idle(&clock_stock);
+	}
 	return moved || result > 0;
 }
 
@@ -2202,6 +2280,28 @@ static fxcg100_menu_result screen_clock(cp_ui *ui)
 	row_info(ui, &y, "Touch bus", text);
 	card_end(ui, &y);
 
+	/* The stock setting leaves several idle cycles between SDRAM accesses;
+	 * the fx-CG profile this emulator is tuned on has almost none. */
+	section_label(ui, &y, "Memory bus");
+	card_begin(ui, y);
+	v = ui->clock_fast_idle;
+	if(row_switch(ui, &y, "Fast SDRAM bus", "Fewer idle cycles; Test first",
+			&v)) {
+		ui->clock_fast_idle = v;
+		e->CS3BCR = v ? cp_clock_fast_sdram_idle(&clock_stock)
+			: clock_stock.CS3BCR;
+		changed = 1;
+	}
+	v = ui->clock_fast_flash;
+	if(row_switch(ui, &y, "Fast flash bus", "Fewer idle cycles; Test first",
+			&v)) {
+		ui->clock_fast_flash = v;
+		e->CS0BCR = v ? cp_clock_fast_flash_idle(&clock_stock)
+			: clock_stock.CS0BCR;
+		changed = 1;
+	}
+	card_end(ui, &y);
+
 	section_label(ui, &y, "Use");
 	card_begin(ui, y);
 	v = ui->clock_at_startup;
@@ -2233,6 +2333,8 @@ static fxcg100_menu_result screen_clock(cp_ui *ui)
 
 		if(ui_button(ui, r, "Restore stock", BTN_OUTLINED)) {
 			*e = clock_stock;
+			ui->clock_fast_idle = 0;
+			ui->clock_fast_flash = 0;
 			cp_chain_decode(e, ch);
 			changed = 1;
 		}

@@ -379,6 +379,27 @@ static inline cp_clock cp_clock_for_chain(const cp_clock *stock,
 	return c;
 }
 
+/* CS3BCR with the idle-cycle fields (IWW, IWRWD, IWRWS, IWRRD, IWRRS, bits
+ * 30:16) of the fx-CG Ptune F5 profile, 0x04904400: none between accesses of
+ * one kind to the SDRAM, two around a change of direction or device. The
+ * fx-CP400 ships with 0x76db4400: four between two reads, twelve after a
+ * write. Everything else in the register stays as stock has it. */
+#define CP_CLK_IDLE_MASK 0x7fff0000u
+#define CP_CLK_IDLE_FAST 0x04900000u
+
+static inline uint32_t cp_clock_fast_sdram_idle(const cp_clock *stock)
+{
+	return (stock->CS3BCR & ~CP_CLK_IDLE_MASK) | CP_CLK_IDLE_FAST;
+}
+
+/* The same for the flash, CS0BCR: the F5 profile has 0x44900400. */
+#define CP_CLK_FLASH_IDLE_FAST 0x44900000u
+
+static inline uint32_t cp_clock_fast_flash_idle(const cp_clock *stock)
+{
+	return (stock->CS0BCR & ~CP_CLK_IDLE_MASK) | CP_CLK_FLASH_IDLE_FAST;
+}
+
 /* Dividers for the touch controller's I2C clock. SCL is the peripheral
  * clock / (low + high); the OS and gint use 0x29 and 0x22, about 393 kHz at
  * the stock 29.4912 MHz. For another peripheral clock, keep SCL at or below

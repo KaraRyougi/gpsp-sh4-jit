@@ -25,7 +25,8 @@
 enum {
 	CP_SURFACE_UPRIGHT = 0,    /* portrait */
 	CP_SURFACE_KEYS_RIGHT,     /* landscape, calculator turned anticlockwise */
-	CP_SURFACE_KEYS_LEFT       /* landscape, calculator turned clockwise */
+	CP_SURFACE_KEYS_LEFT,      /* landscape, calculator turned clockwise */
+	CP_SURFACE_FLIPPED         /* portrait, calculator upside down */
 };
 
 typedef struct cp_surface {
@@ -39,6 +40,8 @@ typedef struct cp_surface {
 
 static inline int cp_surface_mode(unsigned view, unsigned rotation)
 {
+	if (cp_view_is_flipped(view, rotation))
+		return CP_SURFACE_FLIPPED;
 	if (!cp_view_is_landscape(view))
 		return CP_SURFACE_UPRIGHT;
 	return rotation == CP_ROTATION_KEYS_LEFT ? CP_SURFACE_KEYS_LEFT
@@ -87,6 +90,8 @@ static inline uint16_t *cp_surface_pixel(const cp_surface *s, int x, int y)
 {
 	if (s->mode == CP_SURFACE_UPRIGHT)
 		return &s->pixels[y * s->w + x];
+	if (s->mode == CP_SURFACE_FLIPPED)
+		return &s->pixels[(s->h - 1 - y) * s->w + (s->w - 1 - x)];
 	if (s->mode == CP_SURFACE_KEYS_RIGHT)
 		return &s->pixels[x * s->h + (s->h - 1 - y)];
 	return &s->pixels[(s->w - 1 - x) * s->h + y];
@@ -134,6 +139,15 @@ static inline void cp__fill(const cp_surface *s, int x, int y, int w, int h,
 	if (s->mode == CP_SURFACE_UPRIGHT) {
 		for (; y0 < y1; y0++) {
 			uint16_t *p = &s->pixels[y0 * s->w + x0];
+
+			for (n = x1 - x0; n > 0; n--)
+				*p++ = color;
+		}
+		return;
+	}
+	if (s->mode == CP_SURFACE_FLIPPED) {
+		for (; y0 < y1; y0++) {
+			uint16_t *p = &s->pixels[(s->h - 1 - y0) * s->w + (s->w - x1)];
 
 			for (n = x1 - x0; n > 0; n--)
 				*p++ = color;

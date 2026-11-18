@@ -122,7 +122,12 @@ typedef struct fxcg100_config_file {
    * that zero keeps them on). */
   uint32_t theme;
   uint32_t animations_off;
-  uint32_t reserved[2];
+  /* fx-CP400: wait for the panel's refresh before each frame. */
+  uint32_t lcd_sync;
+  /* The last free word, shared: bits 0-3 the refresh position, bits 8-12
+   * the backlight level (0 leaves the system's), bits 16-19 the backlight
+   * PWM rate (0 leaves the system's). */
+  uint32_t lcd_extra;
 } fxcg100_config_file;
 
 static const uint16_t config_path[] = {
@@ -219,6 +224,10 @@ static int config_options_valid(const fxcg100_config_file *config)
     config->rotation < 2 &&
     config->touch_keys_hidden < 2 &&
     config->lcd_cpu < 2 &&
+    config->lcd_sync < 2 &&
+    (config->lcd_extra & ~0x000f1f0fu) == 0 &&
+    ((config->lcd_extra >> 8) & 31u) <= 16u &&
+    ((config->lcd_extra >> 16) & 15u) <= 9u &&
     config->theme < 16 &&
     config->animations_off < 2 &&
     (config->version == CGBA_CONFIG_VERSION_LEGACY ||
@@ -260,6 +269,9 @@ static void config_from_state(fxcg100_config_file *config,
   config->rotation = state->rotation;
   config->touch_keys_hidden = state->touch_keys ? 0 : 1;
   config->lcd_cpu = state->lcd_cpu;
+  config->lcd_sync = state->lcd_sync;
+  config->lcd_extra = (state->lcd_sync_offset & 15u) |
+    ((state->backlight & 31u) << 8) | ((state->backlight_pwm & 15u) << 16);
   config->theme = state->theme;
   config->animations_off = state->animations ? 0 : 1;
 }
@@ -281,6 +293,10 @@ static void state_from_config(fxcg100_menu_state *state,
   state->rotation = config->rotation;
   state->touch_keys = config->touch_keys_hidden ? 0 : 1;
   state->lcd_cpu = config->lcd_cpu;
+  state->lcd_sync = config->lcd_sync;
+  state->lcd_sync_offset = config->lcd_extra & 15u;
+  state->backlight = (config->lcd_extra >> 8) & 31u;
+  state->backlight_pwm = (config->lcd_extra >> 16) & 15u;
   state->theme = config->theme;
   state->animations = config->animations_off ? 0 : 1;
   /* Version 2 used this word as zeroed reserved space.  Preserve the new

@@ -134,6 +134,54 @@ What this says:
   above were taken with the DMA reading main RAM; the benchmark now also
   measures it for strips out of on-chip RAM, which has not been run yet.
 
+### Tearing
+
+The panel shows its memory row by row about sixty times a second whatever is
+being written, and a frame is written row by row too, so the two can meet
+part-way down a frame. `classpad_sync.h` avoids that where it can: the
+controller is asked which row it is showing (DCS get_scanline, 0x45), and a
+frame is started at a moment from which, given how many rows are shown while
+one frame goes out (measured on the frame before), the two do not meet.
+
+- This panel is refreshed from its last row to its first: the OS sets
+  address mode 0xc0 (rows and columns counted from the far end) on the
+  0x16/0x52 family, so the row the refresh starts with is our row 527.
+  Every view therefore sends its strips from the bottom of the panel
+  upwards, to go the same way.
+- The row count includes blanking rows (856 and 924 rows a refresh were
+  seen on one unit, at 112 and 92 Hz), and where in the count the picture
+  lies is not known. `Refresh position` (0..15, sixteenths of a refresh)
+  is set by eye.
+- The first gameplay frame spends a quarter of a second reading 0x45 to see
+  whether it is a row counter at all, how many rows a refresh has and how
+  often it comes round. If it is not, nothing else is done.
+- `Wait for screen refresh` (Settings, off by default) turns the waiting on.
+  It can cost up to one refresh per frame drawn.
+- Whether a frame tore is worked out for every frame, from the row shown
+  before each strip, with the option on or off. Settings shows the share:
+  `Screen refresh: 560 rows 60 Hz, torn 12%`.
+- A frame that takes much longer than one refresh to write (landscape 2x)
+  cannot be placed and is sent as before.
+
+On an fx-CP400 with panel ID 0x16 the counter is there. The first two
+versions assumed the refresh ran the same way as the strips, and tore as
+before while reporting no tears. Whether the present one works is not yet
+known, and the R61523 family has not been tried at all.
+
+### Backlight
+
+The backlight is driven by the display controller on both panel families,
+and the OS sets it there (0x80038550 brightness, 0x8003861e PWM rate):
+DCS 0x51 and the middle of 0xc9 on the 0x16/0x52 family, 0xb9 on the
+R61523. The system's 14 brightness steps write 11..103 of 255, and it never
+moves the PWM rate off the first of the ten settings in its own table.
+
+Settings has `Backlight` (1..16, 16 = 255; 0 leaves the system's) and
+`Backlight PWM rate` (1..9 from the table, 0 leaves the system's). Both are
+put back when gpSP exits. Which end of the table is the fast one is read
+from the numbers, not measured. The R61523 path follows the OS code and has
+not been run.
+
 ### Two panel families
 
 The fx-CP400 exists with two LCD families, told apart by ID register 0xda.
@@ -259,7 +307,7 @@ sit just above it in portrait:
 | Esc | — | back |
 | Rotate | portrait → CW → CCW → portrait | — |
 | Resize | the other scale of this orientation | — |
-| Swap | keypad side in landscape | — |
+| Swap | keypad side in landscape; in portrait, turns the picture, the touch keys and the keypad directions upside down | — |
 | Main | fast forward while held | — |
 
 There is no on-screen menu key any more. Clear also opens the menu, until
@@ -270,7 +318,7 @@ key now that the icons are there.
 
 HollyHock-3 loads every `PT_LOAD` of the ELF to its address with no checks.
 The one area an add-in may be loaded into is the OS "VRAM backup" buffer
-(0x8c052800, 330 KiB). gpSP needs about 4.7 MiB at fixed link addresses for
+(0x8c052800, 330 KiB). gpSP needs about 5.4 MiB at fixed link addresses for
 the JIT caches, GBA memory and the hot emulator code. No multi-megabyte
 region is documented as free; the rest of RAM is OS data or the OS heap
 (0x8c280000–0x8ce80000), and OS file calls allocate from that heap.
@@ -279,19 +327,27 @@ So the image is split (`gint-gpsp/classpad_gpsp.ld`):
 
 - **low** (0x8c052800): gint, menu, storage, start-up code, read-only data,
   `.data`, and the `.bss` of gint/libc. About 180 KiB. Loaded by the launcher.
-- **arena** (0x8c880000–0x8cd40000): hot emulator code, all other `.bss`, the
+- **arena** (0x8c880000–0x8ce00000): hot emulator code, all other `.bss`, the
   emulator state. In no program header, so the launcher never touches it.
 
 At start-up `gint-gpsp/src/classpad_loader.c`:
 
-1. asks the heap where it currently places a large block (1 MiB probe);
-2. requests one block reaching from there to the end of the arena, and
-   checks that the block it got contains the whole arena. If not, gpSP shows
-   a message and exits without having written anywhere;
-3. clears the arena and reads the `.cgba.core` section out of its own
+1. reserves one OS heap block that contains what is linked into the arena
+   (`classpad_heap.h`). The heap is read first and only requests known to
+   succeed are made, because the OS answers a request it cannot meet with
+   an "Insufficient System Memory to Run" dialog rather than NULL, and
+   because where a block lands depends on the heap's history: on a fresh
+   heap it comes from above the break, on every later start of gpSP it is
+   cut from the top of the area the previous run gave back. On a fresh heap
+   the break is first raised to 0x8ce40000; after that the block runs from
+   the arena's start to the end of the free area around it. If something
+   else is in the way, gpSP shows a message and exits without having asked
+   for anything. On an OS other than 02.01.7003 the heap's layout is not
+   known and the block is found by trying, as before;
+2. clears the arena and reads the `.cgba.core` section out of its own
    `gpSP.hh3` (found through the ELF section headers), then compares a build
    stamp linked into both halves;
-4. tells gint to save/restore ILRAM (the JIT dispatch stubs) around OS calls,
+3. tells gint to save/restore ILRAM (the JIT dispatch stubs) around OS calls,
    since gint cannot reload it from the image on this model.
 
 ### ROM
@@ -597,7 +653,7 @@ rotation, touch mapping and highlight logic pass host tests against a
 simulated panel, and the fx-CG50/CG100 builds are unaffected. Still open:
 
 - **Heap reservation.** Assumes the OS heap is below 0x8c880000 at launch
-  and can grow to 0x8cd40000 + 1 MiB. The check in step 2 fails safe, but
+  and can grow to 0x8ce40000. The check in step 2 fails safe, but
   whether it passes on a real unit is unknown.
 - **Stack.** The add-in runs on the launcher's stack; its size is not known.
 - **Reading its own file.** Depends on the path the launcher passes as

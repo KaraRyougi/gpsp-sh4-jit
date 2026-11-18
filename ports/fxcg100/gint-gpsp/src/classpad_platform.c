@@ -27,6 +27,7 @@
 #include "classpad_gfx.h"
 #include "classpad_scale.h"
 #include "classpad_theme.h"
+#include "classpad_sync.h"
 #ifndef CGBA_HOST_TEST
 #include "classpad_touch_guard.h"
 #include "classpad_touch_poll.h"
@@ -219,6 +220,15 @@ static inline uint16_t *strip_buffer(void)
 	return (uint16_t *)(strip_bank ? STRIP_BUF1 : STRIP_BUF0);
 }
 
+#ifndef CGBA_HOST_TEST
+/* Refresh sync, further down. A frame is either the game picture or the
+ * interface; how long each takes to send is kept apart. */
+enum { SYNC_GAME = 0, SYNC_CANVAS, SYNC_KINDS };
+static void sync_begin(int top, int rows, int kind);
+static void sync_strip(int r0, int rows);
+static void sync_end(void);
+#endif
+
 /* Send the strip just built to a panel window and return while it transfers.
  * Falls back to CPU writes if the DMA channel cannot be had. */
 static void strip_send(int c0, int r0, int width, int rows)
@@ -226,6 +236,9 @@ static void strip_send(int c0, int r0, int width, int rows)
 	uint16_t *strip = strip_buffer();
 	unsigned pixels = (unsigned)(width * rows);
 
+#ifndef CGBA_HOST_TEST
+	sync_strip(r0, rows);
+#endif
 	lcd_begin(c0, c0 + width - 1, r0, r0 + rows - 1);
 	if(!cp_cpu_transfer && (pixels & 15u) == 0 &&
 			dma_transfer_async(0, DMA_32B, pixels / 16u,
@@ -596,9 +609,119 @@ void fxcg100_lcd_init(void)
 #endif
 }
 
+/* ---- backlight ------------------------------------------------------------
+ * Both panel families drive the backlight from the display controller, and
+ * the OS sets it there (OS 02.01.7003, 0x80038550 and 0x8003861e):
+ *
+ *   0x16/0x52   brightness is DCS 0x51, one byte; the PWM rate is the second
+ *               and third parameter of 0xc9, with 0x04 before and 0x01 after
+ *   R61523      both are in 0xb9 (backlight control 2): the second parameter
+ *               is the brightness, the third the PWM divider
+ *
+ * The system's 14 brightness steps write 11..103 of 255, so its brightest
+ * is 40 % of what the backlight can do. It leaves the PWM rate on the first
+ * of ten settings it has a table of (0x8063c184); the table is copied here.
+ * In the newer panel's the two bytes fall as the R61523's divider rises, so
+ * the larger number is taken to be the faster rate; that the rate rises
+ * with the setting here is that reading, not something measured. */
+#ifndef CGBA_HOST_TEST
+static const uint8_t backlight_pwm_new[10][3] = {
+	{ 0x14, 0x29, 0xa0 },   /* what the OS sets when it starts the panel */
+	{ 0x04, 0x91, 0x59 }, { 0x04, 0x48, 0xad }, { 0x04, 0x24, 0x56 },
+	{ 0x04, 0x12, 0x39 }, { 0x04, 0x09, 0x1c }, { 0x04, 0x04, 0x90 },
+	{ 0x04, 0x03, 0x6a }, { 0x04, 0x02, 0x48 }, { 0x04, 0x01, 0xe0 },
+};
+static const uint8_t backlight_pwm_old[10] = {
+	0x00, 0x01, 0x02, 0x03, 0x07, 0x0f, 0x1f, 0x3f, 0x7f, 0xff,
+};
+static int backlight_saved;
+static uint8_t backlight_system;         /* brightness found at the start */
+static uint8_t backlight_b9[4];          /* R61523: 0xb9 as found */
+static uint32_t backlight_level, backlight_rate;
+
+static void backlight_read_b9(uint8_t out[4])
+{
+	int i;
+
+	lcd_select(0xb9);
+	(void)*LCD_DATA;
+	for(i = 0; i < 4; i++)
+		out[i] = (uint8_t)*LCD_DATA;
+}
+
+static void backlight_write(uint32_t level, uint32_t rate)
+{
+	/* Level 1..16 is 15, 31, .. 255; 0 is what the system had. */
+	unsigned value = level ? level * 16u - 1u : backlight_system;
+	/* Rate 1..9 is the table from its slowest entry to its fastest. */
+	unsigned entry = rate ? 10u - rate : 0u;
+
+	wait_lcd_dma();
+	if(lcd_first_column() == 0) {
+		lcd_select(0x51);
+		lcd_param(value);
+		lcd_select(0xc9);
+		lcd_param(backlight_pwm_new[entry][0]);
+		lcd_param(backlight_pwm_new[entry][1]);
+		lcd_param(backlight_pwm_new[entry][2]);
+		lcd_param(0x01);
+	} else {
+		lcd_select(0xb9);
+		lcd_param(backlight_b9[0]);
+		lcd_param(level ? value : backlight_b9[1]);
+		/* The R61523 table starts with its fastest entry. */
+		lcd_param(rate ? backlight_pwm_old[entry - 1u] : backlight_b9[2]);
+		lcd_param(backlight_b9[3]);
+	}
+}
+#endif
+
+void fxcg100_lcd_set_backlight(uint32_t level, uint32_t pwm)
+{
+#ifndef CGBA_HOST_TEST
+	if(level > 16u)
+		level = 0;
+	if(pwm > 9u)
+		pwm = 0;
+	if(!backlight_saved) {
+		if(level == 0 && pwm == 0)
+			return;                  /* nothing asked for: touch nothing */
+		wait_lcd_dma();
+		if(lcd_first_column() == 0) {
+			lcd_select(0x52);        /* read display brightness */
+			(void)*LCD_DATA;
+			backlight_system = (uint8_t)*LCD_DATA;
+		} else {
+			backlight_read_b9(backlight_b9);
+			backlight_system = backlight_b9[1];
+		}
+		/* The system only ever writes 11..103. Anything else was not
+		 * read properly: go back to its middle step when leaving. */
+		if(backlight_system < 8u || backlight_system > 110u)
+			backlight_system = 52u;
+		backlight_saved = 1;
+	} else if(level == backlight_level && pwm == backlight_rate) {
+		return;
+	}
+	backlight_level = level;
+	backlight_rate = pwm;
+	backlight_write(level, pwm);
+#else
+	(void)level;
+	(void)pwm;
+#endif
+}
+
 void fxcg100_lcd_shutdown(void)
 {
 	wait_lcd_dma();
+#ifndef CGBA_HOST_TEST
+	/* Give the system its backlight back. */
+	if(backlight_saved && (backlight_level || backlight_rate)) {
+		backlight_level = backlight_rate = 0;
+		backlight_write(0, 0);
+	}
+#endif
 	cp_game_screen = 0;
 #ifndef CGBA_HOST_TEST
 	ticks_stop();
@@ -634,6 +757,14 @@ void fxcg100_lcd_update(void)
 {
 	if(cp_view_is_landscape(cp_view)) {
 		present_canvas_landscape();
+	} else if(cp_view_is_flipped(cp_view, cp_rotation)) {
+		/* gint drew the canvas upright: a half turn is the same pixels
+		 * from the last to the first. */
+		int i;
+
+		lcd_begin(0, CP_PANEL_W - 1, 0, CP_PANEL_H - 1);
+		for(i = CP_PANEL_W * CP_PANEL_H - 1; i >= 0; i--)
+			lcd_write(gint_vram[i]);
 	} else {
 		lcd_begin(0, CP_PANEL_W - 1, 0, CP_PANEL_H - 1);
 		lcd_put_line(gint_vram, CP_PANEL_W * CP_PANEL_H);
@@ -646,8 +777,24 @@ void fxcg100_lcd_update(void)
  * current orientation (classpad_gfx.h), so no turning is needed here. */
 void fxcg100_lcd_present_frame(void)
 {
-	lcd_begin(0, CP_PANEL_W - 1, 0, CP_PANEL_H - 1);
-	lcd_put_line(gint_vram, CP_PANEL_W * CP_PANEL_H);
+	/* In bands from the bottom of the panel upwards, the way the panel is
+	 * refreshed, like the game picture (see strip_order). */
+	enum { BAND = 16 };
+	int r;
+
+#ifndef CGBA_HOST_TEST
+	sync_begin(0, CP_PANEL_H, SYNC_CANVAS);
+#endif
+	for(r = CP_PANEL_H - BAND; r >= 0; r -= BAND) {
+#ifndef CGBA_HOST_TEST
+		sync_strip(r, BAND);
+#endif
+		lcd_begin(0, CP_PANEL_W - 1, r, r + BAND - 1);
+		lcd_put_line(gint_vram + r * CP_PANEL_W, CP_PANEL_W * BAND);
+	}
+#ifndef CGBA_HOST_TEST
+	sync_end();
+#endif
 	cp_game_screen = 0;
 	cp_touch_mask = 0;
 }
@@ -1081,15 +1228,48 @@ uint32_t fxcg100_poll_app_keys(void)
 
 /* ---- gameplay presentation ------------------------------------------------ */
 
+/* Send a strip built for the upright picture: `rows` rows of `width` at
+ * (x, y) as the player sees them. Held upside down, the same rows go to the
+ * mirrored place with their pixels in reverse order. */
+static void portrait_strip_send(int x, int y, int width, int rows)
+{
+	if(cp_view_is_flipped(cp_view, cp_rotation)) {
+		uint16_t *a = strip_buffer(), *b = a + width * rows - 1;
+
+		for(; a < b; a++, b--) {
+			uint16_t t = *a;
+
+			*a = *b;
+			*b = t;
+		}
+		x = CP_PANEL_W - x - width;
+		y = CP_PANEL_H - y - rows;
+	}
+	strip_send(x, y, width, rows);
+}
+
+/* Strips are sent from the bottom of the panel upwards, whatever the view:
+ * that is the direction this panel is refreshed in (the OS sets address
+ * mode 0xc0 on it, rows counted from the far end), and a frame written the
+ * way it is shown can be kept clear of the refresh (classpad_sync.h). The
+ * upside-down picture gets there by mirroring, so its strips are built in
+ * order; every other one is built last strip first. */
+static inline int strip_order(int index, int count, int in_order)
+{
+	return in_order ? index : count - 1 - index;
+}
+
 /* Portrait 1:1: the framebuffer is already in panel order; 16 rows a strip. */
 static void blit_portrait_1x(const uint16_t *pixels, cp_rect img)
 {
-	int y;
+	int flipped = cp_view_is_flipped(cp_view, cp_rotation);
+	int s, y;
 
-	for(y = 0; y < CP_GBA_H; y += 16) {
+	for(s = 0; s < CP_GBA_H / 16; s++) {
+		y = strip_order(s, CP_GBA_H / 16, flipped) * 16;
 		memcpy(strip_buffer(), pixels + y * CP_GBA_W,
 			16 * CP_GBA_W * sizeof(uint16_t));
-		strip_send(img.x, img.y + y, CP_GBA_W, 16);
+		portrait_strip_send(img.x, img.y + y, CP_GBA_W, 16);
 	}
 }
 
@@ -1099,16 +1279,20 @@ static void blit_portrait_1x(const uint16_t *pixels, cp_rect img)
 static void blit_portrait_43(const uint16_t *pixels, cp_rect img)
 {
 	void (*hs)(const uint16_t *, uint16_t *) = cgba_scale_row_240_320;
-	int groups = img.h / 4, group = 0;
+	int groups = img.h / 4, group;
+	int strips = (groups + 2) / 3, s;
+	int flipped = cp_view_is_flipped(cp_view, cp_rotation);
 
 	if(cp_filter == CGBA_SCALE_FILTER_CRISP)
 		hs = cgba_scale_row_240_320_crisp;
 	else if(cp_filter == CGBA_SCALE_FILTER_SHARP)
 		hs = cgba_scale_row_240_320_sharp;
 
-	while(group < groups) {
+	for(s = 0; s < strips; s++) {
 		uint16_t *strip = strip_buffer();
-		int first = group, n;
+		int first = strip_order(s, strips, flipped) * 3, n;
+
+		group = first;
 
 		for(n = 0; n < 3 && group < groups; n++, group++) {
 			const uint16_t *src = pixels + group * 3 * CP_GBA_W;
@@ -1127,7 +1311,7 @@ static void blit_portrait_43(const uint16_t *pixels, cp_rect img)
 				memcpy(r2, r3, 320 * sizeof(uint16_t));
 			}
 		}
-		strip_send(img.x, img.y + first * 4, 320, n * 4);
+		portrait_strip_send(img.x, img.y + first * 4, 320, n * 4);
 	}
 }
 
@@ -1149,9 +1333,13 @@ static void blit_landscape(const uint16_t *pixels, cp_rect img, int doubled)
 
 	if(cp_view == CP_VIEW_LANDSCAPE_1X) {
 		/* 1:1: a GBA column is a panel row as it is; 16 of them a strip. */
-		for(i = 0; i < CP_GBA_W; i += 16) {
+		int s;
+
+		for(s = CP_GBA_W / 16 - 1; s >= 0; s--) {
 			uint16_t *line = strip_buffer();
 			int k;
+
+			i = s * 16;
 
 			for(k = 0; k < 16; k++)
 				cp_gather_column(pixels, keys_left ? CP_GBA_W - 1 - (i + k)
@@ -1161,9 +1349,12 @@ static void blit_landscape(const uint16_t *pixels, cp_rect img, int doubled)
 		return;
 	}
 
-	while(i < CP_GBA_W) {
+	for(row = CP_GBA_W / per_strip - 1; row >= 0; row--) {
 		uint16_t *line = strip_buffer();
-		int end = i + per_strip;
+		int end;
+
+		i = row * per_strip;
+		end = i + per_strip;
 
 		for(; i < end; i += doubled ? 1 : 2) {
 			unsigned sx = keys_left ? CP_GBA_W - 1 - i : i;
@@ -1184,9 +1375,159 @@ static void blit_landscape(const uint16_t *pixels, cp_rect img, int doubled)
 				line += 3 * width;
 			}
 		}
-		strip_send(p.x, p.y + row, width, rows_per_strip);
-		row += rows_per_strip;
+		strip_send(p.x, p.y + row * rows_per_strip, width, rows_per_strip);
 	}
+}
+
+/* ---- refresh sync (classpad_sync.h) --------------------------------------- */
+
+static uint32_t cp_sync;             /* the option: wait before each frame */
+/* Where the picture's rows are in the panel's count of rows shown, in
+ * sixteenths of a refresh: the count includes blanking rows, and where they
+ * are is not known, so this is set by eye (Settings). */
+static uint32_t cp_sync_offset;
+static uint32_t sync_frames, sync_torn;
+/* For the Settings page: rows shown during the last frame, the window it
+ * was started in, and how many frames had to wait for it. */
+static uint32_t sync_detail[4];
+
+#ifndef CGBA_HOST_TEST
+enum { SCAN_UNKNOWN = 0, SCAN_USABLE, SCAN_NONE };
+static int scan_state;
+static uint32_t scan_total, scan_hz;
+static cp_sync_track sync_track;
+static int sync_tracking;
+static uint32_t sync_lines[SYNC_KINDS];   /* rows shown during the last frame */
+static int sync_kind;
+
+/* The row the panel is showing: DCS get_scanline, two bytes after a dummy
+ * read, as for the ID register above. */
+static uint32_t lcd_scanline(void)
+{
+	uint32_t hi, lo;
+
+	wait_lcd_dma();
+	lcd_select(0x45);
+	hi = *LCD_DATA;
+	hi = *LCD_DATA & 0xffu;
+	lo = *LCD_DATA & 0xffu;
+	return ((hi << 8) | lo) & 0x3ffu;
+}
+
+/* A quarter of a second of reading it, once: is it a row counter, how many
+ * rows are there in a refresh, how often does it come round. */
+static void scan_probe(void)
+{
+	cp_scan_probe probe = { 0, 0, 0, 0, 0 };
+	uint32_t start = fxcg100_ticks(), ticks = 0, n;
+
+	for(n = 0; n < 4000000u && ticks < 32u; n++) {
+		cp_scan_probe_add(&probe, lcd_scanline());
+		if((n & 63u) == 0)
+			ticks = fxcg100_ticks() - start;
+	}
+	scan_total = cp_scan_probe_result(&probe, ticks, &scan_hz);
+	scan_state = scan_total ? SCAN_USABLE : SCAN_NONE;
+	if(!scan_total)
+		scan_total = probe.max;       /* shown on the Settings page */
+}
+
+/* Panel rows are shown last row first, so positions are counted from the
+ * bottom of the panel: row r is shown as number CP_PANEL_H - 1 - r, plus
+ * the offset. */
+static uint32_t scan_position(void)
+{
+	uint32_t shift = scan_total * cp_sync_offset / 16u;
+
+	return (lcd_scanline() % scan_total + scan_total - shift) % scan_total;
+}
+
+static void sync_strip(int r0, int rows)
+{
+	if(sync_tracking)
+		cp_sync_track_strip(&sync_track, scan_position(),
+			(uint32_t)(CP_PANEL_H - r0 - rows));
+}
+
+/* Before a frame whose picture is the panel rows [top, top + rows), sent
+ * last strip first. */
+static void sync_begin(int top, int rows, int kind)
+{
+	uint32_t lo, hi;
+	uint32_t first = (uint32_t)(CP_PANEL_H - top - rows);
+
+	if(scan_state == SCAN_UNKNOWN)
+		scan_probe();
+	if(scan_state != SCAN_USABLE)
+		return;
+
+	sync_kind = kind;
+	sync_detail[0] = sync_lines[kind];
+	sync_detail[1] = sync_detail[2] = 0;
+	if(cp_sync && cp_sync_window(scan_total, (uint32_t)rows,
+			sync_lines[kind], 0, &lo, &hi)) {
+		uint32_t start = fxcg100_ticks(), n;
+
+		sync_detail[1] = lo;
+		sync_detail[2] = hi;
+
+		/* At most one refresh; given up after 47 ms whatever happens. */
+		for(n = 0; n < 400000u; n++) {
+			uint32_t at = (scan_position() + scan_total - first) % scan_total;
+
+			if(at >= lo && at < hi)
+				break;
+			if(n == 0)
+				sync_detail[3]++;
+			if((n & 63u) == 63u && fxcg100_ticks() - start > 6u)
+				break;
+		}
+	}
+	cp_sync_track_begin(&sync_track, scan_total);
+	sync_tracking = 1;
+}
+
+static void sync_end(void)
+{
+	if(!sync_tracking)
+		return;
+	sync_tracking = 0;
+	sync_lines[sync_kind] = cp_sync_track_lines(&sync_track);
+	sync_frames++;
+	sync_torn += (uint32_t)sync_track.crossed;
+}
+#endif
+
+void fxcg100_lcd_set_sync(uint32_t wait, uint32_t offset)
+{
+	wait = wait ? 1 : 0;
+	offset &= 15u;
+	if(wait != cp_sync || offset != cp_sync_offset)
+		sync_frames = sync_torn = sync_detail[3] = 0;
+	cp_sync = wait;
+	cp_sync_offset = offset;
+}
+
+/* For the Settings page: rows in a refresh and its rate (rows is what the
+ * panel answered if it has no usable row counter, and *usable is zero), and
+ * of the frames sent since the option last changed, how many tore. */
+void fxcg100_lcd_sync_info(uint32_t *usable, uint32_t *rows, uint32_t *hz,
+	uint32_t *frames, uint32_t *torn)
+{
+#ifndef CGBA_HOST_TEST
+	*usable = scan_state == SCAN_USABLE;
+	*rows = scan_total;
+	*hz = scan_hz;
+#else
+	*usable = *rows = *hz = 0;
+#endif
+	*frames = sync_frames;
+	*torn = sync_torn;
+}
+
+void fxcg100_lcd_sync_detail(uint32_t detail[4])
+{
+	memcpy(detail, sync_detail, sizeof(sync_detail));
 }
 
 void fxcg100_lcd_blit_gba(const uint16_t *pixels)
@@ -1199,6 +1540,13 @@ void fxcg100_lcd_blit_gba(const uint16_t *pixels)
 		prepare_game_screen();
 
 	l = cp_layout_for(cp_view, cp_rotation);
+#ifndef CGBA_HOST_TEST
+	{
+		cp_rect p = cp_user_to_panel_rect(cp_view, cp_rotation, l.image);
+
+		sync_begin(p.y, p.h, SYNC_GAME);
+	}
+#endif
 	switch(cp_view) {
 	case CP_VIEW_PORTRAIT_43:
 		blit_portrait_43(pixels, l.image);
@@ -1214,6 +1562,9 @@ void fxcg100_lcd_blit_gba(const uint16_t *pixels)
 		blit_portrait_1x(pixels, l.image);
 		break;
 	}
+#ifndef CGBA_HOST_TEST
+	sync_end();
+#endif
 	/* The last strip is left in flight on purpose: its data is in on-chip
 	 * RAM, and every later panel access goes through lcd_begin(), which
 	 * waits for it. The next frame's emulation overlaps the transfer. */

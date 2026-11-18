@@ -107,6 +107,10 @@ u32 cgba_dynarec_thumb_hot_ptr[64] CGBA_HIGH_BSS;
 u32 cgba_dynarec_dual_hot_key[64] CGBA_HIGH_BSS;
 u32 cgba_dynarec_dual_hot_ptr[64] CGBA_HIGH_BSS;
 
+/* Always kept: the ClassPad settings page shows them. */
+u32 cgba_dynarec_rom_flush_count;
+u32 cgba_dynarec_ram_flush_count;
+u32 cgba_dynarec_ram_full_count;   /* of those, because the cache was full */
 #if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
 #define CGBA_SH4_PROF_BITS 11
 #define CGBA_SH4_PROF_SLOTS (1u << CGBA_SH4_PROF_BITS)
@@ -115,8 +119,6 @@ struct cgba_sh4_prof_row {
   u32 count;
 };
 
-u32 cgba_dynarec_rom_flush_count;
-u32 cgba_dynarec_ram_flush_count;
 u32 cgba_dynarec_arm_translate_count;
 u32 cgba_dynarec_thumb_translate_count;
 u32 cgba_dynarec_lookup_arm_count;
@@ -3932,9 +3934,10 @@ bool translate_block_arm(u32 pc, bool ram_region)
 #ifdef SH4_ARCH
       sh4g_litseg_abort();
 #endif
-      if (ram_region)
+      if (ram_region) {
+        cgba_dynarec_ram_full_count++;
         flush_translation_cache_ram();
-      else
+      } else
         flush_translation_cache_rom();
       return false;
     }
@@ -4242,9 +4245,10 @@ bool translate_block_thumb(u32 pc, bool ram_region)
 #ifdef SH4_ARCH
       sh4g_litseg_abort();
 #endif
-      if (ram_region)
+      if (ram_region) {
+        cgba_dynarec_ram_full_count++;
         flush_translation_cache_ram();
-      else
+      } else
         flush_translation_cache_rom();
       return false;
     }
@@ -4394,9 +4398,7 @@ void flush_translation_cache_ram(void)
 {
   /* Flushes RAM caches avoiding doing too much work (ie. wiping unused memory) */
   flush_ram_count++;
-#if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
   cgba_dynarec_ram_flush_count++;
-#endif
 #if defined(CGBA_GPSP_HEADLESS_TEST)
   CGBA_DIAG_LOG("@@CGBA_RAMFLUSH n=%lu pc=%08lx used=%lu iw=%04x-%04x",
     (unsigned long)cgba_dynarec_ram_flush_count, (unsigned long)reg[REG_PC],
@@ -4518,9 +4520,7 @@ void flush_translation_cache_rom(void)
   cgba_last_rom_flush_frame = frame_counter;
 #endif
   /* We flush the generated code except for everything below the watermark. */
-#if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
   cgba_dynarec_rom_flush_count++;
-#endif
 #if defined(CGBA_GPSP_HEADLESS_TEST)
   CGBA_DIAG_LOG("@@CGBA_ROMFLUSH n=%lu pc=%08lx used=%lu",
     (unsigned long)cgba_dynarec_rom_flush_count, (unsigned long)reg[REG_PC],

@@ -118,11 +118,12 @@ static inline void cp_theme_toward(cp_theme *out, const cp_theme *a,
 /* ---- touch keys ------------------------------------------------------------
  * The keys sit next to the game picture on a black ground, so they are kept
  * dim: the faces are the scheme's surface tones taken part of the way to
- * black, the labels a muted version of the text colour. A pressed key is a
- * tonal step up from the idle one, not a patch of the primary colour:
- * enough to confirm the press, not enough to pull the eye off the game. */
+ * black, the labels a muted version of the text colour. A pressed key goes
+ * well over a third of the way to the primary colour: at a tenth (the first
+ * setting) the press could hardly be told from the idle key on the panel,
+ * while a full patch of the primary colour pulls the eye off the game. */
 #define CP_KEY_DIM      90            /* of 256: faces towards black */
-#define CP_KEY_LIT_MIX  24            /* of 256: pressed face towards primary */
+#define CP_KEY_LIT_MIX  96            /* of 256: pressed face towards primary */
 #define CP_KEY_INK_MIX  150           /* of 256: labels towards their face */
 
 typedef struct cp_key_colors {

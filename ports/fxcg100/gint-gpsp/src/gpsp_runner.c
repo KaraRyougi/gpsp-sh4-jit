@@ -1683,6 +1683,36 @@ unsigned cgba_gpsp_diag(char out[][CGBA_DIAG_LINE_MAX], unsigned max_lines)
 	return n;
 }
 
+#ifdef CGBA_DYNAREC
+/* How often each translation cache has been emptied since the game was
+ * started: the count at that moment is set aside, as starting a game empties
+ * both. Loading a saved state empties them too and does count. */
+extern uint32_t cgba_dynarec_rom_flush_count;
+extern uint32_t cgba_dynarec_ram_flush_count;
+extern uint32_t cgba_dynarec_ram_full_count;
+static uint32_t jit_flush_base[3];
+
+void cgba_gpsp_jit_flush_mark(void)
+{
+	jit_flush_base[0] = cgba_dynarec_rom_flush_count;
+	jit_flush_base[1] = cgba_dynarec_ram_flush_count;
+	jit_flush_base[2] = cgba_dynarec_ram_full_count;
+}
+
+void cgba_gpsp_jit_flushes(uint32_t *rom, uint32_t *ram)
+{
+	*rom = cgba_dynarec_rom_flush_count - jit_flush_base[0];
+	*ram = cgba_dynarec_ram_flush_count - jit_flush_base[1];
+}
+
+/* RAM resets because the cache was full; the others are the game writing
+ * over code that had been translated. */
+uint32_t cgba_gpsp_jit_ram_full(void)
+{
+	return cgba_dynarec_ram_full_count - jit_flush_base[2];
+}
+#endif
+
 void cgba_gpsp_shutdown(void)
 {
 	if(!cgba_lcd_test_active)

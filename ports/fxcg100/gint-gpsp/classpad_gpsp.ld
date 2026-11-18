@@ -8,7 +8,7 @@
 	       start-up code live here, with their read-only data, all .data,
 	       and the .bss of gint and libc. The launcher loads this part.
 
-	arena  0x8c880000..0x8cd40000, 4.75 MiB inside the OS heap window
+	arena  0x8c880000..0x8ce00000, 5.5 MiB inside the OS heap window
 	       (0x8c280000..0x8ce80000). The hot emulator code, every other
 	       .bss and the large emulator state are linked here. Nothing here
 	       is loaded by the launcher: at start-up classpad_loader.c obtains
@@ -16,9 +16,10 @@
 	       .cgba.core section from the .hh3 file into place. Until that has
 	       happened only the low part may run.
 
-	The arena stops 1.25 MiB short of the end of the heap window. The
-	reserving allocation may overshoot the arena by up to its 1 MiB probe
-	(see reserve_arena), and the OS needs heap of its own for file calls.
+	The arena stops 0.5 MiB short of the end of the heap window: the block
+	that reserves it ends at 0x8ce40000 (classpad_heap.h), 373 KiB
+	past what is linked here, and the OS needs heap of its own for file
+	calls: what is left above that and what is free below the arena.
 
 	The program headers are explicit because the HollyHock loader copies
 	every PT_LOAD to its address without any check. Arena sections are in
@@ -33,7 +34,7 @@ ENTRY(_cgba_hhk3_entry)
 MEMORY
 {
 	ram   (rwx): o = 0x8c052800, l = 337920
-	arena (rwx): o = 0x8c880000, l = 0x4C0000
+	arena (rwx): o = 0x8c880000, l = 0x580000
 	vbr   (rwx): o = 0x8cffef00, l = 0x1100
 	ilram (rwx): o = 0xe5200000, l = 4k
 	xyram (rwx): o = 0xe500e000, l = 16k
