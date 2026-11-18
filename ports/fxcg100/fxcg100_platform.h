@@ -102,6 +102,14 @@ typedef struct fxcg100_menu_state {
   uint32_t touch_keys;
   /* fx-CP400 only: 0 sends the picture by DMA, 1 by CPU writes. */
   uint32_t lcd_cpu;
+  /* fx-CP400 only: wait for the panel's refresh before each frame. */
+  uint32_t lcd_sync;
+  /* ... and where the picture is in the panel's row count, 0..15. */
+  uint32_t lcd_sync_offset;
+  /* fx-CP400 only: backlight level 1..16 and PWM rate 1..9; 0 leaves what
+   * the system set. */
+  uint32_t backlight;
+  uint32_t backlight_pwm;
   /* fx-CP400 only: colour scheme (CP_THEME_*) and whether the interface
    * animates. */
   uint32_t theme;
@@ -190,6 +198,17 @@ void fxcg100_lcd_set_menu_key(uint32_t clear_opens_menu);
 /* Colour scheme of the touch keys (CP_THEME_*, classpad_theme.h). */
 void fxcg100_lcd_set_theme(uint32_t theme);
 void fxcg100_lcd_set_transfer(uint32_t cpu_writes);
+/* fx-CP400: start each frame where the panel's refresh will not meet it
+ * (classpad_sync.h), and what is known about that refresh. */
+void fxcg100_lcd_set_sync(uint32_t wait, uint32_t offset);
+void fxcg100_lcd_sync_info(uint32_t *usable, uint32_t *rows, uint32_t *hz,
+	uint32_t *frames, uint32_t *torn);
+/* Rows shown during the last frame, the window it was started in (zeros if
+ * none), and the frames that waited for it. */
+void fxcg100_lcd_sync_detail(uint32_t detail[4]);
+/* fx-CP400: backlight level (1..16, 16 = full) and PWM rate (1..9, 9 the
+ * fastest); 0 for either leaves, or puts back, what the system had set. */
+void fxcg100_lcd_set_backlight(uint32_t level, uint32_t pwm);
 /* GBA buttons currently held on the touch keys (FXCG100_GBA_BUTTON_* bits),
  * as sampled by the last fxcg100_poll_app_keys(). */
 uint32_t fxcg100_touch_gba_buttons(void);

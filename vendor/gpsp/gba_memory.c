@@ -435,10 +435,18 @@ static u8 cgba_gamepak_cache[CGBA_GAMEPAK_CACHE_BLOCKS][CGBA_GAMEPAK_BLOCK_BYTES
 
 /* Embedded diagnostic ROMs need stable storage while they are directly mapped.
  * Keep that at-most-256-KiB image separate from the fallback/savestate arena;
- * the latter is invalidated and overwritten by every state operation. This
- * buffer also serves as cold loader scratch for streaming backup signatures. */
+ * the latter is invalidated and overwritten by every state operation.
+ * A build that never loads a ROM from memory (the gint add-in: its one
+ * built-in entry is the LCD test, which loads nothing) defines
+ * CGBA_NO_MEMORY_ROM and does without the buffer. */
+#ifndef CGBA_NO_MEMORY_ROM
 static u8 cgba_static_mini_rom[CGBA_FXCG100_STATIC_ROM_MAX] CGBA_HIGH_BSS;
 #define CGBA_STATIC_MINI_ROM_PTR cgba_static_mini_rom
+#endif
+
+/* Cold loader scratch for streaming backup signatures: the start of the
+ * fallback cache, borrowed the way a savestate borrows it. */
+#define CGBA_SIGNATURE_SCRATCH_BYTES (256u * 1024u)
 #endif
 
 // LRU queue with the loaded blocks and what they map to
@@ -3210,10 +3218,14 @@ u32 load_gamepak_from_memory(const u8 *rom, u32 rom_size,
 #if defined(CGBA_FXCG100) || defined(CGBA_FXCG50)
   /* Both calculators run with the OS heap stubbed out (malloc returns NULL),
    * so materialize into the reserved GamePak-cache tail instead of the heap. */
+#ifdef CGBA_NO_MEMORY_ROM
+  return (u32)-1;
+#else
   if (raw_size > CGBA_FXCG100_STATIC_ROM_MAX)
     return (u32)-1;
   gamepak_mini_rom = CGBA_STATIC_MINI_ROM_PTR;
   gamepak_mini_rom_static = true;
+#endif
 #else
   gamepak_mini_rom = (u8*)malloc(raw_size);
 #endif
@@ -3472,14 +3484,19 @@ static u32 rom_scan_signatures_in_memory(void)
 
 #if defined(CGBA_FXCG100) || defined(CGBA_FXCG50)
   /* The hybrid loader no longer preloads a multi-megabyte page cache. Stream
-   * the complete logical ROM through the separate mini-ROM buffer instead.
-   * Twelve bytes of overlap cover the longest signature while keeping every
-   * chunk's logical origin 4-byte aligned. This is a cold load-time path. */
+   * the complete logical ROM through the start of the fallback cache instead;
+   * every mapping the cache backs is dropped before and after, as for a
+   * savestate. Twelve bytes of overlap cover the longest signature while
+   * keeping every chunk's logical origin 4-byte aligned. This is a cold
+   * load-time path. */
   if (gamepak_file_large && cgba_gamepak_fragment_blocks)
   {
-    const u32 capacity = (u32)sizeof(cgba_static_mini_rom);
+    u8 * const scratch = cgba_gamepak_cache[0];
+    const u32 capacity = CGBA_SIGNATURE_SCRATCH_BYTES;
     const u32 overlap = 12u;
     u32 offset = 0;
+
+    cgba_gamepak_cache_invalidate();
 
     while (offset < gamepak_size)
     {
@@ -3491,17 +3508,15 @@ static u32 rom_scan_signatures_in_memory(void)
       if (filestream_seek(gamepak_file_large, offset, SEEK_SET) < 0)
         got = 0;
       else
-        got = filestream_read(gamepak_file_large,
-                              cgba_static_mini_rom, request);
+        got = filestream_read(gamepak_file_large, scratch, request);
       if (got < 0)
         got = 0;
       if ((u64)got > request)
         got = request;
       if ((u32)got < request)
-        memset(cgba_static_mini_rom + (u32)got, 0xFF,
-               request - (u32)got);
+        memset(scratch + (u32)got, 0xFF, request - (u32)got);
 
-      found |= rom_scan_signature_chunk(cgba_static_mini_rom, request);
+      found |= rom_scan_signature_chunk(scratch, request);
       if ((found & (ROM_SIG_EEPROM | ROM_SIG_SRAM |
                     ROM_SIG_FLASH1M | ROM_SIG_FLASH5)) ==
           (ROM_SIG_EEPROM | ROM_SIG_SRAM |
@@ -3510,6 +3525,7 @@ static u32 rom_scan_signatures_in_memory(void)
         break;
       offset += capacity - overlap;
     }
+    cgba_gamepak_cache_invalidate();
     return found;
   }
 #endif

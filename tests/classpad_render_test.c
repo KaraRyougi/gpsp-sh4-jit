@@ -365,6 +365,33 @@ static void test_picture(unsigned view, unsigned rot, unsigned filter,
 	CHECK(checked > 15000, "view %u: only %ld taps checked", view, checked);
 }
 
+/* Portrait held upside down (Swap in portrait): the whole panel - picture,
+ * keys and captions - is the upright one turned half a turn. */
+static void test_flipped(unsigned view)
+{
+	static uint16_t upright[CP_PANEL_H][CP_PANEL_W];
+	long wrong = 0;
+	int x, y;
+
+	fill_test_frame();
+	set_mode(view, CP_ROTATION_KEYS_RIGHT, 0);
+	fxcg100_lcd_update();
+	fxcg100_lcd_blit_gba(gba);
+	memcpy(upright, panel, sizeof(upright));
+
+	set_mode(view, CP_ROTATION_KEYS_LEFT, 0);
+	fxcg100_lcd_update();
+	fxcg100_lcd_blit_gba(gba);
+	for (y = 0; y < CP_PANEL_H; y++)
+		for (x = 0; x < CP_PANEL_W; x++)
+			if (panel[y][x] != upright[CP_PANEL_H - 1 - y][CP_PANEL_W - 1 - x])
+				wrong++;
+	CHECK(wrong == 0, "view %u upside down: %ld pixels are not the upright "
+		"panel turned half a turn", view, wrong);
+	CHECK(cp_physical_direction(view, CP_ROTATION_KEYS_LEFT, 0) == 2,
+		"view %u upside down: the keypad's directions must turn too", view);
+}
+
 static int rects_overlap(cp_rect a, cp_rect b)
 {
 	return !(a.x + a.w <= b.x || a.x >= b.x + b.w ||
@@ -1067,7 +1094,8 @@ static void test_ui(const char *dir)
 	for (unsigned t = CP_THEME_COUNT; t-- > 0;) {
 		r = ui_find(cp_theme_names[t], 0);
 		if (!r || r->y + r->h > 520) {
-			ui.scroll[SCREEN_SETTINGS] += 200;
+			/* Bring it well inside the page, not past its top. */
+			ui.scroll[SCREEN_SETTINGS] += r ? r->y + r->h - 400 : 200;
 			ui.redraw = 1;
 			ui_settle(ui_frame());
 		}
@@ -1646,6 +1674,8 @@ int main(int argc, char **argv)
 			fxcg100_lcd_set_transfer(0);
 			test_touch(view, rot);
 		}
+	test_flipped(CP_VIEW_PORTRAIT_1X);
+	test_flipped(CP_VIEW_PORTRAIT_43);
 	test_arrow_remap();
 	test_icon_strip();
 	test_key_colours();

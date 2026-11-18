@@ -51,6 +51,10 @@ void cgba_gpsp_debug_menu(fxcg100_debug_info *debug, unsigned frame,
 	uint32_t last_hash, unsigned emu_fps, unsigned draw_fps,
 	const uint16_t *framebuffer, uint32_t host_sp);
 void cgba_gpsp_shutdown(void);
+/* Translation-cache resets since the game was started (JIT builds only). */
+void cgba_gpsp_jit_flush_mark(void);
+void cgba_gpsp_jit_flushes(uint32_t *rom, uint32_t *ram);
+uint32_t cgba_gpsp_jit_ram_full(void);
 
 /* GBA in-game backup save (SRAM/Flash/EEPROM) persistence to \\fls0\<ROM>.SAV.
  * The save is loaded when a ROM boots and dirty data is persisted by shutdown

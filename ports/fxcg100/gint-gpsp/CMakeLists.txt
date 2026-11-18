@@ -165,6 +165,16 @@ set(CGBA_GPSP_RAM_TRANSLATION_CACHE_SIZE "524288" CACHE STRING
   "SH4 dynarec RAM translation cache size in bytes")
 set(CGBA_GPSP_ROM_BRANCH_HASH_BITS "12" CACHE STRING
   "SH4 dynarec ROM branch-hash = 2^N u32 entries; 12 is 16 KiB, which is friendlier to the SH7305 cache than the upstream 16 / 256 KiB table")
+if(CGBA_CLASSPAD)
+  # The fx-CP400 arena is in the OS heap and not under the fx-CG ceiling
+  # above, so the ROM cache is 2.25 MiB there: Pokemon Emerald was seen to
+  # fill the 1 MiB one 11 times in a session. The last quarter is what the
+  # mini-ROM buffer used to take (CGBA_NO_MEMORY_ROM). The hash table is
+  # doubled to keep its chains about the same length. See classpad_gpsp.ld
+  # for the room.
+  set(CGBA_GPSP_ROM_TRANSLATION_CACHE_SIZE 2359296)
+  set(CGBA_GPSP_ROM_BRANCH_HASH_BITS 13)
+endif()
 if(CGBA_DYNAREC)
   list(APPEND GPSP_C_SOURCES
     ${GPSP}/cpu_threaded.c
@@ -208,6 +218,7 @@ target_compile_definitions(cgba-gint-gpsp PRIVATE
   CGBA_FULL_GPSP=1
   CGBA_RTC_WALLCLOCK=1
   ROM_BUFFER_SIZE=1
+  CGBA_NO_MEMORY_ROM=1
   dma_transfer=gpsp_dma_transfer
 )
 option(CGBA_SILENT_TIMERS "Batch timer overflows for the sound-stub calculator port" ON)

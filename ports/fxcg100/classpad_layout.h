@@ -288,8 +288,18 @@ static inline void cp_rotate_next(uint32_t *view, uint32_t *rotation)
 	}
 }
 
+/* Portrait with the calculator held upside down (keypad above the screen):
+ * the rotation setting has no other meaning in portrait, and Swap, which
+ * changes hands in landscape, turns the picture over here. */
+static inline int cp_view_is_flipped(unsigned view, unsigned rotation)
+{
+	return !cp_view_is_landscape(view) && rotation == CP_ROTATION_KEYS_LEFT;
+}
+
 /* ---- user <-> panel --------------------------------------------------------
- * Portrait is the identity. In landscape a user row is a panel column:
+ * Portrait is the identity, or a half turn when flipped:
+ *       panel col = 319 - user x,  panel row = 527 - user y
+ * In landscape a user row is a panel column:
  *   keys right (calculator turned counter-clockwise):
  *       panel col = 319 - user y,  panel row = user x
  *   keys left (turned clockwise):
@@ -300,6 +310,12 @@ static inline cp_rect cp_user_to_panel_rect(unsigned view, unsigned rotation,
 {
 	cp_rect p;
 
+	if (cp_view_is_flipped(view, rotation)) {
+		p = u;
+		p.x = (int16_t)(CP_PANEL_W - u.x - u.w);
+		p.y = (int16_t)(CP_PANEL_H - u.y - u.h);
+		return p;
+	}
 	if (!cp_view_is_landscape(view))
 		return u;
 	p.w = u.h;
@@ -317,7 +333,10 @@ static inline cp_rect cp_user_to_panel_rect(unsigned view, unsigned rotation,
 static inline void cp_panel_to_user_point(unsigned view, unsigned rotation,
 	int px, int py, int *ux, int *uy)
 {
-	if (!cp_view_is_landscape(view)) {
+	if (cp_view_is_flipped(view, rotation)) {
+		*ux = CP_PANEL_W - 1 - px;
+		*uy = CP_PANEL_H - 1 - py;
+	} else if (!cp_view_is_landscape(view)) {
 		*ux = px;
 		*uy = py;
 	} else if (rotation == CP_ROTATION_KEYS_LEFT) {
@@ -332,7 +351,10 @@ static inline void cp_panel_to_user_point(unsigned view, unsigned rotation,
 static inline void cp_user_to_panel_point(unsigned view, unsigned rotation,
 	int ux, int uy, int *px, int *py)
 {
-	if (!cp_view_is_landscape(view)) {
+	if (cp_view_is_flipped(view, rotation)) {
+		*px = CP_PANEL_W - 1 - ux;
+		*py = CP_PANEL_H - 1 - uy;
+	} else if (!cp_view_is_landscape(view)) {
 		*px = ux;
 		*py = uy;
 	} else if (rotation == CP_ROTATION_KEYS_LEFT) {
@@ -479,6 +501,8 @@ static inline uint32_t cp_strip_icons(int touches, int x1, int y1, int x2,
 static inline unsigned cp_physical_direction(unsigned view, unsigned rotation,
 	unsigned user_direction)
 {
+	if (cp_view_is_flipped(view, rotation))
+		return (user_direction + 2u) & 3u;   /* up is the DOWN key */
 	if (!cp_view_is_landscape(view))
 		return user_direction & 3u;
 	if (rotation == CP_ROTATION_KEYS_LEFT)

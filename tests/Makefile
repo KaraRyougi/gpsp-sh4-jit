@@ -21,7 +21,7 @@ DEAD_STRIP := $(if $(filter Darwin,$(shell uname -s)),\
 	swi-overlap swi-oam udiv udiv-emitter idle-signature video-opaque \
 	video-blend-cache video-backdrop-shadow video-sprite-decode video-tile-row-cache video-text-fastpaths arm-mixer m4a-skip clean
 
-all: smoke core litpool thumb cond native-ldst rtc backup-dirty nor-world-switch input config-version storage lcd-cleanup scale classpad cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc swi-overlap swi-oam udiv \
+all: smoke core litpool thumb cond native-ldst rtc pacing backup-dirty nor-world-switch input config-version storage lcd-cleanup scale classpad cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc swi-overlap swi-oam udiv \
 	udiv-emitter idle-signature video-opaque video-blend-cache \
 	video-backdrop-shadow video-sprite-decode video-tile-row-cache video-text-fastpaths arm-mixer m4a-skip audit
 
@@ -107,6 +107,10 @@ classpad: $(ROOT)/tests/classpad_render_test.c $(ROOT)/tests/classpad_elf_test.c
 	  $(ROOT)/ports/fxcg100/classpad_ui.c \
 	  $(ROOT)/ports/fxcg100/classpad_scale.h \
 	  $(ROOT)/ports/fxcg100/classpad_elf.h \
+	  $(ROOT)/ports/fxcg100/classpad_heap.h \
+	  $(ROOT)/tests/classpad_heap_test.c \
+	  $(ROOT)/ports/fxcg100/classpad_sync.h \
+	  $(ROOT)/tests/classpad_sync_test.c \
 	  $(ROOT)/ports/fxcg100/fxcg100_keys.c
 	$(CC) $(CFLAGS) -O2 -DCGBA_HOST_TEST=1 -DCGBA_CLASSPAD=1 -DCGBA_FXCG50=1 \
 	  -I$(ROOT)/tests/stubs -I$(ROOT)/ports/fxcg100 -I$(ROOT) \
@@ -115,6 +119,21 @@ classpad: $(ROOT)/tests/classpad_render_test.c $(ROOT)/tests/classpad_elf_test.c
 	$(CC) $(CFLAGS) -I$(ROOT) $(ROOT)/tests/classpad_elf_test.c \
 	  -o $(BIN)-classpad-elf
 	$(BIN)-classpad-elf
+	$(CC) $(CFLAGS) -O2 -I$(ROOT) $(ROOT)/tests/classpad_heap_test.c \
+	  -o $(BIN)-classpad-heap
+	$(BIN)-classpad-heap
+	$(CC) $(CFLAGS) -O2 -I$(ROOT) $(ROOT)/tests/classpad_sync_test.c \
+	  -o $(BIN)-classpad-sync
+	$(BIN)-classpad-sync
+
+# The speed limiter and automatic frame skipping, on a virtual clock.
+pacing: $(ROOT)/tests/frame_pacing_test.c \
+	  $(ROOT)/ports/fxcg100/gint-gpsp/src/frame_pacing.c \
+	  $(ROOT)/ports/fxcg100/gint-gpsp/src/frame_pacing.h
+	$(CC) $(CFLAGS) -O2 -DCGBA_CLASSPAD=1 -I$(ROOT)/tests/stubs_pacing -I$(ROOT) \
+	  $(ROOT)/tests/frame_pacing_test.c \
+	  $(ROOT)/ports/fxcg100/gint-gpsp/src/frame_pacing.c -o $(BIN)-pacing
+	$(BIN)-pacing
 
 # Production gpSP cartridge GPIO/RTC and calculator-specific ROM loaders. Dead
 # section elimination keeps the otherwise monolithic gba_memory.c host-linkable.

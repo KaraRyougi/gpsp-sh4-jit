@@ -245,6 +245,8 @@ static void apply_display_options(const fxcg100_menu_state *state)
 	fxcg100_lcd_set_rotation(state->rotation);
 	fxcg100_lcd_set_touch_keys(state->touch_keys);
 	fxcg100_lcd_set_transfer(state->lcd_cpu);
+	fxcg100_lcd_set_sync(state->lcd_sync, state->lcd_sync_offset);
+	fxcg100_lcd_set_backlight(state->backlight, state->backlight_pwm);
 	fxcg100_lcd_set_theme(state->theme);
 	{
 		/* Clear is the menu key only while nothing else is mapped to it. */
@@ -333,6 +335,7 @@ static void wait_for_keys_released(void)
 
 static void prepare_exit_to_os(const char *detail)
 {
+	cgba_frame_limiter_stop();
 	draw_status("exiting gpSP...", detail);
 	/* Do not enter Fugue or hand control back to the launcher while the menu
 	 * activation key is still physically down. In particular, the initial-menu
@@ -388,6 +391,9 @@ static int start_gpsp(uint16_t *framebuffer, unsigned rom_id)
 		return -1;
 	}
 
+#ifdef CGBA_DYNAREC
+	cgba_gpsp_jit_flush_mark();
+#endif
 #if defined(CGBA_DYNAREC) && \
 	(defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS))
 	cgba_dynarec_rom_flush_count = 0;
@@ -2327,6 +2333,8 @@ static int gpsp_main(void)
 			 * which can leave the OS call stuck. The one startup scan is enough;
 			 * restart gpSP to discover files added after launch. */
 			menu_state.rom_source = normalize_rom_id(menu_state.rom_source);
+			/* The frame clock must not run on while the menu is open. */
+			cgba_frame_limiter_stop();
 			cgba_gpsp_debug_menu(&debug_info, frame, last_hash,
 				cgba_fps.emu_fps, cgba_fps.draw_fps, framebuffer,
 				read_stack_pointer());
@@ -2492,9 +2500,11 @@ static int gpsp_main(void)
 		previous_app_keys = app_keys;
 		previous_hotkeys = hotkeys;
 		cgba_frame_limiter_wait(&frame_limiter);
+		cgba_pacer_feedback(&pacer, frame_limiter.late);
 	}
 
-	return shutdown_gpsp_and_exit(1);
+	/* Quit from the menu: a normal exit. */
+	return shutdown_gpsp_and_exit(0);
 }
 
 int main(void)
@@ -2510,7 +2520,11 @@ int main(void)
 		dtext(8, 8, C_BLACK, "gpSP cannot start:");
 		dtext(8, 28, C_BLACK, error);
 		dtext(8, 56, C_BLACK, "No emulator code was executed.");
-		dtext(8, 76, C_BLACK, "Press any key to exit.");
+		/* Starting a built-in application makes the OS set its heap up
+		 * again, which clears whatever is in the way. */
+		dtext(8, 84, C_BLACK, "Open any built-in app (Main, for");
+		dtext(8, 104, C_BLACK, "example), then start gpSP again.");
+		dtext(8, 132, C_BLACK, "Press any key to exit.");
 		dupdate();
 		getkey();
 		return 1;
