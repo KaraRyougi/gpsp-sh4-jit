@@ -24,25 +24,51 @@
 
 #define CP_SYNC_MARGIN 24u
 
+/* The counter is read as two bytes while it runs, and nothing says the
+ * controller holds it still between them: a read across a carry can come
+ * out a few hundred rows wrong, enough to start a frame at the wrong moment
+ * or to make one look torn. So a row is believed only when two reads in a
+ * row agree: the second at the first or a few rows after it. */
+#define CP_SCAN_STEP 12u
+
 /* ---- is there a usable row counter? --------------------------------------- */
 
+/* The rows in a refresh are the highest row seen plus one, so one wrong
+ * read above the real last row is enough to get it wrong, and with it
+ * where every offset falls: it sets the sixteenths the offset counts in and
+ * the length positions are taken modulo. (An fx-CP400 with panel ID 0x16
+ * has 548 rows a refresh, 528 of picture and 20 of blanking, at 56 Hz;
+ * when every read counted it showed 856 rows at 112 Hz at one start and
+ * 924 at 92 Hz at another, and the right offset moved with them.) So
+ * only rows that the read after agrees with count, for the highest row and
+ * for the refreshes counted: a misread (the first read after pixels were
+ * written is often one, and so is a read across a carry) is followed by a
+ * read that does not agree with it. */
 typedef struct cp_scan_probe {
-	uint32_t samples, max, last;
-	uint32_t wraps;      /* fell back by more than a few rows: a new refresh */
-	uint32_t backward;   /* fell back a little: not a counter */
+	uint32_t samples;
+	uint32_t believed;   /* reads the one after agreed with */
+	uint32_t max;        /* the highest row believed */
+	uint32_t prev;       /* the read before, believed or not */
+	uint32_t last;       /* the last row believed */
+	uint32_t wraps;      /* believed rows went back to the start: a refresh */
+	uint32_t backward;   /* a read fell back a little: not a counter */
 } cp_scan_probe;
 
 static inline void cp_scan_probe_add(cp_scan_probe *p, uint32_t value)
 {
 	if(p->samples) {
-		if(value + 64u < p->last)
-			p->wraps++;
-		else if(value < p->last)
+		if(value >= p->prev && value <= p->prev + CP_SCAN_STEP) {
+			if(p->believed && value + 64u < p->last)
+				p->wraps++;
+			if(value > p->max)
+				p->max = value;
+			p->last = value;
+			p->believed++;
+		} else if(value < p->prev && value + 64u >= p->prev) {
 			p->backward++;
+		}
 	}
-	if(value > p->max)
-		p->max = value;
-	p->last = value;
+	p->prev = value;
 	p->samples++;
 }
 
@@ -57,6 +83,10 @@ static inline uint32_t cp_scan_probe_result(const cp_scan_probe *p,
 	*hz = rate;
 	if(p->samples < 1000u || p->backward * 50u > p->samples)
 		return 0;
+	/* A counter read faster than it moves agrees with itself nearly every
+	 * time; noise hardly ever does. */
+	if(p->believed * 2u < p->samples)
+		return 0;
 	if(rate < 20u || rate > 200u)
 		return 0;
 	if(p->max < 320u || p->max > 1022u)
@@ -65,13 +95,6 @@ static inline uint32_t cp_scan_probe_result(const cp_scan_probe *p,
 }
 
 /* ---- reading the counter -------------------------------------------------- */
-
-/* The counter is read as two bytes while it runs, and nothing says the
- * controller holds it still between them: a read across a carry can come
- * out a few hundred rows wrong, enough to start a frame at the wrong moment
- * or to make one look torn. So a row is believed only when two reads in a
- * row agree: the second at the first or a few rows after it. */
-#define CP_SCAN_STEP 12u
 
 static inline int cp_scan_agree(uint32_t first, uint32_t second,
 	uint32_t total)
@@ -98,9 +121,21 @@ static inline int cp_scan_agree(uint32_t first, uint32_t second,
  * given a sixth (cp_sync_window_game): on an fx-CG500 with an eighth, a
  * picture that changed colour every frame still tore for a few seconds
  * every ten or so, always at the same rows, while the phase of the game's
- * frames against the panel's drifted past an end of the window. */
+ * frames against the panel's drifted past an end of the window.
+ *
+ * `strip` is the height of one strip, 0 if not known. Each strip goes into
+ * its window row by row from its top, so, when the strips themselves go the
+ * way of the refresh, each one is written against it: its top row as it
+ * starts and its bottom row, the one the refresh comes to first, a strip's
+ * time later. Ahead of the refresh, the writing reaches a strip further
+ * than its start; behind it, the strip's first row is a strip's time late.
+ * Both are kept clear on top of the clearance. Left out, they cost the
+ * calibration page (16-row bands, 34 rows a step on a 548-row refresh)
+ * every clean step for over a third of the places the picture could
+ * start. */
 static inline int cp_sync_window_part(uint32_t total, uint32_t rows,
-	uint32_t lines, int descending, uint32_t part, uint32_t *lo, uint32_t *hi)
+	uint32_t lines, int descending, uint32_t part, uint32_t strip,
+	uint32_t *lo, uint32_t *hi)
 {
 	uint32_t taken, clear;
 
@@ -124,29 +159,68 @@ static inline int cp_sync_window_part(uint32_t total, uint32_t rows,
 		 * to be caught. Slower: it must not come round and catch up. */
 		*lo = (rows > lines ? rows - lines : 0) + clear;
 		*hi = total - (lines > rows ? lines - rows : 0) - clear;
+		if(strip && rows) {
+			uint32_t late = (lines * strip + rows - 1u) / rows;
+
+			if(*hi <= late)
+				return 0;
+			*lo += strip;
+			*hi -= late;
+		}
 	}
 	return *lo < *hi;
 }
 
 /* The share kept clear: by the interface, by the game, and while the offset
  * is being set by eye, when what is wanted is the opposite of safety: an
- * offset one step out (a sixteenth of a refresh) should already tear. */
+ * offset one step out (a sixteenth of a refresh) should already tear.
+ *
+ * While setting it, half a step: wherever the picture really starts, the
+ * step nearest to it is then at most half a step out and gives a clean
+ * screen, and every other step is more than that and tears. With less (a
+ * 48th was tried), a start that falls between two steps leaves no step
+ * clean at all, only some that tear less often than others, and which of
+ * those looks clean depends on how long it is watched. */
 #define CP_SYNC_PART 8u
 #define CP_SYNC_PART_GAME 6u
-#define CP_SYNC_PART_CALIBRATE 48u
+#define CP_SYNC_PART_CALIBRATE 32u
+
+/* While the offset is being set, a frame does not start wherever it finds
+ * the window but at one end of it, the two ends in turn. Waiting for the
+ * window and starting as it opens only ever tries the early end: there an
+ * offset set too low shows, but one set too high only makes the frame
+ * start later, with the refresh further ahead, and stays clean until the
+ * delay uses up the whole window. The interface's frames always arrive
+ * early enough to wait, so on an fx-CP400 positions 0 to 6 all looked
+ * clean when only 0 was right. At the late end it is the other way round.
+ *
+ * The end is a few rows wide so that the polling cannot step over it; a
+ * frame starts at the first of them. Narrows [*lo, *hi) to the early end,
+ * or to the late one if `late`. */
+#define CP_SYNC_END_ROWS 4u
+
+static inline void cp_sync_window_end(uint32_t *lo, uint32_t *hi, int late)
+{
+	if(*hi - *lo <= CP_SYNC_END_ROWS)
+		return;
+	if(late)
+		*lo = *hi - CP_SYNC_END_ROWS;
+	else
+		*hi = *lo + CP_SYNC_END_ROWS;
+}
 
 static inline int cp_sync_window(uint32_t total, uint32_t rows, uint32_t lines,
 	int descending, uint32_t *lo, uint32_t *hi)
 {
 	return cp_sync_window_part(total, rows, lines, descending, CP_SYNC_PART,
-		lo, hi);
+		0, lo, hi);
 }
 
 static inline int cp_sync_window_game(uint32_t total, uint32_t rows,
 	uint32_t lines, int descending, uint32_t *lo, uint32_t *hi)
 {
 	return cp_sync_window_part(total, rows, lines, descending,
-		CP_SYNC_PART_GAME, lo, hi);
+		CP_SYNC_PART_GAME, 0, lo, hi);
 }
 
 /* ---- watching one frame go out -------------------------------------------- */

@@ -202,8 +202,13 @@ void fxcg100_lcd_set_transfer(uint32_t cpu_writes);
  * (classpad_sync.h), and what is known about that refresh. */
 void fxcg100_lcd_set_sync(uint32_t wait, uint32_t offset);
 /* While the page that sets the offset is open: every frame waits, with
- * almost no room to spare, so that a wrong offset shows. */
+ * almost no room to spare, so that a wrong offset shows. Opening it counts
+ * the panel's rows again. */
 void fxcg100_lcd_sync_calibrate(uint32_t on);
+/* What that count found, for the page to show: rows in one refresh and
+ * refreshes a second. Returns 1 if the panel has a usable row counter, -1 if
+ * it has none, 0 if it has not been read yet. */
+int fxcg100_lcd_sync_info(uint32_t *rows, uint32_t *hz);
 /* fx-CP400: backlight level (1..16, 16 = full) and PWM rate (1..9, 9 the
  * fastest); 0 for either leaves, or puts back, what the system had set. */
 void fxcg100_lcd_set_backlight(uint32_t level, uint32_t pwm);

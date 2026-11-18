@@ -2472,6 +2472,30 @@ static fxcg100_menu_result screen_sync(cp_ui *ui)
 	ui_mark("Back", back);
 	leave = (flags & HIT_CLICK) || (ui->key_edge & FXCG100_APPKEY_BACK);
 
+	/* What the panel's row counter was found to be, counted again as the
+	 * page opened: if the right position moves from one start to another
+	 * while these stay the same, the panel's timing is not what moved.
+	 * Level with the back button, so no more rows are hidden. */
+	{
+		uint32_t rows, hz;
+		int found = fxcg100_lcd_sync_info(&rows, &hz);
+		char info[32];
+		int w, h = 32;
+
+		if(found > 0)
+			snprintf(info, sizeof(info), "%u rows, %u Hz", (unsigned)rows,
+				(unsigned)hz);
+		else
+			snprintf(info, sizeof(info), "%s",
+				found < 0 ? "No row counter" : "Counting rows");
+		w = cp_text_width(&cp_font_small, info) + 32;
+		cp_round_rect(&ui->s, ui->w - MARGIN - w, back.y + (back.h - h) / 2,
+			w, h, h / 2, ui->t.container);
+		cp_text(&ui->s, &cp_font_small, ui->w - MARGIN - w + 16,
+			back.y + (back.h - cp_font_small.height) / 2, info,
+			ui->t.on_surface);
+	}
+
 	/* The slider, with its value at the end. */
 	cp_round_rect(&ui->s, pill.x, pill.y, pill.w, pill.h, 24, ui->t.container);
 	ui_slider(ui, slider, "Position", &st->lcd_sync_offset, 15, NULL);
@@ -2741,9 +2765,10 @@ void fxcg100_menu_init(fxcg100_menu_state *state)
 	state->frameskip_type = 1;
 	state->frameskip_value = 1;
 	state->frame_limit = 1;
-	/* Where the picture lay in the panel's count of rows on the units it
-	 * was set by eye on: 0 to 2 were all clean. */
-	state->lcd_sync_offset = 1;
+	/* Where the picture lies in the panel's count of rows: on an fx-CP400
+	 * with panel ID 0x16 (548 rows a refresh, 20 of them blanking) only 0
+	 * gave a clean calibration page. */
+	state->lcd_sync_offset = 0;
 	fxcg100_keymap_defaults(state->keymap);
 	fxcg100_hotkey_defaults(state->hotkey_map);
 	state->random_lfsr = 0x00c6ba5eu;
