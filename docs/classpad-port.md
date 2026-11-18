@@ -313,10 +313,13 @@ Portrait 1:1 and 4:3 use the same pad in the same place, so changing the
 picture size never moves a key. The 1:1 picture sits against the bottom of
 the space the 4:3 one fills, next to the keys.
 
-Which way round landscape is, is chosen in Settings ("Device rotation":
-Portrait, CW, CCW) or by stepping through the three with the Rotate icon.
-CW means the calculator is turned clockwise, which puts the keypad under the
-left hand; CCW is the other way round. In landscape 1.5× the D-pad sits high in the left
+Which way the calculator is held is chosen in Settings ("Device rotation":
+Portrait, CW, CCW, 180). The Rotate icon steps through the first three, and
+Swap turns portrait upside down and back. CW means the calculator is turned
+clockwise, which puts the keypad under the left hand; CCW is the other way
+round; 180 is portrait with the keypad above the screen, where the picture,
+the touch keys, the interface and the cursor keys are all turned half a
+turn. In landscape 1.5× the D-pad sits high in the left
 column, where the thumb rests when the calculator is held by its ends. 
 
 Landscape has three picture sizes. 1:1 is the 1.5× layout with the picture
@@ -325,8 +328,9 @@ carries A, B, Select and Start; the D-pad and the shoulder keys are on the
 keypad. The strip is on the side away from the keypad, under the free
 thumb: on the right when the calculator is turned clockwise, on the left
 when counter-clockwise. gpSP always starts in portrait, the way the calculator is held to start it:
-with a landscape view saved from last time, the interface is drawn upright
-until the first game starts, which then gets the landscape view back.
+with a landscape or upside-down view saved from last time, the interface is
+drawn upright until the first game starts, which then gets the saved view
+back.
 Turning the screen by hand before that takes effect at once. The Resize icon steps through the sizes of the
 current orientation; turning keeps 1:1 as 1:1 and takes the larger sizes to
 the largest of the other orientation.
@@ -353,9 +357,9 @@ sit just above it in portrait:
 |---|---|---|
 | Menu, Settings | open the gpSP menu | — |
 | Esc | — | back |
-| Rotate | portrait → CW → CCW → portrait | — |
-| Resize | the other scale of this orientation | — |
-| Swap | keypad side in landscape; in portrait, turns the picture, the touch keys and the keypad directions upside down | — |
+| Rotate | portrait → CW → CCW → portrait | same |
+| Resize | the other scale of this orientation | same |
+| Swap | keypad side in landscape; in portrait, turns the picture, the touch keys and the keypad directions upside down | same |
 | Main | fast forward while held | — |
 
 There is no on-screen menu key any more. Clear also opens the menu, until

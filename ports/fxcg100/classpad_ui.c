@@ -346,10 +346,10 @@ static int ui_resolve_theme(cp_ui *ui)
 /* ---- input ---------------------------------------------------------------- */
 
 /* gpSP starts upright, the way the calculator is held to start it, even
- * when the saved view is a landscape one: until the first game starts (or
- * the player turns the screen themselves) the interface is drawn in the
- * portrait view of the same size class, and the saved view is left alone
- * for the game to use. */
+ * when the saved view is a landscape or an upside-down one: until the first
+ * game starts (or the player turns the screen themselves) the interface is
+ * drawn in the upright portrait view of the same size class, and the saved
+ * view is left alone for the game to use. */
 static int ui_start_upright;
 
 void cp_ui_game_starting(void)
@@ -361,8 +361,9 @@ static void ui_refresh_orientation(cp_ui *ui)
 {
 	unsigned view = ui->state->screen_scale, rotation = ui->state->rotation;
 
-	if(ui_start_upright && cp_view_is_landscape(view)) {
-		view = cp_view_turned(view);
+	if(ui_start_upright) {
+		if(cp_view_is_landscape(view))
+			view = cp_view_turned(view);
 		rotation = CP_ROTATION_KEYS_RIGHT;     /* upright, not upside down */
 	}
 
@@ -1718,19 +1719,23 @@ static void leave_settings(cp_ui *ui)
 
 static fxcg100_menu_result screen_settings(cp_ui *ui)
 {
-	static const char *const turn[] = { "Portrait", "CW", "CCW" };
+	static const char *const turn[] = { "Portrait", "CW", "CCW", "180" };
 	static const char *const size_portrait[] = { "1:1", "Fit width" };
 	static const char *const size_landscape[] = { "1:1", "1.5x", "2x" };
 	static const char *const filter[] = { "Smooth", "Sharp", "Crisp" };
 	static const char *const transfer[] = { "DMA", "CPU" };
 	static const char *const frameskip[] = { "Auto", "Manual", "Off" };
+	enum { HELD_UPRIGHT, HELD_CW, HELD_CCW, HELD_UPSIDE_DOWN };
 	fxcg100_menu_state *st = ui->state;
 	uint32_t landscape = (uint32_t)cp_view_is_landscape(st->screen_scale);
 	uint32_t size = cp_view_size(st->screen_scale);
-	/* 0 portrait; 1 the calculator turned clockwise, which puts the keypad
-	 * under the left hand; 2 turned counter-clockwise. */
-	uint32_t held = landscape ? 1u + (st->rotation == CP_ROTATION_KEYS_RIGHT)
-		: 0u;
+	/* CW is the calculator turned clockwise, which puts the keypad under
+	 * the left hand; CCW the other way; 180 is portrait with the keypad
+	 * above the screen. */
+	uint32_t held = landscape
+		? (st->rotation == CP_ROTATION_KEYS_RIGHT ? HELD_CCW : HELD_CW)
+		: (cp_view_is_flipped(st->screen_scale, st->rotation)
+			? HELD_UPSIDE_DOWN : HELD_UPRIGHT);
 	int changed = 0, y, top;
 	cp_clock clock;
 	char text[40];
@@ -1746,17 +1751,19 @@ static fxcg100_menu_result screen_settings(cp_ui *ui)
 
 	section_label(ui, &y, "Display");
 	card_begin(ui, y);
-	if(ui_segments(ui, setting_row(ui, &y, "Device rotation"), turn, turn, 3,
+	if(ui_segments(ui, setting_row(ui, &y, "Device rotation"), turn, turn, 4,
 			&held)) {
+		uint32_t turned = held == HELD_CW || held == HELD_CCW;
+
 		ui_start_upright = 0;      /* the player has chosen */
-		if((held != 0) != (landscape != 0)) {
+		if(turned != landscape) {
 			size = cp_view_size(cp_view_turned(st->screen_scale));
-			landscape = held != 0;
+			landscape = turned;
 		}
-		/* Upright here means upright: turning the picture over in portrait
-		 * is what Swap is for. */
-		st->rotation = held == 1 ? CP_ROTATION_KEYS_LEFT
-			: CP_ROTATION_KEYS_RIGHT;
+		/* KEYS_LEFT is turned clockwise in landscape and upside down in
+		 * portrait (cp_view_is_flipped). */
+		st->rotation = held == HELD_CW || held == HELD_UPSIDE_DOWN
+			? CP_ROTATION_KEYS_LEFT : CP_ROTATION_KEYS_RIGHT;
 		changed = 1;
 	}
 	if(ui_segments(ui, setting_row(ui, &y, "Picture size"),

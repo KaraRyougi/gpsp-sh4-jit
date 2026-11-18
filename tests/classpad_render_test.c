@@ -167,10 +167,13 @@ uint32_t fxcg100_rom_source_count(void) { return fake_game_count; }
 const char *fxcg100_rom_source_label(uint32_t i) { return fake_games[i % 12]; }
 /* What a saved configuration would put in the view, if not negative. */
 static int fake_saved_view = -1;
+static uint32_t fake_saved_rotation = CP_ROTATION_KEYS_RIGHT;
 int fxcg100_config_load(fxcg100_menu_state *state)
 {
-	if (fake_saved_view >= 0)
+	if (fake_saved_view >= 0) {
 		state->screen_scale = (uint32_t)fake_saved_view;
+		state->rotation = fake_saved_rotation;
+	}
 	return fake_saved_view >= 0;
 }
 int fxcg100_config_save(const fxcg100_menu_state *state)
@@ -813,12 +816,14 @@ static void ui_open(int in_game, unsigned view)
 		"first draw returned");
 }
 
-/* A tap at a point the player sees: finger down for one step, then up. */
+/* A tap at a point the player sees: finger down for one step, then up. The
+ * point is turned the way the interface was last drawn, which is not the
+ * saved view while gpSP still starts upright. */
 static fxcg100_menu_result ui_tap(int ux, int uy)
 {
 	fxcg100_menu_result r;
 
-	touch_user(ui_state.screen_scale, ui_state.rotation, 1, ux, uy, 0, 0);
+	touch_user(cp_view, cp_rotation, 1, ux, uy, 0, 0);
 	r = ui_frame();
 	if (r != FXCG100_MENU_CONTINUE)
 		return r;
@@ -949,6 +954,29 @@ static void test_ui(const char *dir)
 	memset(&touch_state, 0, sizeof(touch_state));
 	ui_settle(ui_frame());
 	CHECK(ui.w == 528, "a turn in the first library did not show");
+	/* Saved upside down, it starts upright as well, and the game and its
+	 * pause menu get the upside-down view back. */
+	fake_saved_view = CP_VIEW_PORTRAIT_43;
+	fake_saved_rotation = CP_ROTATION_KEYS_LEFT;
+	memset(&touch_state, 0, sizeof(touch_state));
+	fxcg100_menu_init(&ui_state);
+	fake_saved_view = -1;
+	fake_saved_rotation = CP_ROTATION_KEYS_RIGHT;
+	cp_ui_begin(&ui, &ui_state, 0);
+	ui_settle(cp_ui_step(&ui));
+	CHECK(ui.s.mode == CP_SURFACE_UPRIGHT && cp_rotation ==
+		CP_ROTATION_KEYS_RIGHT, "the first screen is upside down");
+	CHECK(ui_state.screen_scale == CP_VIEW_PORTRAIT_43 &&
+		ui_state.rotation == CP_ROTATION_KEYS_LEFT,
+		"the saved upside-down view was lost (%u, %u)",
+		(unsigned)ui_state.screen_scale, (unsigned)ui_state.rotation);
+	CHECK(ui_tap_on("Golden Sun", 0) == FXCG100_MENU_LOAD_GAME &&
+		ui_state.rotation == CP_ROTATION_KEYS_LEFT,
+		"starting a game from the upright library");
+	cp_ui_begin(&ui, &ui_state, 1);
+	ui_settle(cp_ui_step(&ui));
+	CHECK(ui.s.mode == CP_SURFACE_FLIPPED && ui.w == 320,
+		"the pause menu is not upside down like the game");
 
 	/* Sizes and turning: Resize goes round the sizes of an orientation;
 	 * turning keeps 1:1 as 1:1 and takes the larger sizes to the largest. */
@@ -1077,6 +1105,33 @@ static void test_ui(const char *dir)
 	ui_tap_on("2x", 0);
 	CHECK(ui_state.screen_scale == CP_VIEW_LANDSCAPE_2X, "landscape 2x");
 	ui_shot(dir, "ui-settings-landscape");
+	/* 180 is portrait held upside down: the interface turns over, keeps
+	 * taking taps where they are seen, and Portrait turns it back. */
+	ui_tap_on("180", 0);
+	CHECK(ui_state.screen_scale == CP_VIEW_PORTRAIT_43 &&
+		ui_state.rotation == CP_ROTATION_KEYS_LEFT,
+		"180 gives view %u rotation %u",
+		(unsigned)ui_state.screen_scale, (unsigned)ui_state.rotation);
+	CHECK(ui.w == 320 && ui.h == 528 && ui.s.mode == CP_SURFACE_FLIPPED,
+		"interface did not turn over");
+	CHECK(cp_physical_direction(cp_view, cp_rotation, 0) == 2,
+		"upside down, up in the menu is not the DOWN key");
+	ui_tap_on("1:1", 0);
+	CHECK(ui_state.screen_scale == CP_VIEW_PORTRAIT_1X &&
+		ui_state.rotation == CP_ROTATION_KEYS_LEFT,
+		"upside-down 1:1 (%u, %u)", (unsigned)ui_state.screen_scale,
+		(unsigned)ui_state.rotation);
+	ui_tap_on("Portrait", 0);
+	CHECK(ui_state.screen_scale == CP_VIEW_PORTRAIT_1X &&
+		ui_state.rotation == CP_ROTATION_KEYS_RIGHT &&
+		ui.s.mode == CP_SURFACE_UPRIGHT, "Portrait gives view %u rotation %u",
+		(unsigned)ui_state.screen_scale, (unsigned)ui_state.rotation);
+	ui_tap_on("180", 0);
+	ui_tap_on("CW", 0);
+	CHECK(ui_state.screen_scale == CP_VIEW_LANDSCAPE_1X &&
+		ui_state.rotation == CP_ROTATION_KEYS_LEFT && ui.w == 528,
+		"CW from 180 gives view %u rotation %u",
+		(unsigned)ui_state.screen_scale, (unsigned)ui_state.rotation);
 	CHECK(ui_tap_on("Back", 0) == FXCG100_MENU_CONTINUE &&
 		ui.screen == SCREEN_PAUSE, "Back from settings");
 	CHECK(config_saves == 1, "settings saved %d times", config_saves);
