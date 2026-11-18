@@ -134,6 +134,37 @@ int main(void)
 		cp_scan_probe_add(&probe, (i * 2654435761u >> 22) & 0x3ffu);
 	CHECK(cp_scan_probe_result(&probe, 32, &hz) == 0, "probe took noise");
 
+	/* Reading the counter: the same row or a few later is believed, also
+	 * across the end of a refresh; a carry read half done is not. */
+	CHECK(cp_scan_agree(100, 100, TOTAL) && cp_scan_agree(100, 105, TOTAL),
+		"two reads a few rows apart do not agree");
+	CHECK(cp_scan_agree(TOTAL - 2u, 3, TOTAL),
+		"two reads across the end of a refresh do not agree");
+	CHECK(!cp_scan_agree(255, 511, TOTAL) && !cp_scan_agree(511, 256, TOTAL)
+		&& !cp_scan_agree(105, 100, TOTAL),
+		"a misread row was believed");
+
+	/* The game's window keeps more clear than the interface's and lies
+	 * inside it. */
+	{
+		uint32_t lo = 0, hi = 0, glo = 0, ghi = 0;
+
+		CHECK(cp_sync_window(TOTAL, 240, 120, 0, &lo, &hi) &&
+			cp_sync_window_game(TOTAL, 240, 120, 0, &glo, &ghi) &&
+			glo > lo && ghi < hi && glo < ghi,
+			"game window %u-%u is not inside %u-%u", (unsigned)glo,
+			(unsigned)ghi, (unsigned)lo, (unsigned)hi);
+		CHECK(glo == 120u + TOTAL / 6u && ghi == TOTAL - TOTAL / 6u,
+			"game window is %u-%u", (unsigned)glo, (unsigned)ghi);
+	}
+
+	/* The least distance seen between the two during a frame. */
+	cp_sync_track_begin(&t, TOTAL);
+	cp_sync_track_strip(&t, 300, 0);
+	cp_sync_track_strip(&t, 320, 100);
+	cp_sync_track_strip(&t, 340, 400);
+	CHECK(t.near == 60u, "closest approach is %u", (unsigned)t.near);
+
 	if(failures)
 		return 1;
 	printf("classpad_sync_test: all checks passed\n");

@@ -43,15 +43,6 @@
 #include <stdio.h>
 #include <string.h>
 
-#if defined(CGBA_DYNAREC) && !defined(CGBA_HOST_TEST)
-#define CP_UI_JIT_RESETS 1
-extern void cgba_gpsp_jit_flushes(uint32_t *rom, uint32_t *ram);  /* gpsp_runner.c */
-extern uint32_t cgba_gpsp_jit_ram_full(void);
-extern uint32_t cgba_classpad_heap_mark(void);        /* classpad_loader.c */
-extern uint32_t cgba_classpad_reserved_start(void);
-extern uint32_t cgba_classpad_heap_differs(void);
-#endif
-
 #define MARGIN 12              /* screen edge to a card */
 #define PAD 16                 /* card edge to its content */
 #define CARD_RADIUS 20
@@ -75,16 +66,19 @@ enum {
 	SCREEN_SETTINGS,
 	SCREEN_CONTROLS,
 	SCREEN_CLOCK,
+	SCREEN_SYNC,
 	SCREEN_COUNT
 };
 
 enum { CONFIRM_NONE = 0, CONFIRM_RESTART, CONFIRM_EXIT };
 
 enum {
-	MODAL_NONE = 0, MODAL_CONFIRM, MODAL_CAPTURE, MODAL_CLOCK, MODAL_UNLOCK
+	MODAL_NONE = 0, MODAL_CONFIRM, MODAL_CAPTURE, MODAL_CLOCK, MODAL_FLASHING
 };
 
 enum { BTN_FILLED = 0, BTN_TONAL, BTN_OUTLINED, BTN_TEXT, BTN_DANGER };
+
+enum { SLIDER_NONE = 0, SLIDER_PENDING, SLIDER_DRAG };
 
 enum {
 	ICON_NONE = 0, ICON_BACK, ICON_CLOSE, ICON_SETTINGS, ICON_CHEVRON,
@@ -155,6 +149,12 @@ typedef struct cp_ui {
 	const void *edit;
 	int edit_delta;
 
+	/* The slider a touch began on (its key), and whether the finger is
+	 * still being watched (SLIDER_PENDING), dragging it (SLIDER_DRAG) or
+	 * was let go to scroll the page (SLIDER_NONE). */
+	const void *slider;
+	int slider_state;
+
 	int scroll[SCREEN_COUNT];
 	const char *toast;
 	uint32_t toast_t0;         /* interface time it appeared */
@@ -176,10 +176,8 @@ typedef struct cp_ui {
 	int clock_test_failed;
 	int clock_loaded, clock_pending;
 	uint32_t clock_deadline, clock_at_startup;
-	uint32_t clock_unlocked;   /* the limits are switched off */
-	int clock_unlock_ask;      /* asking whether to switch them off */
-	int clock_fast_idle;       /* SDRAM idle cycles as on the fx-CG */
-	int clock_fast_flash;      /* flash idle cycles as on the fx-CG */
+	int sync_warn;             /* asking before the flashing page opens */
+	uint32_t sync_frame;       /* frames of it drawn: picks the colour */
 	int redraw;
 } cp_ui;
 
@@ -416,13 +414,21 @@ static int ui_input(cp_ui *ui)
 			ui->dragging = 0;
 			ui->focus_shown = 0;
 			ui->edit = NULL;          /* a tap on its value picks it again */
+			ui->slider = NULL;        /* a slider drawn at this step claims it */
+			ui->slider_state = SLIDER_NONE;
 			changed = 1;
 		} else {
 			int dx = x - ui->press_x, dy = y - ui->press_y;
 
 			if(dx > DRAG_SLOP || dx < -DRAG_SLOP || dy > DRAG_SLOP ||
-					dy < -DRAG_SLOP)
+					dy < -DRAG_SLOP) {
+				/* A touch that began on a slider: mostly sideways drags
+				 * it, mostly up or down scrolls the page instead. */
+				if(ui->slider_state == SLIDER_PENDING)
+					ui->slider_state = (dx < 0 ? -dx : dx) >=
+						(dy < 0 ? -dy : dy) ? SLIDER_DRAG : SLIDER_NONE;
 				ui->dragging = 1;
+			}
 			if(ui->dragging)
 				ui->drag_dy = y - ui->ty;
 			if(x != ui->tx || y != ui->ty)
@@ -515,7 +521,7 @@ static void ui_unmute(cp_ui *ui, const ui_muted *saved)
  * right, a shallower one from the left. */
 static void ui_goto(cp_ui *ui, int screen)
 {
-	static const int8_t depth[SCREEN_COUNT] = { 0, 0, 1, 2, 2 };
+	static const int8_t depth[SCREEN_COUNT] = { 0, 0, 1, 2, 2, 2 };
 	int d = depth[screen] - depth[ui->screen];
 
 	ui->enter_dir = d > 0 ? 1 : d < 0 ? -1 : 0;
@@ -894,14 +900,138 @@ static int ui_stepper(cp_ui *ui, cp_rect r, const char *key, uint32_t big,
 	return *value != old;
 }
 
-/* A stepper that shows the number itself. */
-static int ui_number(cp_ui *ui, cp_rect r, uint32_t *value, uint32_t max)
+/* What a slider shows for its value: the number, or `zero` (if given) for 0. */
+static void slider_text(char *text, size_t size, uint32_t value,
+	const char *zero)
 {
-	char text[12];
+	if(zero && value == 0)
+		snprintf(text, size, "%s", zero);
+	else
+		snprintf(text, size, "%u", (unsigned)value);
+}
 
-	/* Format after stepping would lag a frame; the caller redraws on change. */
-	snprintf(text, sizeof(text), "%u", (unsigned)*value);
-	return ui_stepper(ui, r, NULL, 1, value, 0, max, 1, text);
+/* The stop nearest to x on a track from x0 over span pixels. */
+static uint32_t slider_stop(int x, int x0, int span, uint32_t max)
+{
+	int v = x <= x0 ? 0 : ((x - x0) * (int)max * 2 + span) / (2 * span);
+
+	return v > (int)max ? max : (uint32_t)v;
+}
+
+#define SLIDER_H 44            /* the handle's height, and the touch target */
+#define SLIDER_TRACK 16
+
+/* Move a remembered value straight to `target`, with no easing. */
+static int ui_anim_jump(cp_ui *ui, const void *key, int target)
+{
+	int i;
+
+	for(i = 0; i < UI_ANIMS; i++)
+		if(ui->anim[i].key == key)
+			ui->anim[i].value = target;
+	return ui_anim(ui, key, target);
+}
+
+/* A Material 3 slider over the whole numbers 0..max: a thick track in two
+ * parts with a gap around a bar handle, the part before the handle filled.
+ * There are no stop marks. A sideways drag that starts on it carries the
+ * handle with the finger while the value follows the nearest stop, and on
+ * release the handle slides to that stop (a drag that starts mostly up or
+ * down still scrolls the page); a tap moves it to the nearest stop; with the
+ * keypad focus on it, left and right step it. While it is held the handle
+ * narrows and a label above it shows the value. `key` (the row's label)
+ * names it for ui_anim. Returns nonzero if *value changed. */
+static int ui_slider(cp_ui *ui, cp_rect r, const char *key, uint32_t *value,
+	uint32_t max, const char *zero)
+{
+	int index = ui->widgets++;
+	int focused = ui->focus_shown && index == ui->focus;
+	int x0 = r.x + SLIDER_TRACK / 2, span = r.w - SLIDER_TRACK;
+	int ty = r.y + (r.h - SLIDER_TRACK) / 2;
+	int held, drag, thumb, hw, a, b;
+	uint32_t old = *value;
+
+	if(max == 0)
+		max = 1;
+	if(*value > max)
+		*value = max;
+	if(focused) {
+		ui->focus_rect = r;
+		ui->focus_seen = 1;
+		if(ui->adjust < 0 && *value > 0)
+			*value -= 1;
+		if(ui->adjust > 0 && *value < max)
+			*value += 1;
+	}
+	if(ui->touching && ui->touch_began && point_in(r, ui->press_x,
+			ui->press_y) && cp_surface_visible(&ui->s, ui->press_x,
+			ui->press_y)) {
+		ui->slider = key;
+		ui->slider_state = SLIDER_PENDING;
+	}
+	drag = ui->slider == key && ui->touching &&
+		ui->slider_state == SLIDER_DRAG;
+	if(drag)
+		*value = slider_stop(ui->tx, x0, span, max);
+	else if(ui->tap && point_in(r, ui->press_x, ui->press_y) &&
+			point_in(r, ui->tap_x, ui->tap_y) &&
+			cp_surface_visible(&ui->s, ui->tap_x, ui->tap_y))
+		*value = slider_stop(ui->tap_x, x0, span, max);
+	held = ui->slider == key && ui->touching &&
+		ui->slider_state != SLIDER_NONE;
+	if(drag) {
+		int x = ui->tx < x0 ? x0 : ui->tx > x0 + span ? x0 + span : ui->tx;
+
+		thumb = ui_anim_jump(ui, key, x);
+	} else {
+		thumb = ui_anim(ui, key, x0 + (int)*value * span / (int)max);
+	}
+
+	/* The two parts of the track stop 6 short of the handle; their ends at
+	 * the handle are nearly square, the outer ends fully round. */
+	hw = held ? 2 : 4;
+	a = thumb - hw / 2 - 6 - r.x;
+	b = thumb - hw / 2 + hw + 6;
+	if(a > 0) {
+		cp_round_rect(&ui->s, r.x, ty, a, SLIDER_TRACK, SLIDER_TRACK / 2,
+			ui->t.primary);
+		if(a >= 12)
+			cp_round_rect(&ui->s, r.x + a - 10, ty, 10, SLIDER_TRACK, 2,
+				ui->t.primary);
+	}
+	if(b < r.x + r.w) {
+		int w = r.x + r.w - b;
+
+		cp_round_rect(&ui->s, b, ty, w, SLIDER_TRACK, SLIDER_TRACK / 2,
+			ui->t.secondary_container);
+		if(w >= 12)
+			cp_round_rect(&ui->s, b, ty, 10, SLIDER_TRACK, 2,
+				ui->t.secondary_container);
+	}
+	cp_round_rect(&ui->s, thumb - hw / 2, r.y, hw, r.h, hw / 2,
+		ui->t.primary);
+	if(focused)
+		cp_round_ring(&ui->s, thumb - 6, r.y - 4, 12, r.h + 8, 6, 2,
+			ui->t.primary);
+	if(held) {
+		char text[12];
+		int tw, bw, bh = cp_font_small.height + 10, bx, by;
+
+		slider_text(text, sizeof(text), *value, zero);
+		tw = cp_text_width(&cp_font_small, text);
+		bw = tw + 20 < 36 ? 36 : tw + 20;
+		bx = thumb - bw / 2;
+		by = r.y - 4 - bh;
+		if(bx < r.x)
+			bx = r.x;
+		if(bx + bw > r.x + r.w)
+			bx = r.x + r.w - bw;
+		cp_round_rect(&ui->s, bx, by, bw, bh, bh / 2, ui->t.on_surface);
+		cp_text_centered(&ui->s, &cp_font_small, bx, by, bw, bh, text,
+			ui->t.surface);
+	}
+	ui_mark(key, r);
+	return *value != old;
 }
 
 /* The picture of a switch, `on` running from 0 (off) to 256. */
@@ -1060,7 +1190,8 @@ static int ui_scroll_begin(cp_ui *ui)
 	int *scroll = &ui->scroll[ui->screen];
 
 	if(ui->touching) {
-		if(ui->dragging && ui->press_y >= ui->bar_h) {
+		if(ui->dragging && ui->press_y >= ui->bar_h &&
+				ui->slider_state != SLIDER_DRAG) {
 			*scroll -= ui->drag_dy;
 			/* Remember how fast, for when the finger lifts. */
 			ui->fling = (ui->fling + ui->drag_dy * 256 /
@@ -1263,6 +1394,36 @@ static cp_rect setting_row_h(cp_ui *ui, int *y, const char *label,
 static cp_rect setting_row(cp_ui *ui, int *y, const char *label)
 {
 	return setting_row_h(ui, y, label, NULL, CONTROL_H);
+}
+
+/* A setting with a slider. On a narrow screen the name and the value share
+ * a line with the slider under it: 12 above the name, the slider right
+ * below it, 8 under the slider, so a name sits closer to its own slider
+ * than to the row before and the last handle clears the card's corner. */
+static int row_slider(cp_ui *ui, int *y, const char *label, uint32_t *value,
+	uint32_t max, const char *zero)
+{
+	char text[12];
+	cp_rect r, control;
+	int top = 12 + cp_font_body.height, changed;
+
+	if(ui->wide)
+		return ui_slider(ui, setting_row_h(ui, y, label, NULL, SLIDER_H),
+			label, value, max, zero);
+	r = row_begin(ui, y, top + SLIDER_H + 8);
+	control = (cp_rect){ (int16_t)(r.x + PAD), (int16_t)(r.y + top),
+		(int16_t)(r.w - 2 * PAD), SLIDER_H };
+	cp_text(&ui->s, &cp_font_body, r.x + PAD, r.y + 12, label,
+		ui->t.on_surface);
+	changed = ui_slider(ui, control, label, value, max, zero);
+	/* After the slider, so it is the value the handle is at now; under the
+	 * held label it would only repeat it. */
+	slider_text(text, sizeof(text), *value, zero);
+	cp_text(&ui->s, &cp_font_small, r.x + r.w - PAD -
+		cp_text_width(&cp_font_small, text), r.y + 12 +
+		(cp_font_body.height - cp_font_small.height) / 2, text,
+		ui->t.on_surface_variant);
+	return changed;
 }
 
 /* Two buttons side by side across the page. */
@@ -1610,19 +1771,21 @@ static fxcg100_menu_result screen_settings(cp_ui *ui)
 		transfer, transfer, 2, &st->lcd_cpu);
 	changed |= row_switch(ui, &y, "Touch keys",
 		"Show the on-screen buttons", &st->touch_keys);
-	changed |= row_switch(ui, &y, "Wait for screen refresh",
+	changed |= row_switch(ui, &y, "VSync",
 		"Less tearing; can cost speed", &st->lcd_sync);
-	if(st->lcd_sync)
-		changed |= ui_number(ui, setting_row(ui, &y, "Refresh position"),
-			&st->lcd_sync_offset, 15);
+	if(st->lcd_sync && row_nav(ui, &y, "Refresh position",
+			"Set it against a flashing picture")) {
+		ui->sync_warn = 1;
+		ui->focus_shown = 0;
+		changed = 1;
+	}
 	/* At once: the interface is sent the same way, so the setting can be
 	 * judged here, on a scrolling page. */
 	fxcg100_lcd_set_sync(st->lcd_sync, st->lcd_sync_offset);
 	/* 0 is the system's own setting; its brightest is about 6 of 16. */
-	changed |= ui_number(ui, setting_row(ui, &y, "Backlight (0 = system)"),
-		&st->backlight, 16);
-	changed |= ui_number(ui, setting_row(ui, &y, "Backlight PWM rate"),
-		&st->backlight_pwm, 9);
+	changed |= row_slider(ui, &y, "Backlight", &st->backlight, 16, "System");
+	changed |= row_slider(ui, &y, "Backlight PWM rate", &st->backlight_pwm, 9,
+		"System");
 	fxcg100_lcd_set_backlight(st->backlight, st->backlight_pwm);
 	card_end(ui, &y);
 
@@ -1640,8 +1803,8 @@ static fxcg100_menu_result screen_settings(cp_ui *ui)
 	changed |= ui_segments(ui, setting_row(ui, &y, "Frame skipping"),
 		frameskip, frameskip, 3, &st->frameskip_type);
 	if(st->frameskip_type == 1)
-		changed |= ui_number(ui, setting_row(ui, &y, "Frames to skip"),
-			&st->frameskip_value, 9);
+		changed |= row_slider(ui, &y, "Frames to skip",
+			&st->frameskip_value, 9, NULL);
 	changed |= row_switch(ui, &y, "Limit to 60 fps",
 		"Never run faster than a real GBA", &st->frame_limit);
 	changed |= row_switch(ui, &y, "Show frame rate", NULL, &st->show_fps);
@@ -1649,47 +1812,6 @@ static fxcg100_menu_result screen_settings(cp_ui *ui)
 	megahertz(text, sizeof(text), "CPU", cp_clock_hz(&clock, CP_CLK_CPU));
 	if(row_nav(ui, &y, "Clock speed", text))
 		ui_goto(ui, SCREEN_CLOCK);
-	/* How often the JIT has had to throw its translations away since the
-	 * game was started. Each time costs a pause while code is translated
-	 * again; a count that keeps rising means the cache is too small. */
-#ifdef CP_UI_JIT_RESETS
-	{
-		uint32_t rom_resets, ram_resets;
-
-		cgba_gpsp_jit_flushes(&rom_resets, &ram_resets);
-		snprintf(text, sizeof(text), "ROM %u, RAM %u (full %u)",
-			(unsigned)rom_resets, (unsigned)ram_resets,
-			(unsigned)cgba_gpsp_jit_ram_full());
-		row_info(ui, &y, "JIT cache resets", text);
-		{
-			uint32_t usable, rows, hz, frames, torn;
-
-			fxcg100_lcd_sync_info(&usable, &rows, &hz, &frames, &torn);
-			if(usable)
-				snprintf(text, sizeof(text), "%u rows %u Hz, torn %u%%",
-					(unsigned)rows, (unsigned)hz,
-					(unsigned)(frames ? torn * 100u / frames : 0));
-			else
-				snprintf(text, sizeof(text), "no counter (%u, %u)",
-					(unsigned)rows, (unsigned)hz);
-			row_info(ui, &y, "Screen refresh", text);
-			if(usable) {
-				uint32_t d[4];
-
-				fxcg100_lcd_sync_detail(d);
-				snprintf(text, sizeof(text), "%u, %u-%u, waits %u%%",
-					(unsigned)d[0], (unsigned)d[1], (unsigned)d[2],
-					(unsigned)(frames ? d[3] * 100u / frames : 0));
-				row_info(ui, &y, "Frame timing", text);
-			}
-		}
-		snprintf(text, sizeof(text), "%08X %08X %02X",
-			(unsigned)cgba_classpad_heap_mark(),
-			(unsigned)cgba_classpad_reserved_start(),
-			(unsigned)cgba_classpad_heap_differs());
-		row_info(ui, &y, "Heap", text);
-	}
-#endif
 	card_end(ui, &y);
 
 	section_label(ui, &y, "Keys");
@@ -1957,9 +2079,16 @@ void cp_ui_apply_saved_clock(void)
 		return;
 	/* Only on top of the state it was made on: not, for instance, when
 	 * another tool has already changed the clock. */
-	if(clock_file_load(&file) && file.at_startup &&
-			file.stock_frqcr == clock_stock.FRQCR)
-		clock_apply(&file.clock);
+	if(clock_file_load(&file)) {
+		if(file.at_startup && file.stock_frqcr == clock_stock.FRQCR)
+			clock_apply(&file.clock);
+	} else {
+		/* Nothing chosen yet: the speed the emulator is tuned on. */
+		cp_clock f5;
+
+		if(cp_clock_f5(&clock_stock, &f5))
+			clock_apply(&f5);
+	}
 }
 
 static void clock_page_open(cp_ui *ui)
@@ -1970,17 +2099,12 @@ static void clock_page_open(cp_ui *ui)
 	fxcg100_clock_read(&ui->clock_running);
 	clock_measure(&ui->clock_running);
 	ui->clock_edit = ui->clock_running;
-	ui->clock_fast_idle = ui->clock_running.CS3BCR != clock_stock.CS3BCR;
-	ui->clock_fast_flash = ui->clock_running.CS0BCR != clock_stock.CS0BCR;
 	cp_chain_decode(&ui->clock_edit, &ui->clock_chain);
-	ui->clock_at_startup = 0;
-	ui->clock_unlocked = 0;
-	if(clock_file_load(&file)) {
+	/* Until something is saved, the default speed is applied at start. */
+	ui->clock_at_startup = 1;
+	if(clock_file_load(&file))
 		ui->clock_at_startup = file.at_startup;
-		ui->clock_unlocked = file.unlocked;
-	}
 	ui->clock_tested = NULL;
-	ui->clock_unlock_ask = 0;
 	ui->clock_pending = 0;
 	ui->clock_loaded = 1;
 }
@@ -2019,45 +2143,11 @@ static fxcg100_menu_result modal_clock(cp_ui *ui)
 		ui->clock_pending = 0;
 		clock_measure(&ui->clock_running);
 		ui_snack(ui, clock_file_save(&ui->clock_running, ui->clock_at_startup,
-			ui->clock_unlocked)
+			0)
 			? "Clock speed kept" : "Kept, but could not be saved");
 	}
 	/* The countdown has to keep running without input. */
 	ui->redraw = 1;
-	return FXCG100_MENU_CONTINUE;
-}
-
-/* The limits in force: Xtune's defaults, or its outer ones when the player
- * has switched the limits off. */
-static const uint32_t *clock_limits(const cp_ui *ui)
-{
-	return ui->clock_unlocked ? cp_clock_hard_limit : cp_clock_limit;
-}
-
-/* Before the limits are switched off. */
-static fxcg100_menu_result modal_unlock(cp_ui *ui)
-{
-	cp_rect box = dialog_box(ui, 216), cancel, ok;
-
-	dialog_text(ui, box, "Switch the limits off?",
-		"Nothing past them is tested.");
-	cp_text_fit(&ui->s, &cp_font_small, box.x + 24, box.y + 84, box.w - 48,
-		"A setting the calculator cannot run", ui->t.on_surface_variant);
-	cp_text_fit(&ui->s, &cp_font_small, box.x + 24, box.y + 106, box.w - 48,
-		"freezes it until it is reset.", ui->t.on_surface_variant);
-	dialog_buttons(box, "Cancel", "Switch off", &cancel, &ok);
-	if(ui_button(ui, cancel, "Cancel", BTN_TEXT) ||
-			(ui->key_edge & FXCG100_APPKEY_BACK)) {
-		ui->clock_unlock_ask = 0;
-		ui->focus_shown = 0;
-		ui->redraw = 1;
-	} else if(ui_button(ui, ok, "Switch off", BTN_FILLED)) {
-		ui->clock_unlock_ask = 0;
-		ui->clock_unlocked = 1;
-		clock_file_save(&ui->clock_running, ui->clock_at_startup, 1);
-		ui->focus_shown = 0;
-		ui->redraw = 1;
-	}
 	return FXCG100_MENU_CONTINUE;
 }
 
@@ -2083,7 +2173,7 @@ static int clock_chain_move(cp_ui *ui, int row, int dir, int steps)
 
 	while(steps-- > 0) {
 		result = cp_chain_step(&ui->clock_chain, row, dir, 0,
-			clock_limits(ui));
+			cp_clock_limit);
 		if(result != 0)
 			break;
 		moved = 1;
@@ -2091,15 +2181,15 @@ static int clock_chain_move(cp_ui *ui, int row, int dir, int steps)
 	if(result > 0) {
 		snprintf(text, sizeof(text), "%s limit is %u MHz",
 			cp_clock_name[result],
-			(unsigned)(clock_limits(ui)[result] / 1000000u));
+			(unsigned)(cp_clock_limit[result] / 1000000u));
 		ui_snack(ui, text);
 	}
 	if(moved) {
+		/* Whatever is set by hand has the fast idle cycles; only "Restore
+		 * stock" gives the calculator's own. */
 		ui->clock_edit = cp_clock_for_chain(&clock_stock, &ui->clock_chain);
-		if(ui->clock_fast_idle)
-			ui->clock_edit.CS3BCR = cp_clock_fast_sdram_idle(&clock_stock);
-		if(ui->clock_fast_flash)
-			ui->clock_edit.CS0BCR = cp_clock_fast_flash_idle(&clock_stock);
+		ui->clock_edit.CS3BCR = cp_clock_fast_sdram_idle(&clock_stock);
+		ui->clock_edit.CS0BCR = cp_clock_fast_flash_idle(&clock_stock);
 	}
 	return moved || result > 0;
 }
@@ -2138,15 +2228,11 @@ static fxcg100_menu_result screen_clock(cp_ui *ui)
 	/* What the chain below adds up to. The stock setting is always allowed,
 	 * whatever the rules say of it. */
 	problem = cp_clock_equal(e, &clock_stock) ? NULL
-		: cp_clock_problem(e, clock_limits(ui));
+		: cp_clock_problem(e, cp_clock_limit);
 	status = "Not applied yet";
 	status_ink = ui->t.on_surface_variant;
 	if(problem) {
 		status = problem;
-		status_ink = ui->t.error;
-	} else if(cp_clock_hz(e, CP_CLK_BUS) > CP_CLK_BUS_MEASURED) {
-		/* Only reachable with the limits off. */
-		status = "Bus above 130 MHz";
 		status_ink = ui->t.error;
 	} else if(cp_clock_equal(e, &ui->clock_running)) {
 		/* With what the processor really does, measured against a timer
@@ -2280,50 +2366,15 @@ static fxcg100_menu_result screen_clock(cp_ui *ui)
 	row_info(ui, &y, "Touch bus", text);
 	card_end(ui, &y);
 
-	/* The stock setting leaves several idle cycles between SDRAM accesses;
-	 * the fx-CG profile this emulator is tuned on has almost none. */
-	section_label(ui, &y, "Memory bus");
-	card_begin(ui, y);
-	v = ui->clock_fast_idle;
-	if(row_switch(ui, &y, "Fast SDRAM bus", "Fewer idle cycles; Test first",
-			&v)) {
-		ui->clock_fast_idle = v;
-		e->CS3BCR = v ? cp_clock_fast_sdram_idle(&clock_stock)
-			: clock_stock.CS3BCR;
-		changed = 1;
-	}
-	v = ui->clock_fast_flash;
-	if(row_switch(ui, &y, "Fast flash bus", "Fewer idle cycles; Test first",
-			&v)) {
-		ui->clock_fast_flash = v;
-		e->CS0BCR = v ? cp_clock_fast_flash_idle(&clock_stock)
-			: clock_stock.CS0BCR;
-		changed = 1;
-	}
-	card_end(ui, &y);
-
 	section_label(ui, &y, "Use");
 	card_begin(ui, y);
 	v = ui->clock_at_startup;
 	if(row_switch(ui, &y, "Apply when gpSP starts",
 			"Hold Clear at start to skip", &v)) {
 		ui->clock_at_startup = v;
-		ui_snack(ui, clock_file_save(&ui->clock_running, v,
-			ui->clock_unlocked)
+		ui_snack(ui, clock_file_save(&ui->clock_running, v, 0)
 			? (v ? "Will be applied at start-up" : "Start-up setting off")
 			: "Could not save");
-		changed = 1;
-	}
-	/* Shown as "Limits: on"; switching them off asks first. */
-	v = !ui->clock_unlocked;
-	if(row_switch(ui, &y, "Limits", "Keep to the tested range", &v)) {
-		if(v) {
-			ui->clock_unlocked = 0;
-			clock_file_save(&ui->clock_running, ui->clock_at_startup, 0);
-		} else {
-			ui->clock_unlock_ask = 1;
-			ui->focus_shown = 0;
-		}
 		changed = 1;
 	}
 	card_end(ui, &y);
@@ -2333,8 +2384,6 @@ static fxcg100_menu_result screen_clock(cp_ui *ui)
 
 		if(ui_button(ui, r, "Restore stock", BTN_OUTLINED)) {
 			*e = clock_stock;
-			ui->clock_fast_idle = 0;
-			ui->clock_fast_flash = 0;
 			cp_chain_decode(e, ch);
 			changed = 1;
 		}
@@ -2344,6 +2393,103 @@ static fxcg100_menu_result screen_clock(cp_ui *ui)
 	ui_scroll_end(ui, y - top);
 	if(changed)
 		ui->redraw = 1;
+	return FXCG100_MENU_CONTINUE;
+}
+
+/* ---- refresh position ----------------------------------------------------- */
+
+/* Before the page below opens. */
+static fxcg100_menu_result modal_flashing(cp_ui *ui)
+{
+	static const char *const more[] = {
+		"many times a second. That can",
+		"trigger seizures in people with",
+		"photosensitive epilepsy.",
+	};
+	cp_rect box = dialog_box(ui, 262), cancel, ok;
+	int i;
+
+	dialog_text(ui, box, "Flashing colours", "The next screen changes colour");
+	for(i = 0; i < 3; i++)
+		cp_text_fit(&ui->s, &cp_font_small, box.x + 24, box.y + 82 + 22 * i,
+			box.w - 48, more[i], ui->t.on_surface_variant);
+	cp_text_fit(&ui->s, &cp_font_small, box.x + 24, box.y + 158, box.w - 48,
+		"Do not go on if that may be you.", ui->t.on_surface);
+	dialog_buttons(box, "Cancel", "Continue", &cancel, &ok);
+	if(ui_button(ui, cancel, "Cancel", BTN_TEXT) ||
+			(ui->key_edge & FXCG100_APPKEY_BACK)) {
+		ui->sync_warn = 0;
+		ui->focus_shown = 0;
+		ui->redraw = 1;
+	} else if(ui_button(ui, ok, "Continue", BTN_FILLED)) {
+		ui->sync_warn = 0;
+		ui->focus_shown = 0;
+		ui->sync_frame = 0;
+		ui_goto(ui, SCREEN_SYNC);
+	}
+	return FXCG100_MENU_CONTINUE;
+}
+
+/* Setting the refresh position by eye: the whole screen changes colour with
+ * every frame, so that a frame the panel's refresh overtook shows as a line
+ * across it, wherever on the panel that happened. The colours are strong
+ * and each differs sharply from the one before, as in the test ROM this
+ * page replaces. All that is drawn over them is a round button for the way
+ * back at the top and a pill with the slider at the bottom; both leave the
+ * colour showing beside them, so no row of the panel is hidden. While the
+ * page is open frames wait with almost no room to spare
+ * (fxcg100_lcd_sync_calibrate), so only the right position, or the one
+ * beside it, gives a clean screen. */
+static fxcg100_menu_result screen_sync(cp_ui *ui)
+{
+	static const uint16_t colours[] = {
+		CP_RGB(255, 255, 255), CP_RGB(255, 0, 0), CP_RGB(0, 255, 0),
+		CP_RGB(0, 0, 255), CP_RGB(255, 255, 0), CP_RGB(255, 0, 255),
+		CP_RGB(0, 255, 255), CP_RGB(255, 132, 0), CP_RGB(99, 0, 197),
+		CP_RGB(132, 132, 132), CP_RGB(0, 0, 0),
+	};
+	fxcg100_menu_state *st = ui->state;
+	uint32_t old = st->lcd_sync_offset;
+	cp_rect back = { MARGIN, MARGIN, 48, 48 };
+	cp_rect pill = { MARGIN, (int16_t)(ui->h - MARGIN - 48),
+		(int16_t)(ui->w - 2 * MARGIN), 48 };
+	cp_rect slider = { (int16_t)(pill.x + 20), (int16_t)(pill.y + 8),
+		(int16_t)(pill.w - 40 - 32), 32 };
+	char text[12];
+	int flags, id, leave;
+
+	cp_fill(&ui->s, 0, 0, ui->w, ui->h,
+		colours[ui->sync_frame++ % (sizeof(colours) / sizeof(colours[0]))]);
+
+	/* The way back, and nothing else. */
+	cp_disc(&ui->s, back.x + 24, back.y + 24, 24, ui->t.container);
+	flags = ui_widget(ui, back);
+	id = ui->last_id;
+	ui_layer(ui, id, back, 24, flags, ui->t.on_surface);
+	ui_icon(ui, ICON_BACK, back.x + 24, back.y + 24, ui->t.on_surface);
+	if(flags & HIT_FOCUS)
+		ui_focus_ring(ui, back, 24);
+	ui_mark("Back", back);
+	leave = (flags & HIT_CLICK) || (ui->key_edge & FXCG100_APPKEY_BACK);
+
+	/* The slider, with its value at the end. */
+	cp_round_rect(&ui->s, pill.x, pill.y, pill.w, pill.h, 24, ui->t.container);
+	ui_slider(ui, slider, "Position", &st->lcd_sync_offset, 15, NULL);
+	snprintf(text, sizeof(text), "%u", (unsigned)st->lcd_sync_offset);
+	cp_text(&ui->s, &cp_font_body,
+		pill.x + pill.w - 20 - cp_text_width(&cp_font_body, text),
+		pill.y + (pill.h - cp_font_body.height) / 2, text, ui->t.on_surface);
+
+	if(st->lcd_sync_offset != old) {
+		fxcg100_lcd_set_sync(st->lcd_sync, st->lcd_sync_offset);
+		ui->settings_dirty = 1;
+	}
+	if(leave) {
+		ui_goto(ui, SCREEN_SETTINGS);
+		return FXCG100_MENU_CONTINUE;
+	}
+	/* A new colour with every frame, input or not. */
+	ui->redraw = 1;
 	return FXCG100_MENU_CONTINUE;
 }
 
@@ -2387,8 +2533,8 @@ static int ui_modal(const cp_ui *ui)
 		return MODAL_CAPTURE;
 	if(ui->screen == SCREEN_CLOCK && ui->clock_pending)
 		return MODAL_CLOCK;
-	if(ui->screen == SCREEN_CLOCK && ui->clock_unlock_ask)
-		return MODAL_UNLOCK;
+	if(ui->screen == SCREEN_SETTINGS && ui->sync_warn)
+		return MODAL_FLASHING;
 	return MODAL_NONE;
 }
 
@@ -2412,7 +2558,8 @@ static void ui_strip_shortcuts(cp_ui *ui)
 			ui->screen != SCREEN_SETTINGS)
 		ui_goto(ui, SCREEN_SETTINGS);
 	if((ui->strip_edge & FXCG100_STRIP_MENU) && ui->screen != SCREEN_LIBRARY) {
-		if(ui->screen == SCREEN_SETTINGS || ui->screen == SCREEN_CONTROLS)
+		if(ui->screen == SCREEN_SETTINGS || ui->screen == SCREEN_CONTROLS ||
+				ui->screen == SCREEN_SYNC)
 			leave_settings(ui);
 		ui_goto(ui, SCREEN_LIBRARY);
 	}
@@ -2516,12 +2663,14 @@ fxcg100_menu_result cp_ui_step(cp_ui *ui)
 	if(modal)
 		ui_mute(ui, &muted);
 	cp_fill(&ui->s, 0, 0, ui->w, ui->h, ui->t.surface);
+	fxcg100_lcd_sync_calibrate(ui->screen == SCREEN_SYNC);
 
 	switch(ui->screen) {
 	case SCREEN_PAUSE:    result = screen_pause(ui); break;
 	case SCREEN_SETTINGS: result = screen_settings(ui); break;
 	case SCREEN_CONTROLS: result = screen_controls(ui); break;
 	case SCREEN_CLOCK:    result = screen_clock(ui); break;
+	case SCREEN_SYNC:     result = screen_sync(ui); break;
 	default:              result = screen_library(ui); break;
 	}
 	cp_surface_unclip(&ui->s);
@@ -2536,7 +2685,7 @@ fxcg100_menu_result cp_ui_step(cp_ui *ui)
 		switch(modal) {
 		case MODAL_CONFIRM: result = modal_confirm(ui); break;
 		case MODAL_CAPTURE: result = modal_capture(ui); break;
-		case MODAL_UNLOCK:  result = modal_unlock(ui); break;
+		case MODAL_FLASHING: result = modal_flashing(ui); break;
 		default:            result = modal_clock(ui); break;
 		}
 		ui->s.oy = 0;
@@ -2592,6 +2741,9 @@ void fxcg100_menu_init(fxcg100_menu_state *state)
 	state->frameskip_type = 1;
 	state->frameskip_value = 1;
 	state->frame_limit = 1;
+	/* Where the picture lay in the panel's count of rows on the units it
+	 * was set by eye on: 0 to 2 were all clean. */
+	state->lcd_sync_offset = 1;
 	fxcg100_keymap_defaults(state->keymap);
 	fxcg100_hotkey_defaults(state->hotkey_map);
 	state->random_lfsr = 0x00c6ba5eu;

@@ -1089,6 +1089,116 @@ static void test_ui(const char *dir)
 	ui_tap_on("Touch keys", 0);
 	CHECK(ui_state.touch_keys == 1, "switch row did not turn back on");
 
+	/* Sliders: a tap jumps to the nearest stop; a sideways drag moves the
+	 * handle and leaves the page where it is; a drag up the page that
+	 * starts on a slider scrolls the page and leaves the value alone. */
+	r = ui_find("Backlight", 0);
+	if (!r || r->y + r->h > 480) {
+		ui.scroll[SCREEN_SETTINGS] += r ? r->y - 200 : 300;
+		ui.redraw = 1;
+		ui_settle(ui_frame());
+		r = ui_find("Backlight", 0);
+	}
+	CHECK(r != NULL, "no Backlight slider");
+	if (r) {
+		cp_rect s = *r;
+		int cy = s.y + s.h / 2, x0 = s.x + 8, span = s.w - 16, scroll;
+
+		ui_tap(s.x + s.w - 4, cy);
+		CHECK(ui_state.backlight == 16, "tap at the right end gives %u",
+			(unsigned)ui_state.backlight);
+		ui_tap(s.x + 4, cy);
+		CHECK(ui_state.backlight == 0, "tap at the left end gives %u",
+			(unsigned)ui_state.backlight);
+		ui_tap(x0 + span * 5 / 16 + 3, cy);
+		CHECK(ui_state.backlight == 5, "tap at the fifth stop gives %u",
+			(unsigned)ui_state.backlight);
+
+		scroll = ui.scroll[SCREEN_SETTINGS];
+		touch_user(CP_VIEW_PORTRAIT_43, 0, 1, x0 + span * 5 / 16, cy, 0, 0);
+		ui_frame();
+		for (int i = 6; i <= 12; i++) {
+			touch_user(CP_VIEW_PORTRAIT_43, 0, 1, x0 + span * i / 16,
+				cy + (i & 1), 0, 0);
+			ui_frame();
+		}
+		/* Between two stops the handle stays under the finger; the value
+		 * is the nearer stop. */
+		touch_user(CP_VIEW_PORTRAIT_43, 0, 1, x0 + span * 12 / 16 + 6, cy,
+			0, 0);
+		ui_frame();
+		CHECK(ui_state.backlight == 12, "drag to the 12th stop gives %u",
+			(unsigned)ui_state.backlight);
+		ui_shot(dir, "ui-settings-slider-held");
+		memset(&touch_state, 0, sizeof(touch_state));
+		ui_settle(ui_frame());
+		CHECK(ui_state.backlight == 12, "letting go moved it to %u",
+			(unsigned)ui_state.backlight);
+		CHECK(ui.scroll[SCREEN_SETTINGS] == scroll,
+			"a sideways drag scrolled the page (%d -> %d)", scroll,
+			ui.scroll[SCREEN_SETTINGS]);
+
+		touch_user(CP_VIEW_PORTRAIT_43, 0, 1, x0 + span / 4, cy, 0, 0);
+		ui_frame();
+		for (int i = 1; i <= 4; i++) {
+			touch_user(CP_VIEW_PORTRAIT_43, 0, 1, x0 + span / 4 + (i & 1),
+				cy - 20 * i, 0, 0);
+			ui_frame();
+		}
+		memset(&touch_state, 0, sizeof(touch_state));
+		ui_settle(ui_frame());
+		CHECK(ui_state.backlight == 12, "a drag up the page moved it to %u",
+			(unsigned)ui_state.backlight);
+		CHECK(ui.scroll[SCREEN_SETTINGS] > scroll,
+			"a drag up the page from a slider did not scroll");
+		ui_shot(dir, "ui-settings-sliders");
+	}
+
+	/* Refresh position: asked first, because the page flashes; Cancel stays
+	 * on Settings. The page has the slider, and draws a new colour with
+	 * every frame whether there is input or not. */
+	r = ui_find("VSync", 0);
+	ui.scroll[SCREEN_SETTINGS] += r ? r->y - 200 : -200;
+	ui.redraw = 1;
+	ui_settle(ui_frame());
+	if (!ui_state.lcd_sync)
+		ui_tap_on("VSync", 0);
+	CHECK(ui_state.lcd_sync == 1, "refresh wait did not turn on");
+	ui_tap_on("Refresh position", 0);
+	CHECK(ui.sync_warn && ui.screen == SCREEN_SETTINGS,
+		"no warning before the flashing page");
+	ui_shot(dir, "ui-sync-warning");
+	ui_tap_on("Cancel", 0);
+	CHECK(!ui.sync_warn && ui.screen == SCREEN_SETTINGS, "Cancel went on");
+	ui_tap_on("Refresh position", 0);
+	ui_tap_on("Continue", 0);
+	CHECK(ui.screen == SCREEN_SYNC, "Continue did not open the page");
+	{
+		uint32_t before = ui.sync_frame;
+		const cp_rect *p;
+
+		ui_frame();
+		ui_frame();
+		CHECK(ui.sync_frame == before + 2 && ui.redraw,
+			"the page does not draw a new colour every frame");
+		p = ui_find("Position", 0);
+		CHECK(p != NULL, "no Position slider on the page");
+		if (p) {
+			ui_tap(p->x + p->w - 4, p->y + p->h / 2);
+			CHECK(ui_state.lcd_sync_offset == 15, "tap at the end gives %u",
+				(unsigned)ui_state.lcd_sync_offset);
+			ui_tap(p->x + 8 + (p->w - 16) * 2 / 15 + 2, p->y + p->h / 2);
+			CHECK(ui_state.lcd_sync_offset == 2, "tap at the 2nd stop gives %u",
+				(unsigned)ui_state.lcd_sync_offset);
+		}
+		ui_shot(dir, "ui-sync-page");
+	}
+	ui_key(KEY_DEL);
+	ui_frame();
+	CHECK(ui.screen == SCREEN_SETTINGS, "back did not leave the page");
+	ui.redraw = 1;
+	ui_settle(ui_frame());
+
 	/* Colour: every scheme can be chosen, the page takes it, and so do the
 	 * touch keys once the game is back. */
 	for (unsigned t = CP_THEME_COUNT; t-- > 0;) {
@@ -1470,6 +1580,9 @@ static void test_clock_page(const char *dir)
 	int i;
 
 	cp_clock_cpu_x2(&stock, &x2);
+	/* As the page makes it: with the fast idle cycles. */
+	x2.CS3BCR = cp_clock_fast_sdram_idle(&stock);
+	x2.CS0BCR = cp_clock_fast_flash_idle(&stock);
 	hw_clock = stock;
 	fake_blob_size = 0;
 	clock_stock_known = 0;
@@ -1510,8 +1623,15 @@ static void test_clock_page(const char *dir)
 	ui_key(KEY_DOWN);
 	ui_key(KEY_LEFT);
 	ui_key(KEY_DEL);                            /* back ends it, stays here */
-	CHECK(ui.edit == NULL && ui.screen == SCREEN_CLOCK &&
-		cp_clock_equal(&ui.clock_edit, &stock), "back left the page");
+	{
+		/* Back at the stock chain, but made by hand: fast idle cycles. */
+		cp_clock made = stock;
+
+		made.CS3BCR = cp_clock_fast_sdram_idle(&stock);
+		made.CS0BCR = cp_clock_fast_flash_idle(&stock);
+		CHECK(ui.edit == NULL && ui.screen == SCREEN_CLOCK &&
+			cp_clock_equal(&ui.clock_edit, &made), "back left the page");
+	}
 	ui_tap_on("/2", 0);
 	CHECK(cp_clock_equal(&ui.clock_edit, &x2), "CPU divider /2 again");
 	ui_shot(dir, "ui-clock-portrait");
@@ -1581,8 +1701,7 @@ static void test_clock_page(const char *dir)
 	ui_settle(cp_ui_step(&ui));
 	CHECK(ui.toast == NULL && !ui.redraw, "the message stayed up");
 
-	/* Limits. With them on, the bus cannot be taken past 134 MHz. Switching
-	 * them off asks first; Cancel leaves them on. */
+	/* The limits are always in force: the bus cannot be taken past 134 MHz. */
 	clock_tap("Restore stock", 1);
 	ui.scroll[SCREEN_CLOCK] = 330;
 	ui.redraw = 1;
@@ -1592,38 +1711,19 @@ static void test_clock_page(const char *dir)
 		"bus /4: %u Hz", cp_clock_hz(&ui.clock_edit, CP_CLK_BUS));
 	ui_tap_on("/2", 2);
 	CHECK(cp_clock_hz(&ui.clock_edit, CP_CLK_BUS) == 117964800u,
-		"236 MHz bus accepted with the limits on");
-	ui_scroll_to_end();
-	ui_tap_on("Limits", 0);
-	CHECK(ui.clock_unlock_ask && !ui.clock_unlocked, "Limits should ask");
-	ui_shot(dir, "ui-clock-unlock");
-	ui_tap_on("Cancel", 0);
-	CHECK(!ui.clock_unlock_ask && !ui.clock_unlocked, "Cancel unlocked");
-	ui_tap_on("Limits", 0);
-	ui_tap_on("Switch off", 0);
-	CHECK(ui.clock_unlocked == 1, "limits not switched off");
-	/* Now the PLL goes past 800 MHz, and the page says what that means. */
+		"236 MHz bus accepted");
+	/* What is set by hand has the fast idle cycles; stock is stock. */
+	CHECK(ui.clock_edit.CS3BCR == cp_clock_fast_sdram_idle(&stock) &&
+		ui.clock_edit.CS0BCR == cp_clock_fast_flash_idle(&stock),
+		"a setting made by hand lacks the fast idle cycles");
+	CHECK(ui_find("Limits", 0) == NULL && ui_find("Fast SDRAM bus", 0) == NULL,
+		"the Limits or the bus switch is still there");
 	clock_tap("Restore stock", 1);
-	ui.scroll[SCREEN_CLOCK] = 0;
-	ui.redraw = 1;
-	ui_settle(ui_frame());
-	for (i = 0; i < 12; i++)
-		ui_tap_on("+", 0);
-	CHECK(cp_clock_hz(&ui.clock_edit, CP_CLK_PLL) > 800000000u,
-		"PLL still held at %u Hz", cp_clock_hz(&ui.clock_edit, CP_CLK_PLL));
-	ui_shot(dir, "ui-clock-unlocked");
-	/* The switch is saved; back on, such a setting may not be applied. */
-	ui_scroll_to_end();
-	ui_tap_on("Limits", 0);
-	CHECK(ui.clock_unlocked == 0, "limits not switched back on");
-	clock_tap("Apply", 0);
-	CHECK(!ui.clock_pending, "a setting over the limits was applied");
-	clock_tap("Restore stock", 1);
+	CHECK(cp_clock_equal(&ui.clock_edit, &stock), "Restore stock is not stock");
 	ui_scroll_to_end();
 
-	/* Turn on "Apply when gpSP starts". */
-	ui_tap_on("Apply when gpSP starts", 0);
-	CHECK(ui.clock_at_startup == 1, "start-up switch");
+	/* "Apply when gpSP starts" is on unless it was switched off. */
+	CHECK(ui.clock_at_startup == 1, "start-up switch is not on by default");
 
 	/* Next launch: applied on top of stock, not otherwise. */
 	for (i = 0; i < 3; i++) {
@@ -1637,6 +1737,27 @@ static void test_clock_page(const char *dir)
 		cp_ui_apply_saved_clock();
 		CHECK(cp_clock_equal(&hw_clock, &x2) == (i == 0),
 			"start-up apply, case %d", i);
+	}
+	/* Nothing saved: the default speed, Ptune 4's F5, unless Clear is held. */
+	fake_blob_size = 0;
+	for (i = 0; i < 2; i++) {
+		cp_clock f5;
+
+		hw_clock = stock;
+		clock_stock_known = 0;
+		memset(key_held, 0, sizeof(key_held));
+		key_held[KEY_CLEAR] = i == 1;
+		cp_ui_apply_saved_clock();
+		CHECK(cp_clock_f5(&stock, &f5), "F5 is not possible from stock");
+		CHECK(cp_clock_equal(&hw_clock, &f5) == (i == 0),
+			"default speed at start, case %d", i);
+		CHECK(cp_clock_hz(&f5, CP_CLK_CPU) == 235929600u &&
+			cp_clock_hz(&f5, CP_CLK_BUS) == 117964800u &&
+			cp_clock_hz(&f5, CP_CLK_PERIPH) == 29491200u &&
+			f5.CS3BCR == cp_clock_fast_sdram_idle(&stock) &&
+			f5.CS0BCR == cp_clock_fast_flash_idle(&stock),
+			"F5 is %u/%u/%u Hz", cp_clock_hz(&f5, CP_CLK_CPU),
+			cp_clock_hz(&f5, CP_CLK_BUS), cp_clock_hz(&f5, CP_CLK_PERIPH));
 	}
 	memset(key_held, 0, sizeof(key_held));
 	hw_clock = stock;

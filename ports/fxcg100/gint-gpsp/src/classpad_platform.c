@@ -220,10 +220,10 @@ static inline uint16_t *strip_buffer(void)
 	return (uint16_t *)(strip_bank ? STRIP_BUF1 : STRIP_BUF0);
 }
 
-#ifndef CGBA_HOST_TEST
 /* Refresh sync, further down. A frame is either the game picture or the
  * interface; how long each takes to send is kept apart. */
 enum { SYNC_GAME = 0, SYNC_CANVAS, SYNC_KINDS };
+#ifndef CGBA_HOST_TEST
 static void sync_begin(int top, int rows, int kind);
 static void sync_strip(int r0, int rows);
 static void sync_end(void);
@@ -1386,10 +1386,10 @@ static uint32_t cp_sync;             /* the option: wait before each frame */
  * sixteenths of a refresh: the count includes blanking rows, and where they
  * are is not known, so this is set by eye (Settings). */
 static uint32_t cp_sync_offset;
-static uint32_t sync_frames, sync_torn;
-/* For the Settings page: rows shown during the last frame, the window it
- * was started in, and how many frames had to wait for it. */
-static uint32_t sync_detail[4];
+/* The page that sets it is open: frames wait whatever the option says, and
+ * with next to no room to spare, so that an offset a step out already shows
+ * as tearing. */
+static int sync_calibrating;
 
 #ifndef CGBA_HOST_TEST
 enum { SCAN_UNKNOWN = 0, SCAN_USABLE, SCAN_NONE };
@@ -1429,7 +1429,7 @@ static void scan_probe(void)
 	scan_total = cp_scan_probe_result(&probe, ticks, &scan_hz);
 	scan_state = scan_total ? SCAN_USABLE : SCAN_NONE;
 	if(!scan_total)
-		scan_total = probe.max;       /* shown on the Settings page */
+		scan_total = probe.max;
 }
 
 /* Panel rows are shown last row first, so positions are counted from the
@@ -1438,8 +1438,19 @@ static void scan_probe(void)
 static uint32_t scan_position(void)
 {
 	uint32_t shift = scan_total * cp_sync_offset / 16u;
+	uint32_t row = lcd_scanline() % scan_total;
+	int tries;
 
-	return (lcd_scanline() % scan_total + scan_total - shift) % scan_total;
+	/* Two reads that agree (classpad_sync.h); four more at the most. */
+	for(tries = 0; tries < 4; tries++) {
+		uint32_t again = lcd_scanline() % scan_total;
+		int agree = cp_scan_agree(row, again, scan_total);
+
+		row = again;
+		if(agree)
+			break;
+	}
+	return (row + scan_total - shift) % scan_total;
 }
 
 static void sync_strip(int r0, int rows)
@@ -1462,14 +1473,12 @@ static void sync_begin(int top, int rows, int kind)
 		return;
 
 	sync_kind = kind;
-	sync_detail[0] = sync_lines[kind];
-	sync_detail[1] = sync_detail[2] = 0;
-	if(cp_sync && cp_sync_window(scan_total, (uint32_t)rows,
-			sync_lines[kind], 0, &lo, &hi)) {
+	if((cp_sync || sync_calibrating) && cp_sync_window_part(scan_total,
+			(uint32_t)rows, sync_lines[kind], 0,
+			sync_calibrating ? CP_SYNC_PART_CALIBRATE
+			: kind == SYNC_GAME ? CP_SYNC_PART_GAME : CP_SYNC_PART,
+			&lo, &hi)) {
 		uint32_t start = fxcg100_ticks(), n;
-
-		sync_detail[1] = lo;
-		sync_detail[2] = hi;
 
 		/* At most one refresh; given up after 47 ms whatever happens. */
 		for(n = 0; n < 400000u; n++) {
@@ -1477,8 +1486,6 @@ static void sync_begin(int top, int rows, int kind)
 
 			if(at >= lo && at < hi)
 				break;
-			if(n == 0)
-				sync_detail[3]++;
 			if((n & 63u) == 63u && fxcg100_ticks() - start > 6u)
 				break;
 		}
@@ -1493,8 +1500,6 @@ static void sync_end(void)
 		return;
 	sync_tracking = 0;
 	sync_lines[sync_kind] = cp_sync_track_lines(&sync_track);
-	sync_frames++;
-	sync_torn += (uint32_t)sync_track.crossed;
 }
 #endif
 
@@ -1502,32 +1507,13 @@ void fxcg100_lcd_set_sync(uint32_t wait, uint32_t offset)
 {
 	wait = wait ? 1 : 0;
 	offset &= 15u;
-	if(wait != cp_sync || offset != cp_sync_offset)
-		sync_frames = sync_torn = sync_detail[3] = 0;
 	cp_sync = wait;
 	cp_sync_offset = offset;
 }
 
-/* For the Settings page: rows in a refresh and its rate (rows is what the
- * panel answered if it has no usable row counter, and *usable is zero), and
- * of the frames sent since the option last changed, how many tore. */
-void fxcg100_lcd_sync_info(uint32_t *usable, uint32_t *rows, uint32_t *hz,
-	uint32_t *frames, uint32_t *torn)
+void fxcg100_lcd_sync_calibrate(uint32_t on)
 {
-#ifndef CGBA_HOST_TEST
-	*usable = scan_state == SCAN_USABLE;
-	*rows = scan_total;
-	*hz = scan_hz;
-#else
-	*usable = *rows = *hz = 0;
-#endif
-	*frames = sync_frames;
-	*torn = sync_torn;
-}
-
-void fxcg100_lcd_sync_detail(uint32_t detail[4])
-{
-	memcpy(detail, sync_detail, sizeof(sync_detail));
+	sync_calibrating = on != 0;
 }
 
 void fxcg100_lcd_blit_gba(const uint16_t *pixels)
