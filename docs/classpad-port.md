@@ -148,26 +148,56 @@ one frame goes out (measured on the frame before), the two do not meet.
   0x16/0x52 family, so the row the refresh starts with is our row 527.
   Every view therefore sends its strips from the bottom of the panel
   upwards, to go the same way.
-- The row count includes blanking rows (856 and 924 rows a refresh were
-  seen on one unit, at 112 and 92 Hz), and where in the count the picture
-  lies is not known. `Refresh position` (0..15, sixteenths of a refresh)
+- The row count includes blanking rows: 548 a refresh at 56 Hz on an
+  fx-CP400 with panel ID 0x16, so 20 rows of blanking for 528 of picture.
+  Where in the count the picture lies is not known. `Refresh position`
+  (0..15, sixteenths of a refresh, 34 rows a step at 548)
   is set by eye on a page of its own (Settings → Refresh position, shown
   when the waiting is on): the whole screen changes colour with every
   frame (strong colours, each unlike the one before), with only a round
-  back button at the top and a pill for the slider at the bottom,
-  both leaving the colour showing beside them, so a line can be seen on
-  any row of the panel. While the page is open frames wait with almost
-  no room to spare (a 48th of a refresh instead of an eighth), so only the
-  right position or the one beside it gives a screen without a line across
-  it. The page is behind a photosensitive-epilepsy warning.
+  back button and the rows and refresh rate the counter was found to have
+  at the top and a pill for the slider at the bottom, all leaving the
+  colour showing beside them, so a line can be seen on any row of the
+  panel. While the page is open frames wait with half a step to spare (a
+  32nd of a refresh instead of an eighth), so the step nearest to where the
+  picture starts gives a screen without a line across it and the others do
+  not. (It was a 48th: then a start falling between two steps left no step
+  clean, only some that tore less often.) Frames on the page start at the
+  early and the late end of the window in turn (`cp_sync_window_end`):
+  waiting for the window and starting as it opens only ever tries the
+  early end, where a position too low tears but one too high just starts
+  the frame later and stays clean until the delay uses up the window. The
+  interface's frames always arrive early enough to wait, so before this
+  positions 0 to 6 all looked clean on the unit where 0 is right. The page
+  is behind a photosensitive-epilepsy warning.
+- The strips go the way of the refresh, but each one is filled from its top
+  row down, against it: its top row is written as it starts and its bottom
+  row, the one the refresh comes to first, a strip's time later. The window
+  keeps a strip's height clear ahead of the refresh and a strip's time
+  behind it, on top of the clearance, with the strip height taken from the
+  number of strips the last frame of the same kind took. Without that, the
+  16-row bands of the calibration page used up most of its 17 rows of
+  clearance, and for over a third of the places the picture could start no
+  step was clean (worked out against a 548-row refresh; tested in
+  `tests/classpad_sync_test.c`).
 - The counter is read as two bytes while it runs, and the first read after
   pixels were written is often wrong: a row is believed only when two reads
   in a row agree (`cp_scan_agree`).
 - The game's picture keeps a sixth of a refresh clear at both ends of its
   window, the interface an eighth.
-- The first gameplay frame spends a quarter of a second reading 0x45 to see
+- The first frame sent spends a quarter of a second reading 0x45 to see
   whether it is a row counter at all, how many rows a refresh has and how
-  often it comes round. If it is not, nothing else is done.
+  often it comes round, and so does the first frame of the page that sets
+  the position. If it is not a counter, nothing else is done. Only reads
+  that the next read agrees with count. When every read counted, the same
+  unit that counts 548 rows at 56 Hz gave 856 rows at 112 Hz at one start
+  and 924 at 92 Hz at another (one wrong read above the last row sets the
+  count; each read across a carry counted as a refresh), and the position
+  that gave a clean picture moved between starts: a wrong count moves where
+  every position falls, since positions are sixteenths of it and taken
+  modulo it. Simulated against 548 rows, counts of 856 and 924 made 3, 4,
+  both or neither the clean positions, depending on the count and on where
+  in the blanking the picture starts.
 - `VSync` (Settings, off by default) turns the waiting on.
   It can cost up to one refresh per frame drawn.
 - A frame that takes much longer than one refresh to write (landscape 2x)
@@ -175,8 +205,16 @@ one frame goes out (measured on the frame before), the two do not meet.
 
 On an fx-CP400 with panel ID 0x16 the counter is there. The first two
 versions assumed the refresh ran the same way as the strips, and tore as
-before while reporting no tears. Whether the present one works is not yet
-known, and the R61523 family has not been tried at all.
+before while reporting no tears. The next one gave a clean calibration
+page at one position on that unit (4, with a wrong row count), which a
+refresh running against the strips could not. With the count right (548
+rows, 56 Hz) and the strips kept clear, positions 0 to 6 looked clean
+while the page still tried only the early end of the window, and 0, the
+lowest of them, is the right one, as 20 rows of blanking would suggest:
+the picture starts within half a step (17 rows) of where the count does.
+0 is the default. With frames starting at both ends of the window, the
+page shows only 0 clean on that unit, every other position tearing. The R61523 family has not
+been tried at all.
 
 ### Backlight
 

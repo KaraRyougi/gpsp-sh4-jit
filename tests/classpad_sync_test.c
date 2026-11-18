@@ -51,6 +51,41 @@ static int frame(uint32_t top, uint32_t rows, uint32_t lines, int descending,
 	return (int)tore;
 }
 
+/* As the presenter really writes: `strips` strips going the way of the
+ * refresh, each one filled from its top row down, against it, in its share
+ * of the `lines` rows shown while the frame goes out. The refresh starts
+ * `at` rows past the picture's first row (in the order it shows them) on a
+ * panel of `total` rows. Returns whether one sweep of the refresh showed
+ * part of the picture new and part old. Times are in rows shown. */
+static int frame_in_strips(uint32_t total, uint32_t rows, uint32_t lines,
+	uint32_t strips, uint32_t at)
+{
+	uint32_t h = (rows + strips - 1u) / strips;
+	double each = (double)lines / strips;
+	long m;
+
+	for(m = -1; m <= (long)(lines / total) + 2; m++) {
+		int seen_new = 0, seen_old = 0;
+		uint32_t p;
+
+		for(p = 0; p < rows; p++) {
+			uint32_t j = p / h;
+			uint32_t end = (j + 1u) * h < rows ? (j + 1u) * h : rows;
+			double written = j * each
+				+ ((double)(end - 1u - p) + 0.5) * each / (end - j * h);
+			double shown = (double)p - (double)at + (double)m * total;
+
+			if(shown > written)
+				seen_new = 1;
+			else
+				seen_old = 1;
+		}
+		if(seen_new && seen_old)
+			return 1;
+	}
+	return 0;
+}
+
 int main(void)
 {
 	/* picture height, rows shown while it is written, strips, upside down */
@@ -66,7 +101,7 @@ int main(void)
 	};
 	unsigned c;
 	cp_sync_track t;
-	cp_scan_probe probe = { 0, 0, 0, 0, 0 };
+	cp_scan_probe probe = { 0 };
 	uint32_t hz, i;
 
 	for(c = 0; c < sizeof(cases) / sizeof(cases[0]); c++) {
@@ -108,6 +143,113 @@ int main(void)
 		}
 	}
 
+	/* Strips filled against the refresh, on an fx-CP400's 548-row refresh:
+	 * the calibration page (528 rows in 16-row bands) and game pictures.
+	 * The clearance is there for an offset that is out (up to half a step
+	 * while it is being set), so the strips must not use it up: with no
+	 * clearance at all, every start inside the window kept with the
+	 * strip's height and time must be clean, and without them some must
+	 * tear. */
+	{
+		static const struct { uint32_t rows, lines, strips, part; } sc[] = {
+			{ 528, 280, 33, CP_SYNC_PART_CALIBRATE },
+			{ 528, 400, 33, CP_SYNC_PART_CALIBRATE },
+			{ 528, 600, 33, CP_SYNC_PART_CALIBRATE },
+			{ 212, 260, 18, CP_SYNC_PART_GAME },
+			{ 240, 170, 15, CP_SYNC_PART_GAME },
+		};
+		const uint32_t total = 548u, none = total + 1u;
+
+		for(c = 0; c < sizeof(sc) / sizeof(sc[0]); c++) {
+			uint32_t strip = (sc[c].rows + sc[c].strips - 1u) / sc[c].strips;
+			uint32_t lo, hi, at, torn = 0, bare_torn = 0;
+
+			CHECK(cp_sync_window_part(total, sc[c].rows, sc[c].lines, 0,
+				sc[c].part, strip, &lo, &hi), "strip case %u: no window", c);
+			if(!cp_sync_window_part(total, sc[c].rows, sc[c].lines, 0,
+					none, strip, &lo, &hi)) {
+				CHECK(0, "strip case %u: no window without clearance", c);
+				continue;
+			}
+			for(at = lo; at < hi; at++)
+				torn += (unsigned)frame_in_strips(total, sc[c].rows,
+					sc[c].lines, sc[c].strips, at);
+			CHECK(torn == 0, "strip case %u: %u starts in [%u, %u) tore", c,
+				(unsigned)torn, (unsigned)lo, (unsigned)hi);
+			if(cp_sync_window_part(total, sc[c].rows, sc[c].lines, 0, none,
+					0, &lo, &hi))
+				for(at = lo; at < hi; at++)
+					bare_torn += (unsigned)frame_in_strips(total,
+						sc[c].rows, sc[c].lines, sc[c].strips, at);
+			CHECK(bare_torn > 0, "strip case %u: the window without the "
+				"strips' height and time did not tear", c);
+		}
+	}
+
+	/* Setting the offset: frames start at the early and the late end of the
+	 * window in turn. The right offset is clean at both; one step out
+	 * either way (a picture that really starts 34 rows later or earlier
+	 * than the offset says) tears at one of them. Starting wherever the
+	 * window opens, as before, a step too high stayed clean. */
+	{
+		static const uint32_t lines_cases[] = { 250, 280, 400, 600 };
+		const uint32_t total = 548u, rows = 528u, strips = 33u, strip = 16u;
+		const uint32_t step = total / 16u;
+
+		for(c = 0; c < sizeof(lines_cases) / sizeof(lines_cases[0]); c++) {
+			uint32_t lines = lines_cases[c], lo, hi, elo, ehi, llo, lhi;
+			uint32_t early, late;
+
+			if(!cp_sync_window_part(total, rows, lines, 0,
+					CP_SYNC_PART_CALIBRATE, strip, &lo, &hi)) {
+				CHECK(0, "calibration %u: no window", (unsigned)lines);
+				continue;
+			}
+			elo = llo = lo;
+			ehi = lhi = hi;
+			cp_sync_window_end(&elo, &ehi, 0);
+			cp_sync_window_end(&llo, &lhi, 1);
+			CHECK(elo == lo && ehi == lo + CP_SYNC_END_ROWS &&
+				llo == hi - CP_SYNC_END_ROWS && lhi == hi,
+				"calibration %u: ends [%u, %u) and [%u, %u) of [%u, %u)",
+				(unsigned)lines, (unsigned)elo, (unsigned)ehi,
+				(unsigned)llo, (unsigned)lhi, (unsigned)lo, (unsigned)hi);
+			/* A frame starts at the first row of the end it waits for. */
+			early = elo;
+			late = llo;
+
+			CHECK(!frame_in_strips(total, rows, lines, strips, early) &&
+				!frame_in_strips(total, rows, lines, strips, late),
+				"calibration %u: the right offset tore", (unsigned)lines);
+			/* Offset a step too low: the picture is shown a step later
+			 * than the count says, so the refresh is a step less ahead. */
+			CHECK(frame_in_strips(total, rows, lines, strips,
+					(early + total - step) % total) ||
+				frame_in_strips(total, rows, lines, strips,
+					(late + total - step) % total),
+				"calibration %u: a step too low did not tear",
+				(unsigned)lines);
+			/* A step too high: the refresh is a step further ahead. */
+			CHECK(frame_in_strips(total, rows, lines, strips,
+					(early + step) % total) ||
+				frame_in_strips(total, rows, lines, strips,
+					(late + step) % total),
+				"calibration %u: a step too high did not tear",
+				(unsigned)lines);
+			/* Only the late end shows a step too high. */
+			CHECK(!frame_in_strips(total, rows, lines, strips,
+					(early + step) % total),
+				"calibration %u: the early end alone showed a step too "
+				"high", (unsigned)lines);
+		}
+	}
+	{
+		uint32_t lo = 10, hi = 13;
+
+		cp_sync_window_end(&lo, &hi, 1);
+		CHECK(lo == 10 && hi == 13, "a window narrower than an end moved");
+	}
+
 	/* A frame that takes most of two refreshes cannot be placed. */
 	{
 		uint32_t lo, hi;
@@ -119,17 +261,38 @@ int main(void)
 	}
 
 	/* The probe: a counter going round 15 times in a quarter second... */
-	for(i = 0; i <= 15u * TOTAL * 4u; i++)
+	for(i = 0; i < 15u * TOTAL * 4u + 4u; i++)
 		cp_scan_probe_add(&probe, (i / 4u) % TOTAL);
 	CHECK(cp_scan_probe_result(&probe, 32, &hz) == TOTAL && hz == 60,
 		"probe: %u Hz", (unsigned)hz);
+	/* ...the same, read wrong now and then: first of all (as after pixels
+	 * were written) above its last row, then across every carry, as a read
+	 * of the high byte before it and the low byte after, and now and then
+	 * anything at all. None of it may move the rows or the rate... */
+	probe = (cp_scan_probe){ 0 };
+	cp_scan_probe_add(&probe, 923);
+	for(i = 0; i < 15u * TOTAL * 4u + 4u; i++) {
+		uint32_t row = (i / 4u) % TOTAL;
+
+		if(i % 4u == 3u && (row & 0xffu) == 0xffu)
+			row &= ~0xffu;
+		else if(i % 997u == 500u)
+			row = (i * 2654435761u >> 22) & 0x3ffu;
+		cp_scan_probe_add(&probe, row);
+	}
+	{
+		uint32_t got = cp_scan_probe_result(&probe, 32, &hz);
+
+		CHECK(got == TOTAL && hz == 60, "probe with misreads: %u rows, %u Hz",
+			(unsigned)got, (unsigned)hz);
+	}
 	/* ...a register that always answers the same... */
-	probe = (cp_scan_probe){ 0, 0, 0, 0, 0 };
+	probe = (cp_scan_probe){ 0 };
 	for(i = 0; i < 20000u; i++)
 		cp_scan_probe_add(&probe, 0x16);
 	CHECK(cp_scan_probe_result(&probe, 32, &hz) == 0, "probe took a constant");
 	/* ...and noise. */
-	probe = (cp_scan_probe){ 0, 0, 0, 0, 0 };
+	probe = (cp_scan_probe){ 0 };
 	for(i = 0; i < 20000u; i++)
 		cp_scan_probe_add(&probe, (i * 2654435761u >> 22) & 0x3ffu);
 	CHECK(cp_scan_probe_result(&probe, 32, &hz) == 0, "probe took noise");

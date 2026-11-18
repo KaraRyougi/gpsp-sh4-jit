@@ -1392,12 +1392,15 @@ static uint32_t cp_sync_offset;
 static int sync_calibrating;
 
 #ifndef CGBA_HOST_TEST
+/* Which end of the window the next frame of that page starts at. */
+static int sync_late;
 enum { SCAN_UNKNOWN = 0, SCAN_USABLE, SCAN_NONE };
 static int scan_state;
 static uint32_t scan_total, scan_hz;
 static cp_sync_track sync_track;
 static int sync_tracking;
 static uint32_t sync_lines[SYNC_KINDS];   /* rows shown during the last frame */
+static uint32_t sync_strips[SYNC_KINDS];  /* strips it was sent in */
 static int sync_kind;
 
 /* The row the panel is showing: DCS get_scanline, two bytes after a dummy
@@ -1414,13 +1417,19 @@ static uint32_t lcd_scanline(void)
 	return ((hi << 8) | lo) & 0x3ffu;
 }
 
-/* A quarter of a second of reading it, once: is it a row counter, how many
- * rows are there in a refresh, how often does it come round. */
+/* A quarter of a second of reading it, once a start and again whenever the
+ * page that sets the offset opens: is it a row counter, how many rows are
+ * there in a refresh, how often does it come round. */
 static void scan_probe(void)
 {
-	cp_scan_probe probe = { 0, 0, 0, 0, 0 };
-	uint32_t start = fxcg100_ticks(), ticks = 0, n;
+	cp_scan_probe probe = { 0 };
+	uint32_t start, ticks = 0, n;
 
+	/* Pixels have just been written: the first reads are the least to be
+	 * trusted. The probe does not believe a lone wrong read anyway. */
+	for(n = 0; n < 8u; n++)
+		(void)lcd_scanline();
+	start = fxcg100_ticks();
 	for(n = 0; n < 4000000u && ticks < 32u; n++) {
 		cp_scan_probe_add(&probe, lcd_scanline());
 		if((n & 63u) == 0)
@@ -1429,7 +1438,10 @@ static void scan_probe(void)
 	scan_total = cp_scan_probe_result(&probe, ticks, &scan_hz);
 	scan_state = scan_total ? SCAN_USABLE : SCAN_NONE;
 	if(!scan_total)
-		scan_total = probe.max;
+		scan_total = probe.max ? probe.max : 1u;
+	/* Measured against the count before, which may not be this one. */
+	memset(sync_lines, 0, sizeof(sync_lines));
+	memset(sync_strips, 0, sizeof(sync_strips));
 }
 
 /* Panel rows are shown last row first, so positions are counted from the
@@ -1464,7 +1476,7 @@ static void sync_strip(int r0, int rows)
  * last strip first. */
 static void sync_begin(int top, int rows, int kind)
 {
-	uint32_t lo, hi;
+	uint32_t lo, hi, strip;
 	uint32_t first = (uint32_t)(CP_PANEL_H - top - rows);
 
 	if(scan_state == SCAN_UNKNOWN)
@@ -1473,13 +1485,23 @@ static void sync_begin(int top, int rows, int kind)
 		return;
 
 	sync_kind = kind;
+	/* The tallest strip, from how many the last frame of this kind took. */
+	strip = sync_strips[kind]
+		? ((uint32_t)rows + sync_strips[kind] - 1u) / sync_strips[kind] : 0;
 	if((cp_sync || sync_calibrating) && cp_sync_window_part(scan_total,
 			(uint32_t)rows, sync_lines[kind], 0,
 			sync_calibrating ? CP_SYNC_PART_CALIBRATE
 			: kind == SYNC_GAME ? CP_SYNC_PART_GAME : CP_SYNC_PART,
-			&lo, &hi)) {
+			strip, &lo, &hi)) {
 		uint32_t start = fxcg100_ticks(), n;
 
+		/* Setting the offset: the two ends of the window in turn
+		 * (cp_sync_window_end), so a position too high tears as well
+		 * as one too low. */
+		if(sync_calibrating) {
+			cp_sync_window_end(&lo, &hi, sync_late);
+			sync_late = !sync_late;
+		}
 		/* At most one refresh; given up after 47 ms whatever happens. */
 		for(n = 0; n < 400000u; n++) {
 			uint32_t at = (scan_position() + scan_total - first) % scan_total;
@@ -1500,6 +1522,7 @@ static void sync_end(void)
 		return;
 	sync_tracking = 0;
 	sync_lines[sync_kind] = cp_sync_track_lines(&sync_track);
+	sync_strips[sync_kind] = sync_track.strips;
 }
 #endif
 
@@ -1513,7 +1536,26 @@ void fxcg100_lcd_set_sync(uint32_t wait, uint32_t offset)
 
 void fxcg100_lcd_sync_calibrate(uint32_t on)
 {
+#ifndef CGBA_HOST_TEST
+	/* Count the rows again as the page opens, so that what it shows, and
+	 * what the offset is set against, is this start's count. */
+	if(on && !sync_calibrating)
+		scan_state = SCAN_UNKNOWN;
+#endif
 	sync_calibrating = on != 0;
+}
+
+int fxcg100_lcd_sync_info(uint32_t *rows, uint32_t *hz)
+{
+#ifndef CGBA_HOST_TEST
+	*rows = scan_state == SCAN_USABLE ? scan_total : 0;
+	*hz = scan_state == SCAN_UNKNOWN ? 0 : scan_hz;
+	return scan_state == SCAN_USABLE ? 1 : scan_state == SCAN_NONE ? -1 : 0;
+#else
+	*rows = 0;
+	*hz = 0;
+	return 0;
+#endif
 }
 
 void fxcg100_lcd_blit_gba(const uint16_t *pixels)
