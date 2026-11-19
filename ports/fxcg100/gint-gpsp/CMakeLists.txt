@@ -85,6 +85,10 @@ option(CGBA_SH4_PIN_GUEST_R0
   "Keep guest ARM r0 resident in callee-saved SH-4 R11" ON)
 option(CGBA_SH4_FASTMEM_XYRAM
   "Place generated resident fastmem routines in on-chip XYRAM (hardware A/B)" OFF)
+option(CGBA_SH4_FASTMEM_ILRAM
+  "Pack hottest resident fastmem routines into free zero-wait-state ILRAM" ON)
+option(CGBA_SH4_LAZY_CHAIN
+  "Avoid spurious update_gba on unpatched exits and lazily chain ROM branches" ON)
 option(CGBA_SH4_KNOWN_TARGET_CACHE
   "Cache known ARM and Thumb indirect targets before the ROM hash walk" ON)
 option(CGBA_SH4_SEGMENTED_LITERAL_POOL
@@ -111,6 +115,8 @@ option(CGBA_SH4_ARM_MIXER_FASTPATH
   "Experimental exact fast path for the Zelda/m4a ARM four-sample mixer loop" OFF)
 option(CGBA_SH4_M4A_MIX_SKIP
   "Skip discarded PCM arithmetic and buffer access in the signature-matched m4a mixer (only valid with the no-op sound backend)" ON)
+option(CGBA_SH4_M4A_LOOP_FOLD
+  "Fold whole iterations of the elided m4a reverb/mix loops in C (needs CGBA_SH4_M4A_MIX_SKIP)" ON)
 option(CGBA_SH4_SWI_OBJAFFINE_HLE
   "Experimental SH4 HLE for BIOS ObjAffineSet (SWI 0x0F); default off until event-slice parity is fixed" OFF)
 set(CGBA_SH4_HEAT_QUIET_FRAMES "180" CACHE STRING
@@ -192,6 +198,7 @@ set(GPSP_CXX_SOURCES
 
 set(GPSP_ASM_SOURCES
   ${GPSP}/bios_data.S
+  ${FXCG100}/sh4/sh4_video_4bpp.S
 )
 if(CGBA_DYNAREC)
   list(APPEND GPSP_ASM_SOURCES ${GPSP}/sh4/sh4_stub.S)
@@ -223,8 +230,14 @@ target_compile_definitions(cgba-gint-gpsp PRIVATE
 option(CGBA_SILENT_TIMERS "Batch timer overflows for the sound-stub calculator port" ON)
 option(CGBA_BULK_DMA "Bulk-copy contiguous ordinary-memory DMA spans" ON)
 option(CGBA_VIDEO_SPRITE_DECODE_CACHE "Reuse sprite attributes until OAM changes" ON)
+option(CGBA_VIDEO_TEXT_FAST4BPP
+  "Fast 4-bpp FULLCOLOR text BG kernel (SH-4 asm + pair LUT + empty-run skip)" ON)
+option(CGBA_VIDEO_DIRTY_SCANLINE
+  "Skip unchanged scanlines, OAM reorders, and unchanged LCD blits" ON)
 target_compile_definitions(cgba-gint-gpsp PRIVATE
   CGBA_VIDEO_SPRITE_DECODE_CACHE=$<BOOL:${CGBA_VIDEO_SPRITE_DECODE_CACHE}>
+  CGBA_VIDEO_TEXT_FAST4BPP=$<BOOL:${CGBA_VIDEO_TEXT_FAST4BPP}>
+  CGBA_VIDEO_DIRTY_SCANLINE=$<BOOL:${CGBA_VIDEO_DIRTY_SCANLINE}>
   CGBA_BULK_DMA=$<BOOL:${CGBA_BULK_DMA}>
   CGBA_SILENT_TIMERS=$<BOOL:${CGBA_SILENT_TIMERS}>)
 if(CGBA_CLASSPAD)
@@ -275,6 +288,8 @@ if(CGBA_DYNAREC)
     CGBA_SH4_BLOCK_PROFILE=$<BOOL:${CGBA_SH4_BLOCK_PROFILE}>
     CGBA_SH4_PIN_GUEST_R0=$<BOOL:${CGBA_SH4_PIN_GUEST_R0}>
     CGBA_SH4_FASTMEM_XYRAM=$<BOOL:${CGBA_SH4_FASTMEM_XYRAM}>
+    CGBA_SH4_FASTMEM_ILRAM=$<BOOL:${CGBA_SH4_FASTMEM_ILRAM}>
+    CGBA_SH4_LAZY_CHAIN=$<BOOL:${CGBA_SH4_LAZY_CHAIN}>
     CGBA_SH4_KNOWN_TARGET_CACHE=$<BOOL:${CGBA_SH4_KNOWN_TARGET_CACHE}>
     CGBA_SH4_SEGMENTED_LITERAL_POOL=$<BOOL:${CGBA_SH4_SEGMENTED_LITERAL_POOL}>
     CGBA_SH4_COMPACT_FASTMEM_TUPLE=$<BOOL:${CGBA_SH4_COMPACT_FASTMEM_TUPLE}>
@@ -334,6 +349,11 @@ if(CGBA_DYNAREC)
   endif()
   if(CGBA_SH4_M4A_MIX_SKIP)
     target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_SH4_M4A_MIX_SKIP=1)
+    # Exact-boundary diagnostics return to update_gba after every guest
+    # instruction; a multi-iteration fold cannot preserve that mode.
+    if(CGBA_SH4_M4A_LOOP_FOLD AND NOT CGBA_SH4_EXACT_CYCLE_BOUNDARIES)
+      target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_SH4_M4A_LOOP_FOLD=1)
+    endif()
   endif()
   if(CGBA_SH4_SWI_OBJAFFINE_HLE)
     target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_SH4_SWI_OBJAFFINE_HLE=1)

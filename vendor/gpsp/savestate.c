@@ -151,6 +151,11 @@ bool gba_load_state(const void* src)
 #ifdef CGBA_PALETTE_DIRTY_ACTIVE
   palette_ram_dirty = CGBA_PALETTE_DIRTY_ACTIVE;
 #endif
+#ifdef CGBA_VRAM_DIRTY_ACTIVE
+  cgba_vram_dirty = CGBA_VRAM_DIRTY_ALL;
+  cgba_video_io_dirty = 1;
+#endif
+  video_invalidate_scanline_cache(0, 160);
 
   video_reload_counters();
 

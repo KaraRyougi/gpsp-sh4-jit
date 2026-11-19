@@ -1765,6 +1765,60 @@ int cgba_sh4_arm_mixer_loop_try(u32 unused, u32 pc)
 }
 #endif
 
+#ifdef CGBA_SH4_M4A_LOOP_FOLD
+#include "ports/fxcg100/sh4/sh4_m4a_skip.h"
+/* Runtime half of the m4a loop fold (see sh4_m4a_skip.h).  The emitted prefix
+ * snapshots the live R13 budget, calls this through the ordinary op2
+ * trampoline (which makes reg[REG_CPSR] and guest r0 authoritative around the
+ * call), then debits cgba_sh4_extra_cycles and falls into the translated loop
+ * head.  `kind` is the loop's offset inside the verified image. */
+volatile s32 cgba_sh4_m4a_loop_budget;
+#if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
+u32 cgba_sh4_m4a_loop_try_count;
+u32 cgba_sh4_m4a_loop_cycles;
+#endif
+
+int cgba_sh4_m4a_loop_try(u32 kind, u32 pc)
+{
+  cgba_sh4_m4a_loop_costs costs;
+  u32 region = (pc >> 24) & 0x0Fu;
+  s32 budget = cgba_sh4_m4a_loop_budget;
+  u32 spent = 0;
+
+  cgba_sh4_extra_cycles = 0;
+  if (CGBA_SH4_DIFF_ACTIVE() || (reg[REG_CPSR] & 0x20u) || budget <= 0)
+    return 0;
+  costs.seq = ws_cyc_seq[region][1];
+  costs.branch = ws_cyc_nseq[region][1];
+  costs.mem = (const uint8_t (*)[2])ws_cyc_nseq;
+
+  if (kind == CGBA_SH4_M4A_LOOP_REVERB) {
+    uint32_t r4 = reg[4], r5 = reg[5], r7 = reg[7], cpsr = reg[REG_CPSR];
+    spent = cgba_sh4_m4a_fold_reverb(&r4, &r5, reg[6], &r7, &cpsr, budget,
+                                     &costs);
+    if (spent) {
+      reg[4] = r4; reg[5] = r5; reg[7] = r7; reg[REG_CPSR] = cpsr;
+    }
+  } else if (kind == CGBA_SH4_M4A_LOOP_INTERP) {
+    cgba_sh4_m4a_interp_state s;
+    s.r2 = reg[2]; s.r3 = reg[3]; s.r4 = reg[4]; s.r5 = reg[5];
+    s.r8 = reg[8]; s.r9 = reg[9]; s.lr = reg[REG_LR];
+    s.cpsr = reg[REG_CPSR];
+    spent = cgba_sh4_m4a_fold_interp(&s, budget, &costs);
+    if (spent) {
+      reg[2] = s.r2; reg[3] = s.r3; reg[5] = s.r5; reg[8] = s.r8;
+      reg[9] = s.r9; reg[REG_LR] = s.lr; reg[REG_CPSR] = s.cpsr;
+    }
+  }
+#if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
+  cgba_sh4_m4a_loop_try_count++;
+  cgba_sh4_m4a_loop_cycles += spent;
+#endif
+  cgba_sh4_extra_cycles = (int)spent;
+  return spent != 0;
+}
+#endif
+
 #ifdef CGBA_SH4_THUMB_UDIV_FASTPATH
 /*
  * Runtime half of the signature-gated Thumb libgcc divide-loop fast path.
@@ -2046,7 +2100,13 @@ static u8 *cgba_bulk_ram_host(u32 addr, u32 len, u8 **tags)
   case 6:
     off = addr & 0x1FFFF;
     if (off + len > 0x18000) return NULL;
-    if (tags) *tags = NULL;                 /* VRAM: no tag mirror */
+    if (tags) {
+      *tags = NULL;                 /* VRAM: no tag mirror */
+#ifdef CGBA_VRAM_DIRTY_ACTIVE
+      if (off < 0x10000u) cgba_vram_dirty |= CGBA_VRAM_DIRTY_BG;
+      if (off + len > 0x10000u) cgba_vram_dirty |= CGBA_VRAM_DIRTY_OBJ;
+#endif
+    }
     return vram + off;
   default:
     return NULL;

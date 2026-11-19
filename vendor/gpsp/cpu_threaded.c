@@ -488,6 +488,9 @@ void translate_icache_sync() {
       return false;                                                           \
   }                                                                           \
 
+#ifndef arm_instruction_prefix
+#define arm_instruction_prefix() do {} while(0)
+#endif
 #ifndef arm_translate_override
 #define arm_translate_override() 0
 #endif
@@ -3891,6 +3894,9 @@ bool translate_block_arm(u32 pc, bool ram_region)
 #else
     block_data[block_data_position].block_offset = translation_ptr;
 #endif
+    /* Backend hook at an instruction boundary, before this instruction's
+     * own fetch cycle joins the translate-time count. */
+    arm_instruction_prefix();
     arm_base_cycles();
 
     if (pc == cheat_master_hook)

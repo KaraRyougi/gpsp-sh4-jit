@@ -63,10 +63,10 @@ SECTIONS
 		*/
 		*(EXCLUDE_FILE (*cpu_threaded.c.obj *cpu.cc.obj
 			*gba_memory.c.obj *video.cc.obj *sh4_interp_helpers.c.obj
-			*sh4_stub.S.obj) .text)
+			*sh4_stub.S.obj *sh4_video_4bpp.S.obj) .text)
 		*(EXCLUDE_FILE (*cpu_threaded.c.obj *cpu.cc.obj
 			*gba_memory.c.obj *video.cc.obj *sh4_interp_helpers.c.obj
-			*sh4_stub.S.obj) .text.*)
+			*sh4_stub.S.obj *sh4_video_4bpp.S.obj) .text.*)
 	} > rom
 
 	.gint.blocks : {
@@ -118,6 +118,11 @@ SECTIONS
 		*(.gint.mapped)
 		. = ALIGN(16);
 	} > ilram AT> rom
+
+	/* Remaining zero-wait-state ILRAM (up to 4 KiB) holds the hottest
+	 * runtime-emitted fastmem routines (saved across OS world switches). */
+	_cgba_ilram_fastmem_start = (_rilram + SIZEOF(.ilram) + 31) & ~31;
+	_cgba_ilram_fastmem_end = ORIGIN(ilram) + LENGTH(ilram);
 
 	. = ORIGIN(xyram);
 	.xyram.fastmem (NOLOAD) : ALIGN(32) {
@@ -174,6 +179,7 @@ SECTIONS
 		*video.cc.obj(.text .text.*)
 		*sh4_interp_helpers.c.obj(.text .text.*)
 		*sh4_stub.S.obj(.text .text.*)
+		*sh4_video_4bpp.S.obj(.text .text.*)
 		. = ALIGN(32);
 		_ecgba_hottext = . ;
 	} > highram AT> rom

@@ -81,10 +81,10 @@ SECTIONS
 		/* Everything except the gameplay working set, which goes to the
 		   arena below. Same object list as the fx-CG50 hot text. */
 		*(EXCLUDE_FILE (*cpu_threaded.c.obj *cpu.cc.obj
-			*gba_memory.c.obj *video.cc.obj *sh4_interp_helpers.c.obj
+			*gba_memory.c.obj *video.cc.obj *sh4_video_4bpp.S.obj *sh4_interp_helpers.c.obj
 			*sh4_stub.S.obj) .text)
 		*(EXCLUDE_FILE (*cpu_threaded.c.obj *cpu.cc.obj
-			*gba_memory.c.obj *video.cc.obj *sh4_interp_helpers.c.obj
+			*gba_memory.c.obj *video.cc.obj *sh4_video_4bpp.S.obj *sh4_interp_helpers.c.obj
 			*sh4_stub.S.obj) .text.*)
 		*(.hh3* .eram*)
 	} > ram :low
@@ -163,6 +163,9 @@ SECTIONS
 		. = ALIGN(16);
 	} > ilram :ilram
 
+	_cgba_ilram_fastmem_start = ALIGN(ORIGIN(ilram) + SIZEOF(.ilram), 32);
+	_cgba_ilram_fastmem_end = ORIGIN(ilram) + LENGTH(ilram);
+
 	_silram = SIZEOF(.ilram);
 	ASSERT(_silram > 0 && _silram <= 4k,
 		"the ILRAM segment must hold the SH4 dispatch stubs (build with CGBA_DYNAREC=ON) and fit 4 KiB")
@@ -193,6 +196,7 @@ SECTIONS
 		*cpu.cc.obj(.text .text.*)
 		*gba_memory.c.obj(.text .text.*)
 		*video.cc.obj(.text .text.*)
+		*sh4_video_4bpp.S.obj(.text .text.*)
 		*sh4_interp_helpers.c.obj(.text .text.*)
 		*sh4_stub.S.obj(.text .text.*)
 		. = ALIGN(32);

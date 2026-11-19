@@ -1385,8 +1385,10 @@ void cgba_gpsp_run_frame(uint32_t gba_buttons, int render_video)
 	(defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS))
 	cgba_prof_window_frame();
 #endif
-	if(render_video && cgba_mode3_debug_copy_active)
+	if(render_video && cgba_mode3_debug_copy_active) {
 		copy_mode3_vram_to_framebuffer();
+		video_invalidate_scanline_cache(0, 160);
+	}
 }
 
 #if defined(CGBA_DYNAREC) && defined(CGBA_SH4_DIFF_HARNESS)
