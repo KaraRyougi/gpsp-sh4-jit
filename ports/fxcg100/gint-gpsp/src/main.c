@@ -2506,6 +2506,7 @@ static int gpsp_main(void)
 			wait_status();
 			enter_gameplay_display(framebuffer, frame);
 #else
+			cgba_frame_limiter_stop();
 			draw_status("Loading state", slot_line);
 			draw_status(cgba_gpsp_state_load(menu_state.savestate_slot)
 				? "State loaded" : "Could not load the state", slot_line);
@@ -2529,6 +2530,7 @@ static int gpsp_main(void)
 				char slot_line[16];
 				int ok, storage_ok;
 
+				cgba_frame_limiter_stop();
 				snprintf(slot_line, sizeof slot_line, "Slot %u",
 					(unsigned)menu_state.savestate_slot);
 				draw_status("Saving state", slot_line);

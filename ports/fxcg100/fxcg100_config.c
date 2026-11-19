@@ -425,7 +425,10 @@ static int run_storage_request(storage_request *request)
   if (!request->path || request->size > INT_MAX)
     return request->operation == STORAGE_SIZE ? -1 : 0;
 #if CGBA_FXCG100_STORAGE
+  uint8_t saved_etmu[6];
+  cgba_etmu_pause(saved_etmu);
   int result = gint_world_switch(GINT_CALL(storage_transaction, (void *)request));
+  cgba_etmu_resume(saved_etmu);
   fxcg100_lcd_note_os_activity();
   return result;
 #else

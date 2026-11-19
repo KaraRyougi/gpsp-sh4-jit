@@ -125,8 +125,12 @@ static const uint16_t cgba_storage_fallback_rom[] = {
 #if CGBA_FXCG100_STORAGE
 static int os_bfile_call(gint_call_t call)
 {
-	int result = gint_world_switch(call);
+	uint8_t saved_etmu[6];
+	int result;
 
+	cgba_etmu_pause(saved_etmu);
+	result = gint_world_switch(call);
+	cgba_etmu_resume(saved_etmu);
 	fxcg100_lcd_note_os_activity();
 	return result;
 }

@@ -278,6 +278,50 @@ void cp_ui_status(const fxcg100_menu_state *state, const char *line1,
  * run. fx-CG: the RTC. */
 uint32_t fxcg100_ticks(void);
 
+/* Work around a libgint-cg.a _drv_tmu world-switch race on SH7305:
+ * _drv_tmu's hsave double-reads volatile ETMU.TCNT and its hrestore sets
+ * ETMU.TSTR=1 before spinning `while (ETMU.TCNT != saved)` at 236 MHz.
+ * Pausing active ETMUs across gint_world_switch() keeps them stopped during
+ * both hsave and hrestore, preventing the 32.768 kHz countdown deadlock. */
+static inline void cgba_etmu_pause(uint8_t saved[6])
+{
+#if defined(__sh__) && (defined(CGBA_FXCG100) || defined(CGBA_FXCG50)) && \
+    !defined(CGBA_CLASSPAD) && !defined(CGBA_HOST_TEST) && \
+    !defined(CGBA_GPSP_HEADLESS_TEST)
+  volatile uint8_t *base = (volatile uint8_t *)0xa44d0030u;
+  for (unsigned i = 0; i < 6u; i++) {
+    volatile uint8_t *tstr = base + i * 0x20u;
+    uint8_t v = *tstr;
+    saved[i] = v;
+    if (v & 1u) {
+      *tstr = (uint8_t)(v & ~1u);
+      for (unsigned spin = 0; spin < 4000u && (*tstr & 1u); spin++)
+        ;
+    }
+  }
+#else
+  for (unsigned i = 0; i < 6u; i++)
+    saved[i] = 0;
+#endif
+}
+
+static inline void cgba_etmu_resume(const uint8_t saved[6])
+{
+#if defined(__sh__) && (defined(CGBA_FXCG100) || defined(CGBA_FXCG50)) && \
+    !defined(CGBA_CLASSPAD) && !defined(CGBA_HOST_TEST) && \
+    !defined(CGBA_GPSP_HEADLESS_TEST)
+  volatile uint8_t *base = (volatile uint8_t *)0xa44d0030u;
+  for (unsigned i = 0; i < 6u; i++) {
+    if (saved[i] & 1u) {
+      volatile uint8_t *tstr = base + i * 0x20u;
+      *tstr = saved[i];
+    }
+  }
+#else
+  (void)saved;
+#endif
+}
+
 #ifndef CGBA_CLASSPAD
 /* The fx-CG interface (cg_ui.c). A message while something slow happens,
  * as a small box: over the game picture, dimmed and placed as the display
