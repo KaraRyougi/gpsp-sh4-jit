@@ -957,7 +957,8 @@ static int cgba_refresh_rom_after_storage(void)
 	cgba_gamepak_unmap_pages();
 	refreshed = (cgba_current_nor_rom.fd >= 0 &&
 		cgba_current_nor_rom.pages[0]) ?
-		cgba_nor_rom_refresh(&cgba_current_nor_rom) : -1;
+		cgba_nor_rom_refresh_path(&cgba_current_nor_rom,
+			cgba_current_nor_path) : -1;
 	if(refreshed < 0 || cgba_current_nor_rom.size != expected_size ||
 			!cgba_current_nor_rom.pages[0] ||
 			memcmp(original_header, cgba_current_nor_rom.pages[0],

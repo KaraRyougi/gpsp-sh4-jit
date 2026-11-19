@@ -339,15 +339,55 @@ static int write_range(storage_request *request, int fd,
                         (int)size) == (int)size;
 }
 
+#define STORAGE_MAX_BITMAP_BLOCKS 128u /* 512 KiB (configs, backups, savestates) */
+
 static int update_existing_blob(storage_request *request, int fd)
 {
+  unsigned blocks = (request->size + STORAGE_COMPARE_BLOCK - 1u) /
+                    STORAGE_COMPARE_BLOCK;
+  if (blocks <= STORAGE_MAX_BITMAP_BLOCKS) {
+    uint32_t dirty[STORAGE_MAX_BITMAP_BLOCKS / 32u] = { 0 };
+    /* Phase 1: pure read/compare pass so BFile_Read is never issued after
+     * BFile_Write on the same Fugue handle, and a read failure leaves the
+     * existing file untouched. */
+    for (unsigned b = 0; b < blocks; b++) {
+      unsigned offset = b * STORAGE_COMPARE_BLOCK;
+      unsigned size = request->size - offset;
+      if (size > STORAGE_COMPARE_BLOCK)
+        size = STORAGE_COMPARE_BLOCK;
+      /* Both supported calculators use Fugue (byte-count return value).
+       * Never compare an incompletely filled scratch buffer. */
+      if (os_bfile_read(fd, storage_compare_buffer, (int)size,
+                        (int)offset) != (int)size)
+        return 0;
+      if (memcmp(storage_compare_buffer,
+                 (const uint8_t *)request->src + offset, size) != 0)
+        dirty[b >> 5] |= 1u << (b & 31u);
+    }
+    /* Phase 2: pure write pass over coalesced dirty runs. */
+    unsigned run_start = 0, run_size = 0;
+    for (unsigned b = 0; b < blocks; b++) {
+      unsigned offset = b * STORAGE_COMPARE_BLOCK;
+      unsigned size = request->size - offset;
+      if (size > STORAGE_COMPARE_BLOCK)
+        size = STORAGE_COMPARE_BLOCK;
+      if (dirty[b >> 5] & (1u << (b & 31u))) {
+        if (!run_size)
+          run_start = offset;
+        run_size += size;
+      } else if (run_size) {
+        if (!write_range(request, fd, run_start, run_size))
+          return 0;
+        run_size = 0;
+      }
+    }
+    return !run_size || write_range(request, fd, run_start, run_size);
+  }
   unsigned run_start = 0, run_size = 0;
   for (unsigned offset = 0; offset < request->size;) {
     unsigned size = request->size - offset;
     if (size > STORAGE_COMPARE_BLOCK)
       size = STORAGE_COMPARE_BLOCK;
-    /* Both supported calculators use Fugue (byte-count return value).
-     * Never compare an incompletely filled scratch buffer. */
     if (os_bfile_read(fd, storage_compare_buffer, (int)size,
                       (int)offset) != (int)size)
       return 0;

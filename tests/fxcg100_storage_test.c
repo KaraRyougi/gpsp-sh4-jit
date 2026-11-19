@@ -82,6 +82,7 @@ static int fake_remove(const uint16_t *p)
 static int fake_read(int fd, void *dst, int size, int offset)
 {
   assert(in_os && opened && fd == 7 && (mode & 1));
+  assert(writes == 0); /* never issue BFile_Read after BFile_Write on the same fd */
   assert(offset >= 0 && offset + size <= length);
   reads++;
   if (reads == fail_read) return -5;
@@ -175,8 +176,8 @@ int main(void)
   assert(!save(length)); assert(storage_mutation_generation == 1);
   counters(); assert(save(length)); assert(!memcmp(disk, source, length));
   reset(16384); source[0] ^= 1; source[12288] ^= 1; fail_read = 3;
-  assert(!save(length)); assert(writes == 1 && storage_mutation_generation == 1);
-  counters(); assert(save(length)); assert(!memcmp(disk, source, length));
+  assert(!save(length)); assert(writes == 0 && storage_mutation_generation == 0);
+  counters(); assert(save(length)); assert(writes == 2 && !memcmp(disk, source, length));
   reset(8192); source[0] ^= 1; fail_close = 1;
   assert(!save(length)); assert(storage_mutation_generation == 1);
   reset(8192); fail_remove = 1;

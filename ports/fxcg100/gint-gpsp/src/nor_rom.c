@@ -193,6 +193,11 @@ static void os_bfile_close(int fd)
 
 typedef struct cgba_block_query {
 	int fd;
+	const uint16_t *reopen_path;
+	uint32_t expected_size;
+	int check_size;
+	int open_result;
+	int size_result;
 	uint32_t block_count;
 	int first_result;
 	uint32_t first_failed_block;
@@ -316,6 +321,28 @@ static int os_bfile_query_blocks(void *opaque)
 	get_block_address_fn get_block_address =
 		(get_block_address_fn)(uintptr_t)CGBA_BFILE_GET_BLOCK_ADDRESS;
 
+	if(query->reopen_path && query->reopen_path[0]) {
+		typedef int (*close_fn)(int);
+		typedef int (*open_fn)(const uint16_t *, int);
+
+		if(query->fd >= 0) {
+			((close_fn)(uintptr_t)CGBA_BFILE_CLOSE)(query->fd);
+			query->fd = -1;
+		}
+		query->fd = ((open_fn)(uintptr_t)CGBA_BFILE_OPEN)(
+			query->reopen_path, BFile_ReadOnly);
+		query->open_result = query->fd;
+		if(query->fd < 0)
+			return -2;
+	}
+	if(query->check_size) {
+		typedef int (*size_fn)(int);
+
+		query->size_result = ((size_fn)(uintptr_t)CGBA_BFILE_SIZE)(query->fd);
+		if(query->size_result != (int)query->expected_size)
+			return -2;
+	}
+
 	for(uint32_t block = 0; block < query->block_count; block++) {
 		void *raw = NULL;
 		int result = get_block_address(query->fd,
@@ -335,11 +362,18 @@ static int os_bfile_query_blocks(void *opaque)
 #endif /* !CGBA_CLASSPAD */
 #endif
 
-static int os_bfile_get_block_addresses(int fd, uint32_t block_count,
+static int os_bfile_get_block_addresses_ex(int fd, const uint16_t *reopen_path,
+	uint32_t expected_size, int check_size, uint32_t block_count,
 	cgba_block_query *query)
 {
 #if CGBA_FXCG100_STORAGE
+	memset(query, 0, sizeof(*query));
 	query->fd = fd;
+	query->reopen_path = reopen_path;
+	query->expected_size = expected_size;
+	query->check_size = check_size;
+	query->open_result = fd;
+	query->size_result = (int)expected_size;
 	query->block_count = block_count;
 	query->first_result = 0;
 	query->first_failed_block = UINT32_MAX;
@@ -347,10 +381,19 @@ static int os_bfile_get_block_addresses(int fd, uint32_t block_count,
 	return os_bfile_call(GINT_CALL(os_bfile_query_blocks, (void *)query));
 #else
 	(void)fd;
+	(void)reopen_path;
+	(void)expected_size;
+	(void)check_size;
 	(void)block_count;
 	(void)query;
 	return -1;
 #endif
+}
+
+static int os_bfile_get_block_addresses(int fd, uint32_t block_count,
+	cgba_block_query *query)
+{
+	return os_bfile_get_block_addresses_ex(fd, NULL, 0, 0, block_count, query);
 }
 
 static int os_bfile_find_first(const uint16_t *pattern, int *handle,
@@ -764,7 +807,8 @@ int cgba_nor_rom_read(cgba_nor_rom *rom, void *dst, uint32_t offset, uint32_t le
  * entries in the 4 KiB table. Only rejected blocks gather through
  * cgba_nor_rom_read. Page 0 is always made directly available for the loader.
  */
-static int build_block_table(cgba_nor_rom *rom)
+static int build_block_table_ex(cgba_nor_rom *rom, const uint16_t *reopen_path,
+	int check_size)
 {
 	uint32_t total = rom->page_count * CGBA_FLASH_BLOCKS_PER_PAGE;
 	uint32_t file_blocks =
@@ -772,18 +816,31 @@ static int build_block_table(cgba_nor_rom *rom)
 	cgba_block_query query;
 	uint32_t p;
 	int cache_invalidated = 0;
+	int query_rc;
 
 	if(total > CGBA_NOR_ROM_MAX_BLOCKS || file_blocks > total)
 		return -1;
 
 	/*
-	 * One synchronous OS-world visit resolves every live Fugue block. Clear
-	 * the padded tail first because a refresh may reuse a table that belonged
-	 * to a larger ROM.
+	 * One synchronous OS-world visit resolves every live Fugue block (and,
+	 * when refreshing after storage mutation on fx-CG, closes the pre-write
+	 * descriptor, reopens fresh, and validates file size in the same switch).
+	 * Clear the padded tail first because a refresh may reuse a table that
+	 * belonged to a larger ROM.
 	 */
 	memset(cgba_block_addr, 0, total * sizeof(*cgba_block_addr));
-	if(os_bfile_get_block_addresses(rom->fd, file_blocks, &query) < 0)
-		return -1;
+	query_rc = ((reopen_path && reopen_path[0]) || check_size)
+		? os_bfile_get_block_addresses_ex(rom->fd, reopen_path,
+			rom->size, check_size, file_blocks, &query)
+		: os_bfile_get_block_addresses(rom->fd, file_blocks, &query);
+	if(reopen_path && reopen_path[0]) {
+		rom->fd = query.fd;
+		rom->open_result = query.open_result;
+	}
+	if(check_size)
+		rom->size_result = query.size_result;
+	if(query_rc < 0)
+		return query_rc;
 
 	rom->direct_page_count = 0;
 	for(uint32_t b = 0; b < total; b++) {
@@ -885,17 +942,23 @@ static int build_block_table(cgba_nor_rom *rom)
 	return 0;
 }
 
-int cgba_nor_rom_refresh(cgba_nor_rom *rom)
+static int build_block_table(cgba_nor_rom *rom)
+{
+	return build_block_table_ex(rom, NULL, 0);
+}
+
+int cgba_nor_rom_refresh_path(cgba_nor_rom *rom, const uint16_t *path)
 {
 	uint8_t original_header[0xC0];
 	uint32_t total;
 	int got;
 
-	if(!rom || rom->fd < 0 || rom->page_count == 0 || !rom->pages[0])
+	if(!rom || (rom->fd < 0 && (!path || !path[0])) ||
+			rom->page_count == 0 || !rom->pages[0])
 		return -1;
+#ifdef CGBA_CLASSPAD
 	if(os_bfile_size(rom->fd) != (int)rom->size)
 		return -2;
-#ifdef CGBA_CLASSPAD
 	/* RAM-pool copies are private: writing other files cannot move or
 	 * invalidate them. Flash addresses are queried again like on the fx-CG. */
 	if(!cp_direct_nor)
@@ -911,9 +974,18 @@ int cgba_nor_rom_refresh(cgba_nor_rom *rom)
 	rom->fail_page = 0;
 	rom->fail_block = 0;
 
+#ifdef CGBA_CLASSPAD
 	if(build_block_table(rom) == 0 &&
 			memcmp(original_header, rom->pages[0], sizeof(original_header)) == 0)
 		return 0;
+#else
+	if(build_block_table_ex(rom, path, 1) == 0 &&
+			memcmp(original_header, rom->pages[0], sizeof(original_header)) == 0)
+		return 0;
+#endif
+
+	if(rom->fd < 0)
+		return -2;
 
 	/* A descriptor/block-address refresh that cannot reproduce the immutable
 	 * ROM header must not leave stale direct pointers reachable. Fall back to
@@ -936,6 +1008,11 @@ int cgba_nor_rom_refresh(cgba_nor_rom *rom)
 	rom->pages[0] = cgba_page0_buf;
 	rom->fallback_used = 1;
 	return 1;
+}
+
+int cgba_nor_rom_refresh(cgba_nor_rom *rom)
+{
+	return cgba_nor_rom_refresh_path(rom, NULL);
 }
 
 const uint8_t * const *cgba_nor_rom_block_table(const cgba_nor_rom *rom)

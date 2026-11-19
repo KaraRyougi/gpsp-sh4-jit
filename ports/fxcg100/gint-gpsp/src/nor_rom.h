@@ -45,8 +45,11 @@ int cgba_nor_rom_open_root_file(cgba_nor_rom *rom, const char *name8dot3);
 int cgba_nor_rom_open_path(cgba_nor_rom *rom, const uint16_t *path);
 /* Re-query physical Fugue/NOR blocks after another file was mutated. Returns
  * 0 for direct/fragmented mapping, 1 for safe BFile-only fallback, <0 if the
- * open ROM can no longer be read or no longer matches its original header. */
+ * open ROM can no longer be read or no longer matches its original header.
+ * When `path` is non-NULL on fx-CG, closes the pre-write descriptor, reopens
+ * fresh, checks size, and queries all blocks in one single OS world switch. */
 int cgba_nor_rom_refresh(cgba_nor_rom *rom);
+int cgba_nor_rom_refresh_path(cgba_nor_rom *rom, const uint16_t *path);
 void cgba_nor_rom_close(cgba_nor_rom *rom);
 void cgba_nor_rom_status(const cgba_nor_rom *rom, char *dst, size_t dst_size);
 unsigned cgba_nor_rom_scan_gba(cgba_nor_rom_list *list);
