@@ -206,7 +206,18 @@ static inline int sh4g_arm_block_native(u8 **tp, u32 opcode, u32 pc,
       sh4_emit_mov_imm(&cg, 6, SH4_REG_ARG0);
       sh4_emit_cmpeq(&cg, SH4_REG_ARG0, SH4_REG_T1);    /* T = VRAM */
       sh4g_close(tp, &cg); }
+#ifdef CGBA_VRAM_DIRTY_ACTIVE
+    { u8 *not_vram = sh4g_emit_bf_placeholder(tp);
+      sh4g_vec_load(tp, SH4G_VEC_vram_dirty, SH4_REG_T1);
+      { sh4_codegen cg = sh4g_open(tp);
+        sh4_emit_mov_imm(&cg, CGBA_VRAM_DIRTY_ALL, SH4_REG_ARG0);
+        sh4_emit_mov_l_store(&cg, SH4_REG_ARG0, SH4_REG_T1);
+        sh4g_close(tp, &cg); }
+      vram_skip = sh4g_emit_bra_placeholder(tp);
+      sh4g_patch_cond(not_vram, *tp); }
+#else
     vram_skip = sh4g_emit_bt_placeholder(tp);
+#endif
     /* Build SMC tag-page pointer in R6 from data page R3. */
     { sh4_codegen cg = sh4g_open(tp);
       sh4_emit_mov_reg(&cg, SH4_REG_T2, SH4_REG_ARG2);
@@ -237,7 +248,11 @@ static inline int sh4g_arm_block_native(u8 **tp, u32 opcode, u32 pc,
       }
       sh4_emit_add_imm(&cg, -(int)(count * 4), SH4_REG_RET);
       sh4g_close(tp, &cg); }
+#ifdef CGBA_VRAM_DIRTY_ACTIVE
+    sh4g_patch_bra(vram_skip, *tp);               /* VRAM: dirty marked, no tags */
+#else
     sh4g_patch_cond(vram_skip, *tp);              /* VRAM: no tags to scan */
+#endif
   }
 
   /* fast path: transfer each listed register (ascending = lowest addr first) */

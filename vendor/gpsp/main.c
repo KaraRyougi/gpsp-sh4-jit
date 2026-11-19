@@ -331,10 +331,13 @@ u32 function_cc update_gba(int remaining_cycles)
           update_scanline();
 
           // Trigger the HBlank DMAs if enabled
-          for (i = 0; i < 4; i++)
+          if (__builtin_expect(cgba_hblank_dma_mask != 0, 0))
           {
-            if(dma[i].start_type == DMA_START_HBLANK)
-              dma_alert |= dma_transfer(i, &dma_cycles);
+            for (i = 0; i < 4; i++)
+            {
+              if(dma[i].start_type == DMA_START_HBLANK)
+                dma_alert |= dma_transfer(i, &dma_cycles);
+            }
           }
         }
 
@@ -450,8 +453,10 @@ u32 function_cc update_gba(int remaining_cycles)
       flag_interrupt(irq_raised);
 
     // Raise any pending interrupts. This changes the CPU mode.
-    if (check_and_raise_interrupts())
-      changed_pc = 0x40000000;
+    if (__builtin_expect(!(reg[REG_CPSR] & 0x80) && io_registers[REG_IME] &&
+                         (io_registers[REG_IE] & io_registers[REG_IF]), 0))
+      if (check_and_raise_interrupts())
+        changed_pc = 0x40000000;
 
     // Figure out when we need to stop CPU execution. The next event is
     // a video event or a timer event, whatever happens first.
@@ -460,11 +465,14 @@ u32 function_cc update_gba(int remaining_cycles)
     { extern u32 cgba_cap_src[8]; cgba_cap_src[0]++; }   /* default: video */
 #endif
     {
-      u32 cc = serial_next_event();
+      extern u32 serial_irq_cycles;
+      if (__builtin_expect(serial_irq_cycles != 0, 0)) {
+        u32 cc = serial_irq_cycles;
 #if defined(CGBA_GPSP_HEADLESS_TEST) && defined(CGBA_SH4_DIAG_COUNTERS)
-      if (cc < execute_cycles) { extern u32 cgba_cap_src[8]; cgba_cap_src[1]++; }
+        if (cc < execute_cycles) { extern u32 cgba_cap_src[8]; cgba_cap_src[1]++; }
 #endif
-      execute_cycles = MIN(execute_cycles, cc);
+        execute_cycles = MIN(execute_cycles, cc);
+      }
     }
 
     // If we are paused due to a DMA, cap the number of cyles to that amount.
@@ -518,6 +526,7 @@ void reset_gba(void)
   init_main();
   init_cpu();
   reset_sound();
+  video_invalidate_scanline_cache(0, 160);
 }
 
 #ifdef TRACE_REGISTERS

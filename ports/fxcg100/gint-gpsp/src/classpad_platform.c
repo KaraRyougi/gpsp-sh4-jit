@@ -1600,7 +1600,8 @@ void fxcg100_lcd_blit_gba(const uint16_t *pixels)
 }
 
 /* Scanline streaming (an fx-CG experiment) is not implemented here. */
+int fxcg100_lcd_is_synced(void) { return 0; }
 int fxcg100_lcd_stream_begin(void) { return 0; }
-void fxcg100_lcd_stream_scanline(const uint16_t *row, unsigned y)
-{ (void)row; (void)y; }
+void fxcg100_lcd_stream_scanline(const uint16_t *row, unsigned y, int dirty)
+{ (void)row; (void)y; (void)dirty; }
 int fxcg100_lcd_stream_end(void) { return 0; }

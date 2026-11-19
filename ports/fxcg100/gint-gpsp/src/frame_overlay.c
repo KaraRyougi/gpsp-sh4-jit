@@ -106,6 +106,10 @@ static void fps_draw_text(uint16_t *pixels, int x, int y, const char *s,
 	}
 }
 
+#if defined(CGBA_VIDEO_DIRTY_SCANLINE) && CGBA_VIDEO_DIRTY_SCANLINE && !defined(CGBA_HOST_TEST)
+extern void video_invalidate_scanline_cache(uint32_t start_y, uint32_t end_y);
+#endif
+
 /*
  * Two-line metrics readout drawn into the frame buffer (no file/NOR I/O):
  *   line 1: emulated FPS (E, core throughput) and drawn FPS (D, post-skip)
@@ -146,4 +150,7 @@ void fxcg100_lcd_overlay_fps(uint16_t *pixels, unsigned emu_fps,
 
 	fps_draw_text(pixels, 1, 1, l1, fg);
 	fps_draw_text(pixels, 1, 1 + FPS_GLYPH_H + 1, l2, fg);
+#if defined(CGBA_VIDEO_DIRTY_SCANLINE) && CGBA_VIDEO_DIRTY_SCANLINE && !defined(CGBA_HOST_TEST)
+	video_invalidate_scanline_cache(0, (uint32_t)(2 * FPS_GLYPH_H + 3));
+#endif
 }

@@ -25,8 +25,189 @@ static int dead_reg(unsigned r)
   return r == 6 || r == 7 || r == 12 || r == 14;
 }
 
+/* ---- loop-fold differential -------------------------------------------
+ * Instruction-order references for the two folded loops, written from the
+ * disassembly one instruction per line: `I` is a fetched instruction
+ * (elided, condition-failed and executed ones all cost one sequential
+ * fetch), `B` a taken branch, `M` a transfer at an address.  They run an
+ * exact number of iterations and know nothing about budgets. */
+static uint8_t mem_cost[16][2];
+static uint32_t SEQ, BR;
+static uint32_t rng_state = 0x1234abcdu;
+static uint32_t rnd(void)
+{
+  rng_state ^= rng_state << 13; rng_state ^= rng_state >> 17;
+  rng_state ^= rng_state << 5;
+  return rng_state;
+}
+#define I (cyc += SEQ)
+#define B (cyc += BR)
+#define M(addr, col) (cyc += mem_cost[((addr) >> 24) & 15][col])
+
+static uint32_t ref_reverb(uint32_t n, uint32_t *r4, uint32_t *r5, uint32_t r6,
+                           uint32_t *r7, uint32_t *cpsr)
+{
+  uint32_t cyc = 0;
+  while (n--) {
+    I; M(*r5 + r6, 0);            /* ldrsb r0,[r5,r6]   */
+    I; M(*r5, 0);                 /* ldrsb r1,[r5]      */
+    I;                            /* add                */
+    I; M(*r7 + r6, 0);            /* ldrsb r1,[r7,r6]   */
+    I;                            /* add                */
+    I; M(*r7, 0); *r7 += 1;       /* ldrsb r1,[r7],#1   */
+    I;                            /* add                */
+    I;                            /* mul                */
+    I;                            /* asr                */
+    I;                            /* tst                */
+    I;                            /* addne              */
+    I; M(*r5 + r6, 0);            /* strb r0,[r5,r6]    */
+    I; M(*r5, 0); *r5 += 1;       /* strb r0,[r5],#1    */
+    I; *cpsr = (*cpsr & 0x0FFFFFFFu) | cgba_sh4_m4a_subs_flags(*r4, 1);
+       *r4 -= 1;                  /* subs r4,r4,#1      */
+    I; B;                         /* bgt (taken)        */
+  }
+  return cyc;
+}
+
+/* Runs `groups` whole four-sample groups from the group head.  Returns 0 and
+ * sets *stopped if a group would leave the fold's domain (wave end). */
+static uint32_t ref_interp(uint32_t groups, cgba_sh4_m4a_interp_state *s,
+                           int *stopped)
+{
+  uint32_t cyc = 0;
+  *stopped = 0;
+  while (groups--) {
+    I; M(s->r5, 1);               /* ldr r6,[r5]            */
+    I; M(s->r5 + 0x630, 1);       /* ldr r7,[r5,#0x630]     */
+    for (;;) {
+      uint32_t before;
+      I; I; I; I; I; I; I; I;     /* mul/add/mul/bic/add/mul/bic/add */
+      I; s->r9 += s->r4;          /* add r9,r9,r4           */
+      I; s->lr = s->r9 >> 23;     /* lsrs lr,r9,#23         */
+      I;                          /* beq                    */
+      if (s->lr == 0) {
+        B;
+      } else {
+        I; s->r9 &= ~0x3F800000u; /* bic r9                 */
+        I; if ((int32_t)s->r2 <= (int32_t)s->lr) { *stopped = 1; return 0; }
+           s->r2 -= s->lr;        /* subs r2,r2,lr          */
+        I;                        /* ble (not taken)        */
+        I; s->lr -= 1;            /* subs lr,lr,#1          */
+        I;                        /* addeq                  */
+        I; if (s->lr) { s->r3 += s->lr; M(s->r3, 0); }  /* ldrsbne r0,[r3,lr]! */
+        I; s->r3 += 1; M(s->r3, 0);                     /* ldrsb r1,[r3,#1]!   */
+        I;                        /* sub                    */
+      }
+      before = s->r5;
+      I; s->r5 += 0x40000000u;    /* adds r5,r5,#0x40000000 */
+      I;                          /* bcc                    */
+      if (s->r5 >= before) { B; continue; }   /* carry clear: next sample */
+      break;
+    }
+    I; M(s->r5 + 0x630, 1);       /* str r7,[r5,#0x630]     */
+    I; M(s->r5, 1); s->r5 += 4;   /* str r6,[r5],#4         */
+    I; s->cpsr = (s->cpsr & 0x0FFFFFFFu) | cgba_sh4_m4a_subs_flags(s->r8, 4);
+       s->r8 -= 4;                /* subs r8,r8,#4          */
+    I; B;                         /* bgt (taken)            */
+  }
+  return cyc;
+}
+#undef I
+#undef B
+#undef M
+
+static int test_folds(void)
+{
+  cgba_sh4_m4a_loop_costs costs;
+  unsigned long folded = 0, declined = 0;
+  unsigned n;
+
+  for (n = 0; n < 200000; n++) {
+    unsigned i;
+    int32_t budget = (int32_t)(rnd() % 3000) - 100;
+    for (i = 0; i < 16; i++) {
+      mem_cost[i][0] = (uint8_t)(1 + rnd() % 9);
+      mem_cost[i][1] = (uint8_t)(1 + rnd() % 9);
+    }
+    SEQ = 1 + rnd() % 3; BR = 1 + rnd() % 5;
+    costs.seq = SEQ; costs.branch = BR;
+    costs.mem = (const uint8_t (*)[2])mem_cost;
+
+    {                                                   /* reverb */
+      uint32_t r4 = (n % 7 == 0) ? rnd() % 3 : rnd() % 300;
+      uint32_t r5 = 0x03000000u + (rnd() & 0x7FFF), r6 = 0x630;
+      uint32_t r7 = (rnd() & 1) ? r5 : 0x03000000u + (rnd() & 0x7FFF);
+      uint32_t cpsr = rnd();
+      uint32_t a4 = r4, a5 = r5, a7 = r7, ac = cpsr;
+      uint32_t spent, want;
+      if (n % 11 == 0) { r5 = a5 = 0x00FFFFF0u + rnd() % 32; }  /* region seam */
+      spent = cgba_sh4_m4a_fold_reverb(&a4, &a5, r6, &a7, &ac, budget, &costs);
+      if (!spent) {
+        declined++;
+        if (a4 != r4 || a5 != r5 || a7 != r7 || ac != cpsr)
+          FAIL("reverb: declined fold changed state");
+      } else {
+        uint32_t k = r4 - a4;
+        folded++;
+        want = ref_reverb(k, &r4, &r5, r6, &r7, &cpsr);
+        if (want != spent || a4 != r4 || a5 != r5 || a7 != r7 || ac != cpsr)
+          FAIL("reverb: fold of %u iterations differs (cycles %u vs %u)",
+               k, spent, want);
+        if ((int32_t)a4 < 1)
+          FAIL("reverb: folded the exiting iteration");
+        if (budget - (int32_t)spent <= 0)
+          FAIL("reverb: fold exhausted the budget");
+      }
+    }
+    {                                                   /* interpolating mix */
+      cgba_sh4_m4a_interp_state s, a, r;
+      uint32_t spent, want, groups;
+      int stopped;
+      s.r2 = (n % 5 == 0) ? rnd() % 40 : rnd() % 20000;
+      s.r3 = 0x08000000u + (rnd() & 0x00FFFFFF);
+      s.r4 = (n % 3 == 0) ? rnd() & 0x00FFFFFF : rnd() & 0x03FFFFFF;
+      s.r5 = 0x03000000u + (rnd() & 0x7FFC);
+      s.r8 = (n % 9 == 0) ? rnd() % 9 : rnd() % 300;
+      s.r9 = rnd() & 0x007FFFFF;
+      s.lr = rnd(); s.cpsr = rnd();
+      if (n % 13 == 0) s.r3 = 0x08FFFFF0u + rnd() % 64;   /* region seam */
+      a = s; r = s;
+      spent = cgba_sh4_m4a_fold_interp(&a, budget, &costs);
+      if (!spent) {
+        declined++;
+        if (a.r2 != s.r2 || a.r3 != s.r3 || a.r5 != s.r5 || a.r8 != s.r8 ||
+            a.r9 != s.r9 || a.lr != s.lr || a.cpsr != s.cpsr)
+          FAIL("interp: declined fold changed state");
+      } else {
+        groups = (s.r8 - a.r8) / 4;
+        folded++;
+        want = ref_interp(groups, &r, &stopped);
+        if (stopped)
+          FAIL("interp: folded across a wave end");
+        if (want != spent || a.r2 != r.r2 || a.r3 != r.r3 || a.r5 != r.r5 ||
+            a.r8 != r.r8 || a.r9 != r.r9 || a.lr != r.lr || a.cpsr != r.cpsr ||
+            a.r4 != r.r4)
+          FAIL("interp: fold of %u groups differs (cycles %u vs %u)",
+               groups, spent, want);
+        if ((int32_t)a.r8 <= 0)
+          FAIL("interp: folded the last group");
+        if (budget - (int32_t)spent <= 0)
+          FAIL("interp: fold exhausted the budget");
+      }
+    }
+  }
+  if (!folded || !declined)
+    FAIL("fold test did not cover both outcomes");
+  printf("m4a loop fold: %lu folds matched the instruction-order reference "
+         "(%lu declined)\n", folded, declined);
+  return 0;
+}
+
 int main(void)
 {
+  if (test_folds())
+    return 1;
+
   unsigned i, drops = 0, mems = 0, flag_setters = 0;
   uint32_t previous = 0;
 
