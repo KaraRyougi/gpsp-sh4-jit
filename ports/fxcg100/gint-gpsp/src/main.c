@@ -7,7 +7,6 @@
 #include "fxcg100_platform.h"
 #include "frame_pacing.h"
 #include "gpsp_runner.h"
-#include "overclock.h"
 
 #if defined(CGBA_CLASSPAD)
 #include <gint/keyboard.h>
@@ -136,7 +135,8 @@ extern uint32_t cgba_sh4_arm_mixer_first_reg[10];
 #endif
 #endif
 
-/* Menu frameskip types (order matches frameskip_options[] in fxcg100_menu.c). */
+/* Menu frameskip types (the order of the Frame skipping choices in cg_ui.c,
+ * classpad_ui.c and fxcg100_menu.c). */
 #define CGBA_FRAMESKIP_AUTOMATIC 0
 #define CGBA_FAST_FORWARD_RENDER_PERIOD 8u
 
@@ -213,11 +213,14 @@ static void clear_gpsp_highbss(void)
 		(size_t)(cgba_highbss_end - cgba_highbss_start));
 }
 
-#ifdef CGBA_CLASSPAD
-/* The display options the status card should follow; set once the menu state
- * exists. Before that the card is shown upright. */
+/* The display options and colours the status card should follow; set once
+ * the menu state exists. Before that the defaults are used. */
 static const fxcg100_menu_state *status_state;
 static const fxcg100_menu_state status_default_state;
+#ifndef CGBA_CLASSPAD
+/* While a game is on screen: its frame, which the fx-CG status box is drawn
+ * over (dimmed), rather than over a plain page. */
+static const uint16_t *status_frame;
 #endif
 
 static void draw_status(const char *line1, const char *line2)
@@ -225,15 +228,10 @@ static void draw_status(const char *line1, const char *line2)
 #ifdef CGBA_CLASSPAD
 	cp_ui_status(status_state ? status_state : &status_default_state, line1,
 		line2);
-	return;
+#else
+	cg_ui_status(status_state ? status_state : &status_default_state, line1,
+		line2, status_frame);
 #endif
-	dclear(C_WHITE);
-	drect(0, 0, DWIDTH - 1, 21, C_RGB(0, 10, 22));
-	dtext(8, 5, C_WHITE, "gpSP");
-	dtext(16, 44, C_BLACK, line1);
-	if(line2)
-		dtext(16, 62, C_BLACK, line2);
-	fxcg100_lcd_update();   /* restores the full gint window then dupdate() */
 }
 
 /* Push the menu's display options to the presenter. */
@@ -260,6 +258,9 @@ static void apply_display_options(const fxcg100_menu_state *state)
 				free_key = 0;
 		fxcg100_lcd_set_menu_key(free_key);
 	}
+#else
+	fxcg100_lcd_set_sync(state->lcd_sync, state->lcd_sync_offset);
+	fxcg100_lcd_set_sync_flip(state->lcd_sync_flip);
 #endif
 }
 
@@ -315,6 +316,9 @@ static void enter_gameplay_display(const uint16_t *framebuffer, unsigned frame)
 	fxcg100_lcd_clear(C_BLACK);
 	fxcg100_lcd_update();
 	blit_gba_frame(framebuffer, frame, FXCG100_GBA_BUTTON_NONE);
+#ifndef CGBA_CLASSPAD
+	status_frame = framebuffer;
+#endif
 }
 
 static void wait_status(void)
@@ -2244,7 +2248,6 @@ static int gpsp_main(void)
 	#ifdef CGBA_GPSP_HEADLESS_TEST
 	return cgba_headless_test(framebuffer);
 	#endif
-	cgba_overclock_init();
 	fxcg100_menu_state menu_state;
 	uint32_t previous_app_keys = 0;
 	uint32_t previous_hotkeys = 0;
@@ -2278,9 +2281,13 @@ static int gpsp_main(void)
 #endif
 	cgba_gpsp_refresh_roms();
 	fxcg100_menu_init(&menu_state);
-#ifdef CGBA_CLASSPAD
 	status_state = &menu_state;
+#ifdef CGBA_CLASSPAD
 	cp_ui_apply_saved_clock();
+#else
+	/* The VSync calibration page shows its colours through the game's own
+	 * frame buffer and presenter; the game draws over it again. */
+	fxcg100_menu_set_frame(framebuffer);
 #endif
 	if(cgba_gpsp_rom_count() > CGBA_GPSP_ROM_BUILTIN_COUNT)
 		menu_state.rom_source = CGBA_GPSP_ROM_BUILTIN_COUNT;
@@ -2338,9 +2345,67 @@ static int gpsp_main(void)
 			cgba_gpsp_debug_menu(&debug_info, frame, last_hash,
 				cgba_fps.emu_fps, cgba_fps.draw_fps, framebuffer,
 				read_stack_pointer());
-			fxcg100_menu_result result =
-				fxcg100_menu_run(&menu_state, frame, last_hash, &debug_info);
+#ifndef CGBA_CLASSPAD
+			status_frame = NULL;
+#endif
+			fxcg100_menu_result result;
+			int storage_failed = 0;
+			for(;;) {
+				result = fxcg100_menu_run(&menu_state, frame, last_hash,
+					&debug_info);
+#ifndef CGBA_CLASSPAD
+				/* fx-CG: the menu stays open while a state is saved, and
+				 * says how it went in its footer. Loading goes back to the
+				 * game, or reports in the footer when it fails. */
+				if(result == FXCG100_MENU_SAVE_STATE ||
+						result == FXCG100_MENU_LOAD_STATE) {
+					int save = result == FXCG100_MENU_SAVE_STATE, ok;
+					unsigned slot = (unsigned)menu_state.savestate_slot;
+					char line[96];
+
+					snprintf(line, sizeof line, save
+						? "Saving state to slot %u..."
+						: "Loading state from slot %u...", slot);
+					cg_ui_show_progress(line);
+					if(!save && !cgba_gpsp_storage_sync()) {
+						storage_failed = 1;
+						break;
+					}
+					ok = save ? cgba_gpsp_state_save(slot)
+						: cgba_gpsp_state_load(slot);
+					if(save && !ok && !cgba_gpsp_storage_sync()) {
+						storage_failed = 1;
+						break;
+					}
+					if(ok && !save) {
+						result = FXCG100_MENU_RETURN;
+						break;
+					}
+					snprintf(line, sizeof line, ok ? "State saved to slot %u"
+						: save ? "Could not save to slot %u"
+						: "Could not load slot %u", slot);
+#ifdef CGBA_SAVE_TIMING
+					if(save) {
+						char t[64];
+
+						/* The check mark says it was saved; a failure
+						 * shows in the error colour. */
+						cgba_save_timing_text(t, sizeof t);
+						snprintf(line, sizeof line, "%s", t);
+					}
+#endif
+					cg_ui_set_result(line, !ok);
+					continue;
+				}
+#endif
+				break;
+			}
 			apply_display_options(&menu_state);
+			if(storage_failed) {
+				draw_status("ROM remap FAILED", "restart or reset required");
+				wait_status();
+				break;
+			}
 
 			wait_for_keys_released();
 			previous_app_keys = fxcg100_poll_app_keys();
@@ -2376,7 +2441,7 @@ static int gpsp_main(void)
 			if(result == FXCG100_MENU_LOAD_STATE ||
 					result == FXCG100_MENU_SAVE_STATE) {
 				int save = result == FXCG100_MENU_SAVE_STATE;
-				char slot_line[32];
+				char slot_line[64];
 				int ok;
 				snprintf(slot_line, sizeof slot_line, "slot %u",
 					(unsigned)menu_state.savestate_slot);
@@ -2390,10 +2455,18 @@ static int gpsp_main(void)
 					wait_status();
 					break;
 				}
+#ifdef CGBA_SAVE_TIMING
+				if(save)
+					cgba_save_timing_text(slot_line, sizeof slot_line);
+#endif
 				draw_status(ok ? (save ? "state saved" : "state loaded")
 					: (save ? "state save FAILED"
 						: "state load FAILED (no file?)"), slot_line);
 				wait_status();
+#ifdef CGBA_SAVE_TIMING
+				wait_status();
+				wait_status();
+#endif
 			}
 			enter_gameplay_display(framebuffer, frame);
 			continue;
@@ -2414,6 +2487,12 @@ static int gpsp_main(void)
 			menu_state.show_fps = menu_state.show_fps ? 0 : 1;
 
 		if(hotkey_edge & FXCG100_HOTKEY_BIT(FXCG100_HOTKEY_LOAD_STATE)) {
+#if !(defined(CGBA_DYNAREC) && defined(CGBA_SH4_PROFILE_COUNTERS))
+			char slot_line[16];
+
+			snprintf(slot_line, sizeof slot_line, "Slot %u",
+				(unsigned)menu_state.savestate_slot);
+#endif
 #if defined(CGBA_DYNAREC) && defined(CGBA_SH4_PROFILE_COUNTERS)
 			/* Profiling build: repurpose the unimplemented loadstate hotkey
 			 * as the JIT memory canary (overclock triage; see gpsp_runner.c).
@@ -2429,8 +2508,9 @@ static int gpsp_main(void)
 			wait_status();
 			enter_gameplay_display(framebuffer, frame);
 #else
+			draw_status("Loading state", slot_line);
 			draw_status(cgba_gpsp_state_load(menu_state.savestate_slot)
-				? "state loaded" : "state load FAILED (no file?)", NULL);
+				? "State loaded" : "Could not load the state", slot_line);
 			wait_status();
 			enter_gameplay_display(framebuffer, frame);
 #endif
@@ -2448,11 +2528,31 @@ static int gpsp_main(void)
 			enter_gameplay_display(framebuffer, frame);
 #else
 			{
-				int ok = cgba_gpsp_state_save(menu_state.savestate_slot);
-				int storage_ok = ok || cgba_gpsp_storage_sync();
-				draw_status(ok ? "state saved" :
-					(storage_ok ? "state save FAILED" : "ROM remap FAILED"),
-					storage_ok ? NULL : "restart or reset required");
+				char slot_line[16];
+				int ok, storage_ok;
+
+				snprintf(slot_line, sizeof slot_line, "Slot %u",
+					(unsigned)menu_state.savestate_slot);
+				draw_status("Saving state", slot_line);
+				ok = cgba_gpsp_state_save(menu_state.savestate_slot);
+				storage_ok = ok || cgba_gpsp_storage_sync();
+#ifdef CGBA_SAVE_TIMING
+				char timing[64];
+
+				cgba_save_timing_text(timing, sizeof timing);
+#endif
+				draw_status(ok ? "State saved" :
+					(storage_ok ? "Could not save the state"
+						: "ROM remap FAILED"),
+					!storage_ok ? "restart or reset required"
+#ifdef CGBA_SAVE_TIMING
+					: timing);
+				wait_status();
+				wait_status();
+				wait_status();
+#else
+					: slot_line);
+#endif
 				if(!storage_ok) {
 					wait_status();
 					break;
@@ -2461,11 +2561,6 @@ static int gpsp_main(void)
 			wait_status();
 			enter_gameplay_display(framebuffer, frame);
 #endif
-		}
-		if(hotkey_edge & FXCG100_HOTKEY_BIT(FXCG100_HOTKEY_SAVE_EXIT)) {
-			draw_status("save+exit unavailable", "not implemented yet");
-			wait_status();
-			enter_gameplay_display(framebuffer, frame);
 		}
 
 		int fast_forward = hotkeys &

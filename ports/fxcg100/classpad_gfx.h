@@ -16,7 +16,7 @@
 
 #include <stdint.h>
 
-#include "classpad_font.h"
+#include "classpad_font_types.h"
 #include "classpad_layout.h"
 
 #define CP_RGB(r, g, b) \

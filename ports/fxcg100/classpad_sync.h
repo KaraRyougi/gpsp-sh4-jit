@@ -74,9 +74,11 @@ static inline void cp_scan_probe_add(cp_scan_probe *p, uint32_t value)
 
 /* After sampling for `ticks` 128ths of a second. Returns the rows in one
  * refresh, or 0 if the values were not those of a row counter; *hz is the
- * refresh rate either way. */
-static inline uint32_t cp_scan_probe_result(const cp_scan_probe *p,
-	uint32_t ticks, uint32_t *hz)
+ * refresh rate either way. The highest row believed must be at least
+ * `min_last`: a panel cannot refresh fewer rows than it shows (320 for the
+ * fx-CP400's 528, 200 for the fx-CG's 216 visible ones). */
+static inline uint32_t cp_scan_probe_result_min(const cp_scan_probe *p,
+	uint32_t ticks, uint32_t *hz, uint32_t min_last)
 {
 	uint32_t rate = ticks ? p->wraps * 128u / ticks : 0;
 
@@ -89,9 +91,15 @@ static inline uint32_t cp_scan_probe_result(const cp_scan_probe *p,
 		return 0;
 	if(rate < 20u || rate > 200u)
 		return 0;
-	if(p->max < 320u || p->max > 1022u)
+	if(p->max < min_last || p->max > 1022u)
 		return 0;
 	return p->max + 1u;
+}
+
+static inline uint32_t cp_scan_probe_result(const cp_scan_probe *p,
+	uint32_t ticks, uint32_t *hz)
+{
+	return cp_scan_probe_result_min(p, ticks, hz, 320u);
 }
 
 /* ---- reading the counter -------------------------------------------------- */
@@ -207,6 +215,40 @@ static inline void cp_sync_window_end(uint32_t *lo, uint32_t *hi, int late)
 		*lo = *hi - CP_SYNC_END_ROWS;
 	else
 		*hi = *lo + CP_SYNC_END_ROWS;
+}
+
+/* Where the fx-CG's calibration page starts its frames: not only at the two
+ * ends of the window but at points across it, `spacing` rows apart (a step
+ * of the offset), in turn from the early end to the late end.
+ *
+ * The two ends alone are enough when the picture covers nearly all of a
+ * refresh, as on the fx-CP400 (528 of 548 rows): little of the refresh is
+ * then safe to start from. Where it covers less (160 of about 250 rows on
+ * the fx-CG), most of the refresh is safe, and an offset far out can put
+ * every place a frame is started somewhere safe as well: the two ends of a
+ * window wider than half a refresh trade places at an offset half a refresh
+ * out, and three points still fit into a safe part three quarters of a
+ * refresh long. A frame torn on the page needs one of the points in the part
+ * that is not safe; with points closer together than that part is long, any
+ * offset that is out puts one there.
+ *
+ * Narrows [*lo, *hi) to CP_SYNC_END_ROWS rows at point `n` (taken modulo
+ * their number) and returns how many points there are. */
+static inline uint32_t cp_sync_window_point(uint32_t *lo, uint32_t *hi,
+	uint32_t n, uint32_t spacing)
+{
+	uint32_t width = *hi - *lo, count, at;
+
+	if(width <= CP_SYNC_END_ROWS)
+		return 1;
+	if(!spacing)
+		spacing = 1;
+	count = (width - CP_SYNC_END_ROWS) / spacing + 2u;
+	n %= count;
+	at = n == count - 1u ? *hi - CP_SYNC_END_ROWS : *lo + n * spacing;
+	*lo = at;
+	*hi = at + CP_SYNC_END_ROWS;
+	return count;
 }
 
 static inline int cp_sync_window(uint32_t total, uint32_t rows, uint32_t lines,

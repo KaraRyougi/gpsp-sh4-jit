@@ -13,6 +13,14 @@ case "$MODEL" in
   classpad) TOOLCHAIN=FXCP;   FLAGS="-DCGBA_CLASSPAD=ON"; OUT=gpSP.hh3 ;;
   *) echo "Usage: $0 [cg100|cg50|classpad]" >&2; exit 2 ;;
 esac
+# CGBA_SAVE_TIMING=1: a build that shows where a savestate save's time goes,
+# in its own build directory (gpSP-<model>-timing.*).
+SUFFIX=""
+if [ "${CGBA_SAVE_TIMING:-0}" = 1 ]; then
+  FLAGS="$FLAGS -DCGBA_SAVE_TIMING=ON"; SUFFIX="-timing"
+else
+  FLAGS="$FLAGS -DCGBA_SAVE_TIMING=OFF"
+fi
 IMAGE="cgba-fxsdk:14.1-gint-2bc6f7e"
 command -v docker >/dev/null || { echo 'Docker is required.' >&2; exit 1; }
 docker info >/dev/null 2>&1 || {
@@ -22,10 +30,11 @@ docker build -t "$IMAGE" "$HERE/toolchain"
 docker run --rm -v "$ROOT:/workspace" -w /workspace \
   -e CGBA_BUILD_MODEL="$MODEL" -e CGBA_BUILD_TOOLCHAIN="$TOOLCHAIN" \
   -e CGBA_BUILD_FLAGS="$FLAGS" -e CGBA_BUILD_OUT="$OUT" \
+  -e CGBA_BUILD_SUFFIX="$SUFFIX" \
   --entrypoint /bin/bash "$IMAGE" -eu -c '
   source_dir=ports/fxcg100/gint-gpsp
-  build_dir="$source_dir/build-docker-$CGBA_BUILD_MODEL"
-  artifact="$build_dir/gpSP-$CGBA_BUILD_MODEL.${CGBA_BUILD_OUT##*.}"
+  build_dir="$source_dir/build-docker-$CGBA_BUILD_MODEL$CGBA_BUILD_SUFFIX"
+  artifact="$build_dir/gpSP-$CGBA_BUILD_MODEL$CGBA_BUILD_SUFFIX.${CGBA_BUILD_OUT##*.}"
   cmake -S "$source_dir" -B "$build_dir" \
     -DCMAKE_TOOLCHAIN_FILE=/root/.local/lib/cmake/fxsdk/$CGBA_BUILD_TOOLCHAIN.cmake \
     -DCMAKE_MODULE_PATH=/root/.local/lib/cmake/fxsdk \
@@ -41,7 +50,7 @@ docker run --rm -v "$ROOT:/workspace" -w /workspace \
   sha256sum "$artifact"
 '
 case "$MODEL" in
-  classpad) echo "Built: $HERE/gint-gpsp/build-docker-$MODEL/gpSP-$MODEL.hh3"
+  classpad) echo "Built: $HERE/gint-gpsp/build-docker-$MODEL$SUFFIX/gpSP-$MODEL$SUFFIX.hh3"
             echo "Copy it to the calculator as gpSP.hh3." ;;
-  *)        echo "Built: $HERE/gint-gpsp/build-docker-$MODEL/gpSP-$MODEL.g3a" ;;
+  *)        echo "Built: $HERE/gint-gpsp/build-docker-$MODEL$SUFFIX/gpSP-$MODEL$SUFFIX.g3a" ;;
 esac

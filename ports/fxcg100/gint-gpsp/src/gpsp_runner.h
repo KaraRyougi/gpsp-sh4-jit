@@ -36,6 +36,19 @@ typedef enum cgba_gpsp_rom_id {
 	CGBA_GPSP_ROM_BUILTIN_COUNT
 } cgba_gpsp_rom_id;
 
+/* Where the time of the last savestate save went, in 128 Hz ticks
+ * (fxcg100_ticks()): the snapshot, its compression, the file write, and the
+ * ROM's flash addresses asked for again after storage changed. `bytes` is
+ * what was written to the file. Recorded on every save; shown by builds made
+ * with -DCGBA_SAVE_TIMING=ON. */
+typedef struct cgba_save_timing {
+	uint32_t snap, pack, write, remap;
+	uint32_t bytes;
+} cgba_save_timing;
+extern cgba_save_timing cgba_last_save_timing;
+/* "pack 0.03 s, write 2.10 s (192K), remap 1.62 s" */
+void cgba_save_timing_text(char *dst, size_t size);
+
 const char *cgba_gpsp_rom_name(unsigned rom_id);
 unsigned cgba_gpsp_rom_count(void);
 unsigned cgba_gpsp_refresh_roms(void);
