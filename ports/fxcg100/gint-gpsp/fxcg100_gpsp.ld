@@ -36,8 +36,6 @@ MEMORY
 SECTIONS
 {
 	_brom = ORIGIN(rom);
-	_srom = SIZEOF(.text) + SIZEOF(.rodata)
-	      + SIZEOF(.gint.drivers) + SIZEOF(.gint.blocks);
 
 	.text : {
 		*(.text.entry)
@@ -134,6 +132,16 @@ SECTIONS
 
 	_silram = SIZEOF(.ilram);
 	_sxyram = SIZEOF(.xyram);
+	/*
+		gint's TLB miss handler (_gint_tlbh) refuses to map any ROM address
+		at or above 0x00300000 + _srom. Include .data, .ilram, and .xyram's
+		load images in _srom; otherwise gint_load_onchip_sections() faults
+		on return from the first OS world switch once .ilram crosses a 64 KiB
+		TLB page boundary past .rodata.
+	*/
+	_srom = LOADADDR(.xyram) + SIZEOF(.xyram) - ORIGIN(rom);
+	ASSERT(_brom + _srom >= _lilram + _silram,
+		"fx-CG100 ROM span does not cover the .ilram load image")
 	ASSERT(_silram <= 4k,
 		"SH4 dispatch stubs exceed the 4 KiB ILRAM budget")
 	ASSERT(SIZEOF(.xyram.fastmem) <= 8k,
