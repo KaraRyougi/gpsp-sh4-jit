@@ -1184,8 +1184,29 @@ static void test_ui(const char *dir)
 				cy + (i & 1), 0, 0);
 			ui_frame();
 		}
-		/* Between two stops the handle stays under the finger; the value
-		 * is the nearer stop. */
+		/* Drag to the right end: the held value label sits over the row's
+		 * right-aligned value text and must paint on top of it, leaving its
+		 * right padding clean ui.t.on_surface. */
+		touch_user(CP_VIEW_PORTRAIT_43, 0, 1, x0 + span, cy, 0, 0);
+		ui_frame();
+		CHECK(ui_state.backlight == 16 && ui.slider_tip,
+			"drag to right end gave value %u, tip %d",
+			(unsigned)ui_state.backlight, ui.slider_tip);
+		{
+			cp_rect b = ui.slider_tip_rect;
+			int clean = 1;
+
+			for (int y = b.y + b.h / 2 - 4; y <= b.y + b.h / 2 + 4; y++)
+				for (int x = b.x + b.w - 8; x <= b.x + b.w - 3; x++)
+					if (user_pixel(CP_VIEW_PORTRAIT_43, 0, x, y) !=
+							ui.t.on_surface)
+						clean = 0;
+			CHECK(clean,
+				"row value text painted over the held slider label");
+		}
+		ui_shot(dir, "ui-settings-slider-held-right");
+
+		/* Drag back to 12 for the held screenshot and release check. */
 		touch_user(CP_VIEW_PORTRAIT_43, 0, 1, x0 + span * 12 / 16 + 6, cy,
 			0, 0);
 		ui_frame();
@@ -1199,6 +1220,40 @@ static void test_ui(const char *dir)
 		CHECK(ui.scroll[SCREEN_SETTINGS] == scroll,
 			"a sideways drag scrolled the page (%d -> %d)", scroll,
 			ui.scroll[SCREEN_SETTINGS]);
+
+		/* With the slider right under the top bar, the held value label
+		 * reaches above bar_h and must not be clipped by the scroll area. */
+		{
+			int saved_scroll = ui.scroll[SCREEN_SETTINGS];
+			const cp_rect *top_r;
+
+			ui.scroll[SCREEN_SETTINGS] += s.y - (ui.bar_h + 4);
+			ui.redraw = 1;
+			ui_settle(ui_frame());
+			top_r = ui_find("Backlight", 0);
+			CHECK(top_r != NULL, "no Backlight slider under top bar");
+			if (top_r) {
+				int tcy = top_r->y + top_r->h / 2;
+				int tx = top_r->x + 8 + (top_r->w - 16) * 12 / 16;
+				cp_rect b;
+
+				touch_user(CP_VIEW_PORTRAIT_43, 0, 1, tx, tcy, 0, 0);
+				ui_frame();
+				b = ui.slider_tip_rect;
+				CHECK(ui.slider_tip && b.y < ui.bar_h,
+					"slider label did not reach over top bar (tip=%d, y=%d)",
+					ui.slider_tip, (int)b.y);
+				CHECK(user_pixel(CP_VIEW_PORTRAIT_43, 0, b.x + 6,
+						b.y + b.h / 2) == ui.t.on_surface,
+					"held slider label was clipped by the top bar");
+				ui_shot(dir, "ui-settings-slider-held-top");
+				memset(&touch_state, 0, sizeof(touch_state));
+				ui_settle(ui_frame());
+			}
+			ui.scroll[SCREEN_SETTINGS] = saved_scroll;
+			ui.redraw = 1;
+			ui_settle(ui_frame());
+		}
 
 		touch_user(CP_VIEW_PORTRAIT_43, 0, 1, x0 + span / 4, cy, 0, 0);
 		ui_frame();

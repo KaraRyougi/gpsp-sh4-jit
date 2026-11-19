@@ -151,11 +151,15 @@ typedef struct cp_ui {
 	const void *edit;
 	int edit_delta;
 
-	/* The slider a touch began on (its key), and whether the finger is
-	 * still being watched (SLIDER_PENDING), dragging it (SLIDER_DRAG) or
-	 * was let go to scroll the page (SLIDER_NONE). */
+	/* The slider a touch began on (its key), whether the finger is still
+	 * being watched (SLIDER_PENDING), dragging it (SLIDER_DRAG) or was let
+	 * go to scroll the page (SLIDER_NONE), and the held value label drawn
+	 * last over the page so nothing paints over or clips it. */
 	const void *slider;
 	int slider_state;
+	int slider_tip;
+	cp_rect slider_tip_rect;
+	char slider_tip_text[16];
 
 	int scroll[SCREEN_COUNT];
 	const char *toast;
@@ -536,6 +540,9 @@ static void ui_goto(cp_ui *ui, int screen)
 
 	ui->screen = screen;
 	ui->edit = NULL;
+	ui->slider = NULL;
+	ui->slider_state = SLIDER_NONE;
+	ui->slider_tip = 0;
 	ui->focus = 0;
 	ui->focus_shown = 0;
 	ui->confirm = CONFIRM_NONE;
@@ -1032,11 +1039,11 @@ static int ui_slider_range(cp_ui *ui, cp_rect r, const char *key,
 		cp_round_ring(&ui->s, thumb - 6, r.y - 4, 12, r.h + 8, 6, 2,
 			ui->t.primary);
 	if(held) {
-		char text[16];
 		int tw, bw, bh = cp_font_small.height + 10, bx, by;
 
-		slider_text(text, sizeof(text), *value, zero, labels);
-		tw = cp_text_width(&cp_font_small, text);
+		slider_text(ui->slider_tip_text, sizeof(ui->slider_tip_text),
+			*value, zero, labels);
+		tw = cp_text_width(&cp_font_small, ui->slider_tip_text);
 		bw = tw + 20 < 36 ? 36 : tw + 20;
 		bx = thumb - bw / 2;
 		by = r.y - 4 - bh;
@@ -1044,9 +1051,11 @@ static int ui_slider_range(cp_ui *ui, cp_rect r, const char *key,
 			bx = r.x;
 		if(bx + bw > r.x + r.w)
 			bx = r.x + r.w - bw;
-		cp_round_rect(&ui->s, bx, by, bw, bh, bh / 2, ui->t.on_surface);
-		cp_text_centered(&ui->s, &cp_font_small, bx, by, bw, bh, text,
-			ui->t.surface);
+		if(by < 4)
+			by = 4;
+		ui->slider_tip = 1;
+		ui->slider_tip_rect = (cp_rect){ (int16_t)(bx + ui->s.ox),
+			(int16_t)(by + ui->s.oy), (int16_t)bw, (int16_t)bh };
 	}
 	ui_mark(key, r);
 	return *value != old;
@@ -2732,6 +2741,7 @@ fxcg100_menu_result cp_ui_step(cp_ui *ui)
 	ui_marks_reset();
 	ui->widgets = 0;
 	ui->touch_seq = 0;
+	ui->slider_tip = 0;
 
 	/* Under a dialog the page is still drawn, darkened and deaf. */
 	modal = ui_modal(ui);
@@ -2764,6 +2774,13 @@ fxcg100_menu_result cp_ui_step(cp_ui *ui)
 	}
 	cp_surface_unclip(&ui->s);
 	ui->s.ox = 0;
+	if(ui->slider_tip) {
+		cp_rect b = ui->slider_tip_rect;
+
+		cp_round_rect(&ui->s, b.x, b.y, b.w, b.h, b.h / 2, ui->t.on_surface);
+		cp_text_centered(&ui->s, &cp_font_small, b.x, b.y, b.w, b.h,
+			ui->slider_tip_text, ui->t.surface);
+	}
 	ui->tint_dim = 0;
 	ui_use(ui, &shown);
 
