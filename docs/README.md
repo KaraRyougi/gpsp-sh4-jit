@@ -19,9 +19,15 @@ As-built (current):
 - [mode0-tile-row-cache.md](mode0-tile-row-cache.md) — default-off background
   row-cache experiment, inconclusive performance results and regression tests.
 
+- [fxcg-ui.md](fxcg-ui.md) — the fx-CG50 / fx-CG100 keypad interface:
+  layout, keys, pages, partial refresh, screen geometry and its host test.
+
 - [classpad-port.md](classpad-port.md) — the fx-CP400 (ClassPad II) port:
   screen-scale choices, landscape, touch keys, the heap-backed memory layout,
   and what is still unverified on hardware.
+- [fxcg-vsync.md](fxcg-vsync.md) — the ClassPad's VSync on the
+  fx-CG50/CG100: panel probing, refresh direction, the calibration page's
+  test points; and the removal of the built-in overclock.
 
 Historical (bring-up era):
 

@@ -1142,23 +1142,54 @@ _Static_assert(GBA_STATE_MEM_SIZE == CGBA_STATE_RAW_SIZE,
 	"calculator and core savestate sizes must agree");
 
 
+cgba_save_timing cgba_last_save_timing;
+
+static void seconds_text(char *dst, size_t size, uint32_t ticks)
+{
+	uint32_t centi = (ticks * 100u + 64u) / 128u;
+
+	snprintf(dst, size, "%u.%02u", (unsigned)(centi / 100u),
+		(unsigned)(centi % 100u));
+}
+
+void cgba_save_timing_text(char *dst, size_t size)
+{
+	const cgba_save_timing *t = &cgba_last_save_timing;
+	char pack[12], write[12], remap[12];
+
+	seconds_text(pack, sizeof(pack), t->snap + t->pack);
+	seconds_text(write, sizeof(write), t->write);
+	seconds_text(remap, sizeof(remap), t->remap);
+	snprintf(dst, size, "pack %s s, write %s s (%uK), remap %s s", pack, write,
+		(unsigned)((t->bytes + 1023u) / 1024u), remap);
+}
+
 int cgba_gpsp_state_save(unsigned slot)
 {
 	u8 *buf = cgba_state_buffer();
 	uint16_t path[24];
-	int ok = 0;
+	int ok = 0, synced;
+	uint32_t t0 = fxcg100_ticks(), t1;
 
+	memset(&cgba_last_save_timing, 0, sizeof(cgba_last_save_timing));
 	if (!buf)
 		return 0;
 
 	cgba_state_path(path, slot);
 	gba_save_state(buf);
+	t1 = fxcg100_ticks();
+	cgba_last_save_timing.snap = t1 - t0;
+	t0 = t1;
+	cgba_last_save_timing.bytes = GBA_STATE_MEM_SIZE;
 #ifdef CGBA_DYNAREC
 	{
 		u8 *comp = cgba_state_comp_buffer(buf);
 		unsigned cap = cgba_state_comp_capacity();
 		unsigned csz = cgba_state_compress(buf, GBA_STATE_MEM_SIZE,
 			comp, cap);
+		t1 = fxcg100_ticks();
+		cgba_last_save_timing.pack = t1 - t0;
+		t0 = t1;
 		if (csz && csz < GBA_STATE_MEM_SIZE) {
 			/* Round the FILE up to 64KB buckets: repeat saves of
 			 * similar size hit write_blob's fast overwrite path
@@ -1170,6 +1201,7 @@ int cgba_gpsp_state_save(unsigned slot)
 			 * than the raw state. Store raw in that case. */
 			if (fsz <= cap && fsz < GBA_STATE_MEM_SIZE) {
 				memset(comp + csz, 0, fsz - csz);
+				cgba_last_save_timing.bytes = fsz;
 				ok = fxcg100_storage_write_blob(path, comp, fsz);
 			} else {
 				ok = fxcg100_storage_write_blob(path, buf,
@@ -1183,10 +1215,15 @@ int cgba_gpsp_state_save(unsigned slot)
 #else
 	ok = fxcg100_storage_write_blob(path, buf, GBA_STATE_MEM_SIZE);
 #endif
+	t1 = fxcg100_ticks();
+	cgba_last_save_timing.write = t1 - t0;
+	t0 = t1;
 	cgba_state_buffer_release();
 	/* Refresh after any attempted mutation, even a failed write. An identical
 	 * file causes no mutation and needs no ROM block-address query. */
-	return cgba_gpsp_storage_sync() && ok;
+	synced = cgba_gpsp_storage_sync();
+	cgba_last_save_timing.remap = fxcg100_ticks() - t0;
+	return synced && ok;
 }
 
 static int cgba_state_load_from(const uint16_t *path)

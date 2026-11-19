@@ -42,7 +42,6 @@ set(PORT_SOURCES
   src/frame_overlay.c
   src/nor_rom.c
   src/nor_filestream.c
-  src/overclock.c
   src/gpsp_runner.c
   src/frame_pacing.c
   src/crash_panic.c
@@ -96,6 +95,8 @@ option(CGBA_SH4_INTERP_STATS
   "Count interpreted guest instructions by region (diag; ~4.5% overhead)" OFF)
 option(CGBA_SH4_DIAG_COUNTERS
   "Per-slice/per-helper diagnostic counters in headless builds (~0.5%)" OFF)
+option(CGBA_SAVE_TIMING
+  "Show how long each step of a savestate save took (pack, write, remap)" OFF)
 option(CGBA_DEBUG_MENU
   "Show the in-menu DEBUG INFO submenu + F:/H frame/hash overlay (dev; hidden in release)" OFF)
 option(CGBA_SH4_SWI_HLE_VERIFY
@@ -140,8 +141,6 @@ option(CGBA_SH4_PROFILE_COUNTERS
   "Hardware/debug: count SH4 JIT translations, cache flushes, and helper calls for the ON-menu debug page" OFF)
 option(CGBA_FXCG100_STORAGE
   "Enable gint_world_switch-backed fx-CG100 BFile storage for ROM/config files" ON)
-option(CGBA_DEFAULT_OVERCLOCK
-  "Apply the Ptune 4 F5 profile while gpSP is running" ON)
 # The .cgba.highbss arena must end at or below 0x8c655300, the ONLY layout
 # proven safe on real hardware. Growing the arena hard-reset the calculator
 # twice: a 1.5 MB ROM cache (arena end 0x8c715300) overwrote the resident MPM
@@ -239,10 +238,13 @@ if(CGBA_CLASSPAD)
     src/classpad_loader.c
     ${FXCG100}/classpad_ui.c)
 else()
+  # The gint fx-CG platform: the list menu with VSync, which the older
+  # non-gint build of fxcg100_menu.c does not have.
+  target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_GINT_PLATFORM=1)
   target_sources(cgba-gint-gpsp PRIVATE
     src/gint_platform.c
     src/no_osheap.c
-    ${FXCG100}/fxcg100_menu.c)
+    ${FXCG100}/cg_ui.c)  # keypad interface; fxcg100_menu.c is the bare-metal build's
   if(CGBA_FXCG50)
     target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_FXCG50=1)
     target_sources(cgba-gint-gpsp PRIVATE
@@ -255,10 +257,8 @@ endif()
 if(CGBA_FXCG100_STORAGE)
   target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_FXCG100_STORAGE=1)
 endif()
-# The Ptune profile is tuned for the fx-CG bus and SDRAM; it is not applied on
-# the fx-CP400, whose memory timings have not been characterised.
-if(CGBA_DEFAULT_OVERCLOCK AND NOT CGBA_CLASSPAD)
-  target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_DEFAULT_OVERCLOCK=1)
+if(CGBA_SAVE_TIMING)
+  target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_SAVE_TIMING=1)
 endif()
 if(CGBA_DEBUG_MENU)
   target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_DEBUG_MENU=1)

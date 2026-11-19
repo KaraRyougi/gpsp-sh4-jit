@@ -20,6 +20,12 @@ void fxcg100_panic(const char *text);
 #define FXCG100_APPKEY_RIGHT  (1u << 8)
 #define FXCG100_APPKEY_BACK   (1u << 9)
 #define FXCG100_APPKEY_ON     (1u << 10)
+/* fx-CG interface only (cg_ui.c): the key that opens Settings (OPTN on the
+ * fx-CG50, SETTINGS on the fx-CG100), DEL, and the digit keys. */
+#define FXCG100_APPKEY_SETTINGS (1u << 11)
+#define FXCG100_APPKEY_DEL      (1u << 12)
+#define FXCG100_APPKEY_DIGIT(n) (1u << (16 + (n)))
+#define FXCG100_APPKEY_DIGITS   (0x3ffu << 16)
 
 #if defined(CGBA_CLASSPAD)
 #define FXCG100_PHYSKEY_ON 0x74u   /* fx-CP400 KEY_CLEAR (Clear / power) */
@@ -102,10 +108,12 @@ typedef struct fxcg100_menu_state {
   uint32_t touch_keys;
   /* fx-CP400 only: 0 sends the picture by DMA, 1 by CPU writes. */
   uint32_t lcd_cpu;
-  /* fx-CP400 only: wait for the panel's refresh before each frame. */
+  /* Wait for the panel's refresh before each frame (VSync). */
   uint32_t lcd_sync;
   /* ... and where the picture is in the panel's row count, 0..15. */
   uint32_t lcd_sync_offset;
+  /* fx-CG only: the refresh taken the other way round. */
+  uint32_t lcd_sync_flip;
   /* fx-CP400 only: backlight level 1..16 and PWM rate 1..9; 0 leaves what
    * the system set. */
   uint32_t backlight;
@@ -167,6 +175,8 @@ void fxcg100_lcd_fill_rect(unsigned x, unsigned y, unsigned w, unsigned h,
 void fxcg100_lcd_draw_text(unsigned x, unsigned y, const char *text,
                            uint16_t fg, uint16_t bg);
 void fxcg100_lcd_update(void);
+/* Push only VRAM rows y..y+h-1 (widened to whole groups of four rows). */
+void fxcg100_lcd_update_rows(unsigned y, unsigned h);
 void fxcg100_lcd_status(const char *text);
 /* OS BFile calls can draw a busy icon directly into LCD GRAM. Mark that
  * activity so the next gameplay presentation removes any stale border pixels. */
@@ -198,17 +208,6 @@ void fxcg100_lcd_set_menu_key(uint32_t clear_opens_menu);
 /* Colour scheme of the touch keys (CP_THEME_*, classpad_theme.h). */
 void fxcg100_lcd_set_theme(uint32_t theme);
 void fxcg100_lcd_set_transfer(uint32_t cpu_writes);
-/* fx-CP400: start each frame where the panel's refresh will not meet it
- * (classpad_sync.h), and what is known about that refresh. */
-void fxcg100_lcd_set_sync(uint32_t wait, uint32_t offset);
-/* While the page that sets the offset is open: every frame waits, with
- * almost no room to spare, so that a wrong offset shows. Opening it counts
- * the panel's rows again. */
-void fxcg100_lcd_sync_calibrate(uint32_t on);
-/* What that count found, for the page to show: rows in one refresh and
- * refreshes a second. Returns 1 if the panel has a usable row counter, -1 if
- * it has none, 0 if it has not been read yet. */
-int fxcg100_lcd_sync_info(uint32_t *rows, uint32_t *hz);
 /* fx-CP400: backlight level (1..16, 16 = full) and PWM rate (1..9, 9 the
  * fastest); 0 for either leaves, or puts back, what the system had set. */
 void fxcg100_lcd_set_backlight(uint32_t level, uint32_t pwm);
@@ -237,8 +236,6 @@ void fxcg100_lcd_present_frame(void);
 struct cp_clock;
 void fxcg100_clock_read(struct cp_clock *clock);
 void fxcg100_clock_write(const struct cp_clock *clock);
-/* 128 Hz ticks: from a timer, or from the RTC once it is seen to run. */
-uint32_t fxcg100_ticks(void);
 /* How many times a touch read that never finished had to be called off. */
 uint32_t fxcg100_touch_recoveries(void);
 /* Nonzero when gpSP reads the touch controller itself rather than through
@@ -267,6 +264,49 @@ void cp_ui_game_starting(void);
 void cp_ui_status(const fxcg100_menu_state *state, const char *line1,
                   const char *line2);
 #endif
+/* ---- shared by the fx-CP400 and the gint fx-CG builds ------------------- */
+
+/* Start each frame where the panel's refresh will not meet it
+ * (classpad_sync.h): `wait` turns it on, `offset` (0..15, sixteenths of a
+ * refresh) is where the picture is in the panel's row count. */
+void fxcg100_lcd_set_sync(uint32_t wait, uint32_t offset);
+/* While the page that sets the offset is open: every frame waits, with
+ * almost no room to spare, so that a wrong offset shows. Opening it counts
+ * the panel's rows again. */
+void fxcg100_lcd_sync_calibrate(uint32_t on);
+/* What that count found, for the page to show: rows in one refresh and
+ * refreshes a second. Returns 1 if the panel has a usable row counter, -1 if
+ * it has none, 0 if it has not been read yet. */
+int fxcg100_lcd_sync_info(uint32_t *rows, uint32_t *hz);
+#if !defined(CGBA_CLASSPAD)
+/* fx-CG: take the refresh the other way round from what the panel's address
+ * mode says (strips go up the panel instead of down, or the reverse). */
+void fxcg100_lcd_set_sync_flip(uint32_t flip);
+/* fx-CG: the panel's ID (gint's r61524_get_version()), its DCS address mode
+ * (0 on the R61524) and which way the strips of a waiting frame go. Returns
+ * zero until the panel has been read, the first time a frame waited. */
+int fxcg100_lcd_sync_panel(uint32_t *id, uint32_t *mode, int *upward);
+/* fx-CG: the GBA frame buffer the VSync calibration page may paint (it shows
+ * its colours through fxcg100_lcd_blit_gba(), like a game frame). */
+void fxcg100_menu_set_frame(uint16_t *framebuffer);
+#endif
+/* 128 Hz ticks. fx-CP400: from a timer, or from the RTC once it is seen to
+ * run. fx-CG: the RTC. */
+uint32_t fxcg100_ticks(void);
+
+#ifndef CGBA_CLASSPAD
+/* The fx-CG interface (cg_ui.c). A message while something slow happens,
+ * as a small box: over the game picture, dimmed and placed as the display
+ * mode places it, when `frame` is the GBA frame, else over a plain page. */
+void cg_ui_status(const fxcg100_menu_state *state, const char *line1,
+                  const char *line2, const uint16_t *frame);
+/* While main() saves or loads a state for the menu: show `text` in the
+ * footer of the page that asked for it. */
+void cg_ui_show_progress(const char *text);
+/* The next fxcg100_menu_run() goes back to the page and row it left and
+ * shows `text` in the footer for two seconds. */
+void cg_ui_set_result(const char *text, int error);
+#endif
 uint32_t fxcg100_frame_hash(const uint16_t *pixels);
 
 /* Draw an FPS metrics overlay into the top-left of a 240x160 GBA frame buffer
@@ -274,6 +314,10 @@ uint32_t fxcg100_frame_hash(const uint16_t *pixels);
  * draw_fps = drawn/blitted frame rate after frameskip. */
 void fxcg100_lcd_overlay_fps(uint16_t *pixels, unsigned emu_fps,
                              unsigned draw_fps);
+/* Lines of text (5x7 capitals, digits and a little punctuation) in a black
+ * box at the top left of a 240x160 GBA frame buffer. */
+void fxcg100_lcd_overlay_lines(uint16_t *pixels, const char *const *lines,
+                               unsigned count);
 
 int cgba_run_jit_probe(void);
 

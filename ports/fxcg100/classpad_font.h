@@ -9,24 +9,7 @@
  * pixel, two pixels to a byte with the first pixel in the top bits, rows
  * padded to a byte. */
 
-#include <stdint.h>
-
-typedef struct cp_glyph {
-	uint16_t offset;      /* into the font's data */
-	uint8_t w, h;         /* bitmap size */
-	int8_t left, top;     /* bitmap origin from the pen and the line top */
-	uint8_t advance;
-} cp_glyph;
-
-typedef struct cp_font {
-	const cp_glyph *glyphs;
-	const uint8_t *data;
-	uint8_t height;       /* line height */
-	uint8_t ascent;
-} cp_font;
-
-#define CP_FONT_FIRST 32
-#define CP_FONT_LAST 126
+#include "classpad_font_types.h"
 
 static const uint8_t cp_font_small_data[3352] = {
 	127,0,127,0,110,0,110,0,93,0,93,0,76,0,39,0,175,32,126,32,

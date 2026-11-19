@@ -35,6 +35,7 @@
 #include "fxcg100_platform.h"
 #include "classpad_layout.h"
 #include "classpad_clock.h"
+#include "classpad_font.h"
 #include "classpad_gfx.h"
 #include "classpad_theme.h"
 

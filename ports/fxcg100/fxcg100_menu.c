@@ -4,6 +4,10 @@
 #include <stdio.h>
 #include <string.h>
 
+/* VSync (the GRAPHICS OPTIONS rows and the calibration page) is only in the
+ * gint fx-CG build, which defines CGBA_GINT_PLATFORM; the older non-gint
+ * build of this menu does not have it. */
+
 /* Developer diagnostics in the menu (the DEBUG INFO submenu and the F:/H:
  * frame/hash overlay in the header) are hidden by default for formal releases.
  * Build with -DCGBA_DEBUG_MENU=1 to show them. */
@@ -13,10 +17,12 @@
 
 #define LCD_W 384
 #define LCD_H 216
-#define MENU_TOP 28
+/* A sub-page's title is drawn at y = 20 and is 9 rows tall; its first row's
+ * highlight starts at MENU_TOP - 1, clear of it. */
+#define MENU_TOP 32
 #define MENU_MAIN_TOP 50
 #define MENU_ROW_H 10
-#define MENU_VISIBLE_ROWS 15
+#define MENU_VISIBLE_ROWS 14
 #define MENU_MAIN_VISIBLE_ROWS 13
 
 #define RGB565(r, g, b) \
@@ -44,7 +50,9 @@ typedef enum menu_value_id {
   MENU_VALUE_FRAMESKIP_VARIATION,
   MENU_VALUE_FRAME_LIMIT,
   MENU_VALUE_SHOW_FPS,
-  MENU_VALUE_SAVE_SLOT
+  MENU_VALUE_SAVE_SLOT,
+  MENU_VALUE_VSYNC,
+  MENU_VALUE_SYNC_OFFSET
 } menu_value_id;
 
 typedef enum menu_item_kind {
@@ -71,7 +79,8 @@ typedef enum menu_action_id {
   MENU_ACTION_RESET_KEYS,
   MENU_ACTION_SAVE_CONFIG,
   MENU_ACTION_LOAD_CONFIG,
-  MENU_ACTION_CHEAT
+  MENU_ACTION_CHEAT,
+  MENU_ACTION_SYNC_CALIBRATE
 } menu_action_id;
 
 typedef struct menu_item {
@@ -183,6 +192,14 @@ static const menu_item graphics_items[] = {
     MENU_PAGE_GRAPHICS, MENU_VALUE_FRAME_LIMIT, on_off_options, 2, NULL },
   { "SHOW FPS", MENU_ITEM_CHOICE, MENU_ACTION_NONE,
     MENU_PAGE_GRAPHICS, MENU_VALUE_SHOW_FPS, on_off_options, 2, NULL },
+#ifdef CGBA_GINT_PLATFORM
+  /* Wait for the panel's refresh before each frame; where the picture is in
+   * the panel's row count is set on a page of its own (EXE). */
+  { "VSYNC", MENU_ITEM_CHOICE, MENU_ACTION_NONE,
+    MENU_PAGE_GRAPHICS, MENU_VALUE_VSYNC, on_off_options, 2, NULL },
+  { "REFRESH POSITION", MENU_ITEM_NUMBER_ACTION, MENU_ACTION_SYNC_CALIBRATE,
+    MENU_PAGE_GRAPHICS, MENU_VALUE_SYNC_OFFSET, NULL, 16, NULL },
+#endif
   { "BACK", MENU_ITEM_ACTION, MENU_ACTION_BACK,
     MENU_PAGE_MAIN, MENU_VALUE_NONE, NULL, 0, NULL }
 };
@@ -352,6 +369,10 @@ static uint32_t *menu_value_ptr(fxcg100_menu_state *state, menu_value_id id)
     return &state->show_fps;
   case MENU_VALUE_SAVE_SLOT:
     return &state->savestate_slot;
+  case MENU_VALUE_VSYNC:
+    return &state->lcd_sync;
+  case MENU_VALUE_SYNC_OFFSET:
+    return &state->lcd_sync_offset;
   default:
     return NULL;
   }
@@ -495,6 +516,155 @@ static void menu_adjust_value(fxcg100_menu_state *state, const menu_item *item,
     *value = (*value + 1) % count;
 }
 
+#ifdef CGBA_GINT_PLATFORM
+
+/* A full-screen notice in the menu's colours: a title and a few lines. */
+static void menu_draw_note(const char *title, const char *const *lines,
+                           unsigned count)
+{
+  const uint16_t bg = RGB565(1, 2, 4);
+  const uint16_t panel = RGB565(3, 6, 10);
+  const uint16_t text = RGB565(30, 58, 31);
+  const uint16_t accent = RGB565(31, 48, 12);
+  unsigned i;
+
+  fxcg100_lcd_clear(bg);
+  fxcg100_lcd_fill_rect(0, 0, LCD_W, 18, panel);
+  fxcg100_lcd_draw_text(4, 5, "gpSP", text, panel);
+  fxcg100_lcd_draw_text(8, 28, title, accent, bg);
+  for (i = 0; i < count; i++)
+    fxcg100_lcd_draw_text(8, 52 + i * 14, lines[i], text, bg);
+  fxcg100_lcd_update();
+}
+
+/* ---- refresh position ------------------------------------------------------
+ * VSync (gint_platform.c) starts each frame where the panel's refresh will
+ * not meet it, which needs to know where the picture lies in the panel's row
+ * count: sixteenths of the count, set by eye here. The game's picture, in
+ * the scaling chosen, changes colour with every frame, so a frame the
+ * refresh overtook shows as a line across it. While the page is open frames
+ * wait with half a step to spare and start at the two ends of the window in
+ * turn, so only the right position gives a clean picture. If no position
+ * is clean, the refresh may run the other way: UP/DOWN flips it. */
+
+static uint16_t *menu_frame;
+
+void fxcg100_menu_set_frame(uint16_t *framebuffer)
+{
+  menu_frame = framebuffer;
+}
+
+static int menu_sync_warning(void)
+{
+  static const char *const lines[] = {
+    "THE NEXT SCREEN CHANGES COLOUR MANY",
+    "TIMES A SECOND. THAT CAN TRIGGER",
+    "SEIZURES IN PEOPLE WITH PHOTOSENSITIVE",
+    "EPILEPSY. DO NOT GO ON IF THAT MAY BE YOU.",
+    "",
+    "EXE: CONTINUE     BACK: CANCEL",
+  };
+  uint32_t previous = fxcg100_poll_app_keys();
+
+  menu_draw_note("FLASHING COLOURS", lines, 6);
+  for (;;) {
+    uint32_t edge;
+
+    menu_wait_edge(&previous, &edge);
+    if (edge & FXCG100_APPKEY_EXE)
+      return 1;
+    if (edge & (FXCG100_APPKEY_BACK | FXCG100_APPKEY_ON |
+                FXCG100_APPKEY_HOME))
+      return 0;
+  }
+}
+
+static const char *menu_sync_calibrate(fxcg100_menu_state *state)
+{
+  static const uint16_t colours[] = {
+    RGB565(31, 63, 31), RGB565(31, 0, 0), RGB565(0, 63, 0),
+    RGB565(0, 0, 31), RGB565(31, 63, 0), RGB565(31, 0, 31),
+    RGB565(0, 63, 31), RGB565(31, 33, 0), RGB565(12, 0, 24),
+    RGB565(16, 33, 16), RGB565(0, 0, 0),
+  };
+  const unsigned ncolours = sizeof(colours) / sizeof(colours[0]);
+  uint32_t previous, frame = 0, last = fxcg100_ticks();
+
+  if (!menu_frame)
+    return "NO FRAME BUFFER";
+  if (!menu_sync_warning())
+    return "";
+
+  fxcg100_lcd_set_scale(state->screen_scale);
+  fxcg100_lcd_set_filter(state->screen_filter);
+  fxcg100_lcd_set_sync(state->lcd_sync, state->lcd_sync_offset);
+  fxcg100_lcd_set_sync_flip(state->lcd_sync_flip);
+  fxcg100_lcd_sync_calibrate(1);
+  fxcg100_lcd_clear(0);
+  fxcg100_lcd_update();
+  previous = fxcg100_poll_app_keys();
+
+  for (;;) {
+    uint32_t keys = fxcg100_poll_app_keys();
+    uint32_t edge = keys & ~previous;
+    uint32_t rows, hz, id, mode, i;
+    uint16_t colour;
+    int found, upward;
+    char l0[40], l1[40], l2[40];
+    const char *lines[5];
+
+    previous = keys;
+    if (edge & (FXCG100_APPKEY_EXE | FXCG100_APPKEY_BACK |
+                FXCG100_APPKEY_ON | FXCG100_APPKEY_HOME))
+      break;
+    if (edge & (FXCG100_APPKEY_LEFT | FXCG100_APPKEY_RIGHT)) {
+      state->lcd_sync_offset = (state->lcd_sync_offset +
+        ((edge & FXCG100_APPKEY_RIGHT) ? 1u : 15u)) & 15u;
+      fxcg100_lcd_set_sync(state->lcd_sync, state->lcd_sync_offset);
+    }
+    if (edge & (FXCG100_APPKEY_UP | FXCG100_APPKEY_DOWN)) {
+      state->lcd_sync_flip ^= 1u;
+      fxcg100_lcd_set_sync_flip(state->lcd_sync_flip);
+    }
+
+    found = fxcg100_lcd_sync_info(&rows, &hz);
+    /* Without a row counter nothing waits: keep the flashing to about the
+     * rate a refresh would give. */
+    if (found <= 0)
+      while (fxcg100_ticks() - last < 2u)
+        ;
+    last = fxcg100_ticks();
+
+    colour = colours[frame++ % ncolours];
+    for (i = 0; i < 240u * 160u; i++)
+      menu_frame[i] = colour;
+    fxcg100_lcd_sync_panel(&id, &mode, &upward);
+    snprintf(l0, sizeof(l0), "POSITION %u  STRIPS GO %s%s",
+             (unsigned)state->lcd_sync_offset, upward ? "UP" : "DOWN",
+             state->lcd_sync_flip ? " (FLIPPED)" : "");
+    if (found > 0)
+      snprintf(l1, sizeof(l1), "%u ROWS  %u HZ", (unsigned)rows,
+               (unsigned)hz);
+    else
+      snprintf(l1, sizeof(l1), "%s", found < 0
+               ? "NO ROW COUNTER: VSYNC CANNOT WORK" : "COUNTING ROWS");
+    snprintf(l2, sizeof(l2), "PANEL ID %u  MODE %02X", (unsigned)id,
+             (unsigned)mode);
+    lines[0] = l0;
+    lines[1] = l1;
+    lines[2] = l2;
+    lines[3] = "LEFT/RIGHT: POSITION  UP: FLIP";
+    lines[4] = "EXE: DONE";
+    fxcg100_lcd_overlay_lines(menu_frame, lines, 5);
+    fxcg100_lcd_blit_gba(menu_frame);
+  }
+
+  fxcg100_lcd_sync_calibrate(0);
+  return "REFRESH POSITION SET";
+}
+
+#endif /* CGBA_GINT_PLATFORM */
+
 static void menu_format_item(fxcg100_menu_state *state, const menu_item *item,
                              char *line, size_t line_size)
 {
@@ -512,8 +682,10 @@ static void menu_format_item(fxcg100_menu_state *state, const menu_item *item,
   case MENU_ITEM_NUMBER:
   case MENU_ITEM_NUMBER_ACTION:
     value = menu_value_ptr(state, item->value);
-    snprintf(line, line_size, "%s: %u", item->label,
-             value ? (unsigned)(*value % item->count) : 0);
+    snprintf(line, line_size, "%s: %u%s", item->label,
+             value ? (unsigned)(*value % item->count) : 0,
+             item->value == MENU_VALUE_SYNC_OFFSET && state->lcd_sync_flip
+             ? " FLIPPED" : "");
     break;
   case MENU_ITEM_GBA_KEY:
     if (item->count < FXCG100_GBA_KEY_COUNT)
@@ -758,6 +930,11 @@ static fxcg100_menu_result menu_activate_item(fxcg100_menu_state *state,
   case MENU_ACTION_CHEAT:
     *message = "CHEAT LOADER TODO";
     return FXCG100_MENU_CONTINUE;
+#ifdef CGBA_GINT_PLATFORM
+  case MENU_ACTION_SYNC_CALIBRATE:
+    *message = menu_sync_calibrate(state);
+    return FXCG100_MENU_CONTINUE;
+#endif
   case MENU_ACTION_NONE:
   default:
     return FXCG100_MENU_CONTINUE;

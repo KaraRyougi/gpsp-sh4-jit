@@ -321,6 +321,55 @@ int main(void)
 			"game window is %u-%u", (unsigned)glo, (unsigned)ghi);
 	}
 
+	/* An fx-CG panel: 216 rows shown, 256 in a refresh. The fx-CP400's
+	 * floor (a highest row of 320) refuses it; the fx-CG's (200) takes it,
+	 * and still refuses a constant. */
+	probe = (cp_scan_probe){ 0 };
+	for(i = 0; i < 15u * 256u * 4u + 4u; i++)
+		cp_scan_probe_add(&probe, (i / 4u) % 256u);
+	CHECK(cp_scan_probe_result(&probe, 32, &hz) == 0,
+		"the fx-CP400 probe took a 256-row refresh");
+	CHECK(cp_scan_probe_result_min(&probe, 32, &hz, 200u) == 256u &&
+		hz == 60, "fx-CG probe: %u Hz", (unsigned)hz);
+	probe = (cp_scan_probe){ 0 };
+	for(i = 0; i < 20000u; i++)
+		cp_scan_probe_add(&probe, 0x123);
+	CHECK(cp_scan_probe_result_min(&probe, 32, &hz, 200u) == 0,
+		"fx-CG probe took a constant");
+
+	/* The calibration points: the early end first, then a step apart, the
+	 * late end last; every one inside the window; a window too narrow to
+	 * split is left as it is. */
+	{
+		uint32_t n, count = 0, prev = 0;
+
+		for(n = 0; n < 40u; n++) {
+			uint32_t lo = 72, hi = 242;
+			uint32_t c = cp_sync_window_point(&lo, &hi, n, 16);
+
+			count = c;
+			CHECK(hi - lo == CP_SYNC_END_ROWS && lo >= 72 && hi <= 242,
+				"point %u is %u-%u", (unsigned)n, (unsigned)lo,
+				(unsigned)hi);
+			if(n % c == 0)
+				CHECK(lo == 72, "the first point is at %u", (unsigned)lo);
+			else if(n % c == c - 1u)
+				CHECK(hi == 242, "the last point ends at %u", (unsigned)hi);
+			else
+				CHECK(lo == prev + 16u, "point %u at %u after %u",
+					(unsigned)n, (unsigned)lo, (unsigned)prev);
+			prev = lo;
+		}
+		CHECK(count == 12u, "%u points in a window of 170 rows",
+			(unsigned)count);
+		{
+			uint32_t lo = 100, hi = 103;
+
+			CHECK(cp_sync_window_point(&lo, &hi, 5, 16) == 1 &&
+				lo == 100 && hi == 103, "a narrow window was changed");
+		}
+	}
+
 	/* The least distance seen between the two during a frame. */
 	cp_sync_track_begin(&t, TOTAL);
 	cp_sync_track_strip(&t, 300, 0);
