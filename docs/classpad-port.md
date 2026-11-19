@@ -143,11 +143,14 @@ controller is asked which row it is showing (DCS get_scanline, 0x45), and a
 frame is started at a moment from which, given how many rows are shown while
 one frame goes out (measured on the frame before), the two do not meet.
 
-- This panel is refreshed from its last row to its first: the OS sets
-  address mode 0xc0 (rows and columns counted from the far end) on the
-  0x16/0x52 family, so the row the refresh starts with is our row 527.
-  Every view therefore sends its strips from the bottom of the panel
-  upwards, to go the same way.
+- On the 0x16/0x52 family the OS sets address mode 0xc0 (rows and columns
+  counted from the far end), so logical rows 0..527 are always shown
+  bottom-to-top (527 → 0) without probing 0x0b. On the R61523 (360×640
+  memory with `SCN = 0` scanning physical rows 0..527), refresh direction
+  is read from MIPI DCS `get_address_mode` (0x0b) via
+  `((mode >> 7) ^ (mode >> 4)) & 1`, falling back to top-down if two reads
+  disagree. Every view orders its strips to follow the panel's refresh
+  direction.
 - The row count includes blanking rows: 548 a refresh at 56 Hz on an
   fx-CP400 with panel ID 0x16, so 20 rows of blanking for 528 of picture.
   Where in the count the picture lies is not known. `Refresh position`
@@ -170,19 +173,25 @@ one frame goes out (measured on the frame before), the two do not meet.
   interface's frames always arrive early enough to wait, so before this
   positions 0 to 6 all looked clean on the unit where 0 is right. The page
   is behind a photosensitive-epilepsy warning.
-- The strips go the way of the refresh, but each one is filled from its top
-  row down, against it: its top row is written as it starts and its bottom
-  row, the one the refresh comes to first, a strip's time later. The window
-  keeps a strip's height clear ahead of the refresh and a strip's time
-  behind it, on top of the clearance, with the strip height taken from the
-  number of strips the last frame of the same kind took. Without that, the
-  16-row bands of the calibration page used up most of its 17 rows of
-  clearance, and for over a third of the places the picture could start no
-  step was clean (worked out against a 548-row refresh; tested in
-  `tests/classpad_sync_test.c`).
+- On a bottom-up panel the strips go the way of the refresh, but each one is
+  filled from its top row down, against it: its top row is written as it
+  starts and its bottom row, the one the refresh comes to first, a strip's
+  time later. The window keeps a strip's height clear ahead of the refresh
+  and a strip's time behind it, on top of the clearance, with the strip
+  height taken from the number of strips the last frame of the same kind
+  took. Without that, the 16-row bands of the calibration page used up most
+  of its 17 rows of clearance, and for over a third of the places the
+  picture could start no step was clean (worked out against a 548-row
+  refresh; tested in `tests/classpad_sync_test.c`). On a top-down panel each
+  strip is filled in the same direction as the refresh and needs no
+  intra-strip margin.
 - The counter is read as two bytes while it runs, and the first read after
   pixels were written is often wrong: a row is believed only when two reads
-  in a row agree (`cp_scan_agree`).
+  in a row agree (`cp_scan_agree`). On the R61523 path only, controller
+  reads enforce the DBI read cycle time (`trc >= 450 ns`) and `0x45` waits
+  `>= 3 µs` after selecting the command and after reading the second byte
+  (R61523 Rev.1.01, p.131); the 0x16/0x52 path uses direct bus reads as
+  before.
 - The game's picture keeps a sixth of a refresh clear at both ends of its
   window, the interface an eighth.
 - The first frame sent spends a quarter of a second reading 0x45 to see
@@ -221,14 +230,23 @@ been tried at all.
 The backlight is driven by the display controller on both panel families,
 and the OS sets it there (0x80038550 brightness, 0x8003861e PWM rate):
 DCS 0x51 and the middle of 0xc9 on the 0x16/0x52 family, 0xb9 on the
-R61523. The system's 14 brightness steps write 11..103 of 255, and it never
-moves the PWM rate off the first of the ten settings in its own table.
+R61523 (behind MCAP 0xb0, which is unlocked to `0x02` for `B1h–BFh` only
+and restored around every access, and validated before any write). The
+system's 14 brightness steps write 11..103 of 255, and it never moves the
+PWM rate off the first of the ten settings in its own table.
 
 Settings has `Backlight` (1..16, 16 = 255; 0 leaves the system's) and
-`Backlight PWM rate` (1..9 from the table, 0 leaves the system's). Both are
-put back when gpSP exits. Which end of the table is the fast one is read
-from the numbers, not measured. The R61523 path follows the OS code and has
-not been run.
+`Backlight PWM rate` (`System`, or `430 Hz` .. `33300 Hz` across 9 steps on
+both families). Both are put back when gpSP exits. Because the calculator's
+LED boost driver needs an ~8–9 µs minimum turn-on pulse, high PWM rates
+enforce a minimum `Backlight` floor (`33300 Hz` ≥ 5, `27400 Hz` ≥ 4,
+`18300 Hz` ≥ 3, `13700 Hz` ≥ 2, `6860 Hz` ≥ 1) in both the UI and
+`fxcg100_lcd_set_backlight()` so no combination can black out the screen.
+On the R61523, rate 9 (`PWMDIV = 0x00`, 33.3 kHz) limits PWM duty
+resolution to 210 steps (R61523 Rev.1.01, Table 54 Note 2), so brightness
+14..16 saturate at full duty; rate 8 (27.4 kHz) preserves all 256 steps.
+The R61523 path follows the datasheet and OS code and has not yet been run
+on hardware.
 
 ### Two panel families
 

@@ -41,6 +41,8 @@ static int failures;
 static uint16_t panel[CP_PANEL_H][CP_PANEL_W];
 static int win_c0, win_c1, win_r0, win_r1, win_c, win_r;
 static long win_left = 0;
+static int win_log_active;
+static int win_log_r0[128], win_log_r1[128], win_log_n;
 
 void cp_host_lcd_begin(int c0, int c1, int r0, int r1)
 {
@@ -48,6 +50,11 @@ void cp_host_lcd_begin(int c0, int c1, int r0, int r1)
 	CHECK(c0 >= 0 && c1 < CP_PANEL_W && c0 <= c1 &&
 		r0 >= 0 && r1 < CP_PANEL_H && r0 <= r1,
 		"window out of panel: c %d..%d r %d..%d", c0, c1, r0, r1);
+	if (win_log_active && win_log_n < 128) {
+		win_log_r0[win_log_n] = r0;
+		win_log_r1[win_log_n] = r1;
+		win_log_n++;
+	}
 	win_c0 = c0; win_c1 = c1; win_r0 = r0; win_r1 = r1;
 	win_c = c0; win_r = r0;
 	win_left = (long)(c1 - c0 + 1) * (r1 - r0 + 1);
@@ -1207,6 +1214,58 @@ static void test_ui(const char *dir)
 		CHECK(ui.scroll[SCREEN_SETTINGS] > scroll,
 			"a drag up the page from a slider did not scroll");
 		ui_shot(dir, "ui-settings-sliders");
+
+		/* High PWM rates enforce a minimum Backlight stop (9 -> 5, 8 -> 4,
+		 * ..., 5 -> 1) both when raising PWM and when lowering Backlight. */
+		{
+			const cp_rect *br = ui_find("Backlight", 0);
+			const cp_rect *pr;
+
+			if (br) {
+				ui.scroll[SCREEN_SETTINGS] += br->y - 200;
+				ui.redraw = 1;
+				ui_settle(ui_frame());
+			}
+			br = ui_find("Backlight", 0);
+			pr = ui_find("Backlight PWM rate", 0);
+			CHECK(pr != NULL && br != NULL, "no PWM/Backlight sliders");
+			if (pr && br) {
+				cp_rect ps = *pr, bs = *br;
+				int pcy = ps.y + ps.h / 2, px0 = ps.x + 8, pspan = ps.w - 16;
+				int bcy = bs.y + bs.h / 2;
+
+				/* Start at Backlight = 0 (System); raising PWM to 9 bumps it to 5. */
+				ui_tap(bs.x + 4, bcy);
+				CHECK(ui_state.backlight == 0, "reset backlight to 0");
+				ui_tap(ps.x + ps.w - 4, pcy);
+				CHECK(ui_state.backlight_pwm == 9 && ui_state.backlight == 5,
+					"pwm 9 bumped backlight to %u (pwm=%u)",
+					(unsigned)ui_state.backlight,
+					(unsigned)ui_state.backlight_pwm);
+				/* Trying to tap Backlight to 0 stops at 5. */
+				ui_tap(bs.x + 4, bcy);
+				CHECK(ui_state.backlight == 5,
+					"pwm 9 clamped backlight tap to %u",
+					(unsigned)ui_state.backlight);
+				/* Step PWM down 8..5 and verify the floor drops 4..1. */
+				for (uint32_t pwm = 8; pwm >= 5; pwm--) {
+					ui_tap(px0 + pspan * (int)pwm / 9, pcy);
+					ui_tap(bs.x + 4, bcy);
+					CHECK(ui_state.backlight_pwm == pwm &&
+						ui_state.backlight == pwm - 4u,
+						"pwm %u floor gave backlight %u (pwm=%u)",
+						(unsigned)pwm, (unsigned)ui_state.backlight,
+						(unsigned)ui_state.backlight_pwm);
+				}
+				/* PWM 0 (System) restores full 0..16 range. */
+				ui_tap(ps.x + 4, pcy);
+				ui_tap(bs.x + 4, bcy);
+				CHECK(ui_state.backlight_pwm == 0 && ui_state.backlight == 0,
+					"pwm 0 allowed backlight 0 (got %u, pwm=%u)",
+					(unsigned)ui_state.backlight,
+					(unsigned)ui_state.backlight_pwm);
+			}
+		}
 	}
 
 	/* Refresh position: asked first, because the page flashes; Cancel stays
@@ -1819,6 +1878,89 @@ static void test_clock_page(const char *dir)
 	clock_stock_known = 0;
 }
 
+/* Strips must go bottom-up when the panel refreshes bottom-up (0x16/0x52)
+ * and top-down when it refreshes top-down (R61523), producing identical
+ * pixels on the panel either way. */
+static void test_refresh_direction(void)
+{
+	static uint16_t snap[CP_PANEL_H][CP_PANEL_W];
+
+	/* Menu/calibration frame presenter: 33 contiguous 16-row bands. */
+	for (int i = 0; i < DWIDTH * DHEIGHT; i++)
+		vram[i] = (uint16_t)((i * 2654435761u) >> 16);
+	cp_host_refresh_bottom_up = 1;
+	win_log_n = 0;
+	win_log_active = 1;
+	fxcg100_lcd_present_frame();
+	win_log_active = 0;
+	CHECK(win_log_n == CP_PANEL_H / 16, "present_frame bottom-up bands: %d",
+		win_log_n);
+	for (int i = 1; i < win_log_n; i++)
+		CHECK(win_log_r1[i] + 1 == win_log_r0[i - 1],
+			"present_frame bottom-up band %d: %d..%d after %d..%d",
+			i, win_log_r0[i], win_log_r1[i],
+			win_log_r0[i - 1], win_log_r1[i - 1]);
+	memcpy(snap, panel, sizeof(panel));
+
+	memset(panel, 0, sizeof(panel));
+	cp_host_refresh_bottom_up = 0;
+	win_log_n = 0;
+	win_log_active = 1;
+	fxcg100_lcd_present_frame();
+	win_log_active = 0;
+	CHECK(win_log_n == CP_PANEL_H / 16, "present_frame top-down bands: %d",
+		win_log_n);
+	for (int i = 1; i < win_log_n; i++)
+		CHECK(win_log_r0[i] == win_log_r1[i - 1] + 1,
+			"present_frame top-down band %d: %d..%d after %d..%d",
+			i, win_log_r0[i], win_log_r1[i],
+			win_log_r0[i - 1], win_log_r1[i - 1]);
+	CHECK(memcmp(snap, panel, sizeof(panel)) == 0,
+		"present_frame pixels differed between bottom-up and top-down");
+
+	/* Every gameplay view and rotation. */
+	fill_test_frame();
+	for (unsigned view = 0; view < CP_VIEW_COUNT; view++) {
+		for (unsigned rot = 0; rot < CP_ROTATION_COUNT; rot++) {
+			set_mode(view, rot, 0);
+			fxcg100_lcd_set_transfer(0);
+			cp_host_refresh_bottom_up = 1;
+			fxcg100_lcd_blit_gba(gba);   /* paints background + keys once */
+			win_log_n = 0;
+			win_log_active = 1;
+			fxcg100_lcd_blit_gba(gba);
+			win_log_active = 0;
+			CHECK(win_log_n > 1, "view %u rot %u bottom-up strips: %d",
+				view, rot, win_log_n);
+			for (int i = 1; i < win_log_n; i++)
+				CHECK(win_log_r1[i] + 1 == win_log_r0[i - 1],
+					"view %u rot %u bottom-up strip %d: %d..%d after %d..%d",
+					view, rot, i, win_log_r0[i], win_log_r1[i],
+					win_log_r0[i - 1], win_log_r1[i - 1]);
+			memcpy(snap, panel, sizeof(panel));
+
+			cp_host_refresh_bottom_up = 0;
+			fxcg100_lcd_update();        /* force fresh game screen */
+			fxcg100_lcd_blit_gba(gba);
+			win_log_n = 0;
+			win_log_active = 1;
+			fxcg100_lcd_blit_gba(gba);
+			win_log_active = 0;
+			CHECK(win_log_n > 1, "view %u rot %u top-down strips: %d",
+				view, rot, win_log_n);
+			for (int i = 1; i < win_log_n; i++)
+				CHECK(win_log_r0[i] == win_log_r1[i - 1] + 1,
+					"view %u rot %u top-down strip %d: %d..%d after %d..%d",
+					view, rot, i, win_log_r0[i], win_log_r1[i],
+					win_log_r0[i - 1], win_log_r1[i - 1]);
+			CHECK(memcmp(snap, panel, sizeof(panel)) == 0,
+				"view %u rot %u pixels differed between refresh directions",
+				view, rot);
+		}
+	}
+	cp_host_refresh_bottom_up = 1;
+}
+
 int main(int argc, char **argv)
 {
 	const char *dir = argc > 1 ? argv[1] : NULL;
@@ -1852,6 +1994,7 @@ int main(int argc, char **argv)
 		}
 	test_flipped(CP_VIEW_PORTRAIT_1X);
 	test_flipped(CP_VIEW_PORTRAIT_43);
+	test_refresh_direction();
 	test_arrow_remap();
 	test_icon_strip();
 	test_key_colours();

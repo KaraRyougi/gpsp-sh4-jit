@@ -86,6 +86,37 @@ static int frame_in_strips(uint32_t total, uint32_t rows, uint32_t lines,
 	return 0;
 }
 
+/* As on a top-down panel (R61523 with B7=0, B4=0): strips go top-to-bottom
+ * and each strip's window is also filled top-to-bottom, with the refresh. */
+static int frame_in_strips_same_dir(uint32_t total, uint32_t rows,
+	uint32_t lines, uint32_t strips, uint32_t at)
+{
+	uint32_t h = (rows + strips - 1u) / strips;
+	double each = (double)lines / strips;
+	long m;
+
+	for(m = -1; m <= (long)(lines / total) + 2; m++) {
+		int seen_new = 0, seen_old = 0;
+		uint32_t p;
+
+		for(p = 0; p < rows; p++) {
+			uint32_t j = p / h;
+			uint32_t end = (j + 1u) * h < rows ? (j + 1u) * h : rows;
+			double written = j * each
+				+ ((double)(p - j * h) + 0.5) * each / (end - j * h);
+			double shown = (double)p - (double)at + (double)m * total;
+
+			if(shown > written)
+				seen_new = 1;
+			else
+				seen_old = 1;
+		}
+		if(seen_new && seen_old)
+			return 1;
+	}
+	return 0;
+}
+
 int main(void)
 {
 	/* picture height, rows shown while it is written, strips, upside down */
@@ -327,6 +358,132 @@ int main(void)
 	cp_sync_track_strip(&t, 320, 100);
 	cp_sync_track_strip(&t, 340, 400);
 	CHECK(t.near == 60u, "closest approach is %u", (unsigned)t.near);
+
+	/* Top-down refresh (R61523 with B7=0, B4=0): each strip's window is
+	 * filled in the same direction as the refresh, so strip=0 needs no
+	 * intra-strip margin and calibration still rejects a step out either way. */
+	{
+		static const uint32_t lines_cases[] = { 250, 280, 400, 600 };
+		const uint32_t total = 548u, rows = 528u, strips = 33u;
+		const uint32_t step = total / 16u, none = total + 1u;
+
+		for(c = 0; c < sizeof(lines_cases) / sizeof(lines_cases[0]); c++) {
+			uint32_t lines = lines_cases[c], lo, hi, elo, ehi, llo, lhi, at;
+			unsigned torn = 0;
+
+			CHECK(cp_sync_window_part(total, rows, lines, 0, none, 0,
+				&lo, &hi), "top-down %u: no bare window", (unsigned)lines);
+			for(at = lo; at < hi; at++)
+				torn += (unsigned)frame_in_strips_same_dir(total, rows, lines,
+					strips, at);
+			CHECK(torn == 0, "top-down %u: %u starts in [%u, %u) tore",
+				(unsigned)lines, torn, (unsigned)lo, (unsigned)hi);
+
+			CHECK(cp_sync_window_part(total, rows, lines, 0,
+				CP_SYNC_PART_CALIBRATE, 0, &lo, &hi),
+				"top-down cal %u: no window", (unsigned)lines);
+			elo = llo = lo;
+			ehi = lhi = hi;
+			cp_sync_window_end(&elo, &ehi, 0);
+			cp_sync_window_end(&llo, &lhi, 1);
+			CHECK(!frame_in_strips_same_dir(total, rows, lines, strips, elo) &&
+				!frame_in_strips_same_dir(total, rows, lines, strips, llo),
+				"top-down cal %u: right offset tore", (unsigned)lines);
+			CHECK(frame_in_strips_same_dir(total, rows, lines, strips,
+					(elo + total - step) % total) ||
+				frame_in_strips_same_dir(total, rows, lines, strips,
+					(llo + total - step) % total),
+				"top-down cal %u: step too low did not tear", (unsigned)lines);
+			CHECK(frame_in_strips_same_dir(total, rows, lines, strips,
+					(elo + step) % total) ||
+				frame_in_strips_same_dir(total, rows, lines, strips,
+					(llo + step) % total),
+				"top-down cal %u: step too high did not tear", (unsigned)lines);
+		}
+	}
+
+	/* R61523 refresh direction from 0x0b (get_address_mode). */
+	CHECK(cp_r61523_refresh_bottom_up(0x00, 1) == 0, "R61523 0x00 top-down");
+	CHECK(cp_r61523_refresh_bottom_up(0x40, 1) == 0, "R61523 0x40 top-down");
+	CHECK(cp_r61523_refresh_bottom_up(0x01, 1) == 0, "R61523 B0 flip stays top-down");
+	CHECK(cp_r61523_refresh_bottom_up(0x10, 1) == 1, "R61523 B4=1 bottom-up");
+	CHECK(cp_r61523_refresh_bottom_up(0x80, 1) == 1, "R61523 B7=1 bottom-up");
+	CHECK(cp_r61523_refresh_bottom_up(0x90, 1) == 0, "R61523 B7=1 B4=1 top-down");
+	CHECK(cp_r61523_refresh_bottom_up(0xc0, 0) == 0, "R61523 invalid fallback");
+
+	/* R61523 B0h (MCAP) restore values: only 0, 2, 3, 4 are legal. */
+	CHECK(cp_r61523_mcap_restore_value(0x00) == 0x00, "MCAP 0x00");
+	CHECK(cp_r61523_mcap_restore_value(0x02) == 0x02, "MCAP 0x02");
+	CHECK(cp_r61523_mcap_restore_value(0x03) == 0x03, "MCAP 0x03");
+	CHECK(cp_r61523_mcap_restore_value(0x04) == 0x04, "MCAP 0x04");
+	CHECK(cp_r61523_mcap_restore_value(0x01) == 0x03, "MCAP inhibited 0x01");
+	CHECK(cp_r61523_mcap_restore_value(0x05) == 0x03, "MCAP inhibited 0x05");
+	CHECK(cp_r61523_mcap_restore_value(0x07) == 0x03, "MCAP inhibited 0x07");
+	CHECK(cp_r61523_mcap_restore_value(0xff) == 0x03, "MCAP garbage 0xff");
+
+	/* R61523 B9h PWMDIV: exactly 10 values in Table 54 are legal. */
+	{
+		unsigned valid_count = 0;
+
+		for(i = 0; i < 256u; i++)
+			valid_count += (unsigned)cp_r61523_pwmdiv_valid((uint8_t)i);
+		CHECK(valid_count == 10u, "PWMDIV had %u valid codes, expected 10",
+			valid_count);
+		CHECK(cp_r61523_pwmdiv_valid(0x00) && cp_r61523_pwmdiv_valid(0x01) &&
+			cp_r61523_pwmdiv_valid(0x02) && cp_r61523_pwmdiv_valid(0x03) &&
+			cp_r61523_pwmdiv_valid(0x07) && cp_r61523_pwmdiv_valid(0x0f) &&
+			cp_r61523_pwmdiv_valid(0x1f) && cp_r61523_pwmdiv_valid(0x3f) &&
+			cp_r61523_pwmdiv_valid(0x7f) && cp_r61523_pwmdiv_valid(0xff),
+			"missing legal PWMDIV code");
+		CHECK(!cp_r61523_pwmdiv_valid(0x04) && !cp_r61523_pwmdiv_valid(0x10) &&
+			!cp_r61523_pwmdiv_valid(0x80), "accepted inhibited PWMDIV code");
+	}
+
+	/* R61523 B9h snapshot validation. */
+	{
+		static const uint8_t ok_auto[4] = { 0x00, 0x34, 0x01, 0x08 };
+		static const uint8_t ok_manual[4] = { 0x01, 0x67, 0x07, 0x1d };
+		static const uint8_t all_zero[4] = { 0x00, 0x00, 0x00, 0x00 };
+		static const uint8_t all_ff[4] = { 0xff, 0xff, 0xff, 0xff };
+		static const uint8_t bad_pwmon_res[4] = { 0x02, 0x34, 0x01, 0x08 };
+		static const uint8_t bad_bdcv_zero[4] = { 0x01, 0x00, 0x01, 0x08 };
+		static const uint8_t bad_pwmdiv[4] = { 0x01, 0x34, 0x04, 0x08 };
+		static const uint8_t bad_no_ledpwme[4] = { 0x01, 0x34, 0x01, 0x00 };
+		static const uint8_t bad_ctrl_res[4] = { 0x01, 0x34, 0x01, 0x28 };
+		static const uint8_t bad_manual_off[4] = { 0x00, 0x34, 0x01, 0x18 };
+
+		CHECK(cp_r61523_b9_valid(ok_auto), "valid B9h (PWMWM=0)");
+		CHECK(cp_r61523_b9_valid(ok_manual), "valid B9h (PWMWM=1, PWMON=1)");
+		CHECK(!cp_r61523_b9_valid(all_zero), "rejected all-zero B9h");
+		CHECK(!cp_r61523_b9_valid(all_ff), "rejected all-0xff B9h");
+		CHECK(!cp_r61523_b9_valid(bad_pwmon_res), "rejected reserved PWMON bits");
+		CHECK(!cp_r61523_b9_valid(bad_bdcv_zero), "rejected BDCV=0");
+		CHECK(!cp_r61523_b9_valid(bad_pwmdiv), "rejected inhibited PWMDIV");
+		CHECK(!cp_r61523_b9_valid(bad_no_ledpwme), "rejected LEDPWME=0");
+		CHECK(!cp_r61523_b9_valid(bad_ctrl_res), "rejected reserved ctrl bits");
+		CHECK(!cp_r61523_b9_valid(bad_manual_off), "rejected PWMWM=1, PWMON=0");
+	}
+
+	/* Backlight PWM frequency table and minimum brightness floor per rate. */
+	{
+		static const uint32_t expect_hz[10] = {
+			0, 430, 860, 1720, 3430, 6860, 13700, 18300, 27400, 33300
+		};
+		static const uint32_t expect_min[10] = {
+			0, 0, 0, 0, 0, 1, 2, 3, 4, 5
+		};
+
+		for(i = 0; i < 10u; i++) {
+			CHECK(cp_backlight_pwm_hz(i) == expect_hz[i],
+				"pwm %u: got %u Hz", (unsigned)i,
+				(unsigned)cp_backlight_pwm_hz(i));
+			CHECK(cp_backlight_min_level(i) == expect_min[i],
+				"pwm %u: got min level %u", (unsigned)i,
+				(unsigned)cp_backlight_min_level(i));
+		}
+		CHECK(cp_backlight_pwm_hz(10u) == 0 && cp_backlight_min_level(10u) == 0,
+			"out-of-range pwm rate");
+	}
 
 	if(failures)
 		return 1;

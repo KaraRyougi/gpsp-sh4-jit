@@ -37,6 +37,7 @@
 #include "classpad_clock.h"
 #include "classpad_font.h"
 #include "classpad_gfx.h"
+#include "classpad_sync.h"
 #include "classpad_theme.h"
 
 #include <gint/display.h>
@@ -902,11 +903,14 @@ static int ui_stepper(cp_ui *ui, cp_rect r, const char *key, uint32_t big,
 	return *value != old;
 }
 
-/* What a slider shows for its value: the number, or `zero` (if given) for 0. */
+/* What a slider shows for its value: a named stop if `labels` is given,
+ * `zero` (if given) for 0, or the number itself. */
 static void slider_text(char *text, size_t size, uint32_t value,
-	const char *zero)
+	const char *zero, const char *const *labels)
 {
-	if(zero && value == 0)
+	if(labels)
+		snprintf(text, size, "%s", labels[value]);
+	else if(zero && value == 0)
 		snprintf(text, size, "%s", zero);
 	else
 		snprintf(text, size, "%u", (unsigned)value);
@@ -934,33 +938,38 @@ static int ui_anim_jump(cp_ui *ui, const void *key, int target)
 	return ui_anim(ui, key, target);
 }
 
-/* A Material 3 slider over the whole numbers 0..max: a thick track in two
- * parts with a gap around a bar handle, the part before the handle filled.
- * There are no stop marks. A sideways drag that starts on it carries the
- * handle with the finger while the value follows the nearest stop, and on
- * release the handle slides to that stop (a drag that starts mostly up or
- * down still scrolls the page); a tap moves it to the nearest stop; with the
- * keypad focus on it, left and right step it. While it is held the handle
- * narrows and a label above it shows the value. `key` (the row's label)
- * names it for ui_anim. Returns nonzero if *value changed. */
-static int ui_slider(cp_ui *ui, cp_rect r, const char *key, uint32_t *value,
-	uint32_t max, const char *zero)
+/* A Material 3 slider over the whole numbers 0..max (clamped to min..max):
+ * a thick track in two parts with a gap around a bar handle, the part before
+ * the handle filled. There are no stop marks. A sideways drag that starts on
+ * it carries the handle with the finger while the value follows the nearest
+ * stop, and on release the handle slides to that stop (a drag that starts
+ * mostly up or down still scrolls the page); a tap moves it to the nearest
+ * stop; with the keypad focus on it, left and right step it. While it is held
+ * the handle narrows and a label above it shows the value. `key` (the row's
+ * label) names it for ui_anim. Returns nonzero if *value changed. */
+static int ui_slider_range(cp_ui *ui, cp_rect r, const char *key,
+	uint32_t *value, uint32_t min, uint32_t max, const char *zero,
+	const char *const *labels)
 {
 	int index = ui->widgets++;
 	int focused = ui->focus_shown && index == ui->focus;
 	int x0 = r.x + SLIDER_TRACK / 2, span = r.w - SLIDER_TRACK;
 	int ty = r.y + (r.h - SLIDER_TRACK) / 2;
-	int held, drag, thumb, hw, a, b;
+	int held, drag, thumb, hw, a, b, min_x;
 	uint32_t old = *value;
 
 	if(max == 0)
 		max = 1;
+	if(min > max)
+		min = max;
+	if(*value < min)
+		*value = min;
 	if(*value > max)
 		*value = max;
 	if(focused) {
 		ui->focus_rect = r;
 		ui->focus_seen = 1;
-		if(ui->adjust < 0 && *value > 0)
+		if(ui->adjust < 0 && *value > min)
 			*value -= 1;
 		if(ui->adjust > 0 && *value < max)
 			*value += 1;
@@ -973,16 +982,23 @@ static int ui_slider(cp_ui *ui, cp_rect r, const char *key, uint32_t *value,
 	}
 	drag = ui->slider == key && ui->touching &&
 		ui->slider_state == SLIDER_DRAG;
-	if(drag)
-		*value = slider_stop(ui->tx, x0, span, max);
-	else if(ui->tap && point_in(r, ui->press_x, ui->press_y) &&
+	if(drag) {
+		uint32_t next = slider_stop(ui->tx, x0, span, max);
+
+		*value = next < min ? min : next;
+	} else if(ui->tap && point_in(r, ui->press_x, ui->press_y) &&
 			point_in(r, ui->tap_x, ui->tap_y) &&
-			cp_surface_visible(&ui->s, ui->tap_x, ui->tap_y))
-		*value = slider_stop(ui->tap_x, x0, span, max);
+			cp_surface_visible(&ui->s, ui->tap_x, ui->tap_y)) {
+		uint32_t next = slider_stop(ui->tap_x, x0, span, max);
+
+		*value = next < min ? min : next;
+	}
 	held = ui->slider == key && ui->touching &&
 		ui->slider_state != SLIDER_NONE;
+	min_x = x0 + (int)min * span / (int)max;
 	if(drag) {
-		int x = ui->tx < x0 ? x0 : ui->tx > x0 + span ? x0 + span : ui->tx;
+		int x = ui->tx < min_x ? min_x
+			: ui->tx > x0 + span ? x0 + span : ui->tx;
 
 		thumb = ui_anim_jump(ui, key, x);
 	} else {
@@ -1016,10 +1032,10 @@ static int ui_slider(cp_ui *ui, cp_rect r, const char *key, uint32_t *value,
 		cp_round_ring(&ui->s, thumb - 6, r.y - 4, 12, r.h + 8, 6, 2,
 			ui->t.primary);
 	if(held) {
-		char text[12];
+		char text[16];
 		int tw, bw, bh = cp_font_small.height + 10, bx, by;
 
-		slider_text(text, sizeof(text), *value, zero);
+		slider_text(text, sizeof(text), *value, zero, labels);
 		tw = cp_text_width(&cp_font_small, text);
 		bw = tw + 20 < 36 ? 36 : tw + 20;
 		bx = thumb - bw / 2;
@@ -1034,6 +1050,12 @@ static int ui_slider(cp_ui *ui, cp_rect r, const char *key, uint32_t *value,
 	}
 	ui_mark(key, r);
 	return *value != old;
+}
+
+static int ui_slider(cp_ui *ui, cp_rect r, const char *key, uint32_t *value,
+	uint32_t max, const char *zero)
+{
+	return ui_slider_range(ui, r, key, value, 0, max, zero, NULL);
 }
 
 /* The picture of a switch, `on` running from 0 (off) to 256. */
@@ -1402,30 +1424,45 @@ static cp_rect setting_row(cp_ui *ui, int *y, const char *label)
  * a line with the slider under it: 12 above the name, the slider right
  * below it, 8 under the slider, so a name sits closer to its own slider
  * than to the row before and the last handle clears the card's corner. */
-static int row_slider(cp_ui *ui, int *y, const char *label, uint32_t *value,
-	uint32_t max, const char *zero)
+static int row_slider_range(cp_ui *ui, int *y, const char *label,
+	uint32_t *value, uint32_t min, uint32_t max, const char *zero,
+	const char *const *labels)
 {
-	char text[12];
+	char text[16];
 	cp_rect r, control;
 	int top = 12 + cp_font_body.height, changed;
 
-	if(ui->wide)
-		return ui_slider(ui, setting_row_h(ui, y, label, NULL, SLIDER_H),
-			label, value, max, zero);
+	if(ui->wide) {
+		r = row_begin(ui, y, SLIDER_H + 16);
+		control = (cp_rect){ (int16_t)(r.x + r.w - PAD - 280),
+			(int16_t)(r.y + 8), 280, SLIDER_H };
+		changed = ui_slider_range(ui, control, label, value, min, max,
+			zero, labels);
+		slider_text(text, sizeof(text), *value, zero, labels);
+		row_text(ui, r, r.w - 2 * PAD - 280 - 12, label, text);
+		return changed;
+	}
 	r = row_begin(ui, y, top + SLIDER_H + 8);
 	control = (cp_rect){ (int16_t)(r.x + PAD), (int16_t)(r.y + top),
 		(int16_t)(r.w - 2 * PAD), SLIDER_H };
 	cp_text(&ui->s, &cp_font_body, r.x + PAD, r.y + 12, label,
 		ui->t.on_surface);
-	changed = ui_slider(ui, control, label, value, max, zero);
+	changed = ui_slider_range(ui, control, label, value, min, max,
+		zero, labels);
 	/* After the slider, so it is the value the handle is at now; under the
 	 * held label it would only repeat it. */
-	slider_text(text, sizeof(text), *value, zero);
+	slider_text(text, sizeof(text), *value, zero, labels);
 	cp_text(&ui->s, &cp_font_small, r.x + r.w - PAD -
 		cp_text_width(&cp_font_small, text), r.y + 12 +
 		(cp_font_body.height - cp_font_small.height) / 2, text,
 		ui->t.on_surface_variant);
 	return changed;
+}
+
+static int row_slider(cp_ui *ui, int *y, const char *label, uint32_t *value,
+	uint32_t max, const char *zero)
+{
+	return row_slider_range(ui, y, label, value, 0, max, zero, NULL);
 }
 
 /* Two buttons side by side across the page. */
@@ -1790,11 +1827,31 @@ static fxcg100_menu_result screen_settings(cp_ui *ui)
 	/* At once: the interface is sent the same way, so the setting can be
 	 * judged here, on a scrolling page. */
 	fxcg100_lcd_set_sync(st->lcd_sync, st->lcd_sync_offset);
-	/* 0 is the system's own setting; its brightest is about 6 of 16. */
-	changed |= row_slider(ui, &y, "Backlight", &st->backlight, 16, "System");
-	changed |= row_slider(ui, &y, "Backlight PWM rate", &st->backlight_pwm, 9,
-		"System");
-	fxcg100_lcd_set_backlight(st->backlight, st->backlight_pwm);
+	/* 0 is the system's own setting; its brightest is about 6 of 16.
+	 * High PWM rates need a wider minimum duty so the LED boost driver
+	 * still fires (cp_backlight_min_level). */
+	{
+		static const char *const pwm_labels[10] = {
+			"System", "430 Hz", "860 Hz", "1720 Hz", "3430 Hz",
+			"6860 Hz", "13700 Hz", "18300 Hz", "27400 Hz", "33300 Hz",
+		};
+		uint32_t min_bl = cp_backlight_min_level(st->backlight_pwm);
+
+		if(st->backlight < min_bl) {
+			st->backlight = min_bl;
+			changed = 1;
+		}
+		changed |= row_slider_range(ui, &y, "Backlight", &st->backlight,
+			min_bl, 16, "System", NULL);
+		if(row_slider_range(ui, &y, "Backlight PWM rate", &st->backlight_pwm,
+				0, 9, NULL, pwm_labels)) {
+			changed = 1;
+			min_bl = cp_backlight_min_level(st->backlight_pwm);
+			if(st->backlight < min_bl)
+				st->backlight = min_bl;
+		}
+		fxcg100_lcd_set_backlight(st->backlight, st->backlight_pwm);
+	}
 	card_end(ui, &y);
 
 	section_label(ui, &y, "Appearance");

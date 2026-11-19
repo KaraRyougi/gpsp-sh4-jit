@@ -112,6 +112,12 @@ void cp_host_lcd_write(uint16_t pixel);
 static uint16_t host_strips[2][STRIP_PIXELS] __attribute__((aligned(32)));
 #define STRIP_BUF0 ((uintptr_t)host_strips[0])
 #define STRIP_BUF1 ((uintptr_t)host_strips[1])
+static int cp_host_refresh_bottom_up = 1;
+
+static inline int lcd_refresh_bottom_up(void)
+{
+	return cp_host_refresh_bottom_up;
+}
 
 static void lcd_begin(int c0, int c1, int r0, int r1)
 {
@@ -127,6 +133,36 @@ static inline void lcd_write(uint16_t pixel)
 /* X and Y RAM, the same banks the fx-CG presenter uses. */
 #define STRIP_BUF0 ((uintptr_t)0xe5007000u)
 #define STRIP_BUF1 ((uintptr_t)0xe5017000u)
+
+static uint32_t lcd_cpu_mhz_cached;
+
+/* Current CPU clock in MHz, rounded up and floored at stock speed, so busy
+ * waits for LCD bus timing never under-wait even under overclock. */
+static uint32_t lcd_cpu_mhz(void)
+{
+	if(!lcd_cpu_mhz_cached) {
+		cp_clock clock;
+		uint32_t hz;
+
+		fxcg100_clock_read(&clock);
+		hz = cp_clock_hz(&clock, CP_CLK_CPU);
+		lcd_cpu_mhz_cached = (hz + 999999u) / 1000000u;
+		if(lcd_cpu_mhz_cached < 118u)
+			lcd_cpu_mhz_cached = 118u;
+	}
+	return lcd_cpu_mhz_cached;
+}
+
+/* Busy-wait at least `ns` nanoseconds. Each loop iteration runs at least a
+ * `dt; bf/s; nop` (2+ cycles on SH-4A), so ceil(ns * MHz / 2000) iterations
+ * is a safe lower bound at every clock speed. */
+static void lcd_delay_ns(uint32_t ns)
+{
+	uint32_t loops = (ns * lcd_cpu_mhz() + 1999u) / 2000u;
+
+	while(loops--)
+		__asm__ volatile("nop");
+}
 
 static inline void lcd_synco(void)
 {
@@ -150,6 +186,21 @@ static inline void lcd_param(unsigned value)
 	lcd_synco();
 }
 
+/* Read one word from the R61523 data port. The R61523 DBI Type B read cycle
+ * needs trc >= 450 ns and trdh >= 250 ns (datasheet Table 119, p.248), far
+ * slower than writes (twc >= 60 ns), and overclocking raises Bphi without
+ * raising CS5a waits. Used only on R61523 paths so 0x16/0x52 stays untouched. */
+static uint16_t r61523_read_word(void)
+{
+	uint16_t value;
+
+	lcd_synco();
+	value = *LCD_DATA;
+	lcd_synco();
+	lcd_delay_ns(450);
+	return value;
+}
+
 /* The fx-CP400 shipped with two panel families that are told apart by ID
  * register 0xda. The original one is the R61523, whose 360-column memory
  * shows the picture from column 40. Later units answer 0x16 or 0x52 and
@@ -166,12 +217,71 @@ static int lcd_first_column(void)
 	if(first_column < 0) {
 		unsigned id;
 
+		wait_lcd_dma();
 		lcd_select(0xda);
 		id = *LCD_DATA;          /* the OS discards the first read too */
 		id = *LCD_DATA & 0xffu;
 		first_column = (id == 0x16 || id == 0x52) ? 0 : 40;
 	}
 	return first_column;
+}
+
+static inline int lcd_is_r61523(void)
+{
+	return lcd_first_column() != 0;
+}
+
+/* Whether logical rows 0..527 are refreshed bottom-to-top (527 -> 0).
+ * On 0x16/0x52 the OS sets 0xc0 and bottom-up refresh is already verified on
+ * hardware, so 0x0b is never probed there. On R61523, read MIPI DCS
+ * get_address_mode (0x0b, User Command: needs no MCAP unlock) twice. */
+static int lcd_refresh_bottom_up(void)
+{
+	static int bottom_up = -1;
+
+	if(bottom_up < 0) {
+		if(!lcd_is_r61523()) {
+			bottom_up = 1;
+		} else {
+			uint8_t m1, m2;
+
+			wait_lcd_dma();
+			lcd_select(0x0b);
+			(void)r61523_read_word();
+			m1 = (uint8_t)(r61523_read_word() & 0xffu);
+			lcd_select(0x0b);
+			(void)r61523_read_word();
+			m2 = (uint8_t)(r61523_read_word() & 0xffu);
+			bottom_up = cp_r61523_refresh_bottom_up(m1, m1 == m2);
+		}
+	}
+	return bottom_up;
+}
+
+/* R61523 Manufacturer Command Access Protect (B0h, datasheet p.135).
+ * Default MCAP = 3'b011 treats B1h..BFh (including B9h backlight control)
+ * as NOP. Unlock B1h..BFh only (0x02) and restore the previous value. */
+static uint8_t r61523_mcap_unlock(void)
+{
+	uint8_t saved;
+
+	lcd_select(0xb0);
+	(void)r61523_read_word();
+	saved = cp_r61523_mcap_restore_value(
+		(uint8_t)(r61523_read_word() & 0xffu));
+	if(saved != 0x02u) {
+		lcd_select(0xb0);
+		lcd_param(0x02u);
+	}
+	return saved;
+}
+
+static void r61523_mcap_restore(uint8_t saved)
+{
+	if(saved != 0x02u) {
+		lcd_select(0xb0);
+		lcd_param(saved);
+	}
 }
 
 /* Open a write window (bounds inclusive, panel coordinates) and leave the
@@ -219,6 +329,14 @@ static inline void lcd_put_line(const uint16_t *line, unsigned n)
 static inline uint16_t *strip_buffer(void)
 {
 	return (uint16_t *)(strip_bank ? STRIP_BUF1 : STRIP_BUF0);
+}
+
+/* Order strips to follow the panel's refresh direction (from 0x0b
+ * get_address_mode), so a frame written the way it is shown can be kept
+ * clear of the refresh (classpad_sync.h). */
+static inline int strip_order(int index, int count, int in_order)
+{
+	return in_order ? index : count - 1 - index;
 }
 
 /* Refresh sync, further down. A frame is either the game picture or the
@@ -276,6 +394,7 @@ void fxcg100_clock_write(const struct cp_clock *clock)
 {
 	wait_lcd_dma();
 	cpg_set_overclock_setting((const struct cpg_overclock_setting *)clock);
+	lcd_cpu_mhz_cached = 0;
 	/* gint has rescaled its timers. The polled touch read takes the clock
 	 * of the moment by itself; gint's driver has to be told. */
 	if(!touch_polled)
@@ -606,6 +725,7 @@ void fxcg100_lcd_init(void)
 	if(cp_theme_index >= CP_THEME_COUNT)
 		fxcg100_lcd_set_theme(0);
 #ifndef CGBA_HOST_TEST
+	lcd_cpu_mhz_cached = 0;
 	ticks_start();
 #endif
 }
@@ -616,63 +736,77 @@ void fxcg100_lcd_init(void)
  *
  *   0x16/0x52   brightness is DCS 0x51, one byte; the PWM rate is the second
  *               and third parameter of 0xc9, with 0x04 before and 0x01 after
- *   R61523      both are in 0xb9 (backlight control 2): the second parameter
- *               is the brightness, the third the PWM divider
+ *   R61523      both are in 0xb9 (backlight control 2, behind MCAP 0xb0):
+ *               the second parameter is the brightness (BDCV), the third the
+ *               PWM divider (PWMDIV)
  *
  * The system's 14 brightness steps write 11..103 of 255, so its brightest
- * is 40 % of what the backlight can do. It leaves the PWM rate on the first
- * of ten settings it has a table of (0x8063c184); the table is copied here.
- * In the newer panel's the two bytes fall as the R61523's divider rises, so
- * the larger number is taken to be the faster rate; that the rate rises
- * with the setting here is that reading, not something measured. */
+ * is 40 % of what the backlight can do. The 9 non-default entries in the OS
+ * PWM table (0x8063c184) match the R61523 PWMDIV frequencies (Table 54,
+ * p.154) via 16 MHz / N from 0.43 kHz (0x9159 / 0x7f) up to 33.3 kHz
+ * (0x01e0 / 0x00), so rate 1..9 rises monotonically on both families. On
+ * R61523, PWMDIV = 0x00 (33.3 kHz, rate 9) caps PWM resolution to 210 steps
+ * (Table 54 Note 2), so brightness levels 14..16 saturate at full duty; rate
+ * 8 (27.4 kHz, 0x01) keeps all 256 steps. */
 #ifndef CGBA_HOST_TEST
 static const uint8_t backlight_pwm_new[10][3] = {
-	{ 0x14, 0x29, 0xa0 },   /* what the OS sets when it starts the panel */
-	{ 0x04, 0x91, 0x59 }, { 0x04, 0x48, 0xad }, { 0x04, 0x24, 0x56 },
-	{ 0x04, 0x12, 0x39 }, { 0x04, 0x09, 0x1c }, { 0x04, 0x04, 0x90 },
-	{ 0x04, 0x03, 0x6a }, { 0x04, 0x02, 0x48 }, { 0x04, 0x01, 0xe0 },
+	{ 0x14, 0x29, 0xa0 },   /* 0: what the OS sets when it starts the panel */
+	{ 0x04, 0x91, 0x59 },   /* 1: 0.43 kHz */
+	{ 0x04, 0x48, 0xad },   /* 2: 0.86 kHz */
+	{ 0x04, 0x24, 0x56 },   /* 3: 1.72 kHz */
+	{ 0x04, 0x12, 0x39 },   /* 4: 3.43 kHz */
+	{ 0x04, 0x09, 0x1c },   /* 5: 6.86 kHz */
+	{ 0x04, 0x04, 0x90 },   /* 6: 13.7 kHz */
+	{ 0x04, 0x03, 0x6a },   /* 7: 18.3 kHz */
+	{ 0x04, 0x02, 0x48 },   /* 8: 27.4 kHz */
+	{ 0x04, 0x01, 0xe0 },   /* 9: 33.3 kHz */
 };
-static const uint8_t backlight_pwm_old[10] = {
-	0x00, 0x01, 0x02, 0x03, 0x07, 0x0f, 0x1f, 0x3f, 0x7f, 0xff,
+/* R61523 PWMDIV for rate 1..9 (0.43 kHz .. 33.3 kHz); 0xff (0.21 kHz) is
+ * omitted. */
+static const uint8_t backlight_pwm_old[9] = {
+	0x7f, 0x3f, 0x1f, 0x0f, 0x07, 0x03, 0x02, 0x01, 0x00,
 };
 static int backlight_saved;
+static int backlight_b9_ok;              /* R61523: 0xb9 read passed checks */
 static uint8_t backlight_system;         /* brightness found at the start */
 static uint8_t backlight_b9[4];          /* R61523: 0xb9 as found */
 static uint32_t backlight_level, backlight_rate;
 
 static void backlight_read_b9(uint8_t out[4])
 {
+	uint8_t mcap = r61523_mcap_unlock();
 	int i;
 
 	lcd_select(0xb9);
-	(void)*LCD_DATA;
+	(void)r61523_read_word();
 	for(i = 0; i < 4; i++)
-		out[i] = (uint8_t)*LCD_DATA;
+		out[i] = (uint8_t)(r61523_read_word() & 0xffu);
+	r61523_mcap_restore(mcap);
 }
 
 static void backlight_write(uint32_t level, uint32_t rate)
 {
 	/* Level 1..16 is 15, 31, .. 255; 0 is what the system had. */
 	unsigned value = level ? level * 16u - 1u : backlight_system;
-	/* Rate 1..9 is the table from its slowest entry to its fastest. */
-	unsigned entry = rate ? 10u - rate : 0u;
 
 	wait_lcd_dma();
-	if(lcd_first_column() == 0) {
+	if(!lcd_is_r61523()) {
 		lcd_select(0x51);
 		lcd_param(value);
 		lcd_select(0xc9);
-		lcd_param(backlight_pwm_new[entry][0]);
-		lcd_param(backlight_pwm_new[entry][1]);
-		lcd_param(backlight_pwm_new[entry][2]);
+		lcd_param(backlight_pwm_new[rate][0]);
+		lcd_param(backlight_pwm_new[rate][1]);
+		lcd_param(backlight_pwm_new[rate][2]);
 		lcd_param(0x01);
-	} else {
+	} else if(backlight_b9_ok) {
+		uint8_t mcap = r61523_mcap_unlock();
+
 		lcd_select(0xb9);
 		lcd_param(backlight_b9[0]);
-		lcd_param(level ? value : backlight_b9[1]);
-		/* The R61523 table starts with its fastest entry. */
-		lcd_param(rate ? backlight_pwm_old[entry - 1u] : backlight_b9[2]);
+		lcd_param(value);
+		lcd_param(rate ? backlight_pwm_old[rate - 1u] : backlight_b9[2]);
 		lcd_param(backlight_b9[3]);
+		r61523_mcap_restore(mcap);
 	}
 }
 #endif
@@ -680,20 +814,26 @@ static void backlight_write(uint32_t level, uint32_t rate)
 void fxcg100_lcd_set_backlight(uint32_t level, uint32_t pwm)
 {
 #ifndef CGBA_HOST_TEST
+	uint32_t min_level;
+
 	if(level > 16u)
 		level = 0;
 	if(pwm > 9u)
 		pwm = 0;
+	min_level = cp_backlight_min_level(pwm);
+	if(level < min_level)
+		level = min_level;
 	if(!backlight_saved) {
 		if(level == 0 && pwm == 0)
 			return;                  /* nothing asked for: touch nothing */
 		wait_lcd_dma();
-		if(lcd_first_column() == 0) {
+		if(!lcd_is_r61523()) {
 			lcd_select(0x52);        /* read display brightness */
 			(void)*LCD_DATA;
 			backlight_system = (uint8_t)*LCD_DATA;
 		} else {
 			backlight_read_b9(backlight_b9);
+			backlight_b9_ok = cp_r61523_b9_valid(backlight_b9);
 			backlight_system = backlight_b9[1];
 		}
 		/* The system only ever writes 11..103. Anything else was not
@@ -778,15 +918,18 @@ void fxcg100_lcd_update(void)
  * current orientation (classpad_gfx.h), so no turning is needed here. */
 void fxcg100_lcd_present_frame(void)
 {
-	/* In bands from the bottom of the panel upwards, the way the panel is
-	 * refreshed, like the game picture (see strip_order). */
+	/* In bands following the panel's refresh direction, like the game
+	 * picture (see strip_order). */
 	enum { BAND = 16 };
-	int r;
+	int bands = CP_PANEL_H / BAND;
+	int in_order = !lcd_refresh_bottom_up();
+	int i;
 
 #ifndef CGBA_HOST_TEST
 	sync_begin(0, CP_PANEL_H, SYNC_CANVAS);
 #endif
-	for(r = CP_PANEL_H - BAND; r >= 0; r -= BAND) {
+	for(i = 0; i < bands; i++) {
+		int r = strip_order(i, bands, in_order) * BAND;
 #ifndef CGBA_HOST_TEST
 		sync_strip(r, BAND);
 #endif
@@ -1259,28 +1402,20 @@ static void portrait_strip_send(int x, int y, int width, int rows)
 	strip_send(x, y, width, rows);
 }
 
-/* Strips are sent from the bottom of the panel upwards, whatever the view:
- * that is the direction this panel is refreshed in (the OS sets address
- * mode 0xc0 on it, rows counted from the far end), and a frame written the
- * way it is shown can be kept clear of the refresh (classpad_sync.h). The
- * upside-down picture gets there by mirroring, so its strips are built in
- * order; every other one is built last strip first. */
-static inline int strip_order(int index, int count, int in_order)
-{
-	return in_order ? index : count - 1 - index;
-}
-
 /* Portrait 1:1: the framebuffer is already in panel order; 16 rows a strip. */
 #if !defined(CGBA_HOST_TEST)
 extern void cgba_copy_32b_sh4(void *dst, const void *src, uint32_t nbytes);
 #endif
 static void blit_portrait_1x(const uint16_t *pixels, cp_rect img)
 {
-	int flipped = cp_view_is_flipped(cp_view, cp_rotation);
+	/* portrait_strip_send() mirrors y when flipped, so strips follow the
+	 * panel's refresh direction when (flipped == bottom_up). */
+	int in_order = cp_view_is_flipped(cp_view, cp_rotation)
+		== lcd_refresh_bottom_up();
 	int s, y;
 
 	for(s = 0; s < CP_GBA_H / 16; s++) {
-		y = strip_order(s, CP_GBA_H / 16, flipped) * 16;
+		y = strip_order(s, CP_GBA_H / 16, in_order) * 16;
 #if !defined(CGBA_HOST_TEST)
 		cgba_copy_32b_sh4(strip_buffer(), pixels + y * CP_GBA_W,
 			(uint32_t)(16 * CP_GBA_W * sizeof(uint16_t)));
@@ -1300,7 +1435,8 @@ static void blit_portrait_43(const uint16_t *pixels, cp_rect img)
 	void (*hs)(const uint16_t *, uint16_t *) = cgba_scale_row_240_320;
 	int groups = img.h / 4, group;
 	int strips = (groups + 2) / 3, s;
-	int flipped = cp_view_is_flipped(cp_view, cp_rotation);
+	int in_order = cp_view_is_flipped(cp_view, cp_rotation)
+		== lcd_refresh_bottom_up();
 
 	if(cp_filter == CGBA_SCALE_FILTER_CRISP)
 		hs = cgba_scale_row_240_320_crisp;
@@ -1309,7 +1445,7 @@ static void blit_portrait_43(const uint16_t *pixels, cp_rect img)
 
 	for(s = 0; s < strips; s++) {
 		uint16_t *strip = strip_buffer();
-		int first = strip_order(s, strips, flipped) * 3, n;
+		int first = strip_order(s, strips, in_order) * 3, n;
 
 		group = first;
 
@@ -1345,20 +1481,20 @@ static void blit_landscape(const uint16_t *pixels, cp_rect img, int doubled)
 	static uint16_t column[CP_GBA_H] __attribute__((aligned(4)));
 	cp_rect p = cp_user_to_panel_rect(cp_view, cp_rotation, img);
 	int keys_left = cp_rotation == CP_ROTATION_KEYS_LEFT;
+	int in_order = !lcd_refresh_bottom_up();
 	int width = p.w;                       /* panel row length */
 	int per_strip = doubled ? 6 : 10;      /* GBA columns per strip */
 	int rows_per_strip = doubled ? 12 : 15;
-	int i = 0, row = 0;
+	int strips, s, i = 0, row = 0;
 
 	if(cp_view == CP_VIEW_LANDSCAPE_1X) {
 		/* 1:1: a GBA column is a panel row as it is; 16 of them a strip. */
-		int s;
-
-		for(s = CP_GBA_W / 16 - 1; s >= 0; s--) {
+		strips = CP_GBA_W / 16;
+		for(s = 0; s < strips; s++) {
 			uint16_t *line = strip_buffer();
 			int k;
 
-			i = s * 16;
+			i = strip_order(s, strips, in_order) * 16;
 
 			for(k = 0; k < 16; k++)
 				cp_gather_column(pixels, keys_left ? CP_GBA_W - 1 - (i + k)
@@ -1368,10 +1504,12 @@ static void blit_landscape(const uint16_t *pixels, cp_rect img, int doubled)
 		return;
 	}
 
-	for(row = CP_GBA_W / per_strip - 1; row >= 0; row--) {
+	strips = CP_GBA_W / per_strip;
+	for(s = 0; s < strips; s++) {
 		uint16_t *line = strip_buffer();
 		int end;
 
+		row = strip_order(s, strips, in_order);
 		i = row * per_strip;
 		end = i + per_strip;
 
@@ -1423,16 +1561,27 @@ static uint32_t sync_strips[SYNC_KINDS];  /* strips it was sent in */
 static int sync_kind;
 
 /* The row the panel is showing: DCS get_scanline, two bytes after a dummy
- * read, as for the ID register above. */
+ * read, as for the ID register above. On R61523 (datasheet p.131), the
+ * scanline counter runs on the 1 MHz internal oscillator and requires
+ * >= 3 us after writing 0x45 before the dummy read, and >= 3 us after the
+ * second parameter before issuing 0x45 again. */
 static uint32_t lcd_scanline(void)
 {
 	uint32_t hi, lo;
 
 	wait_lcd_dma();
 	lcd_select(0x45);
-	hi = *LCD_DATA;
-	hi = *LCD_DATA & 0xffu;
-	lo = *LCD_DATA & 0xffu;
+	if(!lcd_is_r61523()) {
+		hi = *LCD_DATA;
+		hi = *LCD_DATA & 0xffu;
+		lo = *LCD_DATA & 0xffu;
+	} else {
+		lcd_delay_ns(3500);
+		(void)r61523_read_word();
+		hi = r61523_read_word() & 0xffu;
+		lo = r61523_read_word() & 0xffu;
+		lcd_delay_ns(3500);
+	}
 	return ((hi << 8) | lo) & 0x3ffu;
 }
 
@@ -1463,9 +1612,8 @@ static void scan_probe(void)
 	memset(sync_strips, 0, sizeof(sync_strips));
 }
 
-/* Panel rows are shown last row first, so positions are counted from the
- * bottom of the panel: row r is shown as number CP_PANEL_H - 1 - r, plus
- * the offset. */
+/* Positions are counted in the panel's refresh order (from 527 downwards
+ * when bottom-up, from 0 upwards when top-down), plus the offset. */
 static uint32_t scan_position(void)
 {
 	uint32_t shift = scan_total * cp_sync_offset / 16u;
@@ -1486,17 +1634,22 @@ static uint32_t scan_position(void)
 
 static void sync_strip(int r0, int rows)
 {
-	if(sync_tracking)
-		cp_sync_track_strip(&sync_track, scan_position(),
-			(uint32_t)(CP_PANEL_H - r0 - rows));
+	if(sync_tracking) {
+		uint32_t row = lcd_refresh_bottom_up()
+			? (uint32_t)(CP_PANEL_H - r0 - rows) : (uint32_t)r0;
+
+		cp_sync_track_strip(&sync_track, scan_position(), row);
+	}
 }
 
 /* Before a frame whose picture is the panel rows [top, top + rows), sent
- * last strip first. */
+ * in the panel's refresh order. */
 static void sync_begin(int top, int rows, int kind)
 {
 	uint32_t lo, hi, strip;
-	uint32_t first = (uint32_t)(CP_PANEL_H - top - rows);
+	int bottom_up = lcd_refresh_bottom_up();
+	uint32_t first = bottom_up
+		? (uint32_t)(CP_PANEL_H - top - rows) : (uint32_t)top;
 
 	if(scan_state == SCAN_UNKNOWN)
 		scan_probe();
@@ -1504,8 +1657,11 @@ static void sync_begin(int top, int rows, int kind)
 		return;
 
 	sync_kind = kind;
-	/* The tallest strip, from how many the last frame of this kind took. */
-	strip = sync_strips[kind]
+	/* When the refresh is bottom-up, each strip's window is still filled
+	 * top-to-bottom (against the refresh), so the window keeps one strip's
+	 * height and time clear (classpad_sync.h). Top-down fills with the
+	 * refresh and needs no intra-strip penalty. */
+	strip = bottom_up && sync_strips[kind]
 		? ((uint32_t)rows + sync_strips[kind] - 1u) / sync_strips[kind] : 0;
 	if((cp_sync || sync_calibrating) && cp_sync_window_part(scan_total,
 			(uint32_t)rows, sync_lines[kind], 0,

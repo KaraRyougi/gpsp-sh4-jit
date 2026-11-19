@@ -282,4 +282,92 @@ static inline uint32_t cp_sync_track_lines(const cp_sync_track *t)
 	return span * t->strips / (t->strips - 1u);
 }
 
+/* ---- R61523 refresh direction and register validation --------------------- */
+
+/* Whether an R61523 refreshes logical panel rows 0..527 bottom-to-top
+ * (527 -> 0), from MIPI DCS get_address_mode (0x0b):
+ *   B7 (bit 7): page address order in frame memory
+ *   B4 (bit 4): line refresh order (inverts memory read and gate scan together)
+ * B0 (R61523 vertical flip) only inverts gate scan and does not change the
+ * memory read order. So logical rows are scanned bottom-to-top iff (B7 ^ B4).
+ *
+ * When 0x0b reads disagree (valid == 0), default to top-down (0), matching
+ * R61523's 360x640 memory with SCN = 0 (rows 0..527 in physical 0..527). */
+static inline int cp_r61523_refresh_bottom_up(uint8_t mode, int valid)
+{
+	if(!valid)
+		return 0;
+	return (int)(((mode >> 7) ^ (mode >> 4)) & 1u);
+}
+
+/* Valid R61523 B0h (MCAP) values are 0x00, 0x02, 0x03 and 0x04; 0x01 and
+ * 0x05..0x07 are setting inhibited (R61523 Rev.1.01, p.135). If a read does
+ * not return a legal value, restore the hardware default 0x03 (Protect On). */
+static inline uint8_t cp_r61523_mcap_restore_value(uint8_t raw)
+{
+	if(raw == 0x00u || raw == 0x02u || raw == 0x03u || raw == 0x04u)
+		return raw;
+	return 0x03u;
+}
+
+/* R61523 B9h param 3 (PWMDIV[7:0]): only these 10 divider codes are legal;
+ * all others are setting inhibited (R61523 Rev.1.01, Table 54, p.154). */
+static inline int cp_r61523_pwmdiv_valid(uint8_t div)
+{
+	switch(div) {
+	case 0x00: case 0x01: case 0x02: case 0x03: case 0x07:
+	case 0x0f: case 0x1f: case 0x3f: case 0x7f: case 0xff:
+		return 1;
+	default:
+		return 0;
+	}
+}
+
+/* Sanity-check a 4-byte R61523 B9h (Backlight Control 2) snapshot read from
+ * a lit panel before modifying it (R61523 Rev.1.01, pp.152-154):
+ *   b9[0]: 0000_000_PWMON
+ *   b9[1]: BDCV[7:0] (nonzero while lit)
+ *   b9[2]: PWMDIV[7:0] (must be one of the 10 legal values)
+ *   b9[3]: 000_PWMWM_LEDPWME_LEDPWMPOL_0_DIMON (LEDPWME must be 1 while the
+ *          controller drives the backlight; if PWMWM = 1 then PWMON must be 1,
+ *          as PWMWM = 1, PWMON = 0 forces 0% or is inhibited with BLCON = 1). */
+static inline int cp_r61523_b9_valid(const uint8_t b9[4])
+{
+	if((b9[0] & 0xfeu) != 0)
+		return 0;
+	if(b9[1] == 0)
+		return 0;
+	if(!cp_r61523_pwmdiv_valid(b9[2]))
+		return 0;
+	if((b9[3] & 0xe2u) != 0 || (b9[3] & 0x08u) == 0)
+		return 0;
+	if((b9[3] & 0x10u) != 0 && (b9[0] & 0x01u) == 0)
+		return 0;
+	return 1;
+}
+
+/* Nominal backlight PWM frequency in Hz for rate 1..9 (0 = System). Both
+ * panel families share these 9 rates (R61523 Table 54 and 16 MHz / N on
+ * 0x16/0x52). */
+static inline uint32_t cp_backlight_pwm_hz(uint32_t pwm)
+{
+	static const uint16_t hz[10] = {
+		0, 430, 860, 1720, 3430, 6860, 13700, 18300, 27400, 33300
+	};
+
+	return pwm < 10u ? hz[pwm] : 0u;
+}
+
+/* Lowest Backlight stop (0..16) that keeps the LED boost driver lit at a
+ * given PWM rate (0..9). At high PWM rates the period is short (30 us at
+ * 33.3 kHz), so low duties fall below the driver's ~8-9 us minimum turn-on
+ * pulse and black out the screen:
+ *   pwm 9 (33300 Hz) -> >= 5, pwm 8 (27400 Hz) -> >= 4,
+ *   pwm 7 (18300 Hz) -> >= 3, pwm 6 (13700 Hz) -> >= 2,
+ *   pwm 5 ( 6860 Hz) -> >= 1, pwm 0..4         -> >= 0 (System allowed). */
+static inline uint32_t cp_backlight_min_level(uint32_t pwm)
+{
+	return pwm >= 5u && pwm <= 9u ? pwm - 4u : 0u;
+}
+
 #endif /* CGBA_CLASSPAD_SYNC_H */
