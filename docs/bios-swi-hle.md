@@ -37,6 +37,16 @@ and return through a common tail (`reg[REG_PC] = lr`, CPSR/mode from
 SPSR_svc). Division (SWI 6/7) is additionally HLE'd inline by the
 translator itself (`is_div_swi`), never reaching this layer.
 
+Div and DivArm are the one exception to the open BIOS dispatcher restoring
+r3: like the official BIOS they return r0 = quotient, r1 = remainder and
+r3 = ABS(quotient). The shipped `open_gba_bios.bin` routes table entries 6
+and 7 through wrappers at 0x3E00/0x3E0C that store r3 over the dispatcher's
+saved slot, and `cgba_sh4_hle_div` sets r3 the same way. `cgba_sh4_hle_div_cycles`
+charges the wrapper's BL, STR and B. The Legend of Zelda: The Minish Cap
+depends on this: its movement-direction helper reads r3 after SWI 6, and
+without it the file-select objects never reach their targets, so the menu
+ignores all input.
+
 ## Why the old memory-SWI HLEs were demoted
 
 The original CpuSet/CpuFastSet/LZ77/RL HLEs (`CGBA_SH4_SWI_MEM_HLE`, now

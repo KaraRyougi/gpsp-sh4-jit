@@ -1051,7 +1051,7 @@ static inline int sh4g_thumb_ldst_native(u8 **tp, u32 opcode, u32 pc,
     int fm = is_load ? (int)kind
       : (kind == SH4_THUMB_LDK_W ? CGBA_FM_STORE_W
          : kind == SH4_THUMB_LDK_UH ? CGBA_FM_STORE_UH : CGBA_FM_STORE_B);
-    sh4g_fastmem_site(tp, cgba_sh4_fastmem_routine[fm],
+    sh4g_fastmem_site(tp, fm,
                       (const void *)cgba_sh4_thumb_ldst, (u32)opcode, (u32)pc,
                       cycle_count, rd, -1);
   }

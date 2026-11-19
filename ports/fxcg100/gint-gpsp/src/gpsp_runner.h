@@ -36,6 +36,19 @@ typedef enum cgba_gpsp_rom_id {
 	CGBA_GPSP_ROM_BUILTIN_COUNT
 } cgba_gpsp_rom_id;
 
+/* Where the time of the last savestate save went, in 128 Hz ticks
+ * (fxcg100_ticks()): the snapshot, its compression, the file write, and the
+ * ROM's flash addresses asked for again after storage changed. `bytes` is
+ * what was written to the file. Recorded on every save; shown by builds made
+ * with -DCGBA_SAVE_TIMING=ON. */
+typedef struct cgba_save_timing {
+	uint32_t snap, pack, write, remap;
+	uint32_t bytes;
+} cgba_save_timing;
+extern cgba_save_timing cgba_last_save_timing;
+/* "pack 0.03 s, write 2.10 s (192K), remap 1.62 s" */
+void cgba_save_timing_text(char *dst, size_t size);
+
 const char *cgba_gpsp_rom_name(unsigned rom_id);
 unsigned cgba_gpsp_rom_count(void);
 unsigned cgba_gpsp_refresh_roms(void);
@@ -51,6 +64,10 @@ void cgba_gpsp_debug_menu(fxcg100_debug_info *debug, unsigned frame,
 	uint32_t last_hash, unsigned emu_fps, unsigned draw_fps,
 	const uint16_t *framebuffer, uint32_t host_sp);
 void cgba_gpsp_shutdown(void);
+/* Translation-cache resets since the game was started (JIT builds only). */
+void cgba_gpsp_jit_flush_mark(void);
+void cgba_gpsp_jit_flushes(uint32_t *rom, uint32_t *ram);
+uint32_t cgba_gpsp_jit_ram_full(void);
 
 /* GBA in-game backup save (SRAM/Flash/EEPROM) persistence to \\fls0\<ROM>.SAV.
  * The save is loaded when a ROM boots and dirty data is persisted by shutdown

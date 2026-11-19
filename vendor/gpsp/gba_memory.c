@@ -402,6 +402,15 @@ u8 gamepak_backup[1024 * 128] CGBA_HIGH_BSS;
 
 u32 dma_bus_val;
 dma_transfer_type dma[4];
+u8 cgba_hblank_dma_mask;
+
+static inline void cgba_update_hblank_dma_mask(u32 dma_number, u32 start_type)
+{
+  if (start_type == DMA_START_HBLANK)
+    cgba_hblank_dma_mask |= (u8)(1u << dma_number);
+  else
+    cgba_hblank_dma_mask &= (u8)~(1u << dma_number);
+}
 
 // ROM memory is allocated in blocks of 1MB to better map the native block
 // mapping system. We will try to allocate 32 of them to allow loading
@@ -435,10 +444,18 @@ static u8 cgba_gamepak_cache[CGBA_GAMEPAK_CACHE_BLOCKS][CGBA_GAMEPAK_BLOCK_BYTES
 
 /* Embedded diagnostic ROMs need stable storage while they are directly mapped.
  * Keep that at-most-256-KiB image separate from the fallback/savestate arena;
- * the latter is invalidated and overwritten by every state operation. This
- * buffer also serves as cold loader scratch for streaming backup signatures. */
+ * the latter is invalidated and overwritten by every state operation.
+ * A build that never loads a ROM from memory (the gint add-in: its one
+ * built-in entry is the LCD test, which loads nothing) defines
+ * CGBA_NO_MEMORY_ROM and does without the buffer. */
+#ifndef CGBA_NO_MEMORY_ROM
 static u8 cgba_static_mini_rom[CGBA_FXCG100_STATIC_ROM_MAX] CGBA_HIGH_BSS;
 #define CGBA_STATIC_MINI_ROM_PTR cgba_static_mini_rom
+#endif
+
+/* Cold loader scratch for streaming backup signatures: the start of the
+ * fallback cache, borrowed the way a savestate borrows it. */
+#define CGBA_SIGNATURE_SCRATCH_BYTES (256u * 1024u)
 #endif
 
 // LRU queue with the loaded blocks and what they map to
@@ -850,6 +867,7 @@ static cpu_alert_type trigger_dma(u32 dma_number, u32 value)
       dma[dma_number].source_direction = ((value >>  7) & 3);
       dma[dma_number].repeat_type = ((value >> 9) & 0x01);
       dma[dma_number].start_type = start_type;
+      cgba_update_hblank_dma_mask(dma_number, start_type);
       dma[dma_number].irq = ((value >> 14) & 0x1);
 
       /* If it is sound FIFO DMA make sure the settings are a certain way */
@@ -905,6 +923,7 @@ static cpu_alert_type trigger_dma(u32 dma_number, u32 value)
   else
   {
     dma[dma_number].start_type = DMA_INACTIVE;
+    cgba_update_hblank_dma_mask(dma_number, DMA_INACTIVE);
     dma[dma_number].direct_sound_channel = DMA_NO_DIRECT_SOUND;
     write_dmareg(REG_DMA0CNT_H, dma_number, value);
   }
@@ -923,6 +942,10 @@ cpu_alert_type function_cc write_io_register16(u32 address, u32 value)
   uint32_t ioreg = ((address & 0xffffff) >> 1);
   value &= 0xffff;
   cgba_timer_trace_io_write(ioreg, value);
+#ifdef CGBA_VRAM_DIRTY_ACTIVE
+  if (ioreg <= REG_BLDY && ioreg != REG_DISPSTAT && ioreg != REG_VCOUNT)
+    cgba_video_io_dirty = 1;
+#endif
   switch(ioreg)
   {
     case REG_DISPCNT:
@@ -1335,15 +1358,36 @@ void function_cc write_backup(u32 address, u32 value)
 
 #define write_backup32()                                                      \
 
+#ifdef CGBA_VRAM_DIRTY_ACTIVE
+volatile u32 cgba_vram_dirty = CGBA_VRAM_DIRTY_ALL;
+volatile u32 cgba_video_io_dirty = 1;
+#define mark_vram_dirty_off(off) \
+  (cgba_vram_dirty |= ((off) < 0x10000u) ? CGBA_VRAM_DIRTY_BG : CGBA_VRAM_DIRTY_OBJ)
+#define mark_vram_dirty_span(off, bytes)                                      \
+  do {                                                                        \
+    u32 _vo = (off), _vb = (bytes);                                           \
+    if (_vo < 0x10000u) cgba_vram_dirty |= CGBA_VRAM_DIRTY_BG;                \
+    if (_vo + _vb > 0x10000u) cgba_vram_dirty |= CGBA_VRAM_DIRTY_OBJ;         \
+  } while (0)
+#define mark_vram_dirty_all() (cgba_vram_dirty = CGBA_VRAM_DIRTY_ALL)
+#else
+#define mark_vram_dirty_off(off) ((void)(off))
+#define mark_vram_dirty_span(off, bytes) do { (void)(off); (void)(bytes); } while (0)
+#define mark_vram_dirty_all() ((void)0)
+#endif
+
 #define write_vram8()                                                         \
   address &= ~0x01;                                                           \
-  address16(vram, address) = eswap16((value << 8) | value)                    \
+  address16(vram, address) = eswap16((value << 8) | value);                   \
+  mark_vram_dirty_off(address)                                                \
 
 #define write_vram16()                                                        \
-  address16(vram, address) = eswap16(value)                                   \
+  address16(vram, address) = eswap16(value);                                  \
+  mark_vram_dirty_off(address)                                                \
 
 #define write_vram32()                                                        \
-  address32(vram, address) = eswap32(value)                                   \
+  address32(vram, address) = eswap32(value);                                  \
+  mark_vram_dirty_off(address)                                                \
 
 // RTC code derived from VBA's (due to lack of any real publically available
 // documentation...)
@@ -2020,6 +2064,7 @@ const dma_region_type dma_region_map[17] =
   u32 wraddr = type##_ptr & 0x1FFFF;                                          \
   if (wraddr >= 0x18000) wraddr -= 0x8000;                                    \
   address##tfsize(vram, wraddr) = eswap##tfsize(read_value);                  \
+  mark_vram_dirty_off(wraddr);                                                \
 }
 
 #define dma_write_io(type, tfsize)                                            \
@@ -2282,9 +2327,93 @@ dma_tf_loop_builder(32);
 
 static const int dma_stride[4] = {1, -1, 0, 1};
 
+#if defined(CGBA_BULK_DMA) && CGBA_BULK_DMA
+/* Resolve only one physically contiguous span. Mirrors, ROM-page boundaries,
+ * IO and backup accesses retain the element-wise path below. */
+static u8 *dma_bulk_span(u32 addr, u32 bytes, bool dest, u8 **tags)
+{
+  u32 off;
+  *tags = NULL;
+  switch (addr >> 24) {
+  case 2:
+    off = addr & 0x3FFFF;
+    if (bytes > 0x40000 - off) return NULL;
+    if (dest) *tags = ewram + 0x40000 + off;
+    return ewram + off;
+  case 3:
+    off = addr & 0x7FFF;
+    if (bytes > 0x8000 - off) return NULL;
+    if (dest) *tags = iwram + off;
+    return iwram + 0x8000 + off;
+  case 6:
+    off = addr & 0x1FFFF;
+    if (bytes > (off < 0x18000 ? 0x18000 : 0x20000) - off) return NULL;
+    return vram + (off < 0x18000 ? off : off - 0x8000);
+  case 7:
+    off = addr & 0x3FF;
+    return bytes <= 0x400 - off ? (u8 *)oam_ram + off : NULL;
+  case 8: case 9: case 10: case 11: case 12:
+    off = addr & 0x01FFFFFF;
+    if (dest || off >= gamepak_size || bytes > gamepak_size - off ||
+        bytes > 0x1000 - (addr & 0xFFF)) return NULL;
+    {
+      u8 *page = cgba_gamepak_resolve_4k(addr);
+      return page ? page + (addr & 0xFFF) : NULL;
+    }
+  default:
+    return NULL;
+  }
+}
+
+static bool dma_bulk_copy(dma_transfer_type *dmach, u32 src, u32 dst,
+                         u32 length, cpu_alert_type *alert)
+{
+  u32 width = dmach->length_type == DMA_16BIT ? 2 : 4;
+  u32 bytes = length * width;
+  u8 *st, *dt, *s, *d;
+  if (length < 8 || dmach->source_direction != 0 ||
+      (dmach->dest_direction != 0 && dmach->dest_direction != 3))
+    return false;
+  s = dma_bulk_span(src, bytes, false, &st);
+  d = dma_bulk_span(dst, bytes, true, &dt);
+  if (!s || !d) return false;
+  /* DMA copies in address order. memmove is not equivalent for overlapping
+   * guest aliases (some software deliberately propagates a fill pattern). */
+  if ((uintptr_t)s < (uintptr_t)d + bytes &&
+      (uintptr_t)d < (uintptr_t)s + bytes)
+    return false;
+
+  dma_bus_val = width == 2 ? readaddress16(s, bytes - 2) :
+                            readaddress32(s, bytes - 4);
+  memcpy(d, s, bytes);  /* Both spans have the same guest byte order. */
+  *alert = CPU_ALERT_NONE;
+  if (dt) {
+    for (u32 off = 0; off < bytes; off += 2)
+      if (address16(dt, off)) {
+        *alert |= CPU_ALERT_SMC;
+        break;
+      }
+  }
+  if ((dst >> 24) == 6) {
+    u32 voff = dst & 0x1FFFFu;
+    if (voff >= 0x18000u) voff -= 0x8000u;
+    mark_vram_dirty_span(voff, bytes);
+  }
+  if ((dst >> 24) == 7) reg[OAM_UPDATED] = 1;
+  dmach->source_address = src + bytes;
+  if (dmach->dest_direction != 3) dmach->dest_address = dst + bytes;
+  return true;
+}
+#endif
+
 static cpu_alert_type dma_transfer_copy(
   dma_transfer_type *dmach, u32 src_ptr, u32 dest_ptr, u32 length)
 {
+#if defined(CGBA_BULK_DMA) && CGBA_BULK_DMA
+  cpu_alert_type alert;
+  if (dma_bulk_copy(dmach, src_ptr, dest_ptr, length, &alert))
+    return alert;
+#endif
   if (dmach->source_direction < 3)
   {
     int dst_stride = dma_stride[dmach->dest_direction];
@@ -2350,6 +2479,7 @@ cpu_alert_type dma_transfer(unsigned dma_chan, int *usedcycles)
     u32 cntrl = read_dmareg(REG_DMA0CNT_H, dma_chan);
     write_dmareg(REG_DMA0CNT_H, dma_chan, cntrl & (~0x8000));
     dmach->start_type = DMA_INACTIVE;
+    cgba_update_hblank_dma_mask(dma_chan, DMA_INACTIVE);
   }
 
   // Trigger an IRQ if configured to do so.
@@ -2711,6 +2841,7 @@ void init_memory(void)
     dma[i].repeat_type = DMA_NO_REPEAT;
     dma[i].direct_sound_channel = DMA_NO_DIRECT_SOUND;
   }
+  cgba_hblank_dma_mask = 0;
 
   // Fill memory map regions, areas marked as NULL must be checked directly
   map_region(read, 0x0000000, 0x1000000, 1, bios_rom);
@@ -2731,6 +2862,7 @@ void init_memory(void)
   memset(iwram, 0, sizeof(iwram));
   memset(ewram, 0, sizeof(ewram));
   memset(vram, 0, sizeof(vram));
+  mark_vram_dirty_all();
 
   write_ioreg(REG_DISPCNT, 0x80);
   write_ioreg(REG_P1, 0x3FF);
@@ -2905,6 +3037,7 @@ bool memory_read_savestate(const u8 *src)
       bson_read_int32(dmastr, "dsc", &dma[i].direct_sound_channel) &&
       bson_read_int32(dmastr, "irq", &dma[i].irq)))
       return false;
+    cgba_update_hblank_dma_mask((u32)i, dma[i].start_type);
   }
 
   rtc_data = rtc_data_array[0] | (((u64)rtc_data_array[1]) << 32);
@@ -3131,10 +3264,14 @@ u32 load_gamepak_from_memory(const u8 *rom, u32 rom_size,
 #if defined(CGBA_FXCG100) || defined(CGBA_FXCG50)
   /* Both calculators run with the OS heap stubbed out (malloc returns NULL),
    * so materialize into the reserved GamePak-cache tail instead of the heap. */
+#ifdef CGBA_NO_MEMORY_ROM
+  return (u32)-1;
+#else
   if (raw_size > CGBA_FXCG100_STATIC_ROM_MAX)
     return (u32)-1;
   gamepak_mini_rom = CGBA_STATIC_MINI_ROM_PTR;
   gamepak_mini_rom_static = true;
+#endif
 #else
   gamepak_mini_rom = (u8*)malloc(raw_size);
 #endif
@@ -3393,14 +3530,19 @@ static u32 rom_scan_signatures_in_memory(void)
 
 #if defined(CGBA_FXCG100) || defined(CGBA_FXCG50)
   /* The hybrid loader no longer preloads a multi-megabyte page cache. Stream
-   * the complete logical ROM through the separate mini-ROM buffer instead.
-   * Twelve bytes of overlap cover the longest signature while keeping every
-   * chunk's logical origin 4-byte aligned. This is a cold load-time path. */
+   * the complete logical ROM through the start of the fallback cache instead;
+   * every mapping the cache backs is dropped before and after, as for a
+   * savestate. Twelve bytes of overlap cover the longest signature while
+   * keeping every chunk's logical origin 4-byte aligned. This is a cold
+   * load-time path. */
   if (gamepak_file_large && cgba_gamepak_fragment_blocks)
   {
-    const u32 capacity = (u32)sizeof(cgba_static_mini_rom);
+    u8 * const scratch = cgba_gamepak_cache[0];
+    const u32 capacity = CGBA_SIGNATURE_SCRATCH_BYTES;
     const u32 overlap = 12u;
     u32 offset = 0;
+
+    cgba_gamepak_cache_invalidate();
 
     while (offset < gamepak_size)
     {
@@ -3412,17 +3554,15 @@ static u32 rom_scan_signatures_in_memory(void)
       if (filestream_seek(gamepak_file_large, offset, SEEK_SET) < 0)
         got = 0;
       else
-        got = filestream_read(gamepak_file_large,
-                              cgba_static_mini_rom, request);
+        got = filestream_read(gamepak_file_large, scratch, request);
       if (got < 0)
         got = 0;
       if ((u64)got > request)
         got = request;
       if ((u32)got < request)
-        memset(cgba_static_mini_rom + (u32)got, 0xFF,
-               request - (u32)got);
+        memset(scratch + (u32)got, 0xFF, request - (u32)got);
 
-      found |= rom_scan_signature_chunk(cgba_static_mini_rom, request);
+      found |= rom_scan_signature_chunk(scratch, request);
       if ((found & (ROM_SIG_EEPROM | ROM_SIG_SRAM |
                     ROM_SIG_FLASH1M | ROM_SIG_FLASH5)) ==
           (ROM_SIG_EEPROM | ROM_SIG_SRAM |
@@ -3431,6 +3571,7 @@ static u32 rom_scan_signatures_in_memory(void)
         break;
       offset += capacity - overlap;
     }
+    cgba_gamepak_cache_invalidate();
     return found;
   }
 #endif

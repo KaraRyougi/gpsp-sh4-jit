@@ -1,0 +1,33 @@
+--- a/src/cachesim.h
++++ b/src/cachesim.h
+@@ -46,0 +47,2 @@
++void cacheSimDebugChar(char c);
++
+--- a/src/cachesim.c
++++ b/src/cachesim.c
+@@ -192,0 +193,14 @@
++
++/* Benchmark-only host instrumentation: no emulated state or cycle changes. */
++void cacheSimDebugChar(char c)
++{
++  static char line[256];
++  static unsigned n;
++  if (!getenv("HLE_CACHESIM_WINDOW")) return;
++  if (c == '\n') {
++    line[n] = 0;
++    if (strstr(line, "loaded OK; running ")) cs_report("window-start");
++    if (strstr(line, "@@CGBA_PROFILE_STOP === done ===")) cs_report("window-end");
++    n = 0;
++  } else if (n < sizeof(line) - 1) line[n++] = c;
++}
+--- a/src/memory/memory.c
++++ b/src/memory/memory.c
+@@ -978 +978 @@
+-  if (address == 0xb7000000) { putchar((int)(value & 0xff)); fflush(stdout); profOnDebugChar((char)(value & 0xff)); return; }
++  if (address == 0xb7000000) { putchar((int)(value & 0xff)); fflush(stdout); profOnDebugChar((char)(value & 0xff)); cacheSimDebugChar((char)(value & 0xff)); return; }
+--- a/src/profile.c
++++ b/src/profile.c
+@@ -163 +163,2 @@
+-  if (!prof_active && (prof_endswith("running frames") ||
++  if (!prof_active && (prof_endswith("loaded OK; running ") ||
++                       prof_endswith("running frames") ||

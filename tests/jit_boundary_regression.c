@@ -5,6 +5,11 @@
  * Section GC keeps unrelated emulator entry points out of this host binary.
  */
 
+#define CGBA_SILENT_TIMERS 1
+#define CGBA_BULK_DMA 1
+#define CGBA_VIDEO_TILE_ROW_CACHE 1
+#define CGBA_VIDEO_BACKDROP_SHADOW_PALETTE 1
+#define CGBA_VIDEO_BLEND_PALETTE_CACHE 1
 #define HAVE_DYNAREC 1
 #define CGBA_DYNAREC 1
 #define ROM_TRANSLATION_CACHE_SIZE (64 * 1024)
@@ -122,6 +127,7 @@ static void reset_fixture(void)
   cgba_idle_wait = 0;
   cgba_timer_active_mask = 0;
   cgba_timer_cap_mask = 0;
+  cgba_hblank_dma_mask = 0;
   reg[CPU_HALT_STATE] = CPU_ACTIVE;
 }
 
@@ -137,6 +143,7 @@ static void configure_iwram_smc_dma(u32 start_type)
   dma[0].dest_direction = DMA_INCREMENT;
   dma[0].length_type = DMA_16BIT;
   dma[0].start_type = start_type;
+  cgba_update_hblank_dma_mask(0, start_type);
   dma[0].irq = DMA_NO_IRQ;
 }
 
@@ -151,6 +158,7 @@ static void configure_waitcnt_dma(u32 start_type)
   dma[0].dest_direction = DMA_INCREMENT;
   dma[0].length_type = DMA_16BIT;
   dma[0].start_type = start_type;
+  cgba_update_hblank_dma_mask(0, start_type);
   dma[0].irq = DMA_NO_IRQ;
 }
 
@@ -455,8 +463,134 @@ static void test_gamepak_eviction_preserves_current_pc(void)
         "all-sticky eviction left victim page mapped");
 }
 
+
+/* Compare batched silent timers against the original overflow-by-overflow
+ * semantics, including cascades, IRQ flags and guest-visible exact reloads. */
+static void test_silent_timer_batch(void)
+{
+  timer_type expected[4];
+  u32 seed = 0x193a7d11;
+  for (unsigned n = 0; n < 4000; n++) {
+    irq_type want = IRQ_NONE, got = IRQ_NONE;
+    unsigned cycles = n % 2001;
+    for (unsigned i = 0; i < 4; i++) {
+      seed = seed * 1664525u + 1013904223u;
+      timer[i].status = i && (seed & 1) ? TIMER_CASCADE : TIMER_PRESCALE;
+      if ((seed & 15) == 0) timer[i].status = TIMER_INACTIVE;
+      const unsigned shifts[] = {0, 6, 8, 10};
+      timer[i].prescale = shifts[(seed >> 5) & 3];
+      timer[i].reload = 1 + ((seed >> 8) % 65536);
+      if (!(n % 5)) timer[i].reload = 1 + i;
+      timer[i].count = (s32)((seed >> 3) % 1024);
+      timer[i].irq = (seed >> 7) & 1;
+      timer[i].direct_sound_channels = TIMER_DS_CHANNEL_BOTH;
+      write_ioreg(REG_TMXD(i), 0x1234);
+    }
+    memcpy(expected, timer, sizeof(expected));
+    for (unsigned i = 0; i < 4; i++) {
+      timer_type *t = &expected[i];
+      if (t->status == TIMER_INACTIVE) continue;
+      unsigned shift = t->status == TIMER_CASCADE ? 0 : t->prescale;
+      if (t->status != TIMER_CASCADE) t->count -= cycles;
+      while (t->count <= 0) {
+        if (t->irq) want |= IRQ_TIMER0 << i;
+        if (i < 3 && expected[i+1].status == TIMER_CASCADE) expected[i+1].count--;
+        t->count += t->reload << shift;
+      }
+    }
+    CHECK(update_timers(&got, cycles) == 0, "silent timer charged DMA");
+    CHECK(got == want && !memcmp(expected, timer, sizeof(timer)), "timer batch case %u", n);
+    for (unsigned i = 0; i < 4; i++) {
+      unsigned shift = timer[i].status == TIMER_CASCADE ? 0 : timer[i].prescale;
+      u16 counter = timer[i].status == TIMER_INACTIVE ? 0x1234 :
+        (u16)-(timer[i].count >> shift);
+      CHECK(read_ioreg(REG_TMXD(i)) == counter, "timer register case %u/%u", n, i);
+    }
+  }
+}
+
+static void test_bulk_dma_equivalence(void)
+{
+  static u8 snapshot[sizeof(ewram) + sizeof(iwram) + sizeof(vram) + sizeof(oam_ram)];
+  const u32 srcs[] = {0x02000100, 0x03000100, 0x06010100, 0x07000100,
+    0x0203FFF0, 0x03007FF0, 0x06017FF0, 0x0601FFF0, 0x070003F0,
+    0x08000100, 0x0A000100, 0x08000FF0};
+  const u32 dsts[] = {0x02000200, 0x03000200, 0x06000200, 0x07000200,
+    0x02000104, 0x02040104, 0x03008104, 0x06018104};
+  for (unsigned width = 2; width <= 4; width += 2)
+    for (unsigned si = 0; si < sizeof(srcs)/sizeof(srcs[0]); si++)
+      for (unsigned di = 0; di < sizeof(dsts)/sizeof(dsts[0]); di++)
+        for (unsigned mode = 0; mode < 4; mode++) {
+          cpu_alert_type alerts[2];
+          dma_transfer_type result[2];
+          u32 bus[2], oam[2];
+          for (unsigned pass = 0; pass < 2; pass++) {
+            reset_fixture();
+            gamepak_size = 0x10000;
+            memory_map_read[0x08000000 / 0x8000] = ewram;
+            memory_map_read[0x0A000000 / 0x8000] = ewram;
+            for (unsigned i = 0; i < sizeof(ewram); i++) ewram[i] = (u8)(i * 31 + 7);
+            for (unsigned i = 0; i < sizeof(iwram); i++) iwram[i] = (u8)(i * 19 + 3);
+            for (unsigned i = 0; i < sizeof(vram); i++) vram[i] = (u8)(i * 11 + 13);
+            for (unsigned i = 0; i < sizeof(oam_ram); i++) ((u8 *)oam_ram)[i] = (u8)i;
+            dma_bus_val = 0x12345678;
+            dma_transfer_type d = {0};
+            d.source_address = srcs[si]; d.dest_address = dsts[di];
+            d.source_direction = mode == 2 ? 2 : 0;
+            d.dest_direction = mode == 3 ? 1 : mode == 1 ? 3 : 0;
+            d.length_type = width == 2 ? DMA_16BIT : DMA_32BIT;
+            if (pass == 0)
+              alerts[pass] = dma_transfer_copy(&d, srcs[si], dsts[di], 16);
+            else if (width == 2)
+              alerts[pass] = dma_tf_loop16(srcs[si], dsts[di],
+                width * dma_stride[d.source_direction], width * dma_stride[d.dest_direction],
+                d.dest_direction < 3, 16, &d);
+            else
+              alerts[pass] = dma_tf_loop32(srcs[si], dsts[di],
+                width * dma_stride[d.source_direction], width * dma_stride[d.dest_direction],
+                d.dest_direction < 3, 16, &d);
+            result[pass] = d; bus[pass] = dma_bus_val; oam[pass] = reg[OAM_UPDATED];
+            size_t off = 0;
+#define DMA_COMPARE_REGION(region) do { \
+  if (!pass) memcpy(snapshot + off, region, sizeof(region)); \
+  else CHECK(!memcmp(snapshot + off, region, sizeof(region)), "DMA region " #region " %u/%u/%u/%u", width, si, di, mode); \
+  off += sizeof(region); \
+} while (0)
+            DMA_COMPARE_REGION(ewram); DMA_COMPARE_REGION(iwram);
+            DMA_COMPARE_REGION(vram); DMA_COMPARE_REGION(oam_ram);
+#undef DMA_COMPARE_REGION
+          }
+          CHECK(alerts[0] == alerts[1] && bus[0] == bus[1] && oam[0] == oam[1] &&
+            !memcmp(result, result+1, sizeof(result[0])), "DMA state %u/%u/%u/%u", width, si, di, mode);
+        }
+}
+
+static void test_palette_cache_notifications(void)
+{
+  reset_fixture();
+  palette_ram_dirty = 0;
+  write_memory8(0x05000001, 0x12);
+  CHECK(palette_ram_dirty == CGBA_PALETTE_DIRTY_ACTIVE, "palette byte cache notification");
+  palette_ram_dirty = 0;
+  write_memory16(0x05000022, 0x3210);
+  CHECK(palette_ram_dirty == CGBA_PALETTE_DIRTY_ACTIVE, "palette halfword cache notification");
+  palette_ram_dirty = 0;
+  write_memory32(0x05000024, 0x12345678);
+  CHECK(palette_ram_dirty == CGBA_PALETTE_DIRTY_ACTIVE, "palette word cache notification");
+  dma_transfer_type d = {0};
+  d.source_address = 0x02000000;
+  d.dest_address = 0x05000000;
+  d.length_type = DMA_32BIT;
+  palette_ram_dirty = 0;
+  dma_transfer_copy(&d, d.source_address, d.dest_address, 16);
+  CHECK(palette_ram_dirty == CGBA_PALETTE_DIRTY_ACTIVE, "palette DMA cache notification");
+}
+
 int main(void)
 {
+  test_palette_cache_notifications();
+  test_silent_timer_batch();
+  test_bulk_dma_equivalence();
   test_waitcnt_invalidation();
   test_waitcnt_savestate_restore();
   test_dma_smc_alert();

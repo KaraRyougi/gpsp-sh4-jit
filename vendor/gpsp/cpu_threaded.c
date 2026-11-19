@@ -107,6 +107,10 @@ u32 cgba_dynarec_thumb_hot_ptr[64] CGBA_HIGH_BSS;
 u32 cgba_dynarec_dual_hot_key[64] CGBA_HIGH_BSS;
 u32 cgba_dynarec_dual_hot_ptr[64] CGBA_HIGH_BSS;
 
+/* Always kept: the ClassPad settings page shows them. */
+u32 cgba_dynarec_rom_flush_count;
+u32 cgba_dynarec_ram_flush_count;
+u32 cgba_dynarec_ram_full_count;   /* of those, because the cache was full */
 #if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
 #define CGBA_SH4_PROF_BITS 11
 #define CGBA_SH4_PROF_SLOTS (1u << CGBA_SH4_PROF_BITS)
@@ -115,8 +119,6 @@ struct cgba_sh4_prof_row {
   u32 count;
 };
 
-u32 cgba_dynarec_rom_flush_count;
-u32 cgba_dynarec_ram_flush_count;
 u32 cgba_dynarec_arm_translate_count;
 u32 cgba_dynarec_thumb_translate_count;
 u32 cgba_dynarec_lookup_arm_count;
@@ -486,6 +488,13 @@ void translate_icache_sync() {
       return false;                                                           \
   }                                                                           \
 
+#ifndef arm_instruction_prefix
+#define arm_instruction_prefix() do {} while(0)
+#endif
+#ifndef arm_translate_override
+#define arm_translate_override() 0
+#endif
+
 #define translate_arm_instruction()                                           \
   arm_load_flag_status()                                                      \
   check_pc_region(pc);                                                        \
@@ -510,6 +519,12 @@ void translate_icache_sync() {
   }                                                                           \
   emit_trace_arm_instruction(pc);                                             \
                                                                               \
+  /* A backend may fully handle (or elide) an instruction here; the condition \
+   * guard above and the cycle accounting around this macro still apply. */   \
+  if(arm_translate_override())                                                \
+  {                                                                           \
+  }                                                                           \
+  else                                                                        \
   switch((opcode >> 20) & 0xFF)                                               \
   {                                                                           \
     case 0x00:                                                                \
@@ -3879,6 +3894,9 @@ bool translate_block_arm(u32 pc, bool ram_region)
 #else
     block_data[block_data_position].block_offset = translation_ptr;
 #endif
+    /* Backend hook at an instruction boundary, before this instruction's
+     * own fetch cycle joins the translate-time count. */
+    arm_instruction_prefix();
     arm_base_cycles();
 
     if (pc == cheat_master_hook)
@@ -3887,8 +3905,20 @@ bool translate_block_arm(u32 pc, bool ram_region)
     }
 
     update_pc_limits();
+#ifdef SH4_ARCH
+    if (block_data_position == 0 || block_data[block_data_position].update_cycles)
+      sh4_greg_forward_reset();
+    u8 *forward_start = translation_ptr;
+#endif
     translate_arm_instruction();
 #ifdef SH4_ARCH
+    /* Unconditional, non-S ALU with immediate or unshifted register operand.
+     * Exclude multiply/PSR encodings and all control-flow destinations. */
+    sh4_greg_forward_finish(forward_start, translation_ptr,
+      (opcode >> 28) == 14 && (opcode & 0x0C100000) == 0 &&
+      ((opcode & 0x02000000) || !(opcode & 0xFF0)) &&
+      ((opcode >> 12) & 15) != 15 &&
+      (((opcode >> 21) & 15) < 8 || ((opcode >> 21) & 15) >= 12));
     sh4g_litseg_maybe_flush(&translation_ptr);
 #endif
 #ifdef CGBA_SH4_EXACT_CYCLE_BOUNDARIES
@@ -3910,9 +3940,10 @@ bool translate_block_arm(u32 pc, bool ram_region)
 #ifdef SH4_ARCH
       sh4g_litseg_abort();
 #endif
-      if (ram_region)
+      if (ram_region) {
+        cgba_dynarec_ram_full_count++;
         flush_translation_cache_ram();
-      else
+      } else
         flush_translation_cache_rom();
       return false;
     }
@@ -4186,8 +4217,18 @@ bool translate_block_thumb(u32 pc, bool ram_region)
     }
 
     update_pc_limits();
+#ifdef SH4_ARCH
+    if (block_data_position == 0 || block_data[block_data_position].update_cycles)
+      sh4_greg_forward_reset();
+    u8 *forward_start = translation_ptr;
+#endif
     translate_thumb_instruction();
 #ifdef SH4_ARCH
+    /* Dead-flag MOV/ADD/SUB: no helper, branch, or partially executed store. */
+    sh4_greg_forward_finish(forward_start, translation_ptr,
+      !(flag_status & 15) &&
+      ((opcode & 0xF800) == 0x1800 || (opcode & 0xF800) == 0x2000 ||
+       (opcode & 0xF000) == 0x3000));
     sh4g_litseg_maybe_flush(&translation_ptr);
 #endif
 #ifdef CGBA_SH4_EXACT_CYCLE_BOUNDARIES
@@ -4210,9 +4251,10 @@ bool translate_block_thumb(u32 pc, bool ram_region)
 #ifdef SH4_ARCH
       sh4g_litseg_abort();
 #endif
-      if (ram_region)
+      if (ram_region) {
+        cgba_dynarec_ram_full_count++;
         flush_translation_cache_ram();
-      else
+      } else
         flush_translation_cache_rom();
       return false;
     }
@@ -4362,9 +4404,7 @@ void flush_translation_cache_ram(void)
 {
   /* Flushes RAM caches avoiding doing too much work (ie. wiping unused memory) */
   flush_ram_count++;
-#if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
   cgba_dynarec_ram_flush_count++;
-#endif
 #if defined(CGBA_GPSP_HEADLESS_TEST)
   CGBA_DIAG_LOG("@@CGBA_RAMFLUSH n=%lu pc=%08lx used=%lu iw=%04x-%04x",
     (unsigned long)cgba_dynarec_ram_flush_count, (unsigned long)reg[REG_PC],
@@ -4486,9 +4526,7 @@ void flush_translation_cache_rom(void)
   cgba_last_rom_flush_frame = frame_counter;
 #endif
   /* We flush the generated code except for everything below the watermark. */
-#if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
   cgba_dynarec_rom_flush_count++;
-#endif
 #if defined(CGBA_GPSP_HEADLESS_TEST)
   CGBA_DIAG_LOG("@@CGBA_ROMFLUSH n=%lu pc=%08lx used=%lu",
     (unsigned long)cgba_dynarec_rom_flush_count, (unsigned long)reg[REG_PC],

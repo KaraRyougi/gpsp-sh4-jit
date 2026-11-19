@@ -57,7 +57,18 @@ int fxcg100_storage_write_blob(const uint16_t *path, const void *src, unsigned s
 #define CGBA_BFILE_WRITE_ONLY 0x02
 #define CGBA_BFILE_READ_WRITE 0x03
 
-#ifdef CGBA_FXCG50
+#if defined(CGBA_CLASSPAD)
+/* fx-CP400: the OS file API behind Fugue-style adapters. */
+#include "classpad_bfile.h"
+#define CGBA_BFILE_OPEN   cp_bfile_open
+#define CGBA_BFILE_SIZE   cp_bfile_size
+#define CGBA_BFILE_CREATE cp_bfile_create
+#define CGBA_BFILE_REMOVE cp_bfile_remove
+#define CGBA_BFILE_READ   cp_bfile_read
+#define CGBA_BFILE_WRITE  cp_bfile_write
+#define CGBA_BFILE_CLOSE  cp_bfile_close
+#define CGBA_BFILE_SEEK   cp_bfile_seek
+#elif defined(CGBA_FXCG50)
 /* fx-CG50 uses gint's portable BFile entry points. Both models run all
  * calls inside the same OS-world transaction below. */
 #include <gint/bfile.h>
@@ -100,7 +111,23 @@ typedef struct fxcg100_config_file {
   uint32_t reserved_backup_update;
   uint32_t show_fps;
   uint32_t frame_limit;
-  uint32_t reserved[7];
+  /* fx-CP400 display options, carved out of the reserved words so the file
+   * size and version stay unchanged. Both are zero in files written by the
+   * fx-CG builds; the touch-key flag is stored inverted so that zero keeps
+   * the keys on. */
+  uint32_t rotation;
+  uint32_t touch_keys_hidden;
+  uint32_t lcd_cpu;
+  /* fx-CP400 interface: colour scheme, and animations (stored inverted so
+   * that zero keeps them on). */
+  uint32_t theme;
+  uint32_t animations_off;
+  /* fx-CP400: wait for the panel's refresh before each frame. */
+  uint32_t lcd_sync;
+  /* The last free word, shared: bits 0-3 the refresh position, bits 8-12
+   * the backlight level (0 leaves the system's), bits 16-19 the backlight
+   * PWM rate (0 leaves the system's). */
+  uint32_t lcd_extra;
 } fxcg100_config_file;
 
 static const uint16_t config_path[] = {
@@ -152,8 +179,12 @@ static int os_bfile_read(int fd, void *dst, int size, int offset)
 }
 static int bfile_read_exact_ok(int result, int size)
 {
+#ifdef CGBA_CLASSPAD
+  return result == size;
+#else
   /* Fugue returns bytes read; CASIOWIN returns bytes remaining after read. */
   return result == size || result == 0;
+#endif
 }
 static int os_bfile_write(int fd, const void *src, int size)
 {
@@ -182,7 +213,7 @@ static int os_bfile_close(int fd)
 
 static int config_options_valid(const fxcg100_config_file *config)
 {
-  return config->screen_scale < 4 &&
+  return config->screen_scale < 5 &&
     config->screen_filter < 4 &&
     config->frameskip_type < 3 &&
     config->frameskip_value < 100 &&
@@ -190,6 +221,15 @@ static int config_options_valid(const fxcg100_config_file *config)
     config->savestate_slot < 10 &&
     config->quick_save_slot < 10 &&
     config->show_fps < 2 &&
+    config->rotation < 2 &&
+    config->touch_keys_hidden < 2 &&
+    config->lcd_cpu < 2 &&
+    config->lcd_sync < 2 &&
+    (config->lcd_extra & ~0x000f1f0fu) == 0 &&
+    ((config->lcd_extra >> 8) & 31u) <= 16u &&
+    ((config->lcd_extra >> 16) & 15u) <= 9u &&
+    config->theme < 16 &&
+    config->animations_off < 2 &&
     (config->version == CGBA_CONFIG_VERSION_LEGACY ||
       config->frame_limit < 2);
 }
@@ -226,6 +266,14 @@ static void config_from_state(fxcg100_config_file *config,
   config->quick_save_slot = state->quick_save_slot;
   config->show_fps = state->show_fps;
   config->frame_limit = state->frame_limit;
+  config->rotation = state->rotation;
+  config->touch_keys_hidden = state->touch_keys ? 0 : 1;
+  config->lcd_cpu = state->lcd_cpu;
+  config->lcd_sync = state->lcd_sync;
+  config->lcd_extra = (state->lcd_sync_offset & 15u) |
+    ((state->backlight & 31u) << 8) | ((state->backlight_pwm & 15u) << 16);
+  config->theme = state->theme;
+  config->animations_off = state->animations ? 0 : 1;
 }
 
 static void state_from_config(fxcg100_menu_state *state,
@@ -242,6 +290,15 @@ static void state_from_config(fxcg100_menu_state *state,
   state->savestate_slot = config->savestate_slot;
   state->quick_save_slot = config->quick_save_slot;
   state->show_fps = config->show_fps;
+  state->rotation = config->rotation;
+  state->touch_keys = config->touch_keys_hidden ? 0 : 1;
+  state->lcd_cpu = config->lcd_cpu;
+  state->lcd_sync = config->lcd_sync;
+  state->lcd_sync_offset = config->lcd_extra & 15u;
+  state->backlight = (config->lcd_extra >> 8) & 31u;
+  state->backlight_pwm = (config->lcd_extra >> 16) & 15u;
+  state->theme = config->theme;
+  state->animations = config->animations_off ? 0 : 1;
   /* Version 2 used this word as zeroed reserved space.  Preserve the new
    * normal-play default when loading an existing configuration. */
   state->frame_limit = config->version >= CGBA_CONFIG_VERSION

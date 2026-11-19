@@ -8,7 +8,49 @@ typedef struct fxcg100_key_choice {
   const char *label;
 } fxcg100_key_choice;
 
-#ifdef CGBA_FXCG50
+#if defined(CGBA_CLASSPAD)
+#include <gint/keycodes.h>
+
+/* fx-CP400 / ClassPad II: bindable keys are gint KEY_* codes. Clear (which
+ * doubles as the power key) opens the emulator menu until it is given to
+ * something here; the Menu and Settings icons under the screen always do.
+ * The arrows are
+ * screen directions: in landscape they follow the picture, not the print on
+ * the cursor pad (see cp_physical_direction). */
+static const fxcg100_key_choice bindable_keys[] = {
+  { KEY_KBD, "Keyboard" }, { KEY_SHIFT, "Shift" },
+  { KEY_DEL, "Backspace" }, { KEY_CLEAR, "Clear" },
+  { KEY_LEFT, "Left" },    { KEY_RIGHT, "Right" },
+  { KEY_UP, "Up" },        { KEY_DOWN, "Down" },
+  { KEY_EQUALS, "=" },     { KEY_X, "x" },
+  { KEY_Y, "y" },          { KEY_Z, "z" },
+  { KEY_POWER, "^" },      { KEY_DIV, "/" },
+  { KEY_LEFTP, "(" },      { KEY_7, "7" },
+  { KEY_8, "8" },          { KEY_9, "9" },
+  { KEY_MUL, "*" },
+  { KEY_RIGHTP, ")" },     { KEY_4, "4" },
+  { KEY_5, "5" },          { KEY_6, "6" },
+  { KEY_SUB, "-" },
+  { KEY_COMMA, "," },      { KEY_1, "1" },
+  { KEY_2, "2" },          { KEY_3, "3" },
+  { KEY_ADD, "+" },
+  { KEY_NEG, "(-)" },      { KEY_0, "0" },
+  { KEY_DOT, "." },        { KEY_EXP, "EXP" },
+  { KEY_EXE, "EXE" },
+};
+
+_Static_assert(sizeof(bindable_keys) / sizeof(bindable_keys[0]) == 34,
+               "fx-CP400 must expose every physical key");
+
+/* GBA button -> fx-CP400 key, in enum order:
+ *   A=EXE B=+ SELECT== START=X
+ *   RIGHT LEFT UP DOWN L=SHIFT R=BKSP  (Clear opens the emulator menu)
+ * Every GBA button is also available as a touch key. */
+static const uint16_t default_keymap[FXCG100_GBA_KEY_COUNT] = {
+  KEY_EXE, KEY_ADD, KEY_EQUALS, KEY_X,
+  KEY_RIGHT, KEY_LEFT, KEY_UP, KEY_DOWN, KEY_SHIFT, KEY_DEL
+};
+#elif defined(CGBA_FXCG50)
 #include <gint/keycodes.h>
 
 /* fx-CG50 / Graph 90+E: bindable keys are gint KEY_* codes on the classic
@@ -152,7 +194,11 @@ const char *fxcg100_key_label(uint16_t key)
       return bindable_keys[i].label;
   }
   if (key == FXCG100_PHYSKEY_ON)
+#ifdef CGBA_CLASSPAD
+    return "Clear";
+#else
     return "ON";
+#endif
   return "?";
 }
 
@@ -192,6 +238,12 @@ int fxcg100_keymap_valid(const uint16_t *keymap)
   if (!keymap)
     return 0;
   for (i = 0; i < FXCG100_GBA_KEY_COUNT; i++) {
+#ifdef CGBA_CLASSPAD
+    /* On the fx-CP400 a GBA button may have no key: it is still on the
+     * touch screen, and giving its key to something else leaves it so. */
+    if (keymap[i] == 0)
+      continue;
+#endif
     if (!fxcg100_key_bindable(keymap[i]))
       return 0;
     for (j = i + 1; j < FXCG100_GBA_KEY_COUNT; j++) {
@@ -281,9 +333,14 @@ uint32_t fxcg100_poll_gba_buttons_mapped(const uint16_t *keymap)
     keymap = default_keymap;
 
   for (i = 0; i < FXCG100_GBA_KEY_COUNT; i++) {
-    if (fxcg100_key_down(keymap[i]))
+    if (keymap[i] != 0 && fxcg100_key_down(keymap[i]))
       buttons |= gba_button_bits[i];
   }
+#ifdef CGBA_CLASSPAD
+  buttons |= fxcg100_touch_gba_buttons();
+  /* The touch keys show what is held, from the keypad as well. */
+  fxcg100_touch_show_buttons(buttons);
+#endif
   return sanitize_gba_buttons(buttons);
 }
 
@@ -306,6 +363,11 @@ uint32_t fxcg100_poll_hotkeys_mapped(const uint16_t *hotkey_map)
     if (key != 0 && fxcg100_key_down(key))
       hotkeys |= FXCG100_HOTKEY_BIT(i);
   }
+#ifdef CGBA_CLASSPAD
+  /* The Main icon under the screen is fast forward while it is held. */
+  if (fxcg100_touch_strip_icons() & FXCG100_STRIP_MAIN)
+    hotkeys |= FXCG100_HOTKEY_BIT(FXCG100_HOTKEY_FAST_FORWARD);
+#endif
 
   return hotkeys;
 }

@@ -12,7 +12,11 @@
  */
 
 #include <gint/display.h>
+#ifdef CGBA_CLASSPAD
+void cgba_classpad_panic_present(void);   /* classpad_platform.c */
+#else
 #include <gint/drivers/r61524.h>
+#endif
 
 void cgba_panic_draw_begin(void)
 {
@@ -30,6 +34,10 @@ void cgba_panic_draw_present(void)
 	/* Full-window reset first: gameplay narrows the R61524 window for the
 	 * strip blit; a panic mid-strip would otherwise present into a partial
 	 * window. r61524_win_set + CPU present are both PIO — panic-safe. */
+#ifdef CGBA_CLASSPAD
+	cgba_classpad_panic_present();
+#else
 	r61524_win_set(0, 395, 0, 223);
 	r61524_display(gint_vram, 0, 224, R61524_CPU);
+#endif
 }

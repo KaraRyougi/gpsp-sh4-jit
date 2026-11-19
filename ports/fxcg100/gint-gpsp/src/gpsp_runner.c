@@ -828,6 +828,41 @@ unsigned cgba_gpsp_state_lines(unsigned frame, const char *phase,
 			(unsigned long)dma[3].source_address,
 			(unsigned long)dma[3].dest_address,
 			(unsigned long)dma[3].length);
+	if(n < max_lines) {
+		/* IWRAM hash with the m4a/MP2K PCM mix buffer masked out, for A/B
+		 * runs of options that deliberately stop producing discarded PCM
+		 * (CGBA_SH4_M4A_MIX_SKIP). The driver publishes its SoundInfo
+		 * pointer at 0x03007FF0; SoundInfo starts with the "Smsh" ident
+		 * (+1 while SoundMain holds it) and keeps the stereo mix buffer
+		 * at +0x350, 2 * 0x630 bytes. Without a driver the whole of IWRAM
+		 * is hashed and si=0. */
+		const uint8_t *iw = iwram + 0x8000;
+		uint32_t si = (uint32_t)iw[0x7FF0] | ((uint32_t)iw[0x7FF1] << 8) |
+			((uint32_t)iw[0x7FF2] << 16) | ((uint32_t)iw[0x7FF3] << 24);
+		uint32_t lo = 0x8000, hi = 0x8000, h = 2166136261u;
+
+		if((si >> 24) == 0x03u && (si & 0x00FFFFFFu) <= 0x8000u - 0xFB0u) {
+			const uint8_t *q = iw + (si & 0x7FFFu);
+			uint32_t ident = (uint32_t)q[0] | ((uint32_t)q[1] << 8) |
+				((uint32_t)q[2] << 16) | ((uint32_t)q[3] << 24);
+			if(ident == 0x68736D53u || ident == 0x68736D54u) {
+				lo = (si & 0x7FFFu) + 0x350u;
+				hi = lo + 2u * 0x630u;
+			}
+		}
+		if(lo == 0x8000u)
+			si = 0;
+		for(uint32_t i = 0; i < 0x8000u; i++) {
+			if(i >= lo && i < hi)
+				continue;
+			h ^= iw[i];
+			h *= 16777619u;
+		}
+		snprintf(out[n++], CGBA_STATE_LINE_MAX,
+			"@@CGBA_M4A frame=%u phase=%s si=%08lX iwx=%08lX pcm=%08lX",
+			frame, phase, (unsigned long)si, (unsigned long)h,
+			(unsigned long)(lo < hi ? cgba_fnv1a32(iw + lo, hi - lo) : 0));
+	}
 	return n;
 }
 #endif
@@ -1107,23 +1142,54 @@ _Static_assert(GBA_STATE_MEM_SIZE == CGBA_STATE_RAW_SIZE,
 	"calculator and core savestate sizes must agree");
 
 
+cgba_save_timing cgba_last_save_timing;
+
+static void seconds_text(char *dst, size_t size, uint32_t ticks)
+{
+	uint32_t centi = (ticks * 100u + 64u) / 128u;
+
+	snprintf(dst, size, "%u.%02u", (unsigned)(centi / 100u),
+		(unsigned)(centi % 100u));
+}
+
+void cgba_save_timing_text(char *dst, size_t size)
+{
+	const cgba_save_timing *t = &cgba_last_save_timing;
+	char pack[12], write[12], remap[12];
+
+	seconds_text(pack, sizeof(pack), t->snap + t->pack);
+	seconds_text(write, sizeof(write), t->write);
+	seconds_text(remap, sizeof(remap), t->remap);
+	snprintf(dst, size, "pack %s s, write %s s (%uK), remap %s s", pack, write,
+		(unsigned)((t->bytes + 1023u) / 1024u), remap);
+}
+
 int cgba_gpsp_state_save(unsigned slot)
 {
 	u8 *buf = cgba_state_buffer();
 	uint16_t path[24];
-	int ok = 0;
+	int ok = 0, synced;
+	uint32_t t0 = fxcg100_ticks(), t1;
 
+	memset(&cgba_last_save_timing, 0, sizeof(cgba_last_save_timing));
 	if (!buf)
 		return 0;
 
 	cgba_state_path(path, slot);
 	gba_save_state(buf);
+	t1 = fxcg100_ticks();
+	cgba_last_save_timing.snap = t1 - t0;
+	t0 = t1;
+	cgba_last_save_timing.bytes = GBA_STATE_MEM_SIZE;
 #ifdef CGBA_DYNAREC
 	{
 		u8 *comp = cgba_state_comp_buffer(buf);
 		unsigned cap = cgba_state_comp_capacity();
 		unsigned csz = cgba_state_compress(buf, GBA_STATE_MEM_SIZE,
 			comp, cap);
+		t1 = fxcg100_ticks();
+		cgba_last_save_timing.pack = t1 - t0;
+		t0 = t1;
 		if (csz && csz < GBA_STATE_MEM_SIZE) {
 			/* Round the FILE up to 64KB buckets: repeat saves of
 			 * similar size hit write_blob's fast overwrite path
@@ -1135,6 +1201,7 @@ int cgba_gpsp_state_save(unsigned slot)
 			 * than the raw state. Store raw in that case. */
 			if (fsz <= cap && fsz < GBA_STATE_MEM_SIZE) {
 				memset(comp + csz, 0, fsz - csz);
+				cgba_last_save_timing.bytes = fsz;
 				ok = fxcg100_storage_write_blob(path, comp, fsz);
 			} else {
 				ok = fxcg100_storage_write_blob(path, buf,
@@ -1148,10 +1215,15 @@ int cgba_gpsp_state_save(unsigned slot)
 #else
 	ok = fxcg100_storage_write_blob(path, buf, GBA_STATE_MEM_SIZE);
 #endif
+	t1 = fxcg100_ticks();
+	cgba_last_save_timing.write = t1 - t0;
+	t0 = t1;
 	cgba_state_buffer_release();
 	/* Refresh after any attempted mutation, even a failed write. An identical
 	 * file causes no mutation and needs no ROM block-address query. */
-	return cgba_gpsp_storage_sync() && ok;
+	synced = cgba_gpsp_storage_sync();
+	cgba_last_save_timing.remap = fxcg100_ticks() - t0;
+	return synced && ok;
 }
 
 static int cgba_state_load_from(const uint16_t *path)
@@ -1313,8 +1385,10 @@ void cgba_gpsp_run_frame(uint32_t gba_buttons, int render_video)
 	(defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS))
 	cgba_prof_window_frame();
 #endif
-	if(render_video && cgba_mode3_debug_copy_active)
+	if(render_video && cgba_mode3_debug_copy_active) {
 		copy_mode3_vram_to_framebuffer();
+		video_invalidate_scanline_cache(0, 160);
+	}
 }
 
 #if defined(CGBA_DYNAREC) && defined(CGBA_SH4_DIFF_HARNESS)
@@ -1647,6 +1721,36 @@ unsigned cgba_gpsp_diag(char out[][CGBA_DIAG_LINE_MAX], unsigned max_lines)
 #endif
 	return n;
 }
+
+#ifdef CGBA_DYNAREC
+/* How often each translation cache has been emptied since the game was
+ * started: the count at that moment is set aside, as starting a game empties
+ * both. Loading a saved state empties them too and does count. */
+extern uint32_t cgba_dynarec_rom_flush_count;
+extern uint32_t cgba_dynarec_ram_flush_count;
+extern uint32_t cgba_dynarec_ram_full_count;
+static uint32_t jit_flush_base[3];
+
+void cgba_gpsp_jit_flush_mark(void)
+{
+	jit_flush_base[0] = cgba_dynarec_rom_flush_count;
+	jit_flush_base[1] = cgba_dynarec_ram_flush_count;
+	jit_flush_base[2] = cgba_dynarec_ram_full_count;
+}
+
+void cgba_gpsp_jit_flushes(uint32_t *rom, uint32_t *ram)
+{
+	*rom = cgba_dynarec_rom_flush_count - jit_flush_base[0];
+	*ram = cgba_dynarec_ram_flush_count - jit_flush_base[1];
+}
+
+/* RAM resets because the cache was full; the others are the game writing
+ * over code that had been translated. */
+uint32_t cgba_gpsp_jit_ram_full(void)
+{
+	return cgba_dynarec_ram_full_count - jit_flush_base[2];
+}
+#endif
 
 void cgba_gpsp_shutdown(void)
 {

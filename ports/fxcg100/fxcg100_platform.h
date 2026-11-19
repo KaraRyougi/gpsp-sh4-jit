@@ -20,8 +20,16 @@ void fxcg100_panic(const char *text);
 #define FXCG100_APPKEY_RIGHT  (1u << 8)
 #define FXCG100_APPKEY_BACK   (1u << 9)
 #define FXCG100_APPKEY_ON     (1u << 10)
+/* fx-CG interface only (cg_ui.c): the key that opens Settings (OPTN on the
+ * fx-CG50, SETTINGS on the fx-CG100), DEL, and the digit keys. */
+#define FXCG100_APPKEY_SETTINGS (1u << 11)
+#define FXCG100_APPKEY_DEL      (1u << 12)
+#define FXCG100_APPKEY_DIGIT(n) (1u << (16 + (n)))
+#define FXCG100_APPKEY_DIGITS   (0x3ffu << 16)
 
-#ifdef CGBA_FXCG50
+#if defined(CGBA_CLASSPAD)
+#define FXCG100_PHYSKEY_ON 0x74u   /* fx-CP400 KEY_CLEAR (Clear / power) */
+#elif defined(CGBA_FXCG50)
 #define FXCG100_PHYSKEY_ON 0x07u   /* fx-CG50 KEY_ACON (AC/ON) */
 #else
 #define FXCG100_PHYSKEY_ON 79u     /* fx-CG100 ON */
@@ -94,6 +102,24 @@ typedef struct fxcg100_menu_state {
   uint32_t quick_save_slot;
   uint32_t show_fps;
   uint32_t frame_limit;
+  /* fx-CP400 only: landscape direction (CP_ROTATION_*) and whether the
+   * on-screen touch keys are shown. Unused on the fx-CG models. */
+  uint32_t rotation;
+  uint32_t touch_keys;
+  /* fx-CP400 only: 0 sends the picture by DMA, 1 by CPU writes. */
+  uint32_t lcd_cpu;
+  /* fx-CP400 only: wait for the panel's refresh before each frame. */
+  uint32_t lcd_sync;
+  /* ... and where the picture is in the panel's row count, 0..15. */
+  uint32_t lcd_sync_offset;
+  /* fx-CP400 only: backlight level 1..16 and PWM rate 1..9; 0 leaves what
+   * the system set. */
+  uint32_t backlight;
+  uint32_t backlight_pwm;
+  /* fx-CP400 only: colour scheme (CP_THEME_*) and whether the interface
+   * animates. */
+  uint32_t theme;
+  uint32_t animations;
   uint16_t keymap[FXCG100_GBA_KEY_COUNT];
   uint16_t hotkey_map[FXCG100_HOTKEY_COUNT];
   uint32_t cheat_active[10];
@@ -147,6 +173,8 @@ void fxcg100_lcd_fill_rect(unsigned x, unsigned y, unsigned w, unsigned h,
 void fxcg100_lcd_draw_text(unsigned x, unsigned y, const char *text,
                            uint16_t fg, uint16_t bg);
 void fxcg100_lcd_update(void);
+/* Push only VRAM rows y..y+h-1 (widened to whole groups of four rows). */
+void fxcg100_lcd_update_rows(unsigned y, unsigned h);
 void fxcg100_lcd_status(const char *text);
 /* OS BFile calls can draw a busy icon directly into LCD GRAM. Mark that
  * activity so the next gameplay presentation removes any stale border pixels. */
@@ -156,14 +184,113 @@ void fxcg100_lcd_blit_gba(const uint16_t *pixels);
  * scanline() is called after a completed GBA row; end() returns one only when
  * all 160 rows were queued, otherwise the caller performs the normal blit. */
 int fxcg100_lcd_stream_begin(void);
-void fxcg100_lcd_stream_scanline(const uint16_t *row, unsigned y);
+void fxcg100_lcd_stream_scanline(const uint16_t *row, unsigned y, int dirty);
 int fxcg100_lcd_stream_end(void);
+int fxcg100_lcd_is_synced(void);
 /* Display scaling for the gameplay blit (menu DISPLAY SCALING):
  * 0 = 1:1 centered, 1 = 4:3 320x212, 2 = fullscreen 384x216. */
 void fxcg100_lcd_set_scale(uint32_t mode);
 /* Scale filter (menu SCALE FILTER), applied to the scaled modes:
  * 0 = SMOOTH, 1 = SHARP, 2 = CRISP (nearest). */
 void fxcg100_lcd_set_filter(uint32_t filter);
+#ifdef CGBA_CLASSPAD
+/* fx-CP400: on that model fxcg100_lcd_set_scale() takes a CP_VIEW_* layout
+ * (classpad_layout.h) instead of the fx-CG scale modes above. */
+void fxcg100_lcd_set_rotation(uint32_t rotation);
+void fxcg100_lcd_set_touch_keys(uint32_t enabled);
+/* Paint the touch keys for the GBA buttons that are held, by touch or from
+ * the keypad. */
+void fxcg100_touch_show_buttons(uint32_t buttons);
+/* Whether Clear opens the menu: it does until the key map gives it another
+ * job. The Menu and Settings icons under the screen always do. */
+void fxcg100_lcd_set_menu_key(uint32_t clear_opens_menu);
+/* Colour scheme of the touch keys (CP_THEME_*, classpad_theme.h). */
+void fxcg100_lcd_set_theme(uint32_t theme);
+void fxcg100_lcd_set_transfer(uint32_t cpu_writes);
+/* fx-CP400: start each frame where the panel's refresh will not meet it
+ * (classpad_sync.h), and what is known about that refresh. */
+void fxcg100_lcd_set_sync(uint32_t wait, uint32_t offset);
+/* While the page that sets the offset is open: every frame waits, with
+ * almost no room to spare, so that a wrong offset shows. Opening it counts
+ * the panel's rows again. */
+void fxcg100_lcd_sync_calibrate(uint32_t on);
+/* What that count found, for the page to show: rows in one refresh and
+ * refreshes a second. Returns 1 if the panel has a usable row counter, -1 if
+ * it has none, 0 if it has not been read yet. */
+int fxcg100_lcd_sync_info(uint32_t *rows, uint32_t *hz);
+/* fx-CP400: backlight level (1..16, 16 = full) and PWM rate (1..9, 9 the
+ * fastest); 0 for either leaves, or puts back, what the system had set. */
+void fxcg100_lcd_set_backlight(uint32_t level, uint32_t pwm);
+/* GBA buttons currently held on the touch keys (FXCG100_GBA_BUTTON_* bits),
+ * as sampled by the last fxcg100_poll_app_keys(). */
+uint32_t fxcg100_touch_gba_buttons(void);
+/* Icons of the printed strip under the LCD being touched, as sampled by the
+ * last fxcg100_poll_app_keys(). */
+#define FXCG100_STRIP_SETTINGS (1u << 0)
+#define FXCG100_STRIP_MENU     (1u << 1)
+#define FXCG100_STRIP_MAIN     (1u << 2)
+#define FXCG100_STRIP_RESIZE   (1u << 3)
+#define FXCG100_STRIP_SWAP     (1u << 4)
+#define FXCG100_STRIP_ROTATE   (1u << 5)
+#define FXCG100_STRIP_ESC      (1u << 6)
+uint32_t fxcg100_touch_strip_icons(void);
+/* First touch on the LCD in the coordinates the player sees; zero when the
+ * screen is not being touched. Sampled by fxcg100_poll_app_keys(). */
+int fxcg100_touch_point(int *x, int *y);
+/* Push gint's VRAM to the panel unchanged (the fx-CP400 interface draws it
+ * already turned for the current orientation). */
+void fxcg100_lcd_present_frame(void);
+/* Clock and bus settings (classpad_clock.h). Writing waits for any display
+ * transfer first; gint restores the OS's own settings around every OS call
+ * and when gpSP exits. */
+struct cp_clock;
+void fxcg100_clock_read(struct cp_clock *clock);
+void fxcg100_clock_write(const struct cp_clock *clock);
+/* How many times a touch read that never finished had to be called off. */
+uint32_t fxcg100_touch_recoveries(void);
+/* Nonzero when gpSP reads the touch controller itself rather than through
+ * gint's driver. */
+int fxcg100_touch_is_polled(void);
+/* The same, by kind: 0 stale flag at the start of a read, 1 read ended on a
+ * bus error, 2 read ended for making no progress, 3 interrupt with no read
+ * under way. */
+uint32_t fxcg100_touch_recovery_count(int kind);
+/* The clock test (classpad_platform.c). The RAM part returns zero if the
+ * memory held everything; the signature must be the same on the stock clock
+ * and on the clock under test. Together they take a few seconds. */
+/* Rounds of a fixed loop in a quarter of a second of the RTC: a measure of
+ * the real processor speed, or zero if the RTC does not count. */
+uint32_t fxcg100_measure_speed(void);
+int fxcg100_stress_ram(void);
+uint32_t fxcg100_stress_signature(void);
+/* Checksum of the RAM-resident emulator code, to detect read errors. */
+uint32_t fxcg100_core_checksum(void);
+/* Apply the clock setting saved for start-up, unless the menu key is held. */
+void cp_ui_apply_saved_clock(void);
+/* Tell the interface that a game is about to be shown: from then on it is
+ * drawn the way round the game is, not upright as at start-up. */
+void cp_ui_game_starting(void);
+/* A full-screen message in the fx-CP400 interface's look (classpad_ui.c). */
+void cp_ui_status(const fxcg100_menu_state *state, const char *line1,
+                  const char *line2);
+#endif
+/* 128 Hz ticks. fx-CP400: from a timer, or from the RTC once it is seen to
+ * run. fx-CG: the RTC. */
+uint32_t fxcg100_ticks(void);
+
+#ifndef CGBA_CLASSPAD
+/* The fx-CG interface (cg_ui.c). A message while something slow happens,
+ * as a small box: over the game picture, dimmed and placed as the display
+ * mode places it, when `frame` is the GBA frame, else over a plain page. */
+void cg_ui_status(const fxcg100_menu_state *state, const char *line1,
+                  const char *line2, const uint16_t *frame);
+/* While main() saves or loads a state for the menu: show `text` in the
+ * footer of the page that asked for it. */
+void cg_ui_show_progress(const char *text);
+/* The next fxcg100_menu_run() goes back to the page and row it left and
+ * shows `text` in the footer for two seconds. */
+void cg_ui_set_result(const char *text, int error);
+#endif
 uint32_t fxcg100_frame_hash(const uint16_t *pixels);
 
 /* Draw an FPS metrics overlay into the top-left of a 240x160 GBA frame buffer

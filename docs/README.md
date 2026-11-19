@@ -14,6 +14,17 @@ As-built (current):
 - [performance-history.md](performance-history.md) — measurement
   methodology and its traps, the commit-anchored optimization chronology,
   state at HEAD, future directions.
+- [emerald-speed-pass.md](emerald-speed-pass.md) — five speed experiments,
+  selected defaults, Emerald cache-model measurements and reproduction.
+- [mode0-tile-row-cache.md](mode0-tile-row-cache.md) — default-off background
+  row-cache experiment, inconclusive performance results and regression tests.
+
+- [fxcg-ui.md](fxcg-ui.md) — the fx-CG50 / fx-CG100 keypad interface:
+  layout, keys, pages, partial refresh, screen geometry and its host test.
+
+- [classpad-port.md](classpad-port.md) — the fx-CP400 (ClassPad II) port:
+  screen-scale choices, landscape, touch keys, the heap-backed memory layout,
+  and what is still unverified on hardware.
 
 Historical (bring-up era):
 
