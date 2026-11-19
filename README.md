@@ -2,9 +2,15 @@
 
 # gpSP for CASIO: A GBA Emulator for CASIO Graphing Calculators
 
-gpSP for CASIO brings Game Boy Advance games to the **CASIO fx-CG50 / Graph 90+E** and **fx-CG100 / Graph Math+** graphing calculators. This port is based on [gpSP emulator maintained by libretro](https://github.com/libretro/gpsp), with an added dynamic recompiler ("dynarec" / "JIT") for the calculators' SH-4A CPU. gpSP does not overclock the calculator itself; apply a Ptune profile (such as Ptune4's F5) before launching it for the best speed. With dynarec and an overclock, many GBA games will run at or close to full speed on the calculator. For more demanding games, automatic or manual frameskip can help keep gameplay smooth.
+gpSP for CASIO brings GBA games to the **CASIO fx-CG50 / Graph 90+E**, **fx-CG100 / Graph Math+**, and **ClassPad II fx-CP400 / fx-CG500** graphing calculators. This port is based on [gpSP emulator maintained by libretro](https://github.com/libretro/gpsp), with a highly optimized dynamic recompiler ("dynarec" / "JIT") for the calculators' SH-4A CPU. By default, gpSP will apply the Ptune4 overclocking profile F5 for the best speed. With its dynarec and overclocking, many GBA games will run at or close to full speed on the calculator. For more demanding games, automatic or manual frameskip can help keep gameplay smooth.
 
-The dynarec is *fully* vibe-coded using GPT-5.5 / Opus 4.8, and later GPT-5.6 Sol / Fable 5. It has been extensively tested to ensure compatibility, although there still can be issues.
+The dynarec is *fully* vibe-coded using GPT-5.5 / Opus 4.8 / GPT-5.6 Sol / Fable 5 / Gemini 4 Neon. It has been extensively tested to ensure compatibility, although there still can be issues.
+
+## Trimming ROMs
+
+If storage space is tight, larger GBA ROMs such as Pokémon Emerald can sometimes be made smaller by removing unused padding from the end of the file. This can help them fit on the calculator while leaving room for other add-ins. Use the [online gpSP ROM trimmer](https://kararyougi.github.io/gpsp-sh4-jit/). It runs locally in your browser and removes only trailing empty padding; it does not compress or otherwise change the game's data.
+
+Keep a backup of the original ROM before trimming it.
 
 ## Features
 
@@ -21,12 +27,12 @@ The dynarec is *fully* vibe-coded using GPT-5.5 / Opus 4.8, and later GPT-5.6 So
 
 ## Installation
 
-1. Open the [Releases page](https://github.com/KaraRyougi/gpsp-sh4-jit/releases) and download the `.g3a` file for your calculator. Choose the file containing `CG50` or `CG100` in its name, as appropriate. You can also [build gpSP from source](#building-from-source).
-2. Copy the `.g3a` file to the root of the calculator's main storage.
-3. (**fx-CG100 / Graph Math+ only**) Download and copy the `mpm.bin` file to the root of the calculator’s main storage. This version of mpm is built from the [dynload branch](https://git.planet-casio.com/PlaneteCasio/mpm/src/branch/dynload), which provides more usable RAM for gpSP.
+1. Open the [Releases page](https://github.com/KaraRyougi/gpsp-sh4-jit/releases) and download the `.g3a` or `.hh3` file for your calculator. You can also [build gpSP from source](#building-from-source).
+3. Copy the `.g3a` or `.hh3` file to the root of the calculator's main storage.
+4. (**fx-CG100 / Graph Math+ only**) Download and copy the `mpm.bin` file to the root of the calculator’s main storage. This version of mpm is built from the [dynload branch](https://git.planet-casio.com/PlaneteCasio/mpm/src/branch/dynload), which provides more usable RAM for gpSP.
 5. Disconnect the calculator safely, then launch **gpSP** from the main menu.
 
-The two calculator builds are model-specific, so make sure you download the right one. gpSP scans for ROMs when it starts; if you add another ROM while gpSP is open, simply restart the emulator to refresh the list. The ROM picker can show up to 48 games, with a maximum size of 16 MiB per ROM.
+The calculator builds are model-specific, so make sure you download the right one. gpSP scans for ROMs when it starts; if you add another ROM while gpSP is open, simply restart the emulator to refresh the list. The ROM picker can show up to 48 games, with a maximum size of 16 MiB per ROM.
 
 ## Usage
 
@@ -79,13 +85,32 @@ Want a different layout? Go to **Settings → Key mapping**, highlight a button,
 
 Under **Shortcuts** on the same page you can give keys to **Fast forward**, **Save state**, **Load state** and **Show frame rate**. They start with no key, so they do not interfere with the normal controls; `DEL` takes a shortcut's key away again.
 
-## fx-CP400 / ClassPad II (experimental)
+## Display modes
 
-There is also a build for the **fx-CP400 (ClassPad II)** running
-[HollyHock-3](https://github.com/ClasspadDev/hollyhock-3). It has been built
-and host-tested but **not yet run on a calculator**; treat it as a first
-hardware test, and see [docs/classpad-port.md](docs/classpad-port.md) for what
-is unverified.
+**Settings → Picture size** offers three ways to fit the GBA picture onto the calculator's screen:
+
+| Menu setting | Resolution |       Aspect ratio | What it looks like                                           |
+| ------------ | ---------: | -----------------: | ------------------------------------------------------------ |
+| Original     |    240×160 |                3:2 | The original GBA resolution, centered with a border and no scaling |
+| Full Height  |    320×212 | 80:53 (almost 3:2) | A larger image that stays very close to the GBA's original shape |
+| Full Screen  |    384×216 |               16:9 | The largest picture; it nearly fills the screen but stretches the original 3:2 image horizontally |
+
+**Full Height** scales by about four output pixels for every three source pixels; its 320×212 picture nearly fills the screen's height and stays very close to the GBA's native 3:2 ratio. **Full Screen** stretches the picture to a true 16:9 ratio.
+
+For either scaled mode, **Scaling filter** chooses the look you prefer:
+
+- **Smooth** softens the image and blends jagged edges.
+- **Sharp** keeps more definition while still using some blending.
+- **Crisp** uses nearest-neighbor scaling for hard, pixelated edges.
+
+If a game feels slow, try **Frame skipping: Auto** first. **Manual** gives you a fixed number of frames to skip, while **Off** draws every frame. **Show frame rate** displays both the emulation rate (`E`) and the number of frames actually drawn to the screen (`D`).
+
+The **Limit to 60 fps** option is enabled by default. It keeps games from running faster than the GBA’s native rate. This limit is global regardless of the frameskip setting. It only caps games that would otherwise run too quickly. It cannot speed up a game running below 60 FPS. The **Fast forward** shortcut temporarily bypasses the limit. Turn the option off if you want unrestricted speed or are benchmarking performance.
+
+## fx-CP400 / ClassPad II
+
+There is also a build for the **fx-CP400 / fx-CG500 (ClassPad II)** running
+[HollyHock-3](https://github.com/ClasspadDev/hollyhock-3).
 
 Copy `gpSP.hh3` (keep that name) and your `.gba` files to the root of the
 calculator's storage and start gpSP from the HollyHock launcher.
@@ -138,28 +163,6 @@ setting other than stock has been tried on hardware; a setting that is too
 fast freezes the calculator until it is reset. If a saved start-up setting
 stops gpSP from starting, hold Clear while launching it.
 
-## Display modes
-
-**Settings → Picture size** offers three ways to fit the GBA picture onto the calculator's screen:
-
-| Menu setting | Resolution |       Aspect ratio | What it looks like                                           |
-| ------------ | ---------: | -----------------: | ------------------------------------------------------------ |
-| Original     |    240×160 |                3:2 | The original GBA resolution, centered with a border and no scaling |
-| Full Height  |    320×212 | 80:53 (almost 3:2) | A larger image that stays very close to the GBA's original shape |
-| Full Screen  |    384×216 |               16:9 | The largest picture; it nearly fills the screen but stretches the original 3:2 image horizontally |
-
-**Full Height** scales by about four output pixels for every three source pixels; its 320×212 picture nearly fills the screen's height and stays very close to the GBA's native 3:2 ratio. **Full Screen** stretches the picture to a true 16:9 ratio.
-
-For either scaled mode, **Scaling filter** chooses the look you prefer:
-
-- **Smooth** softens the image and blends jagged edges.
-- **Sharp** keeps more definition while still using some blending.
-- **Crisp** uses nearest-neighbor scaling for hard, pixelated edges.
-
-If a game feels slow, try **Frame skipping: Auto** first. **Manual** gives you a fixed number of frames to skip, while **Off** draws every frame. **Show frame rate** displays both the emulation rate (`E`) and the number of frames actually drawn to the screen (`D`).
-
-The **Limit to 60 fps** option is enabled by default. It keeps games from running faster than the GBA’s native rate. This limit is global regardless of the frameskip setting. It only caps games that would otherwise run too quickly. It cannot speed up a game running below 60 FPS. The **Fast forward** shortcut temporarily bypasses the limit. Turn the option off if you want unrestricted speed or are benchmarking performance.
-
 ## Save data and savestates
 
 Regular in-game GBA saves are supported and stored in `.SAV` files named after the ROM. gpSP writes new save data to storage when you change games or exit the emulator.
@@ -188,7 +191,7 @@ Before opening a new issue, check the [existing issues](https://github.com/KaraR
 
 Please include:
 
-- Your calculator model: fx-CG50 / Graph 90+E or fx-CG100 / Graph Math+
+- Your calculator model
 - The gpSP version shown in the add-in information
 - The game's title, region, and revision, if known
 - What you expected to happen and what happened instead
@@ -196,12 +199,6 @@ Please include:
 - Your display mode, scaling filter, frameskip settings, and any custom key mappings
 - For performance problems, the `E` and `D` values from the FPS overlay and the part of the game where the slowdown occurs
 - Any error message, photo, or short video that helps show the problem
-
-## Trimming ROMs
-
-If storage space is tight, larger GBA ROMs such as Pokémon Emerald can sometimes be made smaller by removing unused padding from the end of the file. This can help them fit on the calculator while leaving room for other add-ins. Use the [online gpSP ROM trimmer](https://kararyougi.github.io/gpsp-sh4-jit/). It runs locally in your browser and removes only trailing empty padding; it does not compress or otherwise change the game's data.
-
-Keep a backup of the original ROM before trimming it.
 
 ## Building from source
 
