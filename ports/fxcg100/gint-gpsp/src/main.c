@@ -18,6 +18,9 @@ HHK_VERSION("0.10.0804")
 #elif defined(CGBA_FXCG50)
 extern int cgba_hottext_init(void);
 #endif
+#if defined(CGBA_VIDEO_DIRTY_SCANLINE) && CGBA_VIDEO_DIRTY_SCANLINE
+extern uint32_t cgba_video_frame_dirty_rows;
+#endif
 #ifdef CGBA_GPSP_HEADLESS_TEST
 #define CGBA_HEADLESS_STATE_SIZE CGBA_STATE_RAW_SIZE
 extern unsigned char *cgba_gamepak_scratch_acquire(unsigned int min_size);
@@ -2586,10 +2589,21 @@ static int gpsp_main(void)
 		cgba_fps_tick(&cgba_fps, render_video);
 		if(render_video) {
 			if(!streamed || !fxcg100_lcd_stream_end()) {
-				if(menu_state.show_fps)
+				if(menu_state.show_fps) {
 					fxcg100_lcd_overlay_fps(framebuffer,
 						cgba_fps.emu_fps, cgba_fps.draw_fps);
-				blit_gba_frame(framebuffer, frame, gba_buttons);
+					blit_gba_frame(framebuffer, frame, gba_buttons);
+				}
+#if defined(CGBA_VIDEO_DIRTY_SCANLINE) && CGBA_VIDEO_DIRTY_SCANLINE
+				else if(cgba_video_frame_dirty_rows != 0 ||
+					!fxcg100_lcd_is_synced()) {
+					blit_gba_frame(framebuffer, frame, gba_buttons);
+				}
+#else
+				else {
+					blit_gba_frame(framebuffer, frame, gba_buttons);
+				}
+#endif
 			}
 		}
 		previous_app_keys = app_keys;

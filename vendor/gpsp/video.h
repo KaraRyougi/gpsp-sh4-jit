@@ -22,6 +22,13 @@
 
 void update_scanline(void);
 void video_reload_counters(void);
+#if defined(CGBA_VIDEO_DIRTY_SCANLINE) && CGBA_VIDEO_DIRTY_SCANLINE
+void video_invalidate_scanline_cache(u32 start_y, u32 end_y);
+extern u32 cgba_video_frame_dirty_rows;
+#else
+static inline void video_invalidate_scanline_cache(u32 start_y, u32 end_y)
+{ (void)start_y; (void)end_y; }
+#endif
 
 extern s32 affine_reference_x[2];
 extern s32 affine_reference_y[2];

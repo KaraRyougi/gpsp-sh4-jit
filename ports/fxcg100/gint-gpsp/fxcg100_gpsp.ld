@@ -113,6 +113,11 @@ SECTIONS
 		. = ALIGN(16);
 	} > ilram AT> rom
 
+	/* Remaining zero-wait-state ILRAM (up to 4 KiB) holds the hottest
+	 * runtime-emitted fastmem routines (saved across OS world switches). */
+	_cgba_ilram_fastmem_start = (_rilram + SIZEOF(.ilram) + 31) & ~31;
+	_cgba_ilram_fastmem_end = ORIGIN(ilram) + LENGTH(ilram);
+
 	. = ORIGIN(xyram);
 	.xyram.fastmem (NOLOAD) : ALIGN(32) {
 		_cgba_fastmem_start = . ;

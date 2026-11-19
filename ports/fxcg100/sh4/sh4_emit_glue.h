@@ -117,8 +117,12 @@ enum {
   SH4G_VEC_ewram_data,
 #if defined(CGBA_VIDEO_BLEND_PALETTE_CACHE) || \
     defined(CGBA_VIDEO_BACKDROP_SHADOW_PALETTE) || \
-    defined(CGBA_VIDEO_TILE_ROW_CACHE)
+    defined(CGBA_VIDEO_TILE_ROW_CACHE) || \
+    (defined(CGBA_VIDEO_DIRTY_SCANLINE) && CGBA_VIDEO_DIRTY_SCANLINE)
   SH4G_VEC_palette_dirty,
+#endif
+#if defined(CGBA_VIDEO_DIRTY_SCANLINE) && CGBA_VIDEO_DIRTY_SCANLINE
+  SH4G_VEC_vram_dirty,
 #endif
   SH4G_VEC_COUNT                       /* MOV.L disp4 reach caps this at 16 */
 };
@@ -925,6 +929,10 @@ static inline void sh4g_cycle_gate(u8 **tp, uint32_t pc, int is_word)
   { long d = ((long)(*tp) - ((long)bt + 4)) / 2; bt[1] = (uint8_t)(d & 0xFF); }
 }
 
+#ifndef CGBA_SH4_LAZY_CHAIN
+#define CGBA_SH4_LAZY_CHAIN 1
+#endif
+
 /* ---- branch exit (patchable far jump) ------------------------------------ *
  * Emits a fixed self-contained jump whose target literal is back-patched by
  * sh4g_patch_jump(). Returns the patch site (the MOV.L address).             */
@@ -948,6 +956,34 @@ static inline u8 *sh4g_emit_patch_jump(u8 **tp)
   SH4G_EMSTAT((cgba_em_pj_n++, cgba_em_pj_bytes += (unsigned long)(*tp - site)));
   return site;
 }
+
+#if CGBA_SH4_LAZY_CHAIN
+/* Same geometry as sh4g_emit_patch_jump, but uses JSR @R0 so an unpatched
+ * exit passes PR = site + 6 to sh4_lazy_link_rom_{arm,thumb}, which computes
+ * lit = (PR + 3) & ~3 and overwrites the 4-byte data literal once the target
+ * appears in rom_branch_hash. sh4g_chain_patch still rewrites near sites to
+ * BRA + NOP identically. */
+static inline u8 *sh4g_emit_patch_call(u8 **tp)
+{
+  u8 *site = *tp, *lit;
+  long ld_disp;
+
+  lit = (u8 *)(((uintptr_t)(site + 6) + 3u) & ~(uintptr_t)3u);
+  ld_disp = ((long)lit - (((long)site & ~3L) + 4)) / 4;
+  sh4g_u16(tp, (uint16_t)(0xD000 | (SH4_REG_RET << 8) | (ld_disp & 0xFF)));   /* MOV.L @(d,PC),R0 */
+  sh4g_u16(tp, (uint16_t)(0x400B | (SH4_REG_RET << 8)));                      /* JSR @R0 */
+  sh4g_u16(tp, 0x0009);                                                       /* NOP */
+  while (*tp < lit)
+    sh4g_u16(tp, 0x0009);
+  {
+    sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_u32_be(&cg, 0);                                                  /* target placeholder */
+    sh4g_close(tp, &cg);
+  }
+  SH4G_EMSTAT((cgba_em_pj_n++, cgba_em_pj_bytes += (unsigned long)(*tp - site)));
+  return site;
+}
+#endif
 
 /* Patch the literal of a jump emitted by sh4g_emit_patch_jump at `site`. */
 static inline void sh4g_patch_jump(u8 *site, const void *target)
@@ -1025,8 +1061,12 @@ static inline u8 *sh4g_branch_exit(u8 **tp, uint32_t new_pc,
   sh4g_block_exit_jmp(tp);                       /* exhausted: events + redispatch */
   { long d = ((long)(*tp) - ((long)bt + 4)) / 2; bt[1] = (uint8_t)(d & 0xFF); }
 
+#if CGBA_SH4_LAZY_CHAIN
+  site = sh4g_emit_patch_call(tp);               /* chain to target block (patched or lazy-linked) */
+#else
   site = sh4g_emit_patch_jump(tp);               /* chain to target block (patched) */
-  sh4g_patch_jump(site, block_exit_fn);          /* default: redispatch */
+#endif
+  sh4g_patch_jump(site, block_exit_fn);          /* default: redispatch / lazy link */
   return site;
 }
 
@@ -1059,8 +1099,12 @@ static inline u8 *sh4g_branch_exit_idle(u8 **tp, uint32_t new_pc,
   sh4g_u16(tp, (uint16_t)(0xE000 | (SH4_REG_CYCLES << 8))); /* MOV #0,R13 */
   sh4g_vec_call(tp, SH4G_VEC_update_gba);            /* fast-forward events */
   sh4g_const(tp, new_pc, SH4_REG_ARG0);              /* R4 clobbered by C call */
+#if CGBA_SH4_LAZY_CHAIN
+  site = sh4g_emit_patch_call(tp);                   /* chain to target block */
+#else
   site = sh4g_emit_patch_jump(tp);                   /* chain to target block */
-  sh4g_patch_jump(site, block_exit_fn);              /* default: full exit */
+#endif
+  sh4g_patch_jump(site, block_exit_fn);              /* default: full exit / lazy link */
   return site;
 }
 

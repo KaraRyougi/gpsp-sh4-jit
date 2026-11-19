@@ -127,6 +127,7 @@ static void reset_fixture(void)
   cgba_idle_wait = 0;
   cgba_timer_active_mask = 0;
   cgba_timer_cap_mask = 0;
+  cgba_hblank_dma_mask = 0;
   reg[CPU_HALT_STATE] = CPU_ACTIVE;
 }
 
@@ -142,6 +143,7 @@ static void configure_iwram_smc_dma(u32 start_type)
   dma[0].dest_direction = DMA_INCREMENT;
   dma[0].length_type = DMA_16BIT;
   dma[0].start_type = start_type;
+  cgba_update_hblank_dma_mask(0, start_type);
   dma[0].irq = DMA_NO_IRQ;
 }
 
@@ -156,6 +158,7 @@ static void configure_waitcnt_dma(u32 start_type)
   dma[0].dest_direction = DMA_INCREMENT;
   dma[0].length_type = DMA_16BIT;
   dma[0].start_type = start_type;
+  cgba_update_hblank_dma_mask(0, start_type);
   dma[0].irq = DMA_NO_IRQ;
 }
 

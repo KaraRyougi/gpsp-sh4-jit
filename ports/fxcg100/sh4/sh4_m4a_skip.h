@@ -213,4 +213,135 @@ static inline int cgba_sh4_m4a_skip_mem_decode(uint32_t opcode,
   return 1;
 }
 
+/* ------------------------------------------------------------------------
+ * Loop models (CGBA_SH4_M4A_LOOP_FOLD)
+ *
+ * With the PCM work elided, the two hot loops are counters and pointer
+ * bumps.  These models advance them by whole iterations in C.  They are
+ * called from a prefix emitted at the loop head, and the translated loop
+ * still follows the prefix, so:
+ *   - an iteration is folded only if the cycle budget stays positive after
+ *     it.  The budget only decreases inside an iteration and every gate in
+ *     the translated code fires on budget <= 0, so a folded iteration is one
+ *     in which no gate would have fired.  The iteration that exhausts the
+ *     budget is always left to the translated code, which exits normally;
+ *   - loop exits, sample ends and loop points are never folded either.
+ * The cycles charged are the interpreter's for the same path: one sequential
+ * fetch per instruction on the path (elided ones included), one
+ * nonsequential refill per taken branch, and one nonsequential access per
+ * transfer priced by its address region.  All flags the loop head expects
+ * come from the last SUBS and are recomputed exactly.
+ * ------------------------------------------------------------------------ */
+
+#define CGBA_SH4_M4A_LOOP_REVERB 0x010u   /* reverb loop head            */
+#define CGBA_SH4_M4A_LOOP_INTERP 0x300u   /* interpolating group head    */
+
+typedef struct cgba_sh4_m4a_loop_costs {
+  uint32_t seq;                 /* ws_cyc_seq[code region][word]  */
+  uint32_t branch;              /* ws_cyc_nseq[code region][word] */
+  const uint8_t (*mem)[2];      /* ws_cyc_nseq[16][2]             */
+} cgba_sh4_m4a_loop_costs;
+
+static inline uint32_t cgba_sh4_m4a_subs_flags(uint32_t a, uint32_t b)
+{
+  uint32_t r = a - b;
+  return (r & 0x80000000u) | (r == 0 ? 0x40000000u : 0u) |
+         (a >= b ? 0x20000000u : 0u) |
+         ((((a ^ b) & (a ^ r)) >> 31) << 28);
+}
+
+/* Reverb loop, one sample per iteration (15 instructions, 6 byte transfers):
+ *   r4 = samples left, r5/r7 = buffer cursors, r6 = constant channel offset.
+ * Returns the cycles spent; 0 means nothing was folded and nothing changed. */
+static inline uint32_t cgba_sh4_m4a_fold_reverb(
+  uint32_t *r4, uint32_t *r5, uint32_t r6, uint32_t *r7, uint32_t *cpsr,
+  int32_t budget, const cgba_sh4_m4a_loop_costs *c)
+{
+  uint32_t n4 = *r4, n5 = *r5, n7 = *r7, spent = 0, last = 0;
+
+  while ((int32_t)n4 > 1) {           /* keep the final (exiting) iteration */
+    uint32_t a0 = n5 + r6, a2 = n7 + r6, cost;
+    if ((a0 >> 28) | (n5 >> 28) | (a2 >> 28) | (n7 >> 28))
+      break;                          /* outside the charge table */
+    cost = 15u * c->seq + c->branch +
+           2u * c->mem[a0 >> 24][0] + 2u * c->mem[n5 >> 24][0] +
+           c->mem[a2 >> 24][0] + c->mem[n7 >> 24][0];
+    if ((int64_t)budget - (int64_t)spent - (int64_t)cost <= 0)
+      break;
+    spent += cost;
+    last = n4;
+    n4--; n5++; n7++;
+  }
+  if (!spent)
+    return 0;
+  *r4 = n4; *r5 = n5; *r7 = n7;
+  *cpsr = (*cpsr & 0x0FFFFFFFu) | cgba_sh4_m4a_subs_flags(last, 1u);
+  return spent;
+}
+
+/* Interpolating mix, four samples per group:
+ *   r2 = samples left in the wave, r3 = wave cursor, r4 = phase step,
+ *   r5 = buffer cursor (sample-in-group counter in its top two bits),
+ *   r8 = output samples left, r9 = phase, lr = last integer step. */
+typedef struct cgba_sh4_m4a_interp_state {
+  uint32_t r2, r3, r4, r5, r8, r9, lr, cpsr;
+} cgba_sh4_m4a_interp_state;
+
+static inline uint32_t cgba_sh4_m4a_fold_interp(
+  cgba_sh4_m4a_interp_state *s, int32_t budget,
+  const cgba_sh4_m4a_loop_costs *c)
+{
+  uint32_t spent = 0;
+
+  for (;;) {
+    uint32_t r2 = s->r2, r3 = s->r3, r5 = s->r5, r9 = s->r9, lr = s->lr;
+    uint32_t cost, i;
+
+    /* Group head: top bits clear, and the group must not be the last one
+     * (SUBS r8, r8, #4 ; BGT must be taken). */
+    if ((r5 >> 28) || ((r5 + 0x630u) >> 28) || (int32_t)s->r8 <= 4)
+      break;
+    cost = 2u * c->seq + c->mem[r5 >> 24][1] + c->mem[(r5 + 0x630u) >> 24][1];
+    for (i = 0; i < 4u; i++) {
+      cost += 11u * c->seq;
+      r9 += s->r4;
+      lr = r9 >> 23;
+      if (lr == 0) {
+        cost += c->branch;                       /* BEQ over the step code */
+      } else {
+        r9 &= ~0x3F800000u;
+        if ((int32_t)r2 <= (int32_t)lr)
+          goto done;                             /* wave end / loop point */
+        r2 -= lr;
+        cost += 8u * c->seq;
+        lr -= 1u;
+        if (lr != 0) {
+          r3 += lr;
+          if (r3 >> 28)
+            goto done;
+          cost += c->mem[r3 >> 24][0];
+        }
+        r3 += 1u;
+        if (r3 >> 28)
+          goto done;
+        cost += c->mem[r3 >> 24][0];
+      }
+      cost += 2u * c->seq;
+      if (i < 3u)
+        cost += c->branch;                       /* BCC back to the sample */
+    }
+    /* r5's top bits wrapped to zero: store, advance, count the group. */
+    cost += 4u * c->seq + c->mem[(r5 + 0x630u) >> 24][1] +
+            c->mem[r5 >> 24][1] + c->branch;
+    if ((int64_t)budget - (int64_t)spent - (int64_t)cost <= 0)
+      break;
+    spent += cost;
+    s->cpsr = (s->cpsr & 0x0FFFFFFFu) | cgba_sh4_m4a_subs_flags(s->r8, 4u);
+    s->r2 = r2; s->r3 = r3; s->r5 = r5 + 4u; s->r9 = r9; s->lr = lr;
+    s->r8 -= 4u;
+  }
+done:
+  return spent;
+}
+
 #endif /* CGBA_SH4_M4A_SKIP_H */
