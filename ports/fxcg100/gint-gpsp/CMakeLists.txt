@@ -96,6 +96,10 @@ option(CGBA_SH4_INTERP_STATS
   "Count interpreted guest instructions by region (diag; ~4.5% overhead)" OFF)
 option(CGBA_SH4_DIAG_COUNTERS
   "Per-slice/per-helper diagnostic counters in headless builds (~0.5%)" OFF)
+option(CGBA_SAVE_TIMING
+  "Show how long each step of a savestate save took (pack, write, remap)" OFF)
+option(CGBA_KEY_TEST
+  "Show the raw keyboard matrix (KEYSC) and menu key bits in the menu footer" OFF)
 option(CGBA_DEBUG_MENU
   "Show the in-menu DEBUG INFO submenu + F:/H frame/hash overlay (dev; hidden in release)" OFF)
 option(CGBA_SH4_SWI_HLE_VERIFY
@@ -242,7 +246,7 @@ else()
   target_sources(cgba-gint-gpsp PRIVATE
     src/gint_platform.c
     src/no_osheap.c
-    ${FXCG100}/fxcg100_menu.c)
+    ${FXCG100}/cg_ui.c)  # keypad interface; fxcg100_menu.c is the bare-metal build's
   if(CGBA_FXCG50)
     target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_FXCG50=1)
     target_sources(cgba-gint-gpsp PRIVATE
@@ -259,6 +263,12 @@ endif()
 # the fx-CP400, whose memory timings have not been characterised.
 if(CGBA_DEFAULT_OVERCLOCK AND NOT CGBA_CLASSPAD)
   target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_DEFAULT_OVERCLOCK=1)
+endif()
+if(CGBA_SAVE_TIMING)
+  target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_SAVE_TIMING=1)
+endif()
+if(CGBA_KEY_TEST)
+  target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_KEY_TEST=1)
 endif()
 if(CGBA_DEBUG_MENU)
   target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_DEBUG_MENU=1)

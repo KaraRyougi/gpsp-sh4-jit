@@ -1097,7 +1097,7 @@ static void test_ui(const char *dir)
 		(unsigned)ui_state.screen_scale, (unsigned)ui_state.rotation);
 	CHECK(ui.w == 528 && ui.h == 320, "interface did not turn");
 	/* Landscape has three picture sizes. */
-	ui_tap_on("1:1", 0);
+	ui_tap_on("Original", 0);
 	CHECK(ui_state.screen_scale == CP_VIEW_LANDSCAPE_1X, "landscape 1:1 (%u)",
 		(unsigned)ui_state.screen_scale);
 	ui_tap_on("1.5x", 0);
@@ -1116,7 +1116,7 @@ static void test_ui(const char *dir)
 		"interface did not turn over");
 	CHECK(cp_physical_direction(cp_view, cp_rotation, 0) == 2,
 		"upside down, up in the menu is not the DOWN key");
-	ui_tap_on("1:1", 0);
+	ui_tap_on("Original", 0);
 	CHECK(ui_state.screen_scale == CP_VIEW_PORTRAIT_1X &&
 		ui_state.rotation == CP_ROTATION_KEYS_LEFT,
 		"upside-down 1:1 (%u, %u)", (unsigned)ui_state.screen_scale,

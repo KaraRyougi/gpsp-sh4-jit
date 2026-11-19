@@ -20,6 +20,12 @@ void fxcg100_panic(const char *text);
 #define FXCG100_APPKEY_RIGHT  (1u << 8)
 #define FXCG100_APPKEY_BACK   (1u << 9)
 #define FXCG100_APPKEY_ON     (1u << 10)
+/* fx-CG interface only (cg_ui.c): the key that opens Settings (OPTN on the
+ * fx-CG50, SETTINGS on the fx-CG100), DEL, and the digit keys. */
+#define FXCG100_APPKEY_SETTINGS (1u << 11)
+#define FXCG100_APPKEY_DEL      (1u << 12)
+#define FXCG100_APPKEY_DIGIT(n) (1u << (16 + (n)))
+#define FXCG100_APPKEY_DIGITS   (0x3ffu << 16)
 
 #if defined(CGBA_CLASSPAD)
 #define FXCG100_PHYSKEY_ON 0x74u   /* fx-CP400 KEY_CLEAR (Clear / power) */
@@ -167,6 +173,8 @@ void fxcg100_lcd_fill_rect(unsigned x, unsigned y, unsigned w, unsigned h,
 void fxcg100_lcd_draw_text(unsigned x, unsigned y, const char *text,
                            uint16_t fg, uint16_t bg);
 void fxcg100_lcd_update(void);
+/* Push only VRAM rows y..y+h-1 (widened to whole groups of four rows). */
+void fxcg100_lcd_update_rows(unsigned y, unsigned h);
 void fxcg100_lcd_status(const char *text);
 /* OS BFile calls can draw a busy icon directly into LCD GRAM. Mark that
  * activity so the next gameplay presentation removes any stale border pixels. */
@@ -237,8 +245,6 @@ void fxcg100_lcd_present_frame(void);
 struct cp_clock;
 void fxcg100_clock_read(struct cp_clock *clock);
 void fxcg100_clock_write(const struct cp_clock *clock);
-/* 128 Hz ticks: from a timer, or from the RTC once it is seen to run. */
-uint32_t fxcg100_ticks(void);
 /* How many times a touch read that never finished had to be called off. */
 uint32_t fxcg100_touch_recoveries(void);
 /* Nonzero when gpSP reads the touch controller itself rather than through
@@ -266,6 +272,23 @@ void cp_ui_game_starting(void);
 /* A full-screen message in the fx-CP400 interface's look (classpad_ui.c). */
 void cp_ui_status(const fxcg100_menu_state *state, const char *line1,
                   const char *line2);
+#endif
+/* 128 Hz ticks. fx-CP400: from a timer, or from the RTC once it is seen to
+ * run. fx-CG: the RTC. */
+uint32_t fxcg100_ticks(void);
+
+#ifndef CGBA_CLASSPAD
+/* The fx-CG interface (cg_ui.c). A message while something slow happens,
+ * as a small box: over the game picture, dimmed and placed as the display
+ * mode places it, when `frame` is the GBA frame, else over a plain page. */
+void cg_ui_status(const fxcg100_menu_state *state, const char *line1,
+                  const char *line2, const uint16_t *frame);
+/* While main() saves or loads a state for the menu: show `text` in the
+ * footer of the page that asked for it. */
+void cg_ui_show_progress(const char *text);
+/* The next fxcg100_menu_run() goes back to the page and row it left and
+ * shows `text` in the footer for two seconds. */
+void cg_ui_set_result(const char *text, int error);
 #endif
 uint32_t fxcg100_frame_hash(const uint16_t *pixels);
 

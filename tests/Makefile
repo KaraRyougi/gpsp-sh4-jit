@@ -17,11 +17,11 @@ comma   := ,
 DEAD_STRIP := $(if $(filter Darwin,$(shell uname -s)),\
 	-Wl$(comma)-dead_strip,-Wl$(comma)--gc-sections)
 
-.PHONY: all smoke audit core litpool thumb cond native-ldst input config-version storage lcd-cleanup scale classpad rtc backup-dirty nor-world-switch cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc \
+.PHONY: all smoke audit core litpool thumb cond native-ldst input config-version storage lcd-cleanup scale classpad fxcg-ui rtc backup-dirty nor-world-switch overclock cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc \
 	swi-overlap swi-oam udiv udiv-emitter idle-signature video-opaque \
 	video-blend-cache video-backdrop-shadow video-sprite-decode video-tile-row-cache video-text-fastpaths arm-mixer m4a-skip clean
 
-all: smoke core litpool thumb cond native-ldst rtc pacing backup-dirty nor-world-switch input config-version storage lcd-cleanup scale classpad cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc swi-overlap swi-oam udiv \
+all: smoke core litpool thumb cond native-ldst rtc pacing backup-dirty nor-world-switch overclock input config-version storage lcd-cleanup scale classpad fxcg-ui cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc swi-overlap swi-oam udiv \
 	udiv-emitter idle-signature video-opaque video-blend-cache \
 	video-backdrop-shadow video-sprite-decode video-tile-row-cache video-text-fastpaths arm-mixer m4a-skip audit
 
@@ -131,6 +131,30 @@ classpad: $(ROOT)/tests/classpad_render_test.c $(ROOT)/tests/classpad_elf_test.c
 	$(CC) $(CFLAGS) -I$(ROOT) $(ROOT)/tests/classpad_hhk_test.c \
 	  -o $(BIN)-classpad-hhk
 	$(BIN)-classpad-hhk $(CLASSPAD_OS_DUMP)
+# The built-in Ptune 4 F5 profile must not downclock a faster launcher clock.
+overclock: $(ROOT)/tests/overclock_policy_test.c \
+	   $(ROOT)/ports/fxcg100/gint-gpsp/src/overclock.c \
+	   $(ROOT)/tests/stubs/gint/clock.h
+	$(CC) $(CFLAGS) -I$(ROOT)/tests/stubs -I$(ROOT) \
+	  $(ROOT)/tests/overclock_policy_test.c -o $(BIN)-overclock
+	$(BIN)-overclock
+
+# fx-CG50 / fx-CG100 keypad interface (cg_ui.c) on a simulated panel: what
+# each key does, that partial pushes leave nothing behind, baselines.
+#   make -C tests fxcg-ui FXCG_UI_DIR=/some/dir   also writes PPMs
+fxcg-ui: $(ROOT)/tests/fxcg_ui_test.c $(ROOT)/ports/fxcg100/cg_ui.c \
+	  $(ROOT)/ports/fxcg100/cg_font.h $(ROOT)/ports/fxcg100/classpad_gfx.h \
+	  $(ROOT)/ports/fxcg100/classpad_theme.h \
+	  $(ROOT)/ports/fxcg100/fxcg100_keys.c \
+	  $(ROOT)/ports/fxcg100/fxcg100_platform.h
+	$(CC) $(CFLAGS) -O2 -I$(ROOT)/tests/stubs_cgui -I$(ROOT)/ports/fxcg100 \
+	  -I$(ROOT) $(ROOT)/tests/fxcg_ui_test.c -o $(BIN)-fxcg-ui
+	$(BIN)-fxcg-ui $(FXCG_UI_DIR)
+	$(CC) $(CFLAGS) -O2 -DCGBA_FXCG50=1 -I$(ROOT)/tests/stubs_cgui \
+	  -I$(ROOT)/tests/stubs -I$(ROOT)/ports/fxcg100 -I$(ROOT) \
+	  $(ROOT)/tests/fxcg_ui_test.c -o $(BIN)-fxcg-ui-cg50
+	$(BIN)-fxcg-ui-cg50 $(FXCG_UI_DIR)
+
 # The speed limiter and automatic frame skipping, on a virtual clock.
 pacing: $(ROOT)/tests/frame_pacing_test.c \
 	  $(ROOT)/ports/fxcg100/gint-gpsp/src/frame_pacing.c \
@@ -178,6 +202,7 @@ nor-world-switch: $(ROOT)/tests/nor_rom_world_switch_test.c \
 	  $(ROOT)/tests/nor_rom_world_switch_test.c $(DEAD_STRIP) \
 	  -o $(BIN)-nor-world-switch
 	$(BIN)-nor-world-switch
+
 
 # ARM condition-code -> SH4 T-bit emission, every cond x every NZCV (host-only).
 cond: $(ROOT)/tests/sh4_cond_audit.c $(ROOT)/ports/fxcg100/sh4/sh4_emit_glue.h \
@@ -358,7 +383,7 @@ clean:
 	  $(BIN)-input $(BIN)-input-cg50 $(BIN)-config-version \
 	  $(BIN)-rtc $(BIN)-rtc-fxcg100 $(BIN)-backup-dirty \
 	  $(BIN)-storage $(BIN)-storage-cg50 \
-	  $(BIN)-nor-world-switch $(BIN)-scale $(BIN)-cycle $(BIN)-exec \
+	  $(BIN)-nor-world-switch $(BIN)-overclock $(BIN)-scale $(BIN)-cycle $(BIN)-exec \
 	  $(BIN)-jit-boundaries $(BIN)-jit-safety $(BIN)-jit-ram-flush \
 	  $(BIN)-memory-pc $(BIN)-swi-overlap $(BIN)-udiv \
 	  $(BIN)-swi-oam $(BIN)-udiv-emitter $(BIN)-idle-signature \

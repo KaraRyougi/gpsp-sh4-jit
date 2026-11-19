@@ -7,6 +7,7 @@
 #include <gint/drivers/r61524.h>
 #include <gint/keyboard.h>
 #include <gint/keycodes.h>
+#include <gint/rtc.h>
 
 #include <stdio.h>
 #include <string.h>
@@ -157,6 +158,18 @@ uint32_t fxcg100_poll_app_keys(void)
 		keys |= FXCG100_APPKEY_RIGHT;
 	if(keydown(KEY_EXIT))
 		keys |= FXCG100_APPKEY_BACK;
+	if(keydown(KEY_OPTN))
+		keys |= FXCG100_APPKEY_SETTINGS;
+	if(keydown(KEY_DEL))
+		keys |= FXCG100_APPKEY_DEL;
+	{
+		static const int digits[10] = { KEY_0, KEY_1, KEY_2, KEY_3, KEY_4,
+			KEY_5, KEY_6, KEY_7, KEY_8, KEY_9 };
+
+		for(int i = 0; i < 10; i++)
+			if(keydown(digits[i]))
+				keys |= FXCG100_APPKEY_DIGIT(i);
+	}
 #else
 	if(fxcg100_key_down(77))
 		keys |= FXCG100_APPKEY_SHIFT;
@@ -180,9 +193,28 @@ uint32_t fxcg100_poll_app_keys(void)
 		keys |= FXCG100_APPKEY_BACK;
 	if(fxcg100_key_down(FXCG100_PHYSKEY_ON))
 		keys |= FXCG100_APPKEY_ON;
+	if(fxcg100_key_down(78))
+		keys |= FXCG100_APPKEY_SETTINGS;
+	if(fxcg100_key_down(44))
+		keys |= FXCG100_APPKEY_DEL;
+	{
+		/* Skin positions of 0..9 (see fxcg100_keys.c). */
+		static const uint8_t digits[10] = { 71, 72, 62, 52, 73, 63, 53, 74,
+			64, 54 };
+
+		for(int i = 0; i < 10; i++)
+			if(fxcg100_key_down(digits[i]))
+				keys |= FXCG100_APPKEY_DIGIT(i);
+	}
 #endif
 
 	return keys;
+}
+
+/* 128 Hz ticks for timing (savestate timings): the RTC. */
+uint32_t fxcg100_ticks(void)
+{
+	return rtc_ticks();
 }
 
 void fxcg100_lcd_init(void)
@@ -232,6 +264,24 @@ void fxcg100_lcd_update(void)
 	wait_lcd_dma();
 	dupdate();
 	lcd_os_overlay_dirty = 0;
+}
+
+void fxcg100_lcd_update_rows(unsigned y, unsigned h)
+{
+	unsigned y1 = y + h;
+
+	if(y >= DHEIGHT || h == 0)
+		return;
+	if(y1 > DHEIGHT)
+		y1 = DHEIGHT;
+	/* r61524_display() sends whole rows by DMA in groups of four. */
+	y &= ~3u;
+	y1 = (y1 + 3u) & ~3u;
+	if(y1 > DHEIGHT)
+		y1 = DHEIGHT;
+	restore_full_window();
+	wait_lcd_dma();
+	r61524_display(gint_vram, (int)y, (int)(y1 - y), R61524_DMA_WAIT);
 }
 
 void fxcg100_lcd_status(const char *text)
