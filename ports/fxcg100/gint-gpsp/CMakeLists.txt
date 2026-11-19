@@ -1,7 +1,9 @@
 cmake_minimum_required(VERSION 3.15)
 project(cgba_gint_gpsp C CXX ASM)
 
-include(GenerateG3A)
+if(NOT "${FXSDK_PLATFORM_LONG}" STREQUAL "fxCP")
+  include(GenerateG3A)
+endif()
 find_package(Gint 2.9 REQUIRED)
 
 set(CGBA_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../..")
@@ -12,7 +14,19 @@ set(GPSP "${CGBA_ROOT}/vendor/gpsp")
 # the JIT; they differ in keyboard codes, storage backing, and the ROM source
 # (CG100 memory-maps NOR; CG50 streams the .gba via BFile).
 option(CGBA_FXCG50 "Build for fx-CG50 / Graph 90+E instead of fx-CG100" OFF)
-if(CGBA_FXCG50)
+# fx-CP400 / ClassPad II under HollyHock-3 (configure with the FXCP toolchain).
+# Same SH7305, but 16 MiB of RAM that belongs to the OS heap, a 320x528
+# touchscreen, and a POSIX-like file API. The core is configured
+# like the fx-CG50 one (gint key codes, RAM-resident hot code), so this option
+# implies the CGBA_FXCG50 define and overrides the platform layer.
+option(CGBA_CLASSPAD "Build for fx-CP400 / ClassPad II (HollyHock-3 .hh3)" OFF)
+if(CGBA_CLASSPAD)
+  if(NOT "${FXSDK_PLATFORM_LONG}" STREQUAL "fxCP")
+    message(FATAL_ERROR "CGBA_CLASSPAD requires the fxSDK FXCP toolchain file")
+  endif()
+  set(CGBA_FXCG50 ON)
+  set(CGBA_GPSP_LINKER "${CMAKE_CURRENT_SOURCE_DIR}/classpad_gpsp.ld")
+elseif(CGBA_FXCG50)
   set(CGBA_GPSP_LINKER "${CMAKE_CURRENT_SOURCE_DIR}/fxcg50_gpsp.ld")
 else()
   set(CGBA_GPSP_LINKER "${CMAKE_CURRENT_SOURCE_DIR}/fxcg100_gpsp.ld")
@@ -25,17 +39,15 @@ set_target_properties(Gint::Gint PROPERTIES
 
 set(PORT_SOURCES
   src/main.c
-  src/gint_platform.c
+  src/frame_overlay.c
   src/nor_rom.c
   src/nor_filestream.c
   src/overclock.c
   src/gpsp_runner.c
   src/frame_pacing.c
-  src/no_osheap.c
   src/crash_panic.c
   ${FXCG100}/fxcg100_keys.c
   ${FXCG100}/fxcg100_config.c
-  ${FXCG100}/fxcg100_menu.c
   ${FXCG100}/fxcg100_gpsp_stubs.c
   ${FXCG100}/fxcg100_sound_stub.c
 )
@@ -65,10 +77,19 @@ option(CGBA_SH4_THUMB_LDST_NATIVE
   "Enable SH4 native Thumb RAM load fast path" ON)
 option(CGBA_SH4_THUMB_BLOCK_NATIVE
   "Enable SH4 native Thumb RAM block-load fast path" ON)
+option(CGBA_SH4_SELECTIVE_R0_SYNC
+  "Synchronize pinned r0 only when a fastmem transfer uses it" ON)
+option(CGBA_SH4_REG_FORWARD "Experimental adjacent ALU register forwarding" OFF)
+option(CGBA_SH4_BLOCK_PROFILE
+  "Emit block-entry counters in profiling/headless builds" ON)
 option(CGBA_SH4_PIN_GUEST_R0
   "Keep guest ARM r0 resident in callee-saved SH-4 R11" ON)
 option(CGBA_SH4_FASTMEM_XYRAM
   "Place generated resident fastmem routines in on-chip XYRAM (hardware A/B)" OFF)
+option(CGBA_SH4_FASTMEM_ILRAM
+  "Pack hottest resident fastmem routines into free zero-wait-state ILRAM" ON)
+option(CGBA_SH4_LAZY_CHAIN
+  "Avoid spurious update_gba on unpatched exits and lazily chain ROM branches" ON)
 option(CGBA_SH4_KNOWN_TARGET_CACHE
   "Cache known ARM and Thumb indirect targets before the ROM hash walk" ON)
 option(CGBA_SH4_SEGMENTED_LITERAL_POOL
@@ -79,6 +100,10 @@ option(CGBA_SH4_INTERP_STATS
   "Count interpreted guest instructions by region (diag; ~4.5% overhead)" OFF)
 option(CGBA_SH4_DIAG_COUNTERS
   "Per-slice/per-helper diagnostic counters in headless builds (~0.5%)" OFF)
+option(CGBA_SAVE_TIMING
+  "Show how long each step of a savestate save took (pack, write, remap)" OFF)
+option(CGBA_KEY_TEST
+  "Show the raw keyboard matrix (KEYSC) and menu key bits in the menu footer" OFF)
 option(CGBA_DEBUG_MENU
   "Show the in-menu DEBUG INFO submenu + F:/H frame/hash overlay (dev; hidden in release)" OFF)
 option(CGBA_SH4_SWI_HLE_VERIFY
@@ -91,6 +116,10 @@ option(CGBA_SH4_THUMB_UDIV_FASTPATH
   "Experimental exact fast path for the Zelda/libgcc Thumb unsigned divide suffix" OFF)
 option(CGBA_SH4_ARM_MIXER_FASTPATH
   "Experimental exact fast path for the Zelda/m4a ARM four-sample mixer loop" OFF)
+option(CGBA_SH4_M4A_MIX_SKIP
+  "Skip discarded PCM arithmetic and buffer access in the signature-matched m4a mixer (only valid with the no-op sound backend)" ON)
+option(CGBA_SH4_M4A_LOOP_FOLD
+  "Fold whole iterations of the elided m4a reverb/mix loops in C (needs CGBA_SH4_M4A_MIX_SKIP)" ON)
 option(CGBA_SH4_SWI_OBJAFFINE_HLE
   "Experimental SH4 HLE for BIOS ObjAffineSet (SWI 0x0F); default off until event-slice parity is fixed" OFF)
 set(CGBA_SH4_HEAT_QUIET_FRAMES "180" CACHE STRING
@@ -146,6 +175,16 @@ set(CGBA_GPSP_RAM_TRANSLATION_CACHE_SIZE "524288" CACHE STRING
   "SH4 dynarec RAM translation cache size in bytes")
 set(CGBA_GPSP_ROM_BRANCH_HASH_BITS "12" CACHE STRING
   "SH4 dynarec ROM branch-hash = 2^N u32 entries; 12 is 16 KiB, which is friendlier to the SH7305 cache than the upstream 16 / 256 KiB table")
+if(CGBA_CLASSPAD)
+  # The fx-CP400 arena is in the OS heap and not under the fx-CG ceiling
+  # above, so the ROM cache is 2.25 MiB there: Pokemon Emerald was seen to
+  # fill the 1 MiB one 11 times in a session. The last quarter is what the
+  # mini-ROM buffer used to take (CGBA_NO_MEMORY_ROM). The hash table is
+  # doubled to keep its chains about the same length. See classpad_gpsp.ld
+  # for the room.
+  set(CGBA_GPSP_ROM_TRANSLATION_CACHE_SIZE 2359296)
+  set(CGBA_GPSP_ROM_BRANCH_HASH_BITS 13)
+endif()
 if(CGBA_DYNAREC)
   list(APPEND GPSP_C_SOURCES
     ${GPSP}/cpu_threaded.c
@@ -164,6 +203,7 @@ set(GPSP_CXX_SOURCES
 
 set(GPSP_ASM_SOURCES
   ${GPSP}/bios_data.S
+  ${FXCG100}/sh4/sh4_video_4bpp.S
 )
 if(CGBA_DYNAREC)
   list(APPEND GPSP_ASM_SOURCES ${GPSP}/sh4/sh4_stub.S)
@@ -189,21 +229,59 @@ target_compile_definitions(cgba-gint-gpsp PRIVATE
   CGBA_FULL_GPSP=1
   CGBA_RTC_WALLCLOCK=1
   ROM_BUFFER_SIZE=1
+  CGBA_NO_MEMORY_ROM=1
   dma_transfer=gpsp_dma_transfer
 )
-if(CGBA_FXCG50)
-  target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_FXCG50=1)
+option(CGBA_SILENT_TIMERS "Batch timer overflows for the sound-stub calculator port" ON)
+option(CGBA_BULK_DMA "Bulk-copy contiguous ordinary-memory DMA spans" ON)
+option(CGBA_VIDEO_SPRITE_DECODE_CACHE "Reuse sprite attributes until OAM changes" ON)
+option(CGBA_VIDEO_TEXT_FAST4BPP
+  "Fast 4-bpp FULLCOLOR text BG kernel (SH-4 asm + pair LUT + empty-run skip)" ON)
+option(CGBA_VIDEO_DIRTY_SCANLINE
+  "Skip unchanged scanlines, OAM reorders, and unchanged LCD blits" ON)
+target_compile_definitions(cgba-gint-gpsp PRIVATE
+  CGBA_VIDEO_SPRITE_DECODE_CACHE=$<BOOL:${CGBA_VIDEO_SPRITE_DECODE_CACHE}>
+  CGBA_VIDEO_TEXT_FAST4BPP=$<BOOL:${CGBA_VIDEO_TEXT_FAST4BPP}>
+  CGBA_VIDEO_DIRTY_SCANLINE=$<BOOL:${CGBA_VIDEO_DIRTY_SCANLINE}>
+  CGBA_BULK_DMA=$<BOOL:${CGBA_BULK_DMA}>
+  CGBA_SILENT_TIMERS=$<BOOL:${CGBA_SILENT_TIMERS}>)
+if(CGBA_CLASSPAD)
+  # gint uses the OS heap on this model (VRAM backup, the arena itself), so
+  # the no_osheap.c stubs must not be linked.
+  target_compile_definitions(cgba-gint-gpsp PRIVATE
+    CGBA_CLASSPAD=1 CGBA_FXCG50=1)
+  # The ClassPad has its own touch interface in place of the fx-CG menu.
   target_sources(cgba-gint-gpsp PRIVATE
-    src/cg50_syscall.S
-    src/hottext.c)  # BFile trampoline + RAM-resident native-code loader
+    src/classpad_platform.c
+    src/classpad_loader.c
+    ${FXCG100}/classpad_ui.c)
 else()
-  target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_FXCG100=1)
+  target_sources(cgba-gint-gpsp PRIVATE
+    src/gint_platform.c
+    src/no_osheap.c
+    ${FXCG100}/cg_ui.c)  # keypad interface; fxcg100_menu.c is the bare-metal build's
+  if(CGBA_FXCG50)
+    target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_FXCG50=1)
+    target_sources(cgba-gint-gpsp PRIVATE
+      src/cg50_syscall.S
+      src/hottext.c)  # BFile trampoline + RAM-resident native-code loader
+  else()
+    target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_FXCG100=1)
+  endif()
 endif()
 if(CGBA_FXCG100_STORAGE)
   target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_FXCG100_STORAGE=1)
 endif()
-if(CGBA_DEFAULT_OVERCLOCK)
+# The Ptune profile is tuned for the fx-CG bus and SDRAM; it is not applied on
+# the fx-CP400, whose memory timings have not been characterised.
+if(CGBA_DEFAULT_OVERCLOCK AND NOT CGBA_CLASSPAD)
   target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_DEFAULT_OVERCLOCK=1)
+endif()
+if(CGBA_SAVE_TIMING)
+  target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_SAVE_TIMING=1)
+endif()
+if(CGBA_KEY_TEST)
+  target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_KEY_TEST=1)
 endif()
 if(CGBA_DEBUG_MENU)
   target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_DEBUG_MENU=1)
@@ -215,8 +293,13 @@ if(CGBA_DYNAREC)
   target_compile_definitions(cgba-gint-gpsp PRIVATE
     CGBA_DYNAREC=1
     SH4_ARCH=1
+    CGBA_SH4_SELECTIVE_R0_SYNC=$<BOOL:${CGBA_SH4_SELECTIVE_R0_SYNC}>
+    CGBA_SH4_REG_FORWARD=$<BOOL:${CGBA_SH4_REG_FORWARD}>
+    CGBA_SH4_BLOCK_PROFILE=$<BOOL:${CGBA_SH4_BLOCK_PROFILE}>
     CGBA_SH4_PIN_GUEST_R0=$<BOOL:${CGBA_SH4_PIN_GUEST_R0}>
     CGBA_SH4_FASTMEM_XYRAM=$<BOOL:${CGBA_SH4_FASTMEM_XYRAM}>
+    CGBA_SH4_FASTMEM_ILRAM=$<BOOL:${CGBA_SH4_FASTMEM_ILRAM}>
+    CGBA_SH4_LAZY_CHAIN=$<BOOL:${CGBA_SH4_LAZY_CHAIN}>
     CGBA_SH4_KNOWN_TARGET_CACHE=$<BOOL:${CGBA_SH4_KNOWN_TARGET_CACHE}>
     CGBA_SH4_SEGMENTED_LITERAL_POOL=$<BOOL:${CGBA_SH4_SEGMENTED_LITERAL_POOL}>
     CGBA_SH4_COMPACT_FASTMEM_TUPLE=$<BOOL:${CGBA_SH4_COMPACT_FASTMEM_TUPLE}>
@@ -273,6 +356,14 @@ if(CGBA_DYNAREC)
   if(CGBA_SH4_ARM_MIXER_FASTPATH AND NOT CGBA_SH4_EXACT_CYCLE_BOUNDARIES)
     target_compile_definitions(cgba-gint-gpsp PRIVATE
       CGBA_SH4_ARM_MIXER_FASTPATH=1)
+  endif()
+  if(CGBA_SH4_M4A_MIX_SKIP)
+    target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_SH4_M4A_MIX_SKIP=1)
+    # Exact-boundary diagnostics return to update_gba after every guest
+    # instruction; a multi-iteration fold cannot preserve that mode.
+    if(CGBA_SH4_M4A_LOOP_FOLD AND NOT CGBA_SH4_EXACT_CYCLE_BOUNDARIES)
+      target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_SH4_M4A_LOOP_FOLD=1)
+    endif()
   endif()
   if(CGBA_SH4_SWI_OBJAFFINE_HLE)
     target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_SH4_SWI_OBJAFFINE_HLE=1)
@@ -343,6 +434,20 @@ if(CGBA_VIDEO_BACKDROP_SHADOW_PALETTE)
     CGBA_VIDEO_BACKDROP_SHADOW_PALETTE=1)
 endif()
 
+option(CGBA_VIDEO_TILE_ROW_CACHE
+  "Experimental Mode 0 FULLCOLOR 4-bpp background tile-row cache" OFF)
+set(CGBA_VIDEO_TILE_ROW_CACHE_ENTRIES "128" CACHE STRING
+  "Number of direct-mapped tile row entries (power of two)")
+option(CGBA_VIDEO_TILE_ROW_PROFILE "Count tile-row cache hits and misses" OFF)
+if(CGBA_VIDEO_TILE_ROW_CACHE)
+  target_compile_definitions(cgba-gint-gpsp PRIVATE
+    CGBA_VIDEO_TILE_ROW_CACHE=1
+    CGBA_VIDEO_TILE_ROW_CACHE_ENTRIES=${CGBA_VIDEO_TILE_ROW_CACHE_ENTRIES})
+  if(CGBA_VIDEO_TILE_ROW_PROFILE)
+    target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_VIDEO_TILE_ROW_PROFILE=1)
+  endif()
+endif()
+
 # Fully opaque 4-bpp tile rows need neither transparency tests nor per-pixel
 # branches.  Keep the specialized renderer opt-in until representative-game
 # and device cache behavior have both been measured.
@@ -353,11 +458,30 @@ if(CGBA_VIDEO_OPAQUE_TILE_FASTPATH)
     CGBA_VIDEO_OPAQUE_TILE_FASTPATH=1)
 endif()
 
+# Overlay text layers are mostly transparent: step over runs of identical map
+# entries whose tile row is empty instead of decoding every tile.
+option(CGBA_VIDEO_EMPTY_RUN_SKIP
+  "Skip runs of repeated empty overlay tiles in 4-bpp text backgrounds" ON)
+if(CGBA_VIDEO_EMPTY_RUN_SKIP)
+  target_compile_definitions(cgba-gint-gpsp PRIVATE
+    CGBA_VIDEO_EMPTY_RUN_SKIP=1)
+endif()
+
 option(CGBA_VIDEO_OPAQUE_ROW_UNROLL
   "Unroll the measured exact 4-bpp tile-row shapes" ON)
 if(CGBA_VIDEO_OPAQUE_ROW_UNROLL)
   target_compile_definitions(cgba-gint-gpsp PRIVATE
     CGBA_VIDEO_OPAQUE_ROW_UNROLL=1)
+endif()
+
+# Base-layer 4-bpp rows: one table load per packed byte (two pixels) instead
+# of two nibble extractions and two palette loads. 16 KiB of BSS.
+option(CGBA_VIDEO_PAIR_PALETTE
+  "Two-pixel palette table for 4-bpp FULLCOLOR text rows" ON)
+if(CGBA_VIDEO_PAIR_PALETTE AND CGBA_VIDEO_BACKDROP_SHADOW_PALETTE AND
+   CGBA_VIDEO_OPAQUE_ROW_UNROLL)
+  target_compile_definitions(cgba-gint-gpsp PRIVATE
+    CGBA_VIDEO_PAIR_PALETTE=1)
 endif()
 
 # Experimental unscaled-mode path that publishes each completed 16-row group
@@ -614,6 +738,15 @@ if(CGBA_GPSP_HEADLESS_TEST OR CGBA_SH4_DIFF_HARNESS)
     -Wl,--defsym=cgba_highram_limit=0x8c6F0000)
 endif()
 
-generate_g3a(TARGET cgba-gint-gpsp OUTPUT "gpSP.g3a"
-  NAME "gpSP" VERSION "00.10.0804"
-  ICONS icon-uns.png icon-sel.png)
+if(CGBA_CLASSPAD)
+  # A HollyHock-3 add-in is the stripped ELF itself. Section headers must
+  # survive (strip -s keeps them): gpSP finds its own .cgba.core through them.
+  string(REPLACE "gcc" "strip" CGBA_STRIP "${CMAKE_C_COMPILER}")
+  add_custom_command(TARGET cgba-gint-gpsp POST_BUILD
+    COMMAND ${CGBA_STRIP} -s -o "${CMAKE_CURRENT_SOURCE_DIR}/gpSP.hh3"
+      "$<TARGET_FILE:cgba-gint-gpsp>")
+else()
+  generate_g3a(TARGET cgba-gint-gpsp OUTPUT "gpSP.g3a"
+    NAME "gpSP" VERSION "00.10.0804"
+    ICONS icon-uns.png icon-sel.png)
+endif()

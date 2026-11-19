@@ -7,6 +7,7 @@
 #include <gint/drivers/r61524.h>
 #include <gint/keyboard.h>
 #include <gint/keycodes.h>
+#include <gint/rtc.h>
 
 #include <stdio.h>
 #include <string.h>
@@ -59,6 +60,9 @@ static int lcd_window_partial;
  * world switch. Centered gameplay does not cover that top-right border, so
  * remember the activity until a full update or gameplay blit removes it. */
 static int lcd_os_overlay_dirty;
+/* True once a complete gameplay frame has been pushed to the LCD without an
+ * intervening menu/status update, scale/filter change, or OS overlay draw. */
+static int lcd_frame_synced;
 
 static void wait_lcd_dma(void)
 {
@@ -157,6 +161,18 @@ uint32_t fxcg100_poll_app_keys(void)
 		keys |= FXCG100_APPKEY_RIGHT;
 	if(keydown(KEY_EXIT))
 		keys |= FXCG100_APPKEY_BACK;
+	if(keydown(KEY_OPTN))
+		keys |= FXCG100_APPKEY_SETTINGS;
+	if(keydown(KEY_DEL))
+		keys |= FXCG100_APPKEY_DEL;
+	{
+		static const int digits[10] = { KEY_0, KEY_1, KEY_2, KEY_3, KEY_4,
+			KEY_5, KEY_6, KEY_7, KEY_8, KEY_9 };
+
+		for(int i = 0; i < 10; i++)
+			if(keydown(digits[i]))
+				keys |= FXCG100_APPKEY_DIGIT(i);
+	}
 #else
 	if(fxcg100_key_down(77))
 		keys |= FXCG100_APPKEY_SHIFT;
@@ -180,26 +196,48 @@ uint32_t fxcg100_poll_app_keys(void)
 		keys |= FXCG100_APPKEY_BACK;
 	if(fxcg100_key_down(FXCG100_PHYSKEY_ON))
 		keys |= FXCG100_APPKEY_ON;
+	if(fxcg100_key_down(78))
+		keys |= FXCG100_APPKEY_SETTINGS;
+	if(fxcg100_key_down(44))
+		keys |= FXCG100_APPKEY_DEL;
+	{
+		/* Skin positions of 0..9 (see fxcg100_keys.c). */
+		static const uint8_t digits[10] = { 71, 72, 62, 52, 73, 63, 53, 74,
+			64, 54 };
+
+		for(int i = 0; i < 10; i++)
+			if(fxcg100_key_down(digits[i]))
+				keys |= FXCG100_APPKEY_DIGIT(i);
+	}
 #endif
 
 	return keys;
 }
 
+/* 128 Hz ticks for timing (savestate timings): the RTC. */
+uint32_t fxcg100_ticks(void)
+{
+	return rtc_ticks();
+}
+
 void fxcg100_lcd_init(void)
 {
 	lcd_os_overlay_dirty = 0;
+	lcd_frame_synced = 0;
 }
 
 void fxcg100_lcd_shutdown(void)
 {
 	restore_full_window();
 	wait_lcd_dma();
+	lcd_frame_synced = 0;
 }
 
 void fxcg100_lcd_clear(uint16_t color)
 {
 	wait_lcd_dma();
 	dclear((int)color);
+	lcd_frame_synced = 0;
 }
 
 void fxcg100_lcd_fill_rect(unsigned x, unsigned y, unsigned w, unsigned h,
@@ -232,6 +270,26 @@ void fxcg100_lcd_update(void)
 	wait_lcd_dma();
 	dupdate();
 	lcd_os_overlay_dirty = 0;
+	lcd_frame_synced = 0;
+}
+
+void fxcg100_lcd_update_rows(unsigned y, unsigned h)
+{
+	unsigned y1 = y + h;
+
+	if(y >= DHEIGHT || h == 0)
+		return;
+	if(y1 > DHEIGHT)
+		y1 = DHEIGHT;
+	/* r61524_display() sends whole rows by DMA in groups of four. */
+	y &= ~3u;
+	y1 = (y1 + 3u) & ~3u;
+	if(y1 > DHEIGHT)
+		y1 = DHEIGHT;
+	restore_full_window();
+	wait_lcd_dma();
+	r61524_display(gint_vram, (int)y, (int)(y1 - y), R61524_DMA_WAIT);
+	lcd_frame_synced = 0;
 }
 
 void fxcg100_lcd_status(const char *text)
@@ -245,11 +303,13 @@ void fxcg100_lcd_status(const char *text)
 	dtext_opt(4, 2, fg, bg, DTEXT_LEFT, DTEXT_TOP, text ? text : "");
 	dupdate();
 	lcd_os_overlay_dirty = 0;
+	lcd_frame_synced = 0;
 }
 
 void fxcg100_lcd_note_os_activity(void)
 {
 	lcd_os_overlay_dirty = 1;
+	lcd_frame_synced = 0;
 }
 
 /* Start the DMA of one prepared YRAM strip to the LCD window. Falls back to CPU
@@ -314,11 +374,18 @@ static void clear_os_overlay_before_blit(void)
 void fxcg100_lcd_set_scale(uint32_t mode)
 {
 	lcd_scale_mode = (mode <= 2) ? mode : 0;
+	lcd_frame_synced = 0;
 }
 
 void fxcg100_lcd_set_filter(uint32_t filter)
 {
 	lcd_scale_filter = (filter <= CGBA_SCALE_FILTER_CRISP) ? filter : 0;
+	lcd_frame_synced = 0;
+}
+
+int fxcg100_lcd_is_synced(void)
+{
+	return lcd_frame_synced && !lcd_os_overlay_dirty;
 }
 
 typedef void (*cgba_hscale_fn)(const uint16_t *, uint16_t *);
@@ -376,16 +443,16 @@ static void blit_gba_scaled_43(const uint16_t *pixels)
 			uint16_t *r3 = sp + (g * 4 + 3) * 320;
 
 			hs(A, r0);
-			hs(B, scale_scratch);
 			hs(C, r3);
 			if (filter == CGBA_SCALE_FILTER_SMOOTH) {
+				hs(B, scale_scratch);
 				cgba_scale_row_avg(r0, scale_scratch, r1, 320);
 				cgba_scale_row_avg(scale_scratch, r3, r2, 320);
 			} else if (filter == CGBA_SCALE_FILTER_SHARP) {
-				memcpy(r1, scale_scratch, 320 * sizeof(uint16_t));
-				cgba_scale_row_avg(scale_scratch, r3, r2, 320);
+				hs(B, r1);
+				cgba_scale_row_avg(r1, r3, r2, 320);
 			} else {                               /* CRISP: A,B,C,C */
-				memcpy(r1, scale_scratch, 320 * sizeof(uint16_t));
+				hs(B, r1);
 				memcpy(r2, r3, 320 * sizeof(uint16_t));
 			}
 		}
@@ -396,6 +463,7 @@ static void blit_gba_scaled_43(const uint16_t *pixels)
 		y += rows;
 	}
 	lcd_window_partial = 1;
+	lcd_frame_synced = 1;
 }
 
 /* Fullscreen: hscaled source rows are cached in two slots keyed by
@@ -456,6 +524,7 @@ static void blit_gba_scaled_full(const uint16_t *pixels)
 		y += rows;
 	}
 	lcd_window_partial = 1;
+	lcd_frame_synced = 1;
 }
 
 void fxcg100_lcd_blit_gba(const uint16_t *pixels)
@@ -515,6 +584,7 @@ void fxcg100_lcd_blit_gba(const uint16_t *pixels)
 	 * buffer itself is free to be overwritten (the DMA reads on-chip RAM).
 	 */
 	lcd_window_partial = 1;   /* window narrowed; menu restores it */
+	lcd_frame_synced = 1;
 }
 
 /* ---- Scanline-streamed unscaled presentation ---------------------------
@@ -527,6 +597,7 @@ void fxcg100_lcd_blit_gba(const uint16_t *pixels)
 static int lcd_stream_active;
 static unsigned lcd_stream_next_y;
 static unsigned lcd_stream_bank;
+static int lcd_stream_strip_dirty;
 
 int fxcg100_lcd_stream_begin(void)
 {
@@ -536,11 +607,12 @@ int fxcg100_lcd_stream_begin(void)
 	clear_os_overlay_before_blit();
 	lcd_stream_next_y = 0;
 	lcd_stream_bank = 0;
+	lcd_stream_strip_dirty = !lcd_frame_synced;
 	lcd_stream_active = 1;
 	return 1;
 }
 
-void fxcg100_lcd_stream_scanline(const uint16_t *row, unsigned y)
+void fxcg100_lcd_stream_scanline(const uint16_t *row, unsigned y, int dirty)
 {
 	uint16_t *const strips[2] = {
 		(uint16_t *)STRIP_BUF0,
@@ -552,6 +624,8 @@ void fxcg100_lcd_stream_scanline(const uint16_t *row, unsigned y)
 
 	if(!lcd_stream_active || !row || y >= GBA_H)
 		return;
+	if(dirty)
+		lcd_stream_strip_dirty = 1;
 	if(y + 1 < lcd_stream_next_y + STRIP_LINES && y + 1 != GBA_H)
 		return;
 	if(y + 1 > lcd_stream_next_y + STRIP_LINES && y + 1 != GBA_H) {
@@ -564,162 +638,30 @@ void fxcg100_lcd_stream_scanline(const uint16_t *row, unsigned y)
 		lcd_stream_active = 0;
 		return;
 	}
-	memcpy(strips[lcd_stream_bank], row - (rows - 1) * GBA_W,
-		(size_t)rows * GBA_W * sizeof(uint16_t));
-	if(lcd_stream_next_y != 0)
+	if(lcd_stream_strip_dirty) {
+		memcpy(strips[lcd_stream_bank], row - (rows - 1) * GBA_W,
+			(size_t)rows * GBA_W * sizeof(uint16_t));
 		wait_lcd_dma();
-	start_strip_dma(strips[lcd_stream_bank], ox,
-		oy + (int)lcd_stream_next_y, GBA_W, (int)rows);
-	lcd_stream_bank ^= 1;
+		start_strip_dma(strips[lcd_stream_bank], ox,
+			oy + (int)lcd_stream_next_y, GBA_W, (int)rows);
+		lcd_stream_bank ^= 1;
+		lcd_window_partial = 1;
+	}
 	lcd_stream_next_y += rows;
-	lcd_window_partial = 1;
+	lcd_stream_strip_dirty = !lcd_frame_synced;
 }
 
 int fxcg100_lcd_stream_end(void)
 {
 	int complete = lcd_stream_active && lcd_stream_next_y == GBA_H;
 	lcd_stream_active = 0;
+	if(complete)
+		lcd_frame_synced = 1;
 	return complete;
 }
 #else
 int fxcg100_lcd_stream_begin(void) { return 0; }
-void fxcg100_lcd_stream_scanline(const uint16_t *row, unsigned y)
-{ (void)row; (void)y; }
+void fxcg100_lcd_stream_scanline(const uint16_t *row, unsigned y, int dirty)
+{ (void)row; (void)y; (void)dirty; }
 int fxcg100_lcd_stream_end(void) { return 0; }
 #endif
-
-uint32_t fxcg100_frame_hash(const uint16_t *pixels)
-{
-	uint32_t hash = 2166136261u;
-
-	for(unsigned i = 0; i < GBA_W * GBA_H; i++) {
-		uint16_t px = pixels[i];
-		hash ^= (uint8_t)(px >> 8);
-		hash *= 16777619u;
-		hash ^= (uint8_t)px;
-		hash *= 16777619u;
-	}
-
-	return hash;
-}
-
-/*
- * FPS metrics overlay. Drawn directly into the 240x160 GBA frame buffer (top
- * left) so it is carried by the normal strip-DMA blit -- gint's dtext path
- * cannot compose with the DMA presenter. Minimal 5x7 bitmap font (row-major,
- * bit 4 = leftmost column) for just the glyphs the readout uses. White text on
- * a black box: both colors are byte-order invariant, so no RGB565 endianness
- * concern regardless of the panel's byte order.
- */
-#define FPS_GLYPH_W 5
-#define FPS_GLYPH_H 7
-#define FPS_ADVANCE 6
-
-static const uint8_t fps_font_digit[10][FPS_GLYPH_H] = {
-	{0x0E,0x11,0x13,0x15,0x19,0x11,0x0E}, /* 0 */
-	{0x04,0x0C,0x04,0x04,0x04,0x04,0x0E}, /* 1 */
-	{0x0E,0x11,0x01,0x02,0x04,0x08,0x1F}, /* 2 */
-	{0x0E,0x11,0x01,0x06,0x01,0x11,0x0E}, /* 3 */
-	{0x02,0x06,0x0A,0x12,0x1F,0x02,0x02}, /* 4 */
-	{0x1F,0x10,0x10,0x1E,0x01,0x11,0x0E}, /* 5 */
-	{0x0E,0x11,0x10,0x1E,0x11,0x11,0x0E}, /* 6 */
-	{0x1F,0x01,0x02,0x04,0x08,0x08,0x08}, /* 7 */
-	{0x0E,0x11,0x11,0x0E,0x11,0x11,0x0E}, /* 8 */
-	{0x0E,0x11,0x11,0x0F,0x01,0x11,0x0E}, /* 9 */
-};
-
-static const uint8_t *fps_glyph(char c)
-{
-	static const uint8_t F[FPS_GLYPH_H]  = {0x1F,0x10,0x10,0x1E,0x10,0x10,0x10};
-	static const uint8_t P[FPS_GLYPH_H]  = {0x1E,0x11,0x11,0x1E,0x10,0x10,0x10};
-	static const uint8_t S[FPS_GLYPH_H]  = {0x0F,0x10,0x10,0x0E,0x01,0x01,0x1E};
-	static const uint8_t E[FPS_GLYPH_H]  = {0x1F,0x10,0x10,0x1E,0x10,0x10,0x1F};
-	static const uint8_t V[FPS_GLYPH_H]  = {0x11,0x11,0x11,0x11,0x11,0x0A,0x04};
-	static const uint8_t D[FPS_GLYPH_H]  = {0x1E,0x11,0x11,0x11,0x11,0x11,0x1E};
-	static const uint8_t M[FPS_GLYPH_H]  = {0x11,0x1B,0x15,0x15,0x11,0x11,0x11};
-	static const uint8_t CO[FPS_GLYPH_H] = {0x00,0x04,0x00,0x00,0x04,0x00,0x00};
-	static const uint8_t PCT[FPS_GLYPH_H]= {0x19,0x1A,0x04,0x0B,0x13,0x03,0x00};
-	static const uint8_t SP[FPS_GLYPH_H] = {0,0,0,0,0,0,0};
-
-	if(c >= '0' && c <= '9')
-		return fps_font_digit[c - '0'];
-	switch(c) {
-	case 'F': return F;
-	case 'P': return P;
-	case 'S': return S;
-	case 'E': return E;
-	case 'V': return V;
-	case 'D': return D;
-	case 'M': return M;
-	case ':': return CO;
-	case '%': return PCT;
-	default:  return SP;
-	}
-}
-
-static void fps_draw_text(uint16_t *pixels, int x, int y, const char *s,
-	uint16_t fg)
-{
-	for(; *s; s++) {
-		const uint8_t *g = fps_glyph(*s);
-		int r;
-
-		for(r = 0; r < FPS_GLYPH_H; r++) {
-			uint8_t bits = g[r];
-			int col;
-
-			for(col = 0; col < FPS_GLYPH_W; col++) {
-				int px = x + col;
-				int py = y + r;
-
-				if((bits & (0x10 >> col)) &&
-						px >= 0 && px < GBA_W &&
-						py >= 0 && py < GBA_H)
-					pixels[py * GBA_W + px] = fg;
-			}
-		}
-		x += FPS_ADVANCE;
-	}
-}
-
-/*
- * Two-line metrics readout drawn into the frame buffer (no file/NOR I/O):
- *   line 1: emulated FPS (E, core throughput) and drawn FPS (D, post-skip)
- *   line 2: speed % of the 60 Hz target and average frame time in ms
- * The per-second emulated FPS is the stable A/B instrument for build tuning.
- */
-void fxcg100_lcd_overlay_fps(uint16_t *pixels, unsigned emu_fps,
-	unsigned draw_fps)
-{
-	const uint16_t fg = 0xFFFF;   /* white */
-	const uint16_t bg = 0x0000;   /* black */
-	char l1[24], l2[24];
-	unsigned spd, ms;
-	int box_w, w, r, col;
-
-	if(!pixels)
-		return;
-	if(emu_fps > 999)
-		emu_fps = 999;
-	if(draw_fps > 999)
-		draw_fps = 999;
-	spd = emu_fps * 100u / 60u;
-	ms = emu_fps ? 1000u / emu_fps : 0u;
-	snprintf(l1, sizeof(l1), "FPS E:%u D:%u", emu_fps, draw_fps);
-	snprintf(l2, sizeof(l2), "SPD:%u%% %uMS", spd, ms);
-
-	box_w = (int)strlen(l1);
-	w = (int)strlen(l2);
-	if(w > box_w)
-		box_w = w;
-	box_w = box_w * FPS_ADVANCE + 1;
-	if(box_w > GBA_W)
-		box_w = GBA_W;
-
-	for(r = 0; r < 2 * FPS_GLYPH_H + 3 && r < GBA_H; r++)
-		for(col = 0; col < box_w; col++)
-			pixels[r * GBA_W + col] = bg;
-
-	fps_draw_text(pixels, 1, 1, l1, fg);
-	fps_draw_text(pixels, 1, 1 + FPS_GLYPH_H + 1, l2, fg);
-}

@@ -1,48 +1,92 @@
 #include "frame_pacing.h"
 
+#include <gint/cpu.h>
 #include <gint/rtc.h>
 #include <gint/timer.h>
+
+/* The 128 Hz count the pacing is measured against. On the fx-CP400 it comes
+ * from the platform, which does not depend on the RTC running. */
+#ifdef CGBA_CLASSPAD
+uint32_t fxcg100_ticks(void);
+#define pace_ticks() fxcg100_ticks()
+#else
+#define pace_ticks() rtc_ticks()
+#endif
 
 #define RTC_HZ          128u
 #define DEFAULT_TARGET   60
 #define DEFAULT_MAX_SKIP  9
+/* Windows (half a second each) that must keep up before one skip less is
+ * tried: from 2 s, doubling to 64 s while the tries fail. */
+#define PACER_HOLD_MIN    4
+#define PACER_HOLD_MAX  128
 /* One native GBA frame is about 16743 us (59.7275 Hz).  TIMER_ANY normally
  * selects a 32768 Hz ETMU for this delay; timer quantization plus loop overhead
  * therefore keeps normal play below, rather than just above, 60 fps. */
 #define FRAME_LIMIT_US 16743u
 
+/* The frame clock: ticks since the timer was started. */
+static int limiter_timer = -1;
+static volatile uint32_t limiter_due;
+
+static int limiter_tick(void)
+{
+	limiter_due++;
+	return TIMER_CONTINUE;
+}
+
+void cgba_frame_limiter_stop(void)
+{
+	if(limiter_timer >= 0)
+		timer_stop(limiter_timer);
+	limiter_timer = -1;
+}
+
 void cgba_frame_limiter_init(cgba_frame_limiter *limiter)
 {
-	limiter->timer = -1;
-	limiter->elapsed = 1;
+	limiter->enabled = 0;
+	limiter->done = 0;
+	limiter->late = -1;
 }
 
 void cgba_frame_limiter_begin(cgba_frame_limiter *limiter, int enabled)
 {
-	limiter->timer = -1;
-	limiter->elapsed = 1;
-	if(!enabled)
-		return;
-
-	limiter->elapsed = 0;
-	limiter->timer = timer_configure(TIMER_ANY, FRAME_LIMIT_US,
-		GINT_CALL_SET_STOP(&limiter->elapsed));
-	if(limiter->timer < 0) {
-		/* No timer is available.  Running uncapped is safer than stalling the
-		 * emulator; the next frame will try to acquire a timer again. */
-		limiter->elapsed = 1;
+	limiter->enabled = 0;
+	if(!enabled) {
+		cgba_frame_limiter_stop();
 		return;
 	}
-	timer_start(limiter->timer);
+	if(limiter_timer < 0) {
+		limiter_due = 0;
+		limiter->done = 0;
+		limiter_timer = timer_configure(TIMER_ANY, FRAME_LIMIT_US,
+			GINT_CALL(limiter_tick));
+		/* No timer is available.  Running uncapped is safer than stalling
+		 * the emulator; the next frame will try to acquire one again. */
+		if(limiter_timer < 0)
+			return;
+		timer_start(limiter_timer);
+	}
+	limiter->enabled = 1;
 }
 
 void cgba_frame_limiter_wait(cgba_frame_limiter *limiter)
 {
-	/* If emulation took longer than one frame, the callback has already stopped
-	 * and released the timer and there is nothing to wait for. */
-	if(limiter->timer >= 0 && !limiter->elapsed)
-		timer_wait(limiter->timer);
-	limiter->timer = -1;
+	int32_t late;
+
+	if(!limiter->enabled) {
+		limiter->late = -1;
+		return;
+	}
+	limiter->done++;
+	while((int32_t)(limiter_due - limiter->done) < 0)
+		sleep();
+	late = (int32_t)(limiter_due - limiter->done);
+	if(late > CGBA_LIMITER_MAX_LATE) {
+		limiter->done = limiter_due - CGBA_LIMITER_MAX_LATE;
+		late = CGBA_LIMITER_MAX_LATE + 1;    /* time was given up */
+	}
+	limiter->late = late;
 }
 
 static int clampi(int v, int lo, int hi)
@@ -70,7 +114,47 @@ void cgba_pacer_reset(cgba_pacer *p)
 	p->skip = 0;
 	p->since_render = 0;
 	p->in_window = 0;
-	p->start_ticks = rtc_ticks();
+	p->start_ticks = pace_ticks();
+	p->fed = 0;
+	p->worst_late = 0;
+	p->bad_windows = 0;
+	p->good_windows = 0;
+	p->hold = PACER_HOLD_MIN;
+	p->lowered = 0;
+}
+
+void cgba_pacer_feedback(cgba_pacer *p, int late)
+{
+	if(late < 0)
+		return;
+	p->fed++;
+	if(late > p->worst_late)
+		p->worst_late = late;
+}
+
+/* With the limiter on: see frame_pacing.h. A window fell behind if at some
+ * point in it the emulator was two frames or more late. */
+static void update_from_limiter(cgba_pacer *p)
+{
+	if(p->worst_late >= 2) {
+		p->good_windows = 0;
+		if(++p->bad_windows >= 2) {
+			p->bad_windows = 0;
+			if(p->lowered && p->hold < PACER_HOLD_MAX)
+				p->hold *= 2;             /* the try did not hold */
+			p->lowered = 0;
+			p->skip = clampi(p->skip + 1, 0, p->max_skip);
+		}
+	} else {
+		p->bad_windows = 0;
+		if(++p->good_windows >= p->hold) {
+			p->good_windows = 0;
+			if(p->skip > 0) {
+				p->skip--;
+				p->lowered = 1;
+			}
+		}
+	}
 }
 
 /* RTC ticks since midnight wrap once per day; use modular subtraction and
@@ -86,10 +170,12 @@ static uint32_t ticks_elapsed(uint32_t start, uint32_t now)
 
 static void update_window(cgba_pacer *p)
 {
-	uint32_t now = rtc_ticks();
+	uint32_t now = pace_ticks();
 	uint32_t elapsed = ticks_elapsed(p->start_ticks, now);
 
-	if(elapsed > 0) {
+	if(p->fed * 2 >= (int)p->in_window) {
+		update_from_limiter(p);
+	} else if(elapsed > 0) {
 		/* achieved_fps = in_window * RTC_HZ / elapsed; compare to target
 		 * without floating point: behind  <=>  in_window*RTC_HZ < target*elapsed */
 		uint32_t lhs = p->in_window * RTC_HZ;
@@ -103,6 +189,8 @@ static void update_window(cgba_pacer *p)
 
 	p->start_ticks = now;
 	p->in_window = 0;
+	p->fed = 0;
+	p->worst_late = 0;
 }
 
 int cgba_pacer_should_render(cgba_pacer *p)
@@ -129,12 +217,12 @@ void cgba_fps_init(cgba_fps_meter *m)
 	m->draw_frames = 0;
 	m->emu_fps = 0;
 	m->draw_fps = 0;
-	m->start_ticks = rtc_ticks();
+	m->start_ticks = pace_ticks();
 }
 
 int cgba_fps_tick(cgba_fps_meter *m, int drawn)
 {
-	uint32_t now = rtc_ticks();
+	uint32_t now = pace_ticks();
 	uint32_t elapsed;
 
 	m->emu_frames++;

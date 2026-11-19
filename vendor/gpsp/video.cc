@@ -23,7 +23,26 @@ extern "C" {
 }
 
 #ifdef CGBA_LCD_SCANLINE_STREAM
-extern "C" void fxcg100_lcd_stream_scanline(const u16 *row, unsigned y);
+extern "C" void fxcg100_lcd_stream_scanline(const u16 *row, unsigned y, int dirty);
+#endif
+#if defined(CGBA_VIDEO_TEXT_FAST4BPP) && CGBA_VIDEO_TEXT_FAST4BPP && \
+    (defined(__SH4__) || defined(__SH4_NOFPU__) || defined(__SH4A__) || \
+     defined(__sh__)) && defined(MSB_FIRST)
+#define CGBA_SH4_ASM_4BPP 1
+extern "C" {
+void cgba_render_4bpp_span_over_sh4(
+  const u16 *map_ptr, u32 todraw, u16 *dest_ptr,
+  const u8 *tile_base, s32 vflip_off, const u16 *paltbl, u32 skip_zero);
+void cgba_render_4bpp_span_base_sh4(
+  const u16 *map_ptr, u32 todraw, u16 *dest_ptr,
+  const u8 *tile_base, s32 vflip_off, const u16 *paltbl);
+void cgba_render_4bpp_span_base_pair_sh4(
+  const u16 *map_ptr, u32 todraw, u16 *dest_ptr,
+  const u8 *tile_base, s32 vflip_off, const u32 *pair_lut);
+void cgba_render_4bpp_span_over_pair_sh4(
+  const u16 *map_ptr, u32 todraw, u16 *dest_ptr,
+  const u8 *tile_base, s32 vflip_off, const u32 *pair_lut, const u16 *paltbl);
+}
 #endif
 
 u16* gba_screen_pixels = NULL;
@@ -155,16 +174,207 @@ void video_reload_counters()
  * consume only our bit so either cache may observe a palette write first. */
 static u16 backdrop_shadow_palette[256] __attribute__((aligned(4)));
 
+#ifdef CGBA_VIDEO_PAIR_PALETTE
+/* Two-pixel palette: for each 16-color sub-palette, one entry per packed tile
+ * byte holding both of its pixels in framebuffer order (low nibble first).
+ * A 4-bpp row is then four table loads instead of eight nibble extractions
+ * and eight palette loads.  Entries are derived from the backdrop-shadow
+ * palette, so they are exact for base-layer rows (color zero = backdrop) and
+ * for fully opaque rows of any layer (no nibble is zero).
+ *
+ * Sub-tables are rebuilt lazily; the shadow refresh below invalidates only
+ * the sub-palettes whose sixteen colors actually changed. */
+static u16 pair_palette[16][256][2] __attribute__((aligned(32)));
+static u8 pair_palette_valid[16];
+static u8 pair_palette_any_invalid = 1;
+
+static __attribute__((noinline)) void pair_palette_build(unsigned sub)
+{
+  const u16 *pal = backdrop_shadow_palette + sub * 16;
+  u16 (*out)[2] = pair_palette[sub];
+  for (unsigned b = 0; b < 256; b++) {
+    out[b][0] = pal[b & 15];
+    out[b][1] = pal[b >> 4];
+  }
+  pair_palette_valid[sub] = 1;
+}
+
+#ifdef CGBA_SH4_ASM_4BPP
+static __attribute__((noinline)) void pair_palette_build_all_invalid(void)
+{
+  for (unsigned sub = 0; sub < 16; sub++) {
+    if (!pair_palette_valid[sub])
+      pair_palette_build(sub);
+  }
+  pair_palette_any_invalid = 0;
+}
+
+static inline const u32 *pair_palette_get_all_u32(void)
+{
+  if (__builtin_expect(pair_palette_any_invalid != 0, 0))
+    pair_palette_build_all_invalid();
+  return (const u32 *)&pair_palette[0][0][0];
+}
+#endif
+
+template<bool hflip>
+static inline __attribute__((always_inline)) void cgba_render_4bpp_row_pairs(
+  u32 tilepix, unsigned sub, u16 *dest_ptr)
+{
+  typedef u32 alias_u32 __attribute__((may_alias));
+  if (__builtin_expect(!pair_palette_valid[sub], 0))
+    pair_palette_build(sub);
+  const u16 (*tbl)[2] = pair_palette[sub];
+  /* tilepix is in guest order: byte 0 (bits 7..0) holds pixels 0 and 1. */
+  const u16 *p0 = tbl[hflip ? (tilepix >> 24)         : (tilepix & 0xFF)];
+  const u16 *p1 = tbl[hflip ? ((tilepix >> 16) & 0xFF) : ((tilepix >> 8) & 0xFF)];
+  const u16 *p2 = tbl[hflip ? ((tilepix >> 8) & 0xFF)  : ((tilepix >> 16) & 0xFF)];
+  const u16 *p3 = tbl[hflip ? (tilepix & 0xFF)         : (tilepix >> 24)];
+  if (!((uintptr_t)dest_ptr & 3)) {
+    /* SH4 faults on unaligned longword stores; spans may start on an odd
+     * pixel, which takes the halfword path below. */
+    alias_u32 *out = (alias_u32 *)dest_ptr;
+    u32 v0 = *(const alias_u32 *)p0, v1 = *(const alias_u32 *)p1;
+    u32 v2 = *(const alias_u32 *)p2, v3 = *(const alias_u32 *)p3;
+    if (hflip) {
+      v0 = (v0 << 16) | (v0 >> 16); v1 = (v1 << 16) | (v1 >> 16);
+      v2 = (v2 << 16) | (v2 >> 16); v3 = (v3 << 16) | (v3 >> 16);
+    }
+    out[0] = v0; out[1] = v1; out[2] = v2; out[3] = v3;
+  } else {
+    dest_ptr[0] = p0[hflip]; dest_ptr[1] = p0[!hflip];
+    dest_ptr[2] = p1[hflip]; dest_ptr[3] = p1[!hflip];
+    dest_ptr[4] = p2[hflip]; dest_ptr[5] = p2[!hflip];
+    dest_ptr[6] = p3[hflip]; dest_ptr[7] = p3[!hflip];
+  }
+}
+#endif
+
 static const u16 *get_backdrop_shadow_palette(void)
 {
   if (palette_ram_dirty & CGBA_PALETTE_DIRTY_BACKDROP) {
+#ifdef CGBA_VIDEO_PAIR_PALETTE
+    u16 backdrop = palette_ram_converted[0];
+    for (u32 sub = 0; sub < 16; sub++) {
+      u16 *shadow = backdrop_shadow_palette + sub * 16;
+      const u16 *live = palette_ram_converted + sub * 16;
+      if (shadow[0] != backdrop ||
+          memcmp(shadow + 1, live + 1, 15 * sizeof(u16))) {
+        shadow[0] = backdrop;
+        memcpy(shadow + 1, live + 1, 15 * sizeof(u16));
+        pair_palette_valid[sub] = 0;
+        pair_palette_any_invalid = 1;
+      }
+    }
+#else
     memcpy(backdrop_shadow_palette, palette_ram_converted,
       sizeof(backdrop_shadow_palette));
     for (u32 i = 0; i < 256; i += 16)
       backdrop_shadow_palette[i] = palette_ram_converted[0];
+#endif
     palette_ram_dirty &= ~CGBA_PALETTE_DIRTY_BACKDROP;
   }
   return backdrop_shadow_palette;
+}
+#endif
+
+#ifdef CGBA_VIDEO_TILE_ROW_CACHE
+#ifndef CGBA_VIDEO_TILE_ROW_CACHE_ENTRIES
+#define CGBA_VIDEO_TILE_ROW_CACHE_ENTRIES 128
+#endif
+static_assert(CGBA_VIDEO_TILE_ROW_CACHE_ENTRIES > 0 &&
+  !(CGBA_VIDEO_TILE_ROW_CACHE_ENTRIES & (CGBA_VIDEO_TILE_ROW_CACHE_ENTRIES - 1)),
+  "tile row cache size must be a power of two");
+
+/* Content keys observe all VRAM writers without instrumenting their hot paths.
+ * One entry fits one SH4 cache line. Base and overlay layers share entries;
+ * zero pixels contain the backdrop, and overlay writers honor the mask. */
+struct alignas(32) cgba_tile_row_entry {
+  u32 packed, tag;
+  u16 pixels[8];
+  u32 mask;
+  u32 padding;
+};
+static cgba_tile_row_entry tile_rows[CGBA_VIDEO_TILE_ROW_CACHE_ENTRIES];
+static u16 tile_row_palette[256] __attribute__((aligned(4)));
+static u32 tile_row_epoch = 0x10000;
+#ifdef CGBA_VIDEO_TILE_ROW_PROFILE
+extern "C" { u32 cgba_tile_row_hits, cgba_tile_row_misses; }
+#endif
+
+static void tile_row_observe_palette(void)
+{
+  if (!(palette_ram_dirty & CGBA_PALETTE_DIRTY_TILE_ROW)) return;
+  /* Repeated identical palette DMA and OBJ-only writes must not evict BG rows. */
+  if (memcmp(tile_row_palette, palette_ram_converted, sizeof(tile_row_palette))) {
+    memcpy(tile_row_palette, palette_ram_converted, sizeof(tile_row_palette));
+    tile_row_epoch += 0x10000;
+    if (!tile_row_epoch) {
+      memset(tile_rows, 0, sizeof(tile_rows));
+      tile_row_epoch = 0x10000;
+    }
+  }
+  palette_ram_dirty &= ~CGBA_PALETTE_DIRTY_TILE_ROW;
+}
+
+static __attribute__((noinline)) void tile_row_fill(cgba_tile_row_entry *row,
+                                                   u32 packed, u32 tag)
+{
+  u32 data = eswap32(packed), mask = 0;
+  const u16 *pal = tile_row_palette + ((tag >> 8) & 0xf0);
+  for (unsigned i = 0; i < 8; i++) {
+    unsigned color = tag & 0x400 ? data >> 28 : data & 15;
+    row->pixels[i] = color ? pal[color] : tile_row_palette[0];
+    if (color) mask |= 1u << i;
+    if (tag & 0x400) data <<= 4; else data >>= 4;
+  }
+  row->mask = mask == 255 ? ~0u : mask;
+  row->packed = packed;
+  row->tag = tag;
+}
+
+template<bool isbase>
+static inline __attribute__((always_inline)) void render_cached_tile_row(
+  u32 packed, unsigned tile, u16 *__restrict dst)
+{
+  /* Tile number is already decoded by the map walker. Use it only as a
+   * cheap index; raw VRAM content and palette/flip tags remain the key. */
+  unsigned index = tile & (CGBA_VIDEO_TILE_ROW_CACHE_ENTRIES - 1);
+  cgba_tile_row_entry &row = tile_rows[index];
+  u32 tag = tile_row_epoch | (tile & 0xf400);
+  if (row.tag != tag || row.packed != packed) {
+#ifdef CGBA_VIDEO_TILE_ROW_PROFILE
+    cgba_tile_row_misses++;
+#endif
+    tile_row_fill(&row, packed, tag);
+  } else {
+#ifdef CGBA_VIDEO_TILE_ROW_PROFILE
+    cgba_tile_row_hits++;
+#endif
+  }
+  const u32 mask = row.mask;
+  if (isbase || mask == ~0u) {
+    /* Scanline spans can start on an odd pixel. Never issue an unaligned
+     * SH4 longword store; the halfword fallback has the same pixel order. */
+    if (!((uintptr_t)dst & 3)) {
+      typedef u32 alias_u32 __attribute__((may_alias));
+      alias_u32 *out = (alias_u32 *)dst;
+      const alias_u32 *in = (const alias_u32 *)row.pixels;
+      out[0] = in[0]; out[1] = in[1]; out[2] = in[2]; out[3] = in[3];
+    } else {
+      dst[0] = row.pixels[0]; dst[1] = row.pixels[1];
+      dst[2] = row.pixels[2]; dst[3] = row.pixels[3];
+      dst[4] = row.pixels[4]; dst[5] = row.pixels[5];
+      dst[6] = row.pixels[6]; dst[7] = row.pixels[7];
+    }
+  } else {
+#define CGBA_TILE_ROW_PIXEL(i) if (mask & (1u << (i))) dst[i] = row.pixels[i]
+    CGBA_TILE_ROW_PIXEL(0); CGBA_TILE_ROW_PIXEL(1);
+    CGBA_TILE_ROW_PIXEL(2); CGBA_TILE_ROW_PIXEL(3);
+    CGBA_TILE_ROW_PIXEL(4); CGBA_TILE_ROW_PIXEL(5);
+    CGBA_TILE_ROW_PIXEL(6); CGBA_TILE_ROW_PIXEL(7);
+#undef CGBA_TILE_ROW_PIXEL
+  }
 }
 #endif
 
@@ -215,12 +425,20 @@ static inline void rend_part_tile_Nbpp(u32 bg_comb, u32 px_comb,
       }
     }
   } else {
+    u32 raw = *(const u32 *)tile_ptr;
+    if (!raw) {
+      if (isbase) {
+        for (u32 i = start; i < end; i++, dest_ptr++)
+          *dest_ptr = (rdtype == FULLCOLOR) ? bgcolor : (0 | bg_comb);
+      }
+      return;
+    }
     // In 4bpp mode, the tile[15..12] bits contain the sub-palette number.
     u16 tilepal = (tile >> 12) << 4;
     u16 pxflg = px_comb | tilepal;
     const u16 *subpal = &paltbl[tilepal];
     // Read packed pixel data, skip start pixels
-    u32 tilepix = eswap32(*(u32*)tile_ptr);
+    u32 tilepix = eswap32(raw);
     if (hflip) tilepix <<= (start * 4);
     else       tilepix >>= (start * 4);
     // Only 32 bits (8 pixels * 4 bits)
@@ -380,9 +598,13 @@ static inline void render_tile_Nbpp(
      * Emerald's measured Mode 0 base rows are all opaque, and classifying each
      * row would otherwise erase much of the unrolled writer's gain. */
     if (sizeof(dtype) == sizeof(u16) && rdtype == FULLCOLOR && isbase) {
+#ifdef CGBA_VIDEO_PAIR_PALETTE
+      cgba_render_4bpp_row_pairs<hflip>(tilepix, tile >> 12, (u16 *)dest_ptr);
+#else
       u16 tilepal = (tile >> 12) << 4;
       cgba_render_4bpp_row_fullcolor_u16<hflip>(
         tilepix, &paltbl[tilepal], (u16 *)dest_ptr);
+#endif
       return;
     }
 #endif
@@ -409,8 +631,15 @@ static inline void render_tile_Nbpp(
           return;
         }
         if (sizeof(dtype) == sizeof(u16) && rdtype == FULLCOLOR) {
+#ifdef CGBA_VIDEO_PAIR_PALETTE
+          /* No nibble is zero, so the shadow-derived pairs equal the live
+           * palette's. render_scanline_text_fast refreshed the shadow. */
+          cgba_render_4bpp_row_pairs<hflip>(
+            tilepix, tile >> 12, (u16 *)dest_ptr);
+#else
           cgba_render_4bpp_row_fullcolor_u16<hflip>(
             tilepix, subpal, (u16 *)dest_ptr);
+#endif
           return;
         }
       }
@@ -463,21 +692,194 @@ static inline void render_tile_Nbpp(
 }
 
 
-template<typename stype, rendtype rdtype, bool isbase, bool is8bpp>
+/* Keep the cached and generic full-row loops separate at compile time. */
+template<typename dtype, rendtype rdtype, bool is8bpp, bool isbase, bool hflip, bool cached>
+static inline __attribute__((always_inline)) void render_text_tile(
+  u32 bg_comb, u32 px_comb, dtype *dest_ptr, u16 tile,
+  const u8 *tile_base, int vertical_pixel_flip, const u16 *paltbl)
+{
+#ifdef CGBA_VIDEO_TILE_ROW_CACHE
+  if (cached) {
+    const u8 *tile_ptr = tile_base + (tile & 0x3ff) * 32;
+    if (tile & 0x800) tile_ptr += vertical_pixel_flip;
+    u32 raw = *(const u32 *)tile_ptr;
+    if (!raw) {
+      if (isbase) {
+        u16 backdrop = paltbl[0];
+        for (unsigned i = 0; i < 8; i++) dest_ptr[i] = backdrop;
+      }
+      return;
+    }
+    render_cached_tile_row<isbase>(raw, tile, (u16 *)dest_ptr);
+    return;
+  }
+#endif
+  render_tile_Nbpp<dtype, rdtype, is8bpp, isbase, hflip>(
+    bg_comb, px_comb, dest_ptr, tile, tile_base, vertical_pixel_flip, paltbl);
+}
+
+/* Full-tile run of one text-background scanline span.
+ *
+ * CGBA_VIDEO_EMPTY_RUN_SKIP: an overlay (non-base) 4-bpp tile row whose packed
+ * word is zero draws nothing, and any following map entry with the same raw
+ * value names the same tile, flips and row, so it draws nothing either.
+ * Compare raw map entries to step over such runs instead of decoding each
+ * tile again.  VRAM is read on every scanline, so there is no state to
+ * invalidate. */
+template<typename stype, rendtype rdtype, bool is8bpp, bool isbase, bool cached>
+static inline __attribute__((always_inline)) void render_text_tile_run(
+  u32 todraw, u16 *&map_ptr, stype *&dest_ptr, u32 bg_comb, u32 px_comb,
+  const u8 *tile_base, s32 vflip_off, const u16 *paltbl)
+{
+#if defined(CGBA_SH4_ASM_4BPP) && defined(CGBA_VIDEO_BACKDROP_SHADOW_PALETTE)
+  if (sizeof(stype) == sizeof(u16) && rdtype == FULLCOLOR &&
+      !is8bpp && !cached) {
+    if (todraw) {
+#ifdef CGBA_VIDEO_PAIR_PALETTE
+      const u32 *pair_lut = pair_palette_get_all_u32();
+      if (isbase) {
+        cgba_render_4bpp_span_base_pair_sh4(
+          map_ptr, todraw, (u16 *)dest_ptr, tile_base, vflip_off, pair_lut);
+      } else {
+        cgba_render_4bpp_span_over_pair_sh4(
+          map_ptr, todraw, (u16 *)dest_ptr, tile_base, vflip_off,
+          pair_lut, paltbl);
+      }
+#else
+      if (isbase) {
+        cgba_render_4bpp_span_base_sh4(
+          map_ptr, todraw, (u16 *)dest_ptr, tile_base, vflip_off, paltbl);
+      } else {
+        u32 skip_zero = (*(const u32 *)tile_base == 0u) ? 0u : 1u;
+        cgba_render_4bpp_span_over_sh4(
+          map_ptr, todraw, (u16 *)dest_ptr, tile_base, vflip_off,
+          paltbl, skip_zero);
+      }
+#endif
+      map_ptr += todraw;
+      dest_ptr += todraw * 8;
+    }
+    return;
+  }
+#endif
+#ifdef CGBA_VIDEO_EMPTY_RUN_SKIP
+  if (!isbase && !is8bpp && !cached) {
+    u16 *map = map_ptr;
+    u16 *map_end = map + todraw;
+    stype *dst = dest_ptr;
+    while (map < map_end) {
+      u16 raw = *map;
+      u16 tile = eswap16(raw);
+      const u8 *row = tile_base + (tile & 0x3FF) * 32;
+      if (tile & 0x800)
+        row += vflip_off;
+      if (!*(const u32 *)row) {     /* zero in either byte order */
+        do {
+          map++;
+          dst += 8;
+        } while (map < map_end && *map == raw);
+        continue;
+      }
+      if (tile & 0x400)
+        render_tile_Nbpp<stype, rdtype, is8bpp, isbase, true>(
+          bg_comb, px_comb, dst, tile, tile_base, vflip_off, paltbl);
+      else
+        render_tile_Nbpp<stype, rdtype, is8bpp, isbase, false>(
+          bg_comb, px_comb, dst, tile, tile_base, vflip_off, paltbl);
+      map++;
+      dst += 8;
+    }
+    map_ptr = map;
+    dest_ptr = dst;
+    return;
+  }
+#endif
+  for (u32 i = 0; i < todraw; i++, dest_ptr += 8) {
+    u16 tile = eswap16(*map_ptr++);
+    if (tile & 0x400)   // Tile horizontal flip
+      render_text_tile<stype, rdtype, is8bpp, isbase, true, cached>(
+        bg_comb, px_comb, dest_ptr, tile, tile_base, vflip_off, paltbl);
+    else
+      render_text_tile<stype, rdtype, is8bpp, isbase, false, cached>(
+        bg_comb, px_comb, dest_ptr, tile, tile_base, vflip_off, paltbl);
+  }
+}
+
+#if defined(CGBA_VIDEO_DIRTY_SCANLINE) && CGBA_VIDEO_DIRTY_SCANLINE
+/* Per-screenblock 32-bit row-occupancy cache (128 B in .bss), invalidated on
+ * any BG VRAM write via cgba_vram_dirty.  Lets 4-bpp FULLCOLOR overlay layers
+ * (such as Pokemon Emerald's empty BG0 UI layer while walking) skip an entire
+ * scanline in ~18 instructions without scanning tiles or touching palettes. */
+static u32 cgba_sb_row_nonzero[32];
+static u32 cgba_sb_valid_mask;
+
+static __attribute__((noinline)) u32 cgba_sb_scan_rows(u32 sb)
+{
+  const u32 *p = (const u32 *)&vram[sb * 2048u];
+  u32 mask = 0;
+  for (u32 row = 0; row < 32; row++) {
+    u32 acc = p[0] | p[1] | p[2] | p[3] | p[4] | p[5] | p[6] | p[7] |
+              p[8] | p[9] | p[10] | p[11] | p[12] | p[13] | p[14] | p[15];
+    if (acc)
+      mask |= (1u << row);
+    p += 16;
+  }
+  cgba_sb_row_nonzero[sb] = mask;
+  cgba_sb_valid_mask |= (1u << sb);
+  return mask;
+}
+
+static inline bool cgba_sb_row_is_all_zero(u32 sb, u32 row_bit)
+{
+  if (sb >= 32u)
+    return false;
+  u32 mask = (cgba_sb_valid_mask & (1u << sb))
+               ? cgba_sb_row_nonzero[sb]
+               : cgba_sb_scan_rows(sb);
+  return (mask & row_bit) == 0;
+}
+#endif
+
+template<typename stype, rendtype rdtype, bool isbase, bool is8bpp, bool cached = false>
 static void render_scanline_text_fast(u32 layer,
  u32 start, u32 end, void *scanline, const u16 * paltbl)
 {
+#ifdef CGBA_VIDEO_TILE_ROW_CACHE
+  if (cached) tile_row_observe_palette();
+#endif
   u32 bg_control = read_ioreg(REG_BGxCNT(layer));
   u16 vcount = read_ioreg(REG_VCOUNT);
   u32 map_size = (bg_control >> 14) & 0x03;
+  u32 voffset = (vcount + read_ioreg(REG_BGxVOFS(layer))) % 512;
+  u32 base_block = (bg_control >> 8) & 0x1F;
+  u32 tilewidth = is8bpp ? tile_width_8bpp : tile_width_4bpp;
+  u32 vert_pix_offset = (voffset % 8) * tilewidth;
+  u32 tilecntrl = (bg_control >> 2) & 0x03;
+  u8 *tile_base = &vram[tilecntrl * 16*1024 + vert_pix_offset];
+
+#if defined(CGBA_VIDEO_DIRTY_SCANLINE) && CGBA_VIDEO_DIRTY_SCANLINE
+  /* Fast exit for empty 4-bpp FULLCOLOR overlay rows: if every map entry on
+   * this tile row is 0x0000 and tile 0's row is all-zero, nothing can be drawn. */
+  if (!isbase && !is8bpp && rdtype == FULLCOLOR && sizeof(stype) == sizeof(u16)) {
+    u32 sb0 = base_block +
+              (((map_size & 0x02) && (voffset >= 256))
+                 ? ((map_size & 0x01) ? 2u : 1u) : 0u);
+    u32 row_bit = 1u << ((voffset & 255u) >> 3);
+    if (cgba_sb_row_is_all_zero(sb0, row_bit) &&
+        (!(map_size & 0x01) || cgba_sb_row_is_all_zero(sb0 + 1u, row_bit)) &&
+        *(const u32 *)tile_base == 0u)
+      return;
+  }
+#endif
+
   u32 map_width = map_widths[map_size];
   u32 hoffset = (start + read_ioreg(REG_BGxHOFS(layer))) % 512;
-  u32 voffset = (vcount + read_ioreg(REG_BGxVOFS(layer))) % 512;
   stype *dest_ptr = ((stype*)scanline) + start;
 
   // Calculate combine masks. These store 2 bits of info: 1st and 2nd target.
   // If set, the current pixel belongs to a layer that is 1st or 2nd target.
-  u32 bg_comb = color_flags(5), px_comb = color_flags(layer);
+  u32 bg_comb = (rdtype == FULLCOLOR) ? 0u : color_flags(5);
+  u32 px_comb = (rdtype == FULLCOLOR) ? 0u : color_flags(layer);
 
 #ifdef CGBA_VIDEO_BACKDROP_SHADOW_PALETTE
   /* tile_render_layers calls this with palette_ram_converted.  The shadow
@@ -485,11 +887,16 @@ static void render_scanline_text_fast(u32 layer,
    * the backdrop selected by the old transparent-pixel branch. */
   if (rdtype == FULLCOLOR && isbase && !is8bpp)
     paltbl = get_backdrop_shadow_palette();
+#ifdef CGBA_VIDEO_PAIR_PALETTE
+  /* Opaque overlay rows also draw through the pair table, which must track
+   * the live BG palette (text layers always receive palette_ram_converted). */
+  else if (rdtype == FULLCOLOR && !is8bpp && sizeof(stype) == sizeof(u16))
+    (void)get_backdrop_shadow_palette();
+#endif
 #endif
 
   // Background map data is in vram, at an offset specified in 2K blocks.
   // (each map data block is 32x32 tiles, at 16bpp, so 2KB)
-  u32 base_block = (bg_control >> 8) & 0x1F;
   u16 *map_base = (u16 *)&vram[base_block * 2048];
   u16 *map_ptr, *second_ptr;
 
@@ -521,19 +928,11 @@ static void render_scanline_text_fast(u32 layer,
   // Skip the left blocks within the block
   map_ptr += hoffset / 8;
 
-  // Render a single scanline of text tiles
-  u32 tilewidth = is8bpp ? tile_width_8bpp : tile_width_4bpp;
-  u32 vert_pix_offset = (voffset % 8) * tilewidth;
   // Calculate the pixel offset between a line and its "flipped" mirror.
   // The values can be {56, 40, 24, 8, -8, -24, -40, -56}
   s32 vflip_off = is8bpp ?
        tile_size_8bpp - 2*vert_pix_offset - tile_width_8bpp :
        tile_size_4bpp - 2*vert_pix_offset - tile_width_4bpp;
-
-  // The tilemap base is selected via bgcnt (16KiB chunks)
-  u32 tilecntrl = (bg_control >> 2) & 0x03;
-  // Account for the base offset plus the tile vertical offset
-  u8 *tile_base = &vram[tilecntrl * 16*1024 + vert_pix_offset];
   // Number of pixels available until the end of the tile block
   u32 pixel_run = 256 - hoffset;
 
@@ -564,15 +963,8 @@ static void render_scanline_text_fast(u32 layer,
   // Now render full tiles
   u32 todraw = MIN(end, pixel_run) / 8;
 
-  for (u32 i = 0; i < todraw; i++, dest_ptr += 8) {
-    u16 tile = eswap16(*map_ptr++);
-    if (tile & 0x400)   // Tile horizontal flip
-      render_tile_Nbpp<stype, rdtype, is8bpp, isbase, true>(
-        bg_comb, px_comb, dest_ptr, tile, tile_base, vflip_off, paltbl);
-    else
-      render_tile_Nbpp<stype, rdtype, is8bpp, isbase, false>(
-        bg_comb, px_comb, dest_ptr, tile, tile_base, vflip_off, paltbl);
-  }
+  render_text_tile_run<stype, rdtype, is8bpp, isbase, cached>(
+    todraw, map_ptr, dest_ptr, bg_comb, px_comb, tile_base, vflip_off, paltbl);
 
   end -= todraw * 8;
   pixel_run -= todraw * 8;
@@ -585,15 +977,8 @@ static void render_scanline_text_fast(u32 layer,
     map_ptr = second_ptr;
 
   todraw = end / 8;
-  for (u32 i = 0; i < todraw; i++, dest_ptr += 8) {
-    u16 tile = eswap16(*map_ptr++);
-    if (tile & 0x400)   // Tile horizontal flip
-      render_tile_Nbpp<stype, rdtype, is8bpp, isbase, true>(
-        bg_comb, px_comb, dest_ptr, tile, tile_base, vflip_off, paltbl);
-    else
-      render_tile_Nbpp<stype, rdtype, is8bpp, isbase, false>(
-        bg_comb, px_comb, dest_ptr, tile, tile_base, vflip_off, paltbl);
-  }
+  render_text_tile_run<stype, rdtype, is8bpp, isbase, cached>(
+    todraw, map_ptr, dest_ptr, bg_comb, px_comb, tile_base, vflip_off, paltbl);
 
   end -= todraw * 8;
 
@@ -611,7 +996,7 @@ static void render_scanline_text_fast(u32 layer,
 
 // A slow version of the above function that allows for mosaic effects
 template<typename stype, rendtype rdtype, bool isbase, bool is8bpp>
-static void render_scanline_text_mosaic(u32 layer,
+static __attribute__((noinline)) void render_scanline_text_mosaic(u32 layer,
  u32 start, u32 end, void *scanline, const u16 * paltbl)
 {
   u32 bg_control = read_ioreg(REG_BGxCNT(layer));
@@ -741,6 +1126,14 @@ static void render_scanline_text_mosaic(u32 layer,
 }
 
 template<typename stype, rendtype rdtype, bool isbase>
+static __attribute__((noinline)) void render_scanline_text_fast_8bpp(u32 layer,
+ u32 start, u32 end, void *scanline, const u16 * paltbl)
+{
+  render_scanline_text_fast<stype, rdtype, isbase, true>(
+    layer, start, end, scanline, paltbl);
+}
+
+template<typename stype, rendtype rdtype, bool isbase>
 static void render_scanline_text(u32 layer,
  u32 start, u32 end, void *scanline, const u16 * paltbl)
 {
@@ -750,7 +1143,18 @@ static void render_scanline_text(u32 layer,
   const u32 mosamount = read_ioreg(REG_MOSAIC) & 0xFF;
   bool has_mosaic = (bg_control & 0x40) && (mosamount != 0);
 
-  if (has_mosaic) {
+#ifdef CGBA_VIDEO_TILE_ROW_CACHE
+  /* Dispatch once per span. A separate instantiation keeps the cache hit
+   * path inlined without pulling the generic renderer into every tile. */
+  if (sizeof(stype) == sizeof(u16) && rdtype == FULLCOLOR && !is8bpp &&
+      !has_mosaic && !(read_ioreg(REG_DISPCNT) & 7) && paltbl == palette_ram_converted) {
+    render_scanline_text_fast<stype, rdtype, isbase, false, true>(
+      layer, start, end, scanline, paltbl);
+    return;
+  }
+#endif
+
+  if (__builtin_expect(has_mosaic, 0)) {
     if (is8bpp)
       render_scanline_text_mosaic<stype, rdtype, isbase, true>(
         layer, start, end, scanline, paltbl);
@@ -758,8 +1162,8 @@ static void render_scanline_text(u32 layer,
       render_scanline_text_mosaic<stype, rdtype, isbase, false>(
         layer, start, end, scanline, paltbl);
   } else {
-    if (is8bpp)
-      render_scanline_text_fast<stype, rdtype, isbase, true>(
+    if (__builtin_expect(is8bpp, 0))
+      render_scanline_text_fast_8bpp<stype, rdtype, isbase>(
         layer, start, end, scanline, paltbl);
     else
       render_scanline_text_fast<stype, rdtype, isbase, false>(
@@ -1192,6 +1596,31 @@ typedef struct {
   u32 attr1, attr2;
   bool is_double;
 } t_sprite;
+
+#ifndef CGBA_VIDEO_SPRITE_DECODE_CACHE
+#define CGBA_VIDEO_SPRITE_DECODE_CACHE 0
+#endif
+
+static t_sprite decode_sprite(const t_oam *entry)
+{
+  u16 a0 = eswap16(entry->attr0), a1 = eswap16(entry->attr1);
+  u32 shape = a0 >> 14, size = a1 >> 14;
+  t_sprite obj = {
+    .obj_x = (s32)(a1 << 23) >> 23,
+    .obj_y = (a0 & 255) > 160 ? (a0 & 255) - 256 : (a0 & 255),
+    .obj_w = obj_dim_table[shape][size][0],
+    .obj_h = obj_dim_table[shape][size][1],
+    .attr1 = a1, .attr2 = eswap16(entry->attr2),
+    .is_double = (a0 & 0x200) != 0,
+  };
+  return obj;
+}
+
+#if CGBA_VIDEO_SPRITE_DECODE_CACHE
+/* Rebuilt with the visibility lists on every OAM mutation, including native
+ * stores, DMA, reset and savestate load. Affine matrices remain live OAM reads. */
+static struct { t_sprite sprite; u16 attr0; } decoded_objs[128];
+#endif
 
 // Renders a tile row (8 pixels) for a regular (non-affine) object/sprite.
 // tile_offset points to the VRAM offset where the data lives.
@@ -1651,7 +2080,7 @@ inline static void render_sprite(
 
 // Renders objects on a scanline for a given priority.
 // This function assumes that order_obj has been called to prepare the objects.
-template <typename stype, rendtype rdtype>
+template <typename stype, rendtype rdtype, bool cached = CGBA_VIDEO_SPRITE_DECODE_CACHE>
 void render_scanline_objs(
   u32 priority, u32 start, u32 end, void *raw_ptr, const u16* palptr
 ) {
@@ -1666,23 +2095,17 @@ void render_scanline_objs(
     // Objects in the list are pre-filtered and sorted in the appropriate order
     u32 objoff = objlist[objn];
     const t_oam *oamentry = &((t_oam*)oam_ram)[objoff];
-
+#if CGBA_VIDEO_SPRITE_DECODE_CACHE
+    u16 obj_attr0 = cached ? decoded_objs[objoff].attr0 : eswap16(oamentry->attr0);
+    t_sprite direct;
+    if (!cached) direct = decode_sprite(oamentry);
+    const t_sprite &obji = cached ? decoded_objs[objoff].sprite : direct;
+#else
     u16 obj_attr0 = eswap16(oamentry->attr0);
-    u16 obj_attr1 = eswap16(oamentry->attr1);
-    u16 obj_shape = obj_attr0 >> 14;
-    u16 obj_size = (obj_attr1 >> 14);
+    const t_sprite obji = decode_sprite(oamentry);
+#endif
     bool is_affine = obj_attr0 & 0x100;
     bool is_trans = ((obj_attr0 >> 10) & 0x3) == OBJ_MOD_SEMITRAN;
-
-    t_sprite obji = {
-      .obj_x = (s32)(obj_attr1 << 23) >> 23,
-      .obj_y = obj_attr0 & 0xFF,
-      .obj_w = obj_dim_table[obj_shape][obj_size][0],
-      .obj_h = obj_dim_table[obj_shape][obj_size][1],
-      .attr1 = obj_attr1,
-      .attr2 = eswap16(oamentry->attr2),
-      .is_double = (obj_attr0 & 0x200) != 0,
-    };
 
     s32 obj_maxw = (is_affine && obji.is_double) ? obji.obj_w * 2 : obji.obj_w;
 
@@ -1692,9 +2115,6 @@ void render_scanline_objs(
 
     // ST-OBJs force 1st target bit (forced blending)
     bool forcebld = is_trans && rdtype != FULLCOLOR;
-
-    if (obji.obj_y > 160)
-      obji.obj_y -= 256;
 
     // In PIXCOPY mode, we have already some stuff rendered (winout) and now
     // we render the "win-in" area for this object. The PIXCOPY function will
@@ -1805,6 +2225,10 @@ static void order_obj(u32 video_mode)
 
       if(((obj_x + obj_width) > 0) && (obj_x < 240))
       {
+#if CGBA_VIDEO_SPRITE_DECODE_CACHE
+        decoded_objs[obj_num].sprite = decode_sprite(oam_ptr);
+        decoded_objs[obj_num].attr0 = obj_attr0;
+#endif
         u32 obj_priority = (obj_attr2 >> 10) & 0x03;
         bool is_affine = obj_attr0 & 0x100;
         // Clip Y coord and height to the 0..159 interval
@@ -1856,42 +2280,54 @@ u32 layer_count;
 // Things are drawn back to front, so lowest priority goes first.
 static void order_layers(u32 layer_flags, u32 vcnt)
 {
-  bool obj_enabled = (layer_flags & 0x10);
-  s32 priority;
+  static u32 cached_bg_key = 0xFFFFFFFFu;
+  static u8 bg_only_order[4];
+  static u8 bg_only_count;
+  static u8 bg_prio_list[4][4];
+  static u8 bg_prio_cnt[4];
 
-  // Pre-fetch the 4 layer priorities once instead of reading io_registers
-  // four times per priority (16 reads -> 4 reads per scanline).  The
-  // compiler can't CSE the read across the outer loop because io_registers
-  // is global and could in principle be modified by JIT-translated code
-  // between iterations; that doesn't actually happen here (we are inside
-  // update_scanline which runs to completion before returning to the JIT),
-  // but stating it explicitly costs nothing.
-  const u32 layer_prio[4] = {
-    (u32)(read_ioreg(REG_BGxCNT(0)) & 0x03),
-    (u32)(read_ioreg(REG_BGxCNT(1)) & 0x03),
-    (u32)(read_ioreg(REG_BGxCNT(2)) & 0x03),
-    (u32)(read_ioreg(REG_BGxCNT(3)) & 0x03),
-  };
+  const u32 p0 = (u32)(read_ioreg(REG_BGxCNT(0)) & 0x03);
+  const u32 p1 = (u32)(read_ioreg(REG_BGxCNT(1)) & 0x03);
+  const u32 p2 = (u32)(read_ioreg(REG_BGxCNT(2)) & 0x03);
+  const u32 p3 = (u32)(read_ioreg(REG_BGxCNT(3)) & 0x03);
+  const u32 bg_key = (layer_flags & 0x0Fu) |
+                     (p0 << 4) | (p1 << 6) | (p2 << 8) | (p3 << 10);
 
-  layer_count = 0;
-
-  for(priority = 3; priority >= 0; priority--)
-  {
-    bool anyobj = obj_priority_count[priority][vcnt] > 0;
-    s32 lnum;
-
-    for(lnum = 3; lnum >= 0; lnum--)
-    {
-      if(((layer_flags >> lnum) & 1) &&
-         (layer_prio[lnum] == (u32)priority))
-      {
-        layer_order[layer_count++] = lnum;
+  if (__builtin_expect(bg_key != cached_bg_key, 0)) {
+    const u32 layer_prio[4] = { p0, p1, p2, p3 };
+    bg_only_count = 0;
+    for (s32 priority = 3; priority >= 0; priority--) {
+      u8 cnt = 0;
+      for (s32 lnum = 3; lnum >= 0; lnum--) {
+        if (((layer_flags >> lnum) & 1) && (layer_prio[lnum] == (u32)priority)) {
+          bg_prio_list[priority][cnt++] = (u8)lnum;
+          bg_only_order[bg_only_count++] = (u8)lnum;
+        }
       }
+      bg_prio_cnt[priority] = cnt;
     }
-
-    if(obj_enabled && anyobj)
-      layer_order[layer_count++] = priority | 0x04;
+    cached_bg_key = bg_key;
   }
+
+  if (!(layer_flags & 0x10) ||
+      (obj_priority_count[0][vcnt] | obj_priority_count[1][vcnt] |
+       obj_priority_count[2][vcnt] | obj_priority_count[3][vcnt]) == 0) {
+    u32 cnt = bg_only_count;
+    layer_count = cnt;
+    for (u32 i = 0; i < cnt; i++)
+      layer_order[i] = bg_only_order[i];
+    return;
+  }
+
+  u32 out = 0;
+  for (s32 priority = 3; priority >= 0; priority--) {
+    u32 bcnt = bg_prio_cnt[priority];
+    for (u32 i = 0; i < bcnt; i++)
+      layer_order[out++] = bg_prio_list[priority][i];
+    if (obj_priority_count[priority][vcnt] > 0)
+      layer_order[out++] = (u32)priority | 0x04u;
+  }
+  layer_count = out;
 }
 
 
@@ -2632,17 +3068,355 @@ static const u8 active_layers[] = {
   0,
 };
 
+#if defined(CGBA_VIDEO_DIRTY_SCANLINE) && CGBA_VIDEO_DIRTY_SCANLINE
+/* Ultra-lightweight frame+row dirty scanline tracker (~2.4 KiB in .bss).
+ *
+ * Keeps ONE frame-level IO snapshot (checked once at vcount == 0) plus a
+ * 160-byte per-row validity mask and a 160-byte per-row sprite mask.
+ * On scrolling/walking frames where vcount == 0 detects an IO or BG change,
+ * rows 1..159 execute zero memcmp/memcpy and zero D-cache churn; on static,
+ * dialog, or sprite-only frames, unchanged rows skip in ~8 instructions.
+ * Any mid-frame video IO write (HBlank HDMA) sets cgba_video_io_dirty and
+ * cleanly disables row reuse until the next uniform frame. */
+struct cgba_frame_io_snap {
+  u16 dispcnt;
+  u16 bg_io[12];       /* raw io_registers[0x04..0x0F]: BG0..3 CNT/HOFS/VOFS */
+  u16 win_mos_io[7];   /* raw io_registers[0x20..0x26]: WIN0H..MOSAIC */
+  u16 bld_io[3];       /* raw io_registers[0x28..0x2A]: BLDCNT/ALPHA/BLDY */
+  u16 aff_mat[8];      /* raw BG2PA..PD (0x10..0x13), BG3PA..PD (0x18..0x1B) */
+  s32 aff_ref[4];      /* affine_reference_x/y [0..1] at vcount == 0 */
+};
+
+u32 cgba_video_frame_dirty_rows = 160;
+static u8  cgba_sl_row_valid[160];
+static u8  cgba_sl_row_has_obj[160];
+static cgba_frame_io_snap cgba_sl_frame_io;
+static u16 cgba_sl_pal_snap[512];
+static u16 cgba_sl_oam_snap[512];
+static u32 cgba_sl_oam_key = 0xFFFFFFFFu;
+static u16 *cgba_sl_last_pixels = NULL;
+static u32 cgba_sl_last_pitch = 0;
+static bool cgba_sl_io_snap_valid = false;
+static bool cgba_sl_pal_snap_valid = false;
+static bool cgba_sl_oam_snap_valid = false;
+static bool cgba_sl_prev_uniform = false;
+static bool cgba_sl_cur_uniform = false;
+static bool cgba_sl_frame_bg_dirty = true;
+static bool cgba_sl_frame_obj_dirty = true;
+
+extern "C" void video_invalidate_scanline_cache(u32 start_y, u32 end_y)
+{
+  if (start_y >= 160)
+    return;
+  if (end_y > 160)
+    end_y = 160;
+  memset(cgba_sl_row_valid + start_y, 0, end_y - start_y);
+  if (start_y == 0 && end_y == 160) {
+    cgba_sl_io_snap_valid = false;
+    cgba_sl_pal_snap_valid = false;
+    cgba_sl_oam_snap_valid = false;
+    cgba_sl_oam_key = 0xFFFFFFFFu;
+    cgba_sl_prev_uniform = false;
+    cgba_sl_cur_uniform = false;
+    cgba_sl_frame_bg_dirty = true;
+    cgba_sl_frame_obj_dirty = true;
+    cgba_sb_valid_mask = 0;
+  }
+  cgba_video_frame_dirty_rows = 160;
+}
+
+static inline bool cgba_sl_oam_yrange(u16 raw_attr0, u16 raw_attr1,
+                                      u32 *out_start, u32 *out_end)
+{
+  u16 attr0 = eswap16(raw_attr0);
+  if ((attr0 & 0x0300) == 0x0200)
+    return false;
+  u16 shape = attr0 >> 14;
+  u32 mode = (attr0 >> 10) & 0x03;
+  if (shape == 0x3 || mode == OBJ_MOD_INVALID)
+    return false;
+  u16 attr1 = eswap16(raw_attr1);
+  u16 size = attr1 >> 14;
+  s32 h = obj_dim_table[shape][size][1];
+  s32 y = attr0 & 0xFF;
+  if (y > 160)
+    y -= 256;
+  if (attr0 & 0x200)
+    h *= 2;
+  if ((y + h) <= 0 || y >= 160)
+    return false;
+  *out_start = (u32)(y < 0 ? 0 : y);
+  *out_end = (u32)((y + h) > 160 ? 160 : (y + h));
+  return true;
+}
+
+static void cgba_sl_sync_oam(u32 video_mode, u16 dispcnt, bool all_rows_dirty)
+{
+  u32 key = ((video_mode >= 3) ? 4u : 0u) |
+            ((dispcnt & 0x20) ? 2u : 0u) |
+            (sprite_limit ? 1u : 0u);
+  reg[OAM_UPDATED] = 0;
+
+  if (cgba_sl_oam_snap_valid && key == cgba_sl_oam_key &&
+      memcmp(cgba_sl_oam_snap, oam_ram, sizeof(cgba_sl_oam_snap)) == 0) {
+    /* Byte-identical OAM update (e.g. every-VBlank OAM DMA): skip order_obj()
+     * and keep all cached scanlines valid. */
+    return;
+  }
+
+  if (!all_rows_dirty) {
+    if (!cgba_sl_oam_snap_valid || key != cgba_sl_oam_key) {
+      memset(cgba_sl_row_valid, 0, sizeof(cgba_sl_row_valid));
+    } else {
+      u32 dirty_aff = 0;
+      for (u32 i = 0; i < 128; i++) {
+        if (cgba_sl_oam_snap[i * 4 + 3] != oam_ram[i * 4 + 3])
+          dirty_aff |= 1u << (i >> 2);
+      }
+      for (u32 i = 0; i < 128; i++) {
+        u16 o0 = cgba_sl_oam_snap[i * 4 + 0];
+        u16 o1 = cgba_sl_oam_snap[i * 4 + 1];
+        u16 o2 = cgba_sl_oam_snap[i * 4 + 2];
+        u16 n0 = oam_ram[i * 4 + 0];
+        u16 n1 = oam_ram[i * 4 + 1];
+        u16 n2 = oam_ram[i * 4 + 2];
+        bool changed = (o0 != n0) || (o1 != n1) || (o2 != n2);
+        if (!changed && dirty_aff) {
+          u16 a0 = eswap16(n0);
+          if (a0 & 0x100) {
+            u32 aff_idx = (eswap16(n1) >> 9) & 0x1Fu;
+            if (dirty_aff & (1u << aff_idx))
+              changed = true;
+          }
+        }
+        if (changed) {
+          u32 sy, ey;
+          if (cgba_sl_oam_yrange(o0, o1, &sy, &ey))
+            memset(cgba_sl_row_valid + sy, 0, ey - sy);
+          if (cgba_sl_oam_yrange(n0, n1, &sy, &ey))
+            memset(cgba_sl_row_valid + sy, 0, ey - sy);
+        }
+      }
+    }
+  }
+
+  order_obj(video_mode);
+  memcpy(cgba_sl_oam_snap, oam_ram, sizeof(cgba_sl_oam_snap));
+  cgba_sl_oam_key = key;
+  cgba_sl_oam_snap_valid = true;
+}
+
+static inline void cgba_sl_sync_palette(bool *bg_changed, bool *obj_changed)
+{
+  if (!(palette_ram_dirty & CGBA_PALETTE_DIRTY_SCANLINE) &&
+      cgba_sl_pal_snap_valid)
+    return;
+  palette_ram_dirty &= ~CGBA_PALETTE_DIRTY_SCANLINE;
+  if (!cgba_sl_pal_snap_valid) {
+    memcpy(cgba_sl_pal_snap, palette_ram_converted, sizeof(cgba_sl_pal_snap));
+    cgba_sl_pal_snap_valid = true;
+    *bg_changed = true;
+    *obj_changed = true;
+    return;
+  }
+  if (memcmp(cgba_sl_pal_snap, palette_ram_converted, 256 * sizeof(u16)) != 0) {
+    memcpy(cgba_sl_pal_snap, palette_ram_converted, 256 * sizeof(u16));
+    *bg_changed = true;
+  }
+  if (memcmp(cgba_sl_pal_snap + 256, palette_ram_converted + 256,
+             256 * sizeof(u16)) != 0) {
+    memcpy(cgba_sl_pal_snap + 256, palette_ram_converted + 256,
+           256 * sizeof(u16));
+    *obj_changed = true;
+  }
+}
+
+static inline bool cgba_sl_check_and_capture_frame_io(u32 video_mode, u16 dispcnt)
+{
+  u16 raw_dispcnt = io_registers[REG_DISPCNT];
+  bool same = cgba_sl_io_snap_valid && (cgba_sl_frame_io.dispcnt == raw_dispcnt);
+  if (same && !(dispcnt & 0x80)) {
+    if (memcmp(cgba_sl_frame_io.bg_io, &io_registers[REG_BG0CNT],
+               sizeof(cgba_sl_frame_io.bg_io)) != 0 ||
+        memcmp(cgba_sl_frame_io.win_mos_io, &io_registers[REG_WIN0H],
+               sizeof(cgba_sl_frame_io.win_mos_io)) != 0 ||
+        memcmp(cgba_sl_frame_io.bld_io, &io_registers[REG_BLDCNT],
+               sizeof(cgba_sl_frame_io.bld_io)) != 0) {
+      same = false;
+    } else if (video_mode != 0) {
+      if (memcmp(cgba_sl_frame_io.aff_mat, &io_registers[REG_BG2PA],
+                 4 * sizeof(u16)) != 0 ||
+          memcmp(cgba_sl_frame_io.aff_mat + 4, &io_registers[REG_BG3PA],
+                 4 * sizeof(u16)) != 0 ||
+          cgba_sl_frame_io.aff_ref[0] != affine_reference_x[0] ||
+          cgba_sl_frame_io.aff_ref[1] != affine_reference_y[0] ||
+          cgba_sl_frame_io.aff_ref[2] != affine_reference_x[1] ||
+          cgba_sl_frame_io.aff_ref[3] != affine_reference_y[1]) {
+        same = false;
+      }
+    }
+  }
+  if (!same) {
+    cgba_sl_frame_io.dispcnt = raw_dispcnt;
+    if (!(dispcnt & 0x80)) {
+      memcpy(cgba_sl_frame_io.bg_io, &io_registers[REG_BG0CNT],
+             sizeof(cgba_sl_frame_io.bg_io));
+      memcpy(cgba_sl_frame_io.win_mos_io, &io_registers[REG_WIN0H],
+             sizeof(cgba_sl_frame_io.win_mos_io));
+      memcpy(cgba_sl_frame_io.bld_io, &io_registers[REG_BLDCNT],
+             sizeof(cgba_sl_frame_io.bld_io));
+      if (video_mode != 0) {
+        memcpy(cgba_sl_frame_io.aff_mat, &io_registers[REG_BG2PA],
+               4 * sizeof(u16));
+        memcpy(cgba_sl_frame_io.aff_mat + 4, &io_registers[REG_BG3PA],
+               4 * sizeof(u16));
+        cgba_sl_frame_io.aff_ref[0] = affine_reference_x[0];
+        cgba_sl_frame_io.aff_ref[1] = affine_reference_y[0];
+        cgba_sl_frame_io.aff_ref[2] = affine_reference_x[1];
+        cgba_sl_frame_io.aff_ref[3] = affine_reference_y[1];
+      }
+    }
+    cgba_sl_io_snap_valid = true;
+  }
+  return same;
+}
+#endif /* CGBA_VIDEO_DIRTY_SCANLINE */
+
 void update_scanline(void)
 {
   u32 pitch = get_screen_pitch();
   u16 dispcnt = read_ioreg(REG_DISPCNT);
   u32 vcount = read_ioreg(REG_VCOUNT);
-  u16 *screen_offset = get_screen_pixels() + (vcount * pitch);
+  u16 *screen_base = get_screen_pixels();
+  u16 *screen_offset = screen_base + (vcount * pitch);
   u32 video_mode = dispcnt & 0x07;
 
   if(skip_next_frame)
     return;
 
+#if defined(CGBA_VIDEO_DIRTY_SCANLINE) && CGBA_VIDEO_DIRTY_SCANLINE
+  if (screen_base != cgba_sl_last_pixels || pitch != cgba_sl_last_pitch) {
+    video_invalidate_scanline_cache(0, 160);
+    cgba_sl_last_pixels = screen_base;
+    cgba_sl_last_pitch = pitch;
+  }
+
+  bool row_dirty;
+  if (vcount == 0) {
+    bool bg_dirty = !cgba_sl_prev_uniform;
+    bool obj_dirty = false;
+    cgba_video_frame_dirty_rows = 0;
+    cgba_sl_cur_uniform = true;
+
+    cgba_video_io_dirty = 0;
+    bool io_same = cgba_sl_check_and_capture_frame_io(video_mode, dispcnt);
+    if (!io_same)
+      bg_dirty = true;
+
+    {
+      u32 vd = cgba_vram_dirty;
+      if (vd) {
+        cgba_vram_dirty = 0;
+        if (vd & CGBA_VRAM_DIRTY_BG) {
+          bg_dirty = true;
+          cgba_sb_valid_mask = 0;
+        }
+        if (vd & CGBA_VRAM_DIRTY_OBJ) {
+          obj_dirty = true;
+          if (video_mode >= 3)
+            bg_dirty = true;
+        }
+      }
+    }
+    cgba_sl_sync_palette(&bg_dirty, &obj_dirty);
+    if (dispcnt & 0x80) {
+      /* Steady forced blank: only depends on dispcnt (checked via io_same). */
+      obj_dirty = false;
+      bg_dirty = !cgba_sl_prev_uniform || !io_same;
+    }
+    if (reg[OAM_UPDATED])
+      cgba_sl_sync_oam(video_mode, dispcnt, bg_dirty);
+
+    cgba_sl_frame_bg_dirty = bg_dirty;
+    cgba_sl_frame_obj_dirty = obj_dirty;
+    row_dirty = bg_dirty || !cgba_sl_row_valid[0] ||
+                (obj_dirty && cgba_sl_row_has_obj[0]);
+  } else {
+    /* Fast path for rows 1..159: single branch when no mid-frame write happened. */
+    if (__builtin_expect((cgba_video_io_dirty | cgba_vram_dirty |
+                          (palette_ram_dirty & CGBA_PALETTE_DIRTY_SCANLINE) |
+                          reg[OAM_UPDATED]) != 0, 0)) {
+      if (cgba_video_io_dirty) {
+        cgba_video_io_dirty = 0;
+        cgba_sl_cur_uniform = false;
+        cgba_sl_frame_bg_dirty = true;
+      }
+      if (cgba_vram_dirty) {
+        u32 vd = cgba_vram_dirty;
+        cgba_vram_dirty = 0;
+        cgba_sl_cur_uniform = false;
+        if (vd & CGBA_VRAM_DIRTY_BG) {
+          cgba_sl_frame_bg_dirty = true;
+          cgba_sb_valid_mask = 0;
+        }
+        if (vd & CGBA_VRAM_DIRTY_OBJ) {
+          cgba_sl_frame_obj_dirty = true;
+          if (video_mode >= 3)
+            cgba_sl_frame_bg_dirty = true;
+        }
+      }
+      if (palette_ram_dirty & CGBA_PALETTE_DIRTY_SCANLINE) {
+        bool pbg = false, pobj = false;
+        cgba_sl_sync_palette(&pbg, &pobj);
+        if (pbg) {
+          cgba_sl_cur_uniform = false;
+          cgba_sl_frame_bg_dirty = true;
+        }
+        if (pobj) {
+          cgba_sl_cur_uniform = false;
+          cgba_sl_frame_obj_dirty = true;
+        }
+      }
+      if (reg[OAM_UPDATED]) {
+        cgba_sl_cur_uniform = false;
+        cgba_sl_sync_oam(video_mode, dispcnt, cgba_sl_frame_bg_dirty);
+      }
+    }
+    if (cgba_sl_frame_bg_dirty)
+      row_dirty = true;
+    else if (vcount < 160)
+      row_dirty = !cgba_sl_row_valid[vcount] ||
+                  (cgba_sl_frame_obj_dirty && cgba_sl_row_has_obj[vcount]);
+    else
+      row_dirty = true;
+  }
+
+  if (row_dirty) {
+    cgba_video_frame_dirty_rows++;
+    order_layers((dispcnt >> 8) & active_layers[video_mode], vcount);
+
+    // If the screen is in forced blank draw pure white.
+    if(dispcnt & 0x80)
+      memset(screen_offset, 0xff, 240*sizeof(u16));
+    else
+      render_scanline_window(screen_offset);
+
+    if (vcount < 160) {
+      bool obj_en = !(dispcnt & 0x80) &&
+                    (((dispcnt & 0x1000) != 0) || ((dispcnt & 0x8000) != 0));
+      cgba_sl_row_has_obj[vcount] =
+        (obj_en &&
+         (obj_priority_count[0][vcount] |
+          obj_priority_count[1][vcount] |
+          obj_priority_count[2][vcount] |
+          obj_priority_count[3][vcount] |
+          obj_priority_count[4][vcount]) != 0) ? 1 : 0;
+      cgba_sl_row_valid[vcount] = cgba_sl_cur_uniform ? 1 : 0;
+    }
+  }
+  if (vcount == 159)
+    cgba_sl_prev_uniform = cgba_sl_cur_uniform;
+#else
   // If OAM has been modified since the last scanline has been updated then
   // reorder and reprofile the OBJ lists.
   if(reg[OAM_UPDATED])
@@ -2658,11 +3432,16 @@ void update_scanline(void)
     memset(screen_offset, 0xff, 240*sizeof(u16));
   else
     render_scanline_window(screen_offset);
+#endif
 
 #ifdef CGBA_LCD_SCANLINE_STREAM
   /* The renderer has finished every write to this row. In unscaled streaming
    * mode the platform batches it into a DMA-safe 16-row YRAM strip. */
-  fxcg100_lcd_stream_scanline(screen_offset, vcount);
+#if defined(CGBA_VIDEO_DIRTY_SCANLINE) && CGBA_VIDEO_DIRTY_SCANLINE
+  fxcg100_lcd_stream_scanline(screen_offset, vcount, row_dirty ? 1 : 0);
+#else
+  fxcg100_lcd_stream_scanline(screen_offset, vcount, 1);
+#endif
 #endif
 
   // Mode 0 does not use any affine params at all.

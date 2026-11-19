@@ -86,9 +86,11 @@ fxsdk build-cg
 ```
 
 Calculator builds apply Ptune 4 Preset 5 by default while gpSP is running
-(235.93 MHz CPU, 117.96 MHz SDRAM/bus). gint restores the launcher's original
-clock around OS world switches and when gpSP exits. Configure with
-`-DCGBA_DEFAULT_OVERCLOCK=OFF` to build a stock-clock artifact.
+(235.93 MHz CPU, 117.96 MHz SDRAM/bus). A launcher clock that is no slower on
+CPU, SuperHyway and bus, and faster on at least one, is kept instead. gint
+restores the launcher's original clock around OS world switches and when gpSP
+exits. Configure with `-DCGBA_DEFAULT_OVERCLOCK=OFF` to build a stock-clock
+artifact.
 
 Runtime shape:
 
@@ -131,9 +133,9 @@ Runtime shape:
   all-set scans are ignored
 - App shell: `ON` opens the menu after the startup grace period; `HOME` returns
   through the loader on the safe-boot screen
-- Menu: settings for graphics/frameskip/FPS display, load/save state slot,
-  gpSP-style per-action key mapping, config save/load, cheats/misc,
-  load/restart/return/quit. Defaults are `A=OK`, `B=CATALOG`, `SELECT=PageUp`,
+- Menu (`cg_ui.c`, see `docs/fxcg-ui.md`): game library, pause menu with
+  save/load state slots, settings saved on leaving them, per-function key
+  mapping with swaps, restart and exit with confirmation. Defaults are `A=OK`, `B=CATALOG`, `SELECT=PageUp`,
   `START=PageDown`, D-pad arrows, `L=BEGIN`, and `R=END`; gpSP hotkeys default to
   `NONE`. The fx-CG50 defaults are `A=MENU`, `B=EXIT`, `SELECT=^`, `START=VARS`,
   D-pad arrows, `L=F5`, and `R=F6`. Saved settings live at
@@ -260,8 +262,8 @@ Experimental NOR input-probe ROM:
 ports/fxcg100/test_rom/CGBAINP.GBA
 ```
 
-Copy `CGBAINP.GBA` to the storage root, choose
-`ROM SOURCE: NOR CGBAINP.GBA`, then `LOAD NEW GAME`. The default calculator
+Copy `CGBAINP.GBA` to the storage root and pick `CGBAINP` in the game
+list. The default calculator
 build enables `CGBA_FXCG100_STORAGE` and runs the BFile calls through
 `gint_world_switch()`; this avoids calling the OS storage entry points while
 gint owns the hardware state. The loader opens `\\fls0\CGBAINP.GBA`, resolves

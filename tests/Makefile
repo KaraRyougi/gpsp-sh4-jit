@@ -17,13 +17,13 @@ comma   := ,
 DEAD_STRIP := $(if $(filter Darwin,$(shell uname -s)),\
 	-Wl$(comma)-dead_strip,-Wl$(comma)--gc-sections)
 
-.PHONY: all smoke audit core litpool thumb cond native-ldst input config-version storage lcd-cleanup scale rtc backup-dirty nor-world-switch cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc \
+.PHONY: all smoke audit core litpool thumb cond native-ldst input config-version storage lcd-cleanup scale classpad fxcg-ui rtc backup-dirty nor-world-switch overclock cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc \
 	swi-overlap swi-oam udiv udiv-emitter idle-signature video-opaque \
-	video-blend-cache video-backdrop-shadow arm-mixer clean
+	video-blend-cache video-backdrop-shadow video-sprite-decode video-tile-row-cache video-text-fastpaths video-dirty-scanline arm-mixer m4a-skip clean
 
-all: smoke core litpool thumb cond native-ldst rtc backup-dirty nor-world-switch input config-version storage lcd-cleanup scale cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc swi-overlap swi-oam udiv \
+all: smoke core litpool thumb cond native-ldst rtc pacing backup-dirty nor-world-switch overclock input config-version storage lcd-cleanup scale classpad fxcg-ui cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc swi-overlap swi-oam udiv \
 	udiv-emitter idle-signature video-opaque video-blend-cache \
-	video-backdrop-shadow arm-mixer audit
+	video-backdrop-shadow video-sprite-decode video-tile-row-cache video-text-fastpaths video-dirty-scanline arm-mixer m4a-skip audit
 
 # Execution oracle: run emitted native code in a mini SH4 interpreter against
 # the C-helper semantics (closes the pixel-soak blind spot on the audio path).
@@ -92,6 +92,78 @@ scale: $(ROOT)/tests/scale_test.c $(ROOT)/ports/fxcg100/fxcg100_scale.h
 	  $(ROOT)/tests/scale_test.c -o $(BIN)-scale
 	$(BIN)-scale
 
+# fx-CP400 / ClassPad II: the real presenter against a simulated R61523 and
+# stub gint (layouts, rotation, scaler taps, touch keys and their highlight,
+# and the touch interface: library, pause menu, settings, key mapping),
+# plus the lookup that finds the RAM-resident core inside the .hh3, and the
+# File_GetAddr symbol lookup and code check.
+#   make -C tests classpad CLASSPAD_RENDER_DIR=/some/dir   also writes PPMs
+#   make -C tests classpad CLASSPAD_OS_DUMP=nor.bin        also checks a dump
+classpad: $(ROOT)/tests/classpad_render_test.c $(ROOT)/tests/classpad_elf_test.c \
+	  $(ROOT)/tests/classpad_hhk_test.c $(ROOT)/ports/fxcg100/classpad_hhk.h \
+	  $(ROOT)/ports/fxcg100/gint-gpsp/src/classpad_platform.c \
+	  $(ROOT)/ports/fxcg100/classpad_layout.h \
+	  $(ROOT)/ports/fxcg100/classpad_gfx.h \
+	  $(ROOT)/ports/fxcg100/classpad_theme.h \
+	  $(ROOT)/ports/fxcg100/classpad_clock.h \
+	  $(ROOT)/ports/fxcg100/classpad_font.h \
+	  $(ROOT)/ports/fxcg100/classpad_ui.c \
+	  $(ROOT)/ports/fxcg100/classpad_scale.h \
+	  $(ROOT)/ports/fxcg100/classpad_elf.h \
+	  $(ROOT)/ports/fxcg100/classpad_heap.h \
+	  $(ROOT)/tests/classpad_heap_test.c \
+	  $(ROOT)/ports/fxcg100/classpad_sync.h \
+	  $(ROOT)/tests/classpad_sync_test.c \
+	  $(ROOT)/ports/fxcg100/fxcg100_keys.c
+	$(CC) $(CFLAGS) -O2 -DCGBA_HOST_TEST=1 -DCGBA_CLASSPAD=1 -DCGBA_FXCG50=1 \
+	  -I$(ROOT)/tests/stubs -I$(ROOT)/ports/fxcg100 -I$(ROOT) \
+	  $(ROOT)/tests/classpad_render_test.c -o $(BIN)-classpad-render
+	$(BIN)-classpad-render $(CLASSPAD_RENDER_DIR)
+	$(CC) $(CFLAGS) -I$(ROOT) $(ROOT)/tests/classpad_elf_test.c \
+	  -o $(BIN)-classpad-elf
+	$(BIN)-classpad-elf
+	$(CC) $(CFLAGS) -O2 -I$(ROOT) $(ROOT)/tests/classpad_heap_test.c \
+	  -o $(BIN)-classpad-heap
+	$(BIN)-classpad-heap
+	$(CC) $(CFLAGS) -O2 -I$(ROOT) $(ROOT)/tests/classpad_sync_test.c \
+	  -o $(BIN)-classpad-sync
+	$(BIN)-classpad-sync
+	$(CC) $(CFLAGS) -I$(ROOT) $(ROOT)/tests/classpad_hhk_test.c \
+	  -o $(BIN)-classpad-hhk
+	$(BIN)-classpad-hhk $(CLASSPAD_OS_DUMP)
+# The built-in Ptune 4 F5 profile must not downclock a faster launcher clock.
+overclock: $(ROOT)/tests/overclock_policy_test.c \
+	   $(ROOT)/ports/fxcg100/gint-gpsp/src/overclock.c \
+	   $(ROOT)/tests/stubs/gint/clock.h
+	$(CC) $(CFLAGS) -I$(ROOT)/tests/stubs -I$(ROOT) \
+	  $(ROOT)/tests/overclock_policy_test.c -o $(BIN)-overclock
+	$(BIN)-overclock
+
+# fx-CG50 / fx-CG100 keypad interface (cg_ui.c) on a simulated panel: what
+# each key does, that partial pushes leave nothing behind, baselines.
+#   make -C tests fxcg-ui FXCG_UI_DIR=/some/dir   also writes PPMs
+fxcg-ui: $(ROOT)/tests/fxcg_ui_test.c $(ROOT)/ports/fxcg100/cg_ui.c \
+	  $(ROOT)/ports/fxcg100/cg_font.h $(ROOT)/ports/fxcg100/classpad_gfx.h \
+	  $(ROOT)/ports/fxcg100/classpad_theme.h \
+	  $(ROOT)/ports/fxcg100/fxcg100_keys.c \
+	  $(ROOT)/ports/fxcg100/fxcg100_platform.h
+	$(CC) $(CFLAGS) -O2 -I$(ROOT)/tests/stubs_cgui -I$(ROOT)/ports/fxcg100 \
+	  -I$(ROOT) $(ROOT)/tests/fxcg_ui_test.c -o $(BIN)-fxcg-ui
+	$(BIN)-fxcg-ui $(FXCG_UI_DIR)
+	$(CC) $(CFLAGS) -O2 -DCGBA_FXCG50=1 -I$(ROOT)/tests/stubs_cgui \
+	  -I$(ROOT)/tests/stubs -I$(ROOT)/ports/fxcg100 -I$(ROOT) \
+	  $(ROOT)/tests/fxcg_ui_test.c -o $(BIN)-fxcg-ui-cg50
+	$(BIN)-fxcg-ui-cg50 $(FXCG_UI_DIR)
+
+# The speed limiter and automatic frame skipping, on a virtual clock.
+pacing: $(ROOT)/tests/frame_pacing_test.c \
+	  $(ROOT)/ports/fxcg100/gint-gpsp/src/frame_pacing.c \
+	  $(ROOT)/ports/fxcg100/gint-gpsp/src/frame_pacing.h
+	$(CC) $(CFLAGS) -O2 -DCGBA_CLASSPAD=1 -I$(ROOT)/tests/stubs_pacing -I$(ROOT) \
+	  $(ROOT)/tests/frame_pacing_test.c \
+	  $(ROOT)/ports/fxcg100/gint-gpsp/src/frame_pacing.c -o $(BIN)-pacing
+	$(BIN)-pacing
+
 # Production gpSP cartridge GPIO/RTC and calculator-specific ROM loaders. Dead
 # section elimination keeps the otherwise monolithic gba_memory.c host-linkable.
 rtc: $(ROOT)/tests/rtc_test.c $(ROOT)/vendor/gpsp/gba_memory.c \
@@ -130,6 +202,7 @@ nor-world-switch: $(ROOT)/tests/nor_rom_world_switch_test.c \
 	  $(ROOT)/tests/nor_rom_world_switch_test.c $(DEAD_STRIP) \
 	  -o $(BIN)-nor-world-switch
 	$(BIN)-nor-world-switch
+
 
 # ARM condition-code -> SH4 T-bit emission, every cond x every NZCV (host-only).
 cond: $(ROOT)/tests/sh4_cond_audit.c $(ROOT)/ports/fxcg100/sh4/sh4_emit_glue.h \
@@ -270,6 +343,44 @@ video-backdrop-shadow: $(ROOT)/tests/video_backdrop_shadow_test.cc \
 	  -o $(BIN)-video-backdrop-shadow
 	$(BIN)-video-backdrop-shadow
 
+video-sprite-decode: $(ROOT)/tests/video_sprite_decode_test.cc $(ROOT)/vendor/gpsp/video.cc
+	$(CXX) $(CXXFLAGS) -ffunction-sections -fdata-sections \
+	  -I$(ROOT)/vendor/gpsp -I$(ROOT)/vendor/gpsp/libretro \
+	  -I$(ROOT)/vendor/gpsp/libretro/libretro-common/include \
+	  $(DEAD_STRIP) $(ROOT)/tests/video_sprite_decode_test.cc \
+	  -o $(BIN)-video-sprite-decode
+	$(BIN)-video-sprite-decode
+
+video-tile-row-cache: $(ROOT)/tests/video_tile_row_cache_test.cc $(ROOT)/vendor/gpsp/video.cc
+	$(CXX) $(CXXFLAGS) -ffunction-sections -fdata-sections \
+	  -I$(ROOT)/vendor/gpsp -I$(ROOT)/vendor/gpsp/libretro \
+	  -I$(ROOT)/vendor/gpsp/libretro/libretro-common/include \
+	  $(DEAD_STRIP) $(ROOT)/tests/video_tile_row_cache_test.cc \
+	  -o $(BIN)-video-tile-row-cache
+	$(BIN)-video-tile-row-cache
+
+video-dirty-scanline: $(ROOT)/tests/video_dirty_scanline_test.cc $(ROOT)/vendor/gpsp/video.cc
+	$(CXX) $(CXXFLAGS) -ffunction-sections -fdata-sections \
+	  -I$(ROOT)/vendor/gpsp -I$(ROOT)/vendor/gpsp/libretro \
+	  -I$(ROOT)/vendor/gpsp/libretro/libretro-common/include \
+	  $(DEAD_STRIP) $(ROOT)/tests/video_dirty_scanline_test.cc \
+	  -o $(BIN)-video-dirty-scanline
+	$(BIN)-video-dirty-scanline
+
+video-text-fastpaths: $(ROOT)/tests/video_text_fastpaths_test.cc $(ROOT)/vendor/gpsp/video.cc
+	$(CXX) $(CXXFLAGS) -ffunction-sections -fdata-sections \
+	  -I$(ROOT)/vendor/gpsp -I$(ROOT)/vendor/gpsp/libretro \
+	  -I$(ROOT)/vendor/gpsp/libretro/libretro-common/include \
+	  $(DEAD_STRIP) $(ROOT)/tests/video_text_fastpaths_test.cc \
+	  -o $(BIN)-video-text-fastpaths
+	$(BIN)-video-text-fastpaths
+
+m4a-skip: $(ROOT)/tests/sh4_m4a_skip_test.c \
+	$(ROOT)/ports/fxcg100/sh4/sh4_m4a_skip.h
+	$(CC) $(CFLAGS) -I$(ROOT) $(ROOT)/tests/sh4_m4a_skip_test.c \
+	  -o $(BIN)-m4a-skip
+	$(BIN)-m4a-skip
+
 # Requires sh-elf-as + sh-elf-objcopy on PATH.
 audit: $(ROOT)/tests/sh4_codegen_audit.c $(ROOT)/ports/fxcg100/sh4/sh4_codegen.h
 	$(CC) $(CFLAGS) -I$(ROOT) $(ROOT)/tests/sh4_codegen_audit.c -o $(BIN)-audit
@@ -280,10 +391,10 @@ clean:
 	  $(BIN)-input $(BIN)-input-cg50 $(BIN)-config-version \
 	  $(BIN)-rtc $(BIN)-rtc-fxcg100 $(BIN)-backup-dirty \
 	  $(BIN)-storage $(BIN)-storage-cg50 \
-	  $(BIN)-nor-world-switch $(BIN)-scale $(BIN)-cycle $(BIN)-exec \
+	  $(BIN)-nor-world-switch $(BIN)-overclock $(BIN)-scale $(BIN)-cycle $(BIN)-exec \
 	  $(BIN)-jit-boundaries $(BIN)-jit-safety $(BIN)-jit-ram-flush \
 	  $(BIN)-memory-pc $(BIN)-swi-overlap $(BIN)-udiv \
 	  $(BIN)-swi-oam $(BIN)-udiv-emitter $(BIN)-idle-signature \
 	  $(BIN)-video-opaque $(BIN)-video-blend-cache \
 	  $(BIN)-video-backdrop-shadow \
-	  $(BIN)-arm-mixer $(BIN)-audit
+	  $(BIN)-video-sprite-decode $(BIN)-video-tile-row-cache $(BIN)-arm-mixer $(BIN)-audit

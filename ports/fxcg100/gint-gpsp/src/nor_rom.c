@@ -15,7 +15,39 @@
 #define CGBA_SH4_P2_BASE ((uintptr_t)0xa0000000u)
 #define CGBA_SH4_P2_END  ((uintptr_t)0xc0000000u)
 
-#ifdef CGBA_FXCG50
+#if defined(CGBA_CLASSPAD)
+/* fx-CP400: \fls0 is the same Fugue file system as on the fx-CG (4 KiB
+ * clusters laid out on 4 KiB flash units), and the OS has the same
+ * "address of the block at this file offset" call. HollyHock-3's symbol
+ * table names it File_GetAddr; gint does not bind it. In OS 02.01.7002 and
+ * 02.01.7003 (fx-CP400 and fx-CG500 alike):
+ *
+ *   0x80058c88  File_GetAddr(fd, offset, &address)
+ *               masks interrupts and calls
+ *   0x8005876a  the same with the fd checked and split, which calls
+ *   0x80047c18  the Fugue core routine. Its code is the fx-CG100's
+ *               0x80167358 instruction for instruction: the routine under
+ *               Bfile_GetBlockAddress there.
+ *
+ * The address comes from the launcher's symbol table (classpad_loader.c),
+ * or is the one above if the table has no entry, and is used only after the
+ * code there has been compared with what this was worked out from
+ * (cp_hhk_file_getaddr_ok). Otherwise the old scheme applies: the leading
+ * part of the ROM is copied into the RAM pool left over below the emulator
+ * arena (classpad_loader.c), those copies are published as the "direct"
+ * blocks, and whatever does not fit is demand-paged through file reads like
+ * a rejected block on the fx-CG. */
+#include "classpad_bfile.h"
+#include "classpad_hhk.h"
+#include "classpad_loader.h"
+#define CGBA_BFILE_OPEN              cp_bfile_open
+#define CGBA_BFILE_SIZE              cp_bfile_size
+#define CGBA_BFILE_READ              cp_bfile_read
+#define CGBA_BFILE_CLOSE             cp_bfile_close
+#define CGBA_BFILE_FIND_FIRST        cp_bfile_find_first
+#define CGBA_BFILE_FIND_NEXT         cp_bfile_find_next
+#define CGBA_BFILE_FIND_CLOSE        cp_bfile_find_close
+#elif defined(CGBA_FXCG50)
 /* fx-CG50: use gint's portable BFile_* for the ordinary calls, and OS syscall
  * 0x1DAA (via the cg50_syscall.S trampoline) for Bfile_GetBlockAddress, which
  * gint does not wrap. The wrappers below and the NOR block-gather / P2->P1
@@ -138,8 +170,12 @@ static int os_bfile_read(int fd, void *dst, int size, int offset)
 
 static int bfile_read_exact_ok(int result, int size)
 {
+#ifdef CGBA_CLASSPAD
+	return result == size;
+#else
 	/* Fugue returns bytes read; CASIOWIN returns bytes remaining after read. */
 	return result == size || result == 0;
+#endif
 }
 
 static void os_bfile_close(int fd)
@@ -170,6 +206,107 @@ typedef struct cgba_block_query {
  * A 16/32 MiB ROM previously caused 8,192/16,384 CPG transitions. Losing one
  * 128 Hz RTC tick per transition produces the reported 64/128-second drift.
  */
+#ifdef CGBA_CLASSPAD
+/* Nonzero while the published blocks are flash addresses from the OS rather
+ * than copies in the RAM pool. Flash blocks can move when a file is written,
+ * so they are queried again afterwards (cgba_nor_rom_refresh). */
+static int cp_direct_nor;
+
+/* File_GetAddr, or NULL if neither the address in the launcher's symbol
+ * table nor the known one holds the code this was written against. */
+typedef int (*cp_block_address_fn)(int, int, void **);
+
+#ifndef CGBA_HOST_TEST
+/* OS code is read in place, within the first 32 MiB of flash (P1). */
+static const uint8_t *cp_os_code(void *ctx, uint32_t address, uint32_t size)
+{
+	(void)ctx;
+	if(address < 0x80000000u || address >= 0x82000000u ||
+			size > 0x82000000u - address)
+		return NULL;
+	return (const uint8_t *)(uintptr_t)address;
+}
+#endif
+
+static cp_block_address_fn cp_block_address_call(void)
+{
+#ifdef CGBA_HOST_TEST
+	return NULL;
+#else
+	uint32_t named = cgba_classpad_file_getaddr();
+	uint32_t entry = named ? named : CP_FILE_GETADDR_KNOWN;
+
+	if(!cp_hhk_file_getaddr_ok(cp_os_code, NULL, entry))
+		return NULL;
+	return (cp_block_address_fn)(uintptr_t)entry;
+#endif
+}
+
+/* Runs in the OS world. With the OS call: ask for the flash address of every
+ * 4 KiB block, as on the fx-CG. Without it: copy as many whole blocks as fit
+ * into the RAM pool, in one sequential pass over the file, and publish their
+ * RAM addresses. */
+static int os_bfile_query_blocks(void *opaque)
+{
+	cgba_block_query *query = opaque;
+	cp_block_address_fn get_block_address = cp_block_address_call();
+	uint8_t *pool;
+	uint32_t pool_size, pool_blocks, block = 0;
+
+	cp_direct_nor = get_block_address != NULL;
+	if(get_block_address) {
+		for(block = 0; block < query->block_count; block++) {
+			void *raw = NULL;
+			int result = get_block_address(query->fd,
+				(int)(block * CGBA_FLASH_BLOCK_SIZE), &raw);
+
+			cgba_block_addr[block] = raw;
+			if(block == 0)
+				query->first_result = result;
+			if(query->first_failed_block == UINT32_MAX &&
+					(result < 0 || raw == NULL)) {
+				query->first_failed_block = block;
+				query->first_failed_result = result;
+			}
+		}
+		return 0;
+	}
+
+	cgba_classpad_rom_pool(&pool, &pool_size);
+	pool_blocks = pool_size / CGBA_FLASH_BLOCK_SIZE;
+	if(pool_blocks > query->block_count)
+		pool_blocks = query->block_count;
+
+	while(block < pool_blocks) {
+		uint32_t blocks = pool_blocks - block;
+		uint8_t *dst = pool + block * CGBA_FLASH_BLOCK_SIZE;
+		int bytes, got;
+
+		if(blocks > CGBA_FLASH_BLOCKS_PER_PAGE)
+			blocks = CGBA_FLASH_BLOCKS_PER_PAGE;
+		bytes = (int)(blocks * CGBA_FLASH_BLOCK_SIZE);
+		got = cp_bfile_read(query->fd, dst, bytes,
+			(int)(block * CGBA_FLASH_BLOCK_SIZE));
+		/* Publish only blocks that were read in full. The short last block
+		 * of a file is left unpublished and served by the gather path. */
+		blocks = got > 0 ? (uint32_t)got / CGBA_FLASH_BLOCK_SIZE : 0;
+		for(uint32_t i = 0; i < blocks; i++)
+			cgba_block_addr[block + i] = dst + i * CGBA_FLASH_BLOCK_SIZE;
+		block += blocks;
+		if(got != bytes)
+			break;
+	}
+	for(uint32_t rest = block; rest < query->block_count; rest++)
+		cgba_block_addr[rest] = NULL;
+	if(block < query->block_count) {
+		query->first_failed_block = block;
+		query->first_failed_result = -1;
+		if(block == 0)
+			query->first_result = -1;
+	}
+	return 0;
+}
+#else
 static int os_bfile_query_blocks(void *opaque)
 {
 	cgba_block_query *query = opaque;
@@ -193,6 +330,7 @@ static int os_bfile_query_blocks(void *opaque)
 	}
 	return 0;
 }
+#endif /* !CGBA_CLASSPAD */
 #endif
 
 static int os_bfile_get_block_addresses(int fd, uint32_t block_count,
@@ -584,9 +722,27 @@ int cgba_nor_rom_read(cgba_nor_rom *rom, void *dst, uint32_t offset, uint32_t le
 			memcpy(out, src + intra, chunk);
 		} else if(block < cgba_block_total && rom && rom->fd >= 0) {
 			/* Block exists but has no durable direct pointer (rejected
-			 * non-P1/P2 address): a world-switched BFile read is always
-			 * safe, if slow — this only runs for the rare bad blocks. */
-			int got = os_bfile_read(rom->fd, out, (int)chunk, (int)offset);
+			 * non-P1/P2 address, or on the fx-CP400 without the OS call,
+			 * everything past the RAM pool): a world-switched BFile read
+			 * is always safe, if slow. Take the blocks that follow in the
+			 * same state along, so a 32 KiB page costs one OS visit rather
+			 * than eight. */
+			int got;
+
+			while(chunk < len && rom->size &&
+					offset + chunk < rom->size) {
+				uint32_t next = (offset + chunk) / CGBA_FLASH_BLOCK_SIZE;
+				uint32_t more = CGBA_FLASH_BLOCK_SIZE;
+
+				if(next >= cgba_block_total || cgba_block_addr[next])
+					break;
+				if(more > len - chunk)
+					more = len - chunk;
+				if(more > rom->size - (offset + chunk))
+					more = rom->size - (offset + chunk);
+				chunk += more;
+			}
+			got = os_bfile_read(rom->fd, out, (int)chunk, (int)offset);
 			if(!bfile_read_exact_ok(got, (int)chunk))
 				memset(out, 0xff, chunk);
 		} else {
@@ -737,6 +893,12 @@ int cgba_nor_rom_refresh(cgba_nor_rom *rom)
 		return -1;
 	if(os_bfile_size(rom->fd) != (int)rom->size)
 		return -2;
+#ifdef CGBA_CLASSPAD
+	/* RAM-pool copies are private: writing other files cannot move or
+	 * invalidate them. Flash addresses are queried again like on the fx-CG. */
+	if(!cp_direct_nor)
+		return 0;
+#endif
 	total = rom->page_count * CGBA_FLASH_BLOCKS_PER_PAGE;
 	if(total > CGBA_NOR_ROM_MAX_BLOCKS)
 		return -1;

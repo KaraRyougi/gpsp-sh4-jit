@@ -29,6 +29,10 @@ enum {
   KEY_NEG = 0x14, KEY_EXE = 0x15,
 
   KEY_ACON = 0x07,
+
+  /* fx-CP400 additions (the ClassPad host tests). */
+  KEY_KBD = 0xa1, KEY_X = 0xa2, KEY_Y = 0xa3, KEY_Z = 0xa4,
+  KEY_EQUALS = 0xa5, KEY_CLEAR = KEY_EXIT,
 };
 
 #endif

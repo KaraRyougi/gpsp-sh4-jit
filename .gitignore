@@ -24,3 +24,10 @@ release/
 # ROM images are large binaries (and usually copyrighted) — keep them local
 *.gba
 *.gbc
+
+# fx-CP400 / ClassPad II build outputs
+ports/fxcg100/gint-gpsp/build-classpad*/
+ports/fxcg100/gint-gpsp/build-cp*/
+ports/fxcg100/gint-gpsp/*.hh3
+ports/fxcg100/classpad-lcdbench/build-cp*/
+ports/fxcg100/classpad-lcdbench/*.hh3

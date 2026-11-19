@@ -4,18 +4,33 @@
 #include <stdint.h>
 
 /*
- * Normal-play speed limiter.  A one-shot hardware timer is started before an
- * emulated frame and waited on afterwards, so only frames that finish early
- * sleep.  Fast-forward bypasses the limiter at the call site.
+ * Normal-play speed limiter.  One timer ticks once per GBA frame for as long
+ * as the limiter is on, and frame n may not end before tick n.  A frame that
+ * ends early sleeps until its tick; one that ends late does not, and neither
+ * do the frames after it until the lost time has been made up (at most
+ * CGBA_LIMITER_MAX_LATE frames of it: more is forgotten, so a long stall is
+ * not followed by a burst).
+ *
+ * It used to be a one-shot timer per frame, so a frame that overran was
+ * never made up for and the frames after it still slept their full time:
+ * with any frame skipping the game ran slow, and unevenly, by exactly the
+ * time the drawn frames took over one frame.
+ *
+ * Fast-forward bypasses the limiter at the call site.
  */
+#define CGBA_LIMITER_MAX_LATE 3
+
 typedef struct cgba_frame_limiter {
-	int timer;
-	volatile int elapsed;
+	int enabled;
+	uint32_t done;       /* frames finished since the timer was started */
+	int late;            /* whole frames behind after the last one; <0: n/a */
 } cgba_frame_limiter;
 
 void cgba_frame_limiter_init(cgba_frame_limiter *limiter);
 void cgba_frame_limiter_begin(cgba_frame_limiter *limiter, int enabled);
 void cgba_frame_limiter_wait(cgba_frame_limiter *limiter);
+/* Stop the timer (leaving the game loop, or the program). */
+void cgba_frame_limiter_stop(void);
 
 /*
  * Adaptive ("automatic") frameskip controller for the gint gpSP port.
@@ -29,6 +44,15 @@ void cgba_frame_limiter_wait(cgba_frame_limiter *limiter);
  *
  * This is the real implementation behind the menu's "AUTOMATIC" frameskip type;
  * the "MANUAL" and "OFF" types stay on fxcg100_menu_should_blit().
+ *
+ * With the limiter on, the controller does not measure a rate (which the
+ * limiter holds a hair under the target, so the old comparison came out
+ * either way at random and the skip count wandered up and down every half
+ * second, changing the rhythm of the picture each time). It goes by how far
+ * behind the limiter says the emulator is: the skip count goes up when two
+ * windows in a row fell behind, and is tried one lower only after a stretch
+ * of windows that kept up, a stretch that doubles each time the try fails.
+ * So the count settles, and the picture is drawn at even intervals.
  */
 
 typedef struct cgba_pacer {
@@ -39,6 +63,13 @@ typedef struct cgba_pacer {
 	uint32_t window_frames;/* measurement window length, in emulated frames   */
 	uint32_t in_window;    /* emulated frames counted in the current window   */
 	uint32_t start_ticks;  /* rtc_ticks() at the start of the current window  */
+	/* From the limiter (cgba_pacer_feedback): */
+	int   fed;             /* frames with feedback in the current window      */
+	int   worst_late;      /* most frames behind seen in the current window   */
+	int   bad_windows;     /* consecutive windows that fell behind            */
+	int   good_windows;    /* consecutive windows that kept up                */
+	int   hold;            /* windows to keep up before trying one skip less  */
+	int   lowered;         /* the last change was a try at one skip less      */
 } cgba_pacer;
 
 /* Initialize / reset the controller. target_fps and max_skip are clamped to
@@ -49,6 +80,10 @@ void cgba_pacer_reset(cgba_pacer *p);
 /* Call exactly once per emulated frame. Returns nonzero when this frame should
  * be rendered + blitted, zero when its render should be skipped. */
 int cgba_pacer_should_render(cgba_pacer *p);
+
+/* Call once per emulated frame after cgba_frame_limiter_wait(), with the
+ * limiter's `late` (negative when the limiter is off). */
+void cgba_pacer_feedback(cgba_pacer *p, int late);
 
 /*
  * FPS meter for on-screen performance metrics. Independent of the pacer / of the

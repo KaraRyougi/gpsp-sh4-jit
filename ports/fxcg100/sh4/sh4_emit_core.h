@@ -193,12 +193,50 @@ static inline void sh4_emit_flush_pool(sh4_emitter *e)
 /* Byte offset of guest reg[idx] from the base pointer. */
 static inline unsigned sh4_greg_off(unsigned idx) { return idx * 4; }
 
+#ifndef CGBA_SH4_REG_FORWARD
+#define CGBA_SH4_REG_FORWARD 0
+#endif
+
+/* A write-through, one-instruction forwarding window. The driver opens it
+ * only after a straight-line ALU instruction ending in a guest-register store.
+ * Only the very first host instruction of the successor may consume it. No
+ * register stays dirty, and branches/helpers/gates need no new spill ABI. */
+static uint8_t *sh4_forward_at;
+static unsigned sh4_forward_guest, sh4_forward_host;
+
+static inline void sh4_greg_forward_reset(void) { sh4_forward_at = NULL; }
+
+static inline void sh4_greg_forward_finish(uint8_t *start, uint8_t *end, int eligible)
+{
+  sh4_forward_at = NULL;
+#if CGBA_SH4_REG_FORWARD
+  if (eligible && end - start >= 2) {
+    unsigned insn = ((unsigned)end[-2] << 8) | end[-1];
+    /* MOV.L Rm,@(disp,R14), only architectural r1-r14. */
+    if ((insn & 0xFF00) == 0x1E00 && (insn & 15) > 0 && (insn & 15) < 15) {
+      sh4_forward_guest = insn & 15;
+      sh4_forward_host = (insn >> 4) & 15;
+      sh4_forward_at = end;
+    }
+  }
+#else
+  (void)start; (void)end; (void)eligible;
+#endif
+}
+
 /* Load guest reg[idx] -> host rn. CPSR is cached in R8 and guest r0 in R11.
  * Other indices use @(disp,base) for the ARM r0..r15 window (offsets 0..60),
  * else @(R0,base) with R0 set to the offset (<=127). */
 static inline void sh4_emit_load_greg(sh4_codegen *cg, unsigned idx, unsigned rn)
 {
   unsigned off = sh4_greg_off(idx);
+#if CGBA_SH4_REG_FORWARD
+  if (cg->ptr == sh4_forward_at && idx == sh4_forward_guest) {
+    sh4_forward_at = NULL;
+    if (rn != sh4_forward_host) sh4_emit_mov_reg(cg, sh4_forward_host, rn);
+    return;
+  }
+#endif
   if (idx == SH4_GREG_CPSR) {
     sh4_emit_mov_reg(cg, SH4_REG_CPSR, rn);          /* rn = cached CPSR */
 #if CGBA_SH4_PIN_GUEST_R0

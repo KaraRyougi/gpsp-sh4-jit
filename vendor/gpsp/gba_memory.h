@@ -290,6 +290,7 @@ bool cgba_gamepak_remap_pages(const u8 * const *pages, u32 rom_size);
 extern u32 oam_update;
 extern u32 gbc_sound_wave_update;
 extern dma_transfer_type dma[DMA_CHAN_CNT];
+extern u8 cgba_hblank_dma_mask;
 
 extern u8 open_gba_bios_rom[1024*16];
 extern u16 palette_ram[512];
@@ -297,14 +298,33 @@ extern u16 oam_ram[512];
 extern u16 palette_ram_converted[512];
 #define CGBA_PALETTE_DIRTY_BLEND    0x01u
 #define CGBA_PALETTE_DIRTY_BACKDROP 0x02u
-#if defined(CGBA_VIDEO_BLEND_PALETTE_CACHE) && \
-    defined(CGBA_VIDEO_BACKDROP_SHADOW_PALETTE)
+#define CGBA_PALETTE_DIRTY_TILE_ROW 0x04u
+#define CGBA_PALETTE_DIRTY_SCANLINE 0x08u
+#ifdef CGBA_VIDEO_BLEND_PALETTE_CACHE
+#define CGBA_PALETTE_BLEND_BIT CGBA_PALETTE_DIRTY_BLEND
+#else
+#define CGBA_PALETTE_BLEND_BIT 0
+#endif
+#ifdef CGBA_VIDEO_BACKDROP_SHADOW_PALETTE
+#define CGBA_PALETTE_BACKDROP_BIT CGBA_PALETTE_DIRTY_BACKDROP
+#else
+#define CGBA_PALETTE_BACKDROP_BIT 0
+#endif
+#ifdef CGBA_VIDEO_TILE_ROW_CACHE
+#define CGBA_PALETTE_TILE_ROW_BIT CGBA_PALETTE_DIRTY_TILE_ROW
+#else
+#define CGBA_PALETTE_TILE_ROW_BIT 0
+#endif
+#if defined(CGBA_VIDEO_DIRTY_SCANLINE) && CGBA_VIDEO_DIRTY_SCANLINE
+#define CGBA_PALETTE_SCANLINE_BIT CGBA_PALETTE_DIRTY_SCANLINE
+#else
+#define CGBA_PALETTE_SCANLINE_BIT 0
+#endif
+#if CGBA_PALETTE_BLEND_BIT || CGBA_PALETTE_BACKDROP_BIT || \
+    CGBA_PALETTE_TILE_ROW_BIT || CGBA_PALETTE_SCANLINE_BIT
 #define CGBA_PALETTE_DIRTY_ACTIVE \
-  (CGBA_PALETTE_DIRTY_BLEND | CGBA_PALETTE_DIRTY_BACKDROP)
-#elif defined(CGBA_VIDEO_BLEND_PALETTE_CACHE)
-#define CGBA_PALETTE_DIRTY_ACTIVE CGBA_PALETTE_DIRTY_BLEND
-#elif defined(CGBA_VIDEO_BACKDROP_SHADOW_PALETTE)
-#define CGBA_PALETTE_DIRTY_ACTIVE CGBA_PALETTE_DIRTY_BACKDROP
+  (CGBA_PALETTE_BLEND_BIT | CGBA_PALETTE_BACKDROP_BIT | \
+   CGBA_PALETTE_TILE_ROW_BIT | CGBA_PALETTE_SCANLINE_BIT)
 #endif
 #ifdef CGBA_PALETTE_DIRTY_ACTIVE
 /* Bitmask set by every path which mutates palette_ram_converted, including
@@ -312,6 +332,16 @@ extern u16 palette_ram_converted[512];
  * after rebuilding, so independent consumers cannot hide invalidation from
  * one another. */
 extern volatile u32 palette_ram_dirty;
+#endif
+#if defined(CGBA_VIDEO_DIRTY_SCANLINE) && CGBA_VIDEO_DIRTY_SCANLINE
+#define CGBA_VRAM_DIRTY_BG   0x01u
+#define CGBA_VRAM_DIRTY_OBJ  0x02u
+#define CGBA_VRAM_DIRTY_ALL  (CGBA_VRAM_DIRTY_BG | CGBA_VRAM_DIRTY_OBJ)
+#define CGBA_VRAM_DIRTY_ACTIVE CGBA_VRAM_DIRTY_ALL
+/* Bitmask set by every path that writes VRAM (CPU, DMA, SWI HLE, native SH4
+ * stores, reset and savestate load). Consumed by the dirty-scanline tracker. */
+extern volatile u32 cgba_vram_dirty;
+extern volatile u32 cgba_video_io_dirty;
 #endif
 extern u16 io_registers[512];
 extern u8 vram[1024 * 96];

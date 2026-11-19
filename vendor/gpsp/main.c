@@ -119,6 +119,27 @@ static unsigned update_timers(irq_type *irq_raised, unsigned completed_cycles)
       if(timer[i].status != TIMER_CASCADE)
          timer[i].count -= completed_cycles;
 
+#if defined(CGBA_SILENT_TIMERS) && CGBA_SILENT_TIMERS
+      /* The calculator's sound_timer is a no-op. Preserve the number of
+       * cascade ticks and the final counter, without calling it for each
+       * overflow. The common single-overflow case avoids software division. */
+      if (timer[i].count <= 0)
+      {
+         u32 period = timer[i].reload << shift;
+         u32 overflows = 1;
+         timer[i].count += period;
+         if (timer[i].count <= 0)
+         {
+            u32 extra = (0u - (u32)timer[i].count) / period + 1;
+            timer[i].count += extra * period;
+            overflows += extra;
+         }
+         if (timer[i].irq)
+            *irq_raised |= (IRQ_TIMER0 << i);
+         if (i != 3 && timer[i + 1].status == TIMER_CASCADE)
+            timer[i + 1].count -= overflows;
+      }
+#else
       /* Process EVERY overflow the elapsed cycles covered: IRQ-less sound
          timers no longer cap the event slice (AW: the ~38kHz sample timer
          forced ~650 update_gba round-trips per frame), so a slice may span
@@ -144,6 +165,7 @@ static unsigned update_timers(irq_type *irq_raised, unsigned completed_cycles)
 
          timer[i].count += (timer[i].reload << shift);
       }
+#endif
 
       /* Publish the final counter after applying every reload.  Publishing
          before the loop exposed a transient zero at an exact overflow and
@@ -309,10 +331,13 @@ u32 function_cc update_gba(int remaining_cycles)
           update_scanline();
 
           // Trigger the HBlank DMAs if enabled
-          for (i = 0; i < 4; i++)
+          if (__builtin_expect(cgba_hblank_dma_mask != 0, 0))
           {
-            if(dma[i].start_type == DMA_START_HBLANK)
-              dma_alert |= dma_transfer(i, &dma_cycles);
+            for (i = 0; i < 4; i++)
+            {
+              if(dma[i].start_type == DMA_START_HBLANK)
+                dma_alert |= dma_transfer(i, &dma_cycles);
+            }
           }
         }
 
@@ -428,8 +453,10 @@ u32 function_cc update_gba(int remaining_cycles)
       flag_interrupt(irq_raised);
 
     // Raise any pending interrupts. This changes the CPU mode.
-    if (check_and_raise_interrupts())
-      changed_pc = 0x40000000;
+    if (__builtin_expect(!(reg[REG_CPSR] & 0x80) && io_registers[REG_IME] &&
+                         (io_registers[REG_IE] & io_registers[REG_IF]), 0))
+      if (check_and_raise_interrupts())
+        changed_pc = 0x40000000;
 
     // Figure out when we need to stop CPU execution. The next event is
     // a video event or a timer event, whatever happens first.
@@ -438,11 +465,14 @@ u32 function_cc update_gba(int remaining_cycles)
     { extern u32 cgba_cap_src[8]; cgba_cap_src[0]++; }   /* default: video */
 #endif
     {
-      u32 cc = serial_next_event();
+      extern u32 serial_irq_cycles;
+      if (__builtin_expect(serial_irq_cycles != 0, 0)) {
+        u32 cc = serial_irq_cycles;
 #if defined(CGBA_GPSP_HEADLESS_TEST) && defined(CGBA_SH4_DIAG_COUNTERS)
-      if (cc < execute_cycles) { extern u32 cgba_cap_src[8]; cgba_cap_src[1]++; }
+        if (cc < execute_cycles) { extern u32 cgba_cap_src[8]; cgba_cap_src[1]++; }
 #endif
-      execute_cycles = MIN(execute_cycles, cc);
+        execute_cycles = MIN(execute_cycles, cc);
+      }
     }
 
     // If we are paused due to a DMA, cap the number of cyles to that amount.
@@ -496,6 +526,7 @@ void reset_gba(void)
   init_main();
   init_cpu();
   reset_sound();
+  video_invalidate_scanline_cache(0, 160);
 }
 
 #ifdef TRACE_REGISTERS
