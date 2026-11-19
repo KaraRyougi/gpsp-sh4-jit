@@ -34,6 +34,12 @@ static inline size_t sh4_offset(const sh4_codegen *cg, const uint8_t *base)
 
 static inline void sh4_emit_u16(sh4_codegen *cg, uint16_t opcode)
 {
+#if defined(__sh__) && defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+  /* Runtime SH-4 codegen always targets 2-byte-aligned executable buffers;
+   * translation_cache_limit enforces the real cache bound at instruction edges. */
+  *(uint16_t *)cg->ptr = opcode;
+  cg->ptr += 2;
+#else
   if ((size_t)(cg->limit - cg->ptr) < 2) {
     cg->overflow = 1;
     return;
@@ -42,6 +48,7 @@ static inline void sh4_emit_u16(sh4_codegen *cg, uint16_t opcode)
   cg->ptr[0] = (uint8_t)(opcode >> 8);
   cg->ptr[1] = (uint8_t)opcode;
   cg->ptr += 2;
+#endif
 }
 
 /* ------------------------------------------------------------------ */
@@ -259,6 +266,15 @@ static inline void sh4_emit_rotcr(sh4_codegen *cg, unsigned rn)
 /* MOV.{B,W,L} @Rm, Rn  (load) */
 static inline void sh4_emit_mov_b_load(sh4_codegen *cg, unsigned rm, unsigned rn)
 { sh4_emit_u16(cg, SH4_NM(0x6000, rn, rm)); }
+/* MOV.B @(disp4, Rm), R0  (sign-extending byte load, disp 0..15) */
+static inline void sh4_emit_mov_b_load_disp(sh4_codegen *cg, unsigned rm, unsigned disp4)
+{ sh4_emit_u16(cg, (uint16_t)(0x8400u | ((rm & 0xFu) << 4) | (disp4 & 0xFu))); }
+/* MOV.W @(disp4*2, Rm), R0  (sign-extending word load, disp4 = 0..15 halfwords) */
+static inline void sh4_emit_mov_w_load_disp(sh4_codegen *cg, unsigned rm, unsigned disp4)
+{ sh4_emit_u16(cg, (uint16_t)(0x8500u | ((rm & 0xFu) << 4) | (disp4 & 0xFu))); }
+/* MOV.W R0, @(disp4*2, Rn)  (halfword store, disp4 = 0..15 halfwords) */
+static inline void sh4_emit_mov_w_store_disp(sh4_codegen *cg, unsigned rn, unsigned disp4)
+{ sh4_emit_u16(cg, (uint16_t)(0x8100u | ((rn & 0xFu) << 4) | (disp4 & 0xFu))); }
 static inline void sh4_emit_mov_w_load(sh4_codegen *cg, unsigned rm, unsigned rn)
 { sh4_emit_u16(cg, SH4_NM(0x6001, rn, rm)); }
 static inline void sh4_emit_mov_l_load(sh4_codegen *cg, unsigned rm, unsigned rn)
@@ -272,7 +288,9 @@ static inline void sh4_emit_mov_w_store(sh4_codegen *cg, unsigned rm, unsigned r
 static inline void sh4_emit_mov_l_store(sh4_codegen *cg, unsigned rm, unsigned rn)
 { sh4_emit_u16(cg, SH4_NM(0x2002, rn, rm)); }
 
-/* MOV.L @Rm+, Rn  (post-increment load) / MOV.L Rm, @-Rn (pre-dec store) */
+/* MOV.{B,L} @Rm+, Rn  (post-increment load) / MOV.L Rm, @-Rn (pre-dec store) */
+static inline void sh4_emit_mov_b_load_inc(sh4_codegen *cg, unsigned rm, unsigned rn)
+{ sh4_emit_u16(cg, SH4_NM(0x6004, rn, rm)); }
 static inline void sh4_emit_mov_l_load_inc(sh4_codegen *cg, unsigned rm, unsigned rn)
 { sh4_emit_u16(cg, SH4_NM(0x6006, rn, rm)); }
 static inline void sh4_emit_mov_l_store_dec(sh4_codegen *cg, unsigned rm, unsigned rn)

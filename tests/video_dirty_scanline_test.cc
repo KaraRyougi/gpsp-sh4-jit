@@ -20,6 +20,7 @@ u32 skip_next_frame = 0;
 int sprite_limit = 1;
 volatile u32 palette_ram_dirty = CGBA_PALETTE_DIRTY_ACTIVE;
 volatile u32 cgba_vram_dirty = CGBA_VRAM_DIRTY_ALL;
+volatile u32 cgba_vram_sb_dirty = 0;
 volatile u32 cgba_video_io_dirty = 1;
 
 static unsigned seed = 0x51A7BEEFu;
@@ -352,6 +353,40 @@ static bool run_tests(void)
   cgba_vram_dirty = CGBA_VRAM_DIRTY_OBJ;
   CHECK(verify_frame("mode3-high-vram-write"));
   CHECK(cgba_video_frame_dirty_rows == 160);
+
+  /* 14. Active-layer-aware BLDCNT no-op + full-screen WIN1 fast path! */
+  init_scene_mode0();
+  write_ioreg(REG_DISPCNT, 0x5E00u); /* Mode 0, BG1/2/3+OBJ+WIN1, BG0 OFF */
+  write_ioreg(REG_WIN1H, 0x00F0u);
+  write_ioreg(REG_WIN1V, 0x00A0u);
+  write_ioreg(REG_WININ, 0x3F00u);
+  write_ioreg(REG_WINOUT, 0x0000u);
+  write_ioreg(REG_BLDALPHA, 0x0A06u);
+  write_ioreg(REG_BLDY, 0x0008u);
+  write_ioreg(REG_BG1CNT, 0x0900u);
+  write_ioreg(REG_BG2CNT, 0x0A01u);
+  write_ioreg(REG_BG3CNT, 0x0B02u);
+  /* BLDCNT targets disabled BG0 only -> must take fast fullcolor path & match ref. */
+  write_ioreg(REG_BLDCNT, 0x3E41u);
+  CHECK(verify_frame("mode0-win1-bldcnt-disabled-bg0"));
+  CHECK(cgba_mode0_fast_fullframe == true);
+  /* BLDCNT targets OBJ only -> fullcolor on non-OBJ rows, blend on OBJ rows. */
+  write_ioreg(REG_BLDCNT, 0x3E50u);
+  CHECK(verify_frame("mode0-win1-bldcnt-obj-only"));
+  CHECK(cgba_mode0_fast_fullframe == false);
+  CHECK(cgba_mode0_fast_no_obj == true);
+  /* BLDCNT self-only BG1 blend -> no-op, fast path. */
+  write_ioreg(REG_BLDCNT, 0x0242u);
+  CHECK(verify_frame("mode0-win1-bldcnt-self-bg1"));
+  CHECK(cgba_mode0_fast_fullframe == true);
+  /* BLDCNT brighten on backdrop (BD=0x20) -> NOT a no-op! */
+  write_ioreg(REG_BLDCNT, 0x00A0u);
+  CHECK(verify_frame("mode0-win1-bldcnt-brighten-bd"));
+  CHECK(cgba_mode0_fast_fullframe == false);
+  /* BLDCNT brighten on disabled BG0 only -> no-op! */
+  write_ioreg(REG_BLDCNT, 0x0081u);
+  CHECK(verify_frame("mode0-win1-bldcnt-brighten-disabled-bg0"));
+  CHECK(cgba_mode0_fast_fullframe == true);
 
   return true;
 }

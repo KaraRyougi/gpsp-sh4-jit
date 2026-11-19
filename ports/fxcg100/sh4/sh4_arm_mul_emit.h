@@ -72,15 +72,76 @@ static inline int sh4g_arm_multiply_native(u8 **tp, u32 opcode, u32 flag_status)
   if (accumulate && rn == 15)           return 0;
 
   { sh4_codegen cg = sh4g_open(tp);
+#if CGBA_SH4_REG_FORWARD
+    if (accumulate && cg.ptr == sh4_forward_at && rn == sh4_forward_guest &&
+        sh4_forward_host == SH4_REG_T0 && rm != rn && rs != rn) {
+      /* R1 already holds reg[rn] from the preceding straight-line instruction. */
+      sh4_forward_at = NULL;
+      sh4_emit_load_greg(&cg, rm, SH4_REG_T1);
+      sh4_emit_load_greg(&cg, rs, SH4_REG_T2);
+      sh4_emit_mul_l(&cg, SH4_REG_T1, SH4_REG_T2);
+      sh4_emit_sts_macl(&cg, SH4_REG_T1);
+      sh4_emit_add_reg(&cg, SH4_REG_T1, SH4_REG_T0);
+      sh4_emit_store_greg(&cg, SH4_REG_T0, rd);
+    } else {
+      unsigned r_rm = SH4_REG_T0, r_rs = SH4_REG_T1;
+      if (cg.ptr == sh4_forward_at && rs == sh4_forward_guest && rm != rs) {
+        u32 tmp = rm; rm = rs; rs = tmp;            /* hit R1 forward window */
+      }
+#if CGBA_SH4_PIN_GUEST_R0
+      if (rm == 0) r_rm = SH4_REG_GUEST_R0;
+      else         sh4_emit_load_greg(&cg, rm, SH4_REG_T0);
+      if (rs == 0) r_rs = SH4_REG_GUEST_R0;
+      else         sh4_emit_load_greg(&cg, rs, SH4_REG_T1);
+#else
+      sh4_emit_load_greg(&cg, rm, SH4_REG_T0);
+      sh4_emit_load_greg(&cg, rs, SH4_REG_T1);
+#endif
+      sh4_emit_mul_l(&cg, r_rm, r_rs);              /* MACL = rm * rs (low 32) */
+      if (accumulate) {
+#if CGBA_SH4_PIN_GUEST_R0
+        if (rd == 0 && rn == 0 && !set_flags) {
+          sh4_emit_sts_macl(&cg, SH4_REG_T0);
+          sh4_emit_add_reg(&cg, SH4_REG_T0, SH4_REG_GUEST_R0);
+        } else {
+          sh4_emit_load_greg(&cg, rn, SH4_REG_T1);  /* hide MUL.L latency */
+          sh4_emit_sts_macl(&cg, SH4_REG_T0);       /* R1 = product */
+          sh4_emit_add_reg(&cg, SH4_REG_T1, SH4_REG_T0);
+          sh4_emit_store_greg(&cg, SH4_REG_T0, rd);
+        }
+#else
+        sh4_emit_load_greg(&cg, rn, SH4_REG_T1);    /* hide MUL.L latency */
+        sh4_emit_sts_macl(&cg, SH4_REG_T0);         /* R1 = product */
+        sh4_emit_add_reg(&cg, SH4_REG_T1, SH4_REG_T0);
+        sh4_emit_store_greg(&cg, SH4_REG_T0, rd);
+#endif
+      } else {
+#if CGBA_SH4_PIN_GUEST_R0
+        if (rd == 0 && !set_flags) {
+          sh4_emit_sts_macl(&cg, SH4_REG_GUEST_R0);
+        } else {
+          sh4_emit_sts_macl(&cg, SH4_REG_T0);
+          sh4_emit_store_greg(&cg, SH4_REG_T0, rd);
+        }
+#else
+        sh4_emit_sts_macl(&cg, SH4_REG_T0);
+        sh4_emit_store_greg(&cg, SH4_REG_T0, rd);
+#endif
+      }
+    }
+#else
     sh4_emit_load_greg(&cg, rm, SH4_REG_T0);
     sh4_emit_load_greg(&cg, rs, SH4_REG_T1);
     sh4_emit_mul_l(&cg, SH4_REG_T0, SH4_REG_T1);    /* MACL = rm * rs (low 32) */
-    sh4_emit_sts_macl(&cg, SH4_REG_T0);             /* R1 = product */
     if (accumulate) {
-      sh4_emit_load_greg(&cg, rn, SH4_REG_T1);      /* R2 = reg[rn] */
+      sh4_emit_load_greg(&cg, rn, SH4_REG_T1);      /* hide MUL.L latency */
+      sh4_emit_sts_macl(&cg, SH4_REG_T0);           /* R1 = product */
       sh4_emit_add_reg(&cg, SH4_REG_T1, SH4_REG_T0);/* R1 += rn */
+    } else {
+      sh4_emit_sts_macl(&cg, SH4_REG_T0);           /* R1 = product */
     }
     sh4_emit_store_greg(&cg, SH4_REG_T0, rd);
+#endif
     sh4g_close(tp, &cg); }
   if (set_flags)
     sh4g_set_nz_m(tp, SH4_REG_T0, flag_status);     /* N/Z only, C/V preserved */

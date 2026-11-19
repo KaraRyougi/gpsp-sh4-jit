@@ -258,19 +258,46 @@ static inline uint32_t cgba_sh4_m4a_fold_reverb(
   int32_t budget, const cgba_sh4_m4a_loop_costs *c)
 {
   uint32_t n4 = *r4, n5 = *r5, n7 = *r7, spent = 0, last = 0;
+  uint32_t rem, base_cost;
+  const uint8_t (*mem)[2] = c->mem;
+
+  if (budget <= 1 || (int32_t)n4 <= 1)
+    return 0;
+  rem = (uint32_t)(budget - 1);       /* strictly positive remaining budget */
+  base_cost = 15u * c->seq + c->branch;
 
   while ((int32_t)n4 > 1) {           /* keep the final (exiting) iteration */
     uint32_t a0 = n5 + r6, a2 = n7 + r6, cost;
+    uint32_t max_k, by_budget, room, r1, r2, r3, step_cost;
     if ((a0 >> 28) | (n5 >> 28) | (a2 >> 28) | (n7 >> 28))
       break;                          /* outside the charge table */
-    cost = 15u * c->seq + c->branch +
-           2u * c->mem[a0 >> 24][0] + 2u * c->mem[n5 >> 24][0] +
-           c->mem[a2 >> 24][0] + c->mem[n7 >> 24][0];
-    if ((int64_t)budget - (int64_t)spent - (int64_t)cost <= 0)
+    cost = base_cost +
+           2u * mem[a0 >> 24][0] + 2u * mem[n5 >> 24][0] +
+           mem[a2 >> 24][0] + mem[n7 >> 24][0];
+    if (cost > rem)
       break;
-    spent += cost;
-    last = n4;
-    n4--; n5++; n7++;
+    /* All four cursors increment by 1/iter, so cost stays constant until one
+     * crosses a 16 MiB region boundary. Fold the whole uniform run in O(1). */
+    max_k = n4 - 1u;
+    by_budget = rem / cost;
+    if (by_budget < max_k)
+      max_k = by_budget;
+    room = 0x01000000u - (a0 & 0x00FFFFFFu);
+    r1 = 0x01000000u - (n5 & 0x00FFFFFFu);
+    r2 = 0x01000000u - (a2 & 0x00FFFFFFu);
+    r3 = 0x01000000u - (n7 & 0x00FFFFFFu);
+    if (r1 < room) room = r1;
+    if (r2 < room) room = r2;
+    if (r3 < room) room = r3;
+    if (room < max_k)
+      max_k = room;
+    step_cost = max_k * cost;
+    spent += step_cost;
+    rem -= step_cost;
+    last = n4 - max_k + 1u;
+    n4 -= max_k;
+    n5 += max_k;
+    n7 += max_k;
   }
   if (!spent)
     return 0;
@@ -291,56 +318,156 @@ static inline uint32_t cgba_sh4_m4a_fold_interp(
   cgba_sh4_m4a_interp_state *s, int32_t budget,
   const cgba_sh4_m4a_loop_costs *c)
 {
-  uint32_t spent = 0;
+  uint32_t spent = 0, rem;
+  uint32_t r2 = s->r2, r3 = s->r3, r4 = s->r4, r5 = s->r5;
+  uint32_t r8 = s->r8, r9 = s->r9, lr = s->lr;
+  uint32_t seq = c->seq, br = c->branch;
+  uint32_t fixed_cost = 58u * seq + 4u * br;
+  uint32_t step_seq = 8u * seq;
+  const uint8_t (*mem)[2] = c->mem;
+
+  if (budget <= 1 || (int32_t)r8 <= 4)
+    return 0;
+  rem = (uint32_t)(budget - 1);       /* strictly positive remaining budget */
+
+  /* Cache region-derived wait-state costs across groups: in practice r5 stays
+   * in IWRAM (0x03) and r3 stays in ROM/RAM for the entire mix call. */
+  uint32_t r5_reg = 0xFFFFFFFFu, r5_630_reg = 0xFFFFFFFFu;
+  uint32_t r5_cost = 0;
+  uint32_t r3_reg = r3 >> 24;
+  uint32_t r3_mem = (r3_reg < 16u) ? mem[r3_reg][0] : 0u;
+
+  /* O(1) uniform-region batch fast path: fold up to 63 groups (252 samples)
+   * at a time using pure 32-bit arithmetic (4*63*f < 2^31).  The exact 1-group
+   * tail loop below finishes the final 0..2 groups and any edge cases. */
+  if ((int32_t)r2 > 0 && r9 < 0x00800000u && r4 < 0x3F800000u &&
+      (r3 >> 28) == 0u) {
+    uint32_t q = r4 >> 23;
+    uint32_t f = r4 & 0x007FFFFFu;
+    uint32_t step1 = step_seq + r3_mem;
+    uint32_t step2 = step1 + r3_mem;
+    for (;;) {
+      uint32_t r5_b = r5 + 0x630u;
+      uint32_t k, k_bud, k_r5, k_r5b, max_gcost, n_samp, phase_sum, carry;
+      uint32_t total_steps, max_steps, r3_room, batch_cost;
+      if ((r5 >> 28) | (r5_b >> 28) || (int32_t)r8 <= 4)
+        break;
+      if ((r5 >> 24) != r5_reg || (r5_b >> 24) != r5_630_reg) {
+        r5_reg = r5 >> 24;
+        r5_630_reg = r5_b >> 24;
+        r5_cost = fixed_cost + 2u * mem[r5_reg][1] + 2u * mem[r5_630_reg][1];
+      }
+      if (q == 0u)
+        max_gcost = r5_cost + 4u * (step1 > br ? step1 : br);
+      else
+        max_gcost = r5_cost + 4u * step2;
+      k_bud = rem / max_gcost;
+      if (k_bud == 0u)
+        break;
+      k = (r8 - 1u) >> 2;
+      if (k > 63u) k = 63u;
+      if (k_bud < k) k = k_bud;
+      k_r5 = (0x01000000u - (r5 & 0x00FFFFFFu)) >> 2;
+      k_r5b = (0x01000000u - (r5_b & 0x00FFFFFFu)) >> 2;
+      if (k_r5 < k) k = k_r5;
+      if (k_r5b < k) k = k_r5b;
+      if (k == 0u)
+        break;
+      r3_room = 0x00FFFFFFu - (r3 & 0x00FFFFFFu);
+      max_steps = r2 - 1u;
+      if (r3_room < max_steps) max_steps = r3_room;
+      n_samp = k << 2;
+      phase_sum = r9 + n_samp * f;
+      carry = phase_sum >> 23;
+      total_steps = n_samp * q + carry;
+      if (total_steps > max_steps) {
+        k = max_steps / ((q + 1u) << 2);
+        if (k == 0u)
+          break;
+        n_samp = k << 2;
+        phase_sum = r9 + n_samp * f;
+        carry = phase_sum >> 23;
+        total_steps = n_samp * q + carry;
+      }
+      r9 = phase_sum & 0x007FFFFFu;
+      if (q == 0u) {
+        batch_cost = k * r5_cost + (n_samp - carry) * br + carry * step1;
+        lr = 0u;
+      } else if (q == 1u) {
+        batch_cost = k * (r5_cost + 4u * step1) + carry * r3_mem;
+        lr = (r9 < f) ? 1u : 0u;
+      } else {
+        batch_cost = k * (r5_cost + 4u * step2);
+        lr = (q - 1u) + ((r9 < f) ? 1u : 0u);
+      }
+      spent += batch_cost;
+      rem -= batch_cost;
+      r2 -= total_steps;
+      r3 += total_steps;
+      r5 += n_samp;
+      r8 -= n_samp;
+    }
+  }
 
   for (;;) {
-    uint32_t r2 = s->r2, r3 = s->r3, r5 = s->r5, r9 = s->r9, lr = s->lr;
-    uint32_t cost, i;
+    uint32_t n2 = r2, n3 = r3, n9 = r9, nlr = lr;
+    uint32_t r5_b, cost, i;
 
     /* Group head: top bits clear, and the group must not be the last one
      * (SUBS r8, r8, #4 ; BGT must be taken). */
-    if ((r5 >> 28) || ((r5 + 0x630u) >> 28) || (int32_t)s->r8 <= 4)
+    r5_b = r5 + 0x630u;
+    if ((r5 >> 28) | (r5_b >> 28) || (int32_t)r8 <= 4)
       break;
-    cost = 2u * c->seq + c->mem[r5 >> 24][1] + c->mem[(r5 + 0x630u) >> 24][1];
-    for (i = 0; i < 4u; i++) {
-      cost += 11u * c->seq;
-      r9 += s->r4;
-      lr = r9 >> 23;
-      if (lr == 0) {
-        cost += c->branch;                       /* BEQ over the step code */
-      } else {
-        r9 &= ~0x3F800000u;
-        if ((int32_t)r2 <= (int32_t)lr)
-          goto done;                             /* wave end / loop point */
-        r2 -= lr;
-        cost += 8u * c->seq;
-        lr -= 1u;
-        if (lr != 0) {
-          r3 += lr;
-          if (r3 >> 28)
-            goto done;
-          cost += c->mem[r3 >> 24][0];
-        }
-        r3 += 1u;
-        if (r3 >> 28)
-          goto done;
-        cost += c->mem[r3 >> 24][0];
-      }
-      cost += 2u * c->seq;
-      if (i < 3u)
-        cost += c->branch;                       /* BCC back to the sample */
+    if ((r5 >> 24) != r5_reg || (r5_b >> 24) != r5_630_reg) {
+      r5_reg = r5 >> 24;
+      r5_630_reg = r5_b >> 24;
+      r5_cost = fixed_cost + 2u * mem[r5_reg][1] + 2u * mem[r5_630_reg][1];
     }
-    /* r5's top bits wrapped to zero: store, advance, count the group. */
-    cost += 4u * c->seq + c->mem[(r5 + 0x630u) >> 24][1] +
-            c->mem[r5 >> 24][1] + c->branch;
-    if ((int64_t)budget - (int64_t)spent - (int64_t)cost <= 0)
+    cost = r5_cost;
+    for (i = 0; i < 4u; i++) {
+      n9 += r4;
+      nlr = n9 >> 23;
+      if (nlr == 0u) {
+        cost += br;                              /* BEQ over the step code */
+      } else {
+        n9 &= ~0x3F800000u;
+        if ((int32_t)n2 <= (int32_t)nlr)
+          goto done;                             /* wave end / loop point */
+        n2 -= nlr;
+        cost += step_seq;
+        nlr -= 1u;
+        if (nlr != 0u) {
+          n3 += nlr;
+          if (n3 >> 28)
+            goto done;
+          if (__builtin_expect((n3 >> 24) != r3_reg, 0)) {
+            r3_reg = n3 >> 24;
+            r3_mem = mem[r3_reg][0];
+          }
+          cost += r3_mem;
+        }
+        n3 += 1u;
+        if (n3 >> 28)
+          goto done;
+        if (__builtin_expect((n3 >> 24) != r3_reg, 0)) {
+          r3_reg = n3 >> 24;
+          r3_mem = mem[r3_reg][0];
+        }
+        cost += r3_mem;
+      }
+    }
+    if (cost > rem)
       break;
     spent += cost;
-    s->cpsr = (s->cpsr & 0x0FFFFFFFu) | cgba_sh4_m4a_subs_flags(s->r8, 4u);
-    s->r2 = r2; s->r3 = r3; s->r5 = r5 + 4u; s->r9 = r9; s->lr = lr;
-    s->r8 -= 4u;
+    rem -= cost;
+    r2 = n2; r3 = n3; r5 += 4u; r9 = n9; lr = nlr;
+    r8 -= 4u;
   }
 done:
+  if (spent) {
+    s->cpsr = (s->cpsr & 0x0FFFFFFFu) | cgba_sh4_m4a_subs_flags(r8 + 4u, 4u);
+    s->r2 = r2; s->r3 = r3; s->r5 = r5; s->r8 = r8; s->r9 = r9; s->lr = lr;
+  }
   return spent;
 }
 

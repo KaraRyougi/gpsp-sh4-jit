@@ -194,7 +194,7 @@ static inline void sh4_emit_flush_pool(sh4_emitter *e)
 static inline unsigned sh4_greg_off(unsigned idx) { return idx * 4; }
 
 #ifndef CGBA_SH4_REG_FORWARD
-#define CGBA_SH4_REG_FORWARD 0
+#define CGBA_SH4_REG_FORWARD 1
 #endif
 
 /* A write-through, one-instruction forwarding window. The driver opens it

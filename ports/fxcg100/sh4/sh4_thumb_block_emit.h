@@ -312,6 +312,13 @@ static inline int sh4g_thumb_block_native(u8 **tp, u32 opcode, u32 pc,
         sh4_emit_mov_imm(&cg, CGBA_VRAM_DIRTY_ALL, SH4_REG_ARG0);
         sh4_emit_mov_l_store(&cg, SH4_REG_ARG0, SH4_REG_T1);
         sh4g_close(tp, &cg); }
+#ifdef CGBA_VRAM_SB_DIRTY_ACTIVE
+      sh4g_const(tp, (u32)(uintptr_t)&cgba_vram_sb_dirty, SH4_REG_T1);
+      { sh4_codegen cg = sh4g_open(tp);
+        sh4_emit_mov_imm(&cg, -1, SH4_REG_ARG0);
+        sh4_emit_mov_l_store(&cg, SH4_REG_ARG0, SH4_REG_T1);
+        sh4g_close(tp, &cg); }
+#endif
       vram_skip = sh4g_emit_bra_placeholder(tp);
       sh4g_patch_cond(not_vram, *tp); }
 #else

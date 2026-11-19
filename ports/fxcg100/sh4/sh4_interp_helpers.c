@@ -417,6 +417,7 @@ u32 function_cc execute_load_s16(u32 address) { cgba_sh4_charge_mem(address, 0);
 
 static u8 *cgba_bulk_ram_host(u32 addr, u32 len, u8 **tags);
 static int cgba_bulk_tags_smc(const u8 *tags, u32 len);
+static int cgba_swi_bulk_video_copy(u32 dst, const u8 *sh, u32 bytes);
 
 static inline u32 cgba_le32_read(const u8 *p)
 {
@@ -440,6 +441,10 @@ static int cgba_sh4_store_u16_io_fast(u32 address, u32 source)
   switch (address & 0x3FEu) {
   case 0x000u: { /* DISPCNT */
     u32 value = source & 0xFFFFu;
+    cgba_video_flush_before_write();
+#ifdef CGBA_VRAM_DIRTY_ACTIVE
+    cgba_video_io_dirty = 1;
+#endif
     reg[OAM_UPDATED] |= ((value & 0x07u) != (read_ioreg(REG_DISPCNT) & 0x07u));
     address16(io_registers, 0x000u) = eswap16((u16)value);
     return 1;
@@ -456,6 +461,10 @@ static int cgba_sh4_store_u16_io_fast(u32 address, u32 source)
   case 0x04Au:  /* WINOUT */
   case 0x04Cu:  /* MOSAIC */
   case 0x052u:  /* BLDALPHA */
+    cgba_video_flush_before_write();
+#ifdef CGBA_VRAM_DIRTY_ACTIVE
+    cgba_video_io_dirty = 1;
+#endif
     address16(io_registers, address & 0x3FEu) = eswap16((u16)source);
     return 1;
   case 0x208u:  /* IME */
@@ -2101,9 +2110,19 @@ static u8 *cgba_bulk_ram_host(u32 addr, u32 len, u8 **tags)
     off = addr & 0x1FFFF;
     if (off + len > 0x18000) return NULL;
     if (tags) {
+      cgba_video_flush_before_write();
       *tags = NULL;                 /* VRAM: no tag mirror */
 #ifdef CGBA_VRAM_DIRTY_ACTIVE
-      if (off < 0x10000u) cgba_vram_dirty |= CGBA_VRAM_DIRTY_BG;
+      if (off < 0x10000u && len > 0u) {
+        cgba_vram_dirty |= CGBA_VRAM_DIRTY_BG;
+#ifdef CGBA_VRAM_SB_DIRTY_ACTIVE
+        { u32 hi = off + len - 1u;
+          if (hi >= 0x10000u) hi = 0xFFFFu;
+          u32 s0 = off >> 11, s1 = hi >> 11;
+          cgba_vram_sb_dirty |= (s1 - s0 >= 31u) ? 0xFFFFFFFFu
+                                                 : (((2u << (s1 - s0)) - 1u) << s0); }
+#endif
+      }
       if (off + len > 0x10000u) cgba_vram_dirty |= CGBA_VRAM_DIRTY_OBJ;
 #endif
     }
@@ -2721,7 +2740,7 @@ static u32 cgba_swi_fastset_engine(s32 remaining)
              and dh/tags point into the GBA RAM arrays, not the cache. */
           if (cgba_bulk_tags_smc(tags, bytes))
             flush_translation_cache_ram();
-        } else {
+        } else if (!cgba_swi_bulk_video_copy(dst, sh, bytes)) {
           u32 i;
           for (i = 0; i < bytes; i += 4)
             execute_store_u32(dst + i, cgba_le32_read(sh + i));
@@ -2809,6 +2828,49 @@ static void cgba_swi_cpuset_materialize(int half)
     cgba_cs_entry_cost += 22 * S0 + N0;
     reg[REG_PC] = CGBA_CS_WCOPY_LOOP;
   }
+}
+
+static int cgba_swi_bulk_video_copy(u32 dst, const u8 *sh, u32 bytes)
+{
+  u32 region = dst >> 24;
+  if (region == 7u) {
+    u32 off = dst & 0x3FFu;
+    if (off + bytes > 0x400u)
+      return 0;
+    {
+      u8 *od = (u8 *)(void *)oam_ram + off;
+      if (memcmp(od, sh, bytes) != 0) {
+        cgba_video_flush_before_write();
+        memcpy(od, sh, bytes);
+        reg[OAM_UPDATED] = 1;
+      }
+    }
+    return 1;
+  }
+  if (region == 5u) {
+    u32 off = dst & 0x3FFu;
+    if (off + bytes > 0x400u)
+      return 0;
+    {
+      u8 *pd = (u8 *)(void *)palette_ram + off;
+      if (memcmp(pd, sh, bytes) != 0) {
+        u16 *pr = (u16 *)(void *)pd;
+        u16 *pc = (u16 *)(void *)((u8 *)(void *)palette_ram_converted + off);
+        u32 n16 = bytes >> 1, i;
+        cgba_video_flush_before_write();
+        memcpy(pd, sh, bytes);
+        for (i = 0; i < n16; i++) {
+          u16 v = eswap16(pr[i]);
+          pc[i] = convert_palette(v);
+        }
+#ifdef CGBA_PALETTE_DIRTY_ACTIVE
+        palette_ram_dirty = CGBA_PALETTE_DIRTY_ACTIVE;
+#endif
+      }
+    }
+    return 1;
+  }
+  return 0;
 }
 
 static u32 cgba_swi_cpuset_engine(s32 remaining)
@@ -2911,12 +2973,14 @@ static u32 cgba_swi_cpuset_engine(s32 remaining)
                                                   FastSet copy-site note) */
       }
 #ifdef CGBA_SH4_SWI_OAM_BULK
-      else if (!(half &&
-                 cgba_sh4_swi_copy_u16_to_oam(
-                   (u8 *)(void *)oam_ram, sh, dst, k,
-                   &reg[OAM_UPDATED]))) {
+      else if (!((dst >> 24) == 7u && half &&
+                 (cgba_video_flush_before_write(),
+                  cgba_sh4_swi_copy_u16_to_oam(
+                    (u8 *)(void *)oam_ram, sh, dst, k,
+                    &reg[OAM_UPDATED]))) &&
+               !cgba_swi_bulk_video_copy(dst, sh, bytes)) {
 #else
-      else {
+      else if (!cgba_swi_bulk_video_copy(dst, sh, bytes)) {
 #endif
         int saved = cgba_sh4_extra_cycles;
         u32 i;

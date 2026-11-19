@@ -185,6 +185,361 @@ defsymbl(cgba_sh4_vec_table)
   .long   _cgba_vram_dirty                      /* 15 SH4G_VEC_vram_dirty    */
 #endif
 
+/* ---- hot indirect-branch dispatchers (zero-wait-state ILRAM) -------------
+ * Only the vector table and the three hot indirect-branch fast paths live in
+ * .ilram.dispatch (~580 B total). All cold stubs (entry/exit, update_gba,
+ * BIOS/cold fallback, SWI, C-helper trampolines, lazy-link) live in .text,
+ * freeing ~1.4 KiB of ILRAM so all top fastmem routines (LOAD/STORE W/UH/B/SB/SH
+ * and block PUSH/POP) fit simultaneously in zero-wait-state ILRAM. */
+
+defsymbl(sh4_indirect_branch_arm)
+#ifdef CGBA_SH4_DIFF_HARNESS
+  mov.l   ibh_sb, r1
+  mov.l   @r1, r1
+  tst     r1, r1
+  bf      .Liba_to_slow           /* single-block diff -> unchanged C path */
+#endif
+  mov.l   ibh_bios_limit, r1
+  cmp/hs  r1, r4                  /* T = target >= 0x4000 */
+  bt      iba_hash
+  mov     #REG_PC, r0
+  mov.l   r4, @(r0,r14)           /* match resolver before BIOS fallback */
+  mov.l   ibh_bios_fb, r0
+  jmp     @r0
+  nop
+iba_hash:
+  mov     r4, r2
+  shlr2   r2
+  shll2   r2                      /* key = pc & ~3 (ARM) */
+#if CGBA_SH4_KNOWN_TARGET_CACHE
+  mov     r2, r0
+  and     #0xfc, r0
+  shll    r0                      /* ((r2 >> 2) & 63) * 8 */
+  mov.l   ibh_ahot, r1
+  add     r0, r1
+  mov.l   @r1+, r3
+  cmp/eq  r2, r3
+  bf      iba_hash_miss
+  mov.l   @r1, r7
+  INC_COUNTER cgba_dynarec_ibh_arm_hot_count
+  mov     #REG_PC, r0
+  jmp     @r7
+  mov.l   r4, @(r0,r14)           /* delay slot: commit reg[REG_PC] */
+iba_hash_miss:
+#endif
+  mov.l   ibh_mul, r3
+  dmulu.l r2, r3
+  sts     macl, r0
+  mov     #-(32-ROM_BRANCH_HASH_BITS), r1
+  shld    r1, r0                  /* hash index = product >> (32 - bits) */
+  shll2   r0                      /* * sizeof(u32) */
+  mov.l   ibh_hash, r1
+  mov.l   @(r0,r1), r5            /* blk_offset = rom_branch_hash[hash] */
+  mov.l   ibh_tcache, r6
+iba_walk:
+  tst     r5, r5
+  bt      .Liba_to_slow           /* miss */
+  mov     r5, r7
+  add     r6, r7                  /* r7 = &rom_translation_cache[blk_offset] */
+  mov.l   @r7, r0                 /* hashhdr_type.pc_value */
+  cmp/eq  r2, r0
+  bt      iba_hit
+  mov.l   @(4,r7), r5             /* hashhdr_type.next_entry */
+  bra     iba_walk
+  nop
+iba_hit:
+  INC_COUNTER cgba_dynarec_ibh_arm_hit_count
+  add     #8, r7                  /* sizeof(hashhdr_type) + prologue size */
+#if CGBA_SH4_KNOWN_TARGET_CACHE
+  mov     r2, r0
+  and     #0xfc, r0
+  shll    r0
+  mov.l   ibh_ahot, r1
+  add     r0, r1
+  mov.l   r2, @r1
+  mov.l   r7, @(4,r1)
+#endif
+  mov     #REG_PC, r0
+  jmp     @r7
+  mov.l   r4, @(r0,r14)           /* delay slot: commit reg[REG_PC] */
+.Liba_to_slow:
+  mov.l   ibh_iba_slow, r0
+  jmp     @r0
+  nop
+
+defsymbl(sh4_indirect_branch_thumb)
+#ifdef CGBA_SH4_DIFF_HARNESS
+  mov.l   ibh_sb, r1
+  mov.l   @r1, r1
+  tst     r1, r1
+  bf      .Libt_to_slow
+#endif
+  mov.l   ibh_bios_limit, r1
+  cmp/hs  r1, r4                  /* T = target >= 0x4000 */
+  bt      ibt_hash
+  mov     #REG_PC, r0
+  mov.l   r4, @(r0,r14)
+  mov.l   ibh_bios_fb, r0
+  jmp     @r0
+  nop
+ibt_hash:
+  mov     r4, r0
+  or      #1, r0
+  mov     r0, r2                  /* key = pc | 1 (Thumb) */
+#if CGBA_SH4_KNOWN_TARGET_CACHE
+  and     #0x7e, r0               /* r0 already == r2; ((r2 >> 1) & 63) * 8 */
+  shll2   r0
+  mov.l   ibh_thot, r1
+  add     r0, r1
+  mov.l   @r1+, r3
+  cmp/eq  r2, r3
+  bf      ibt_hash_miss
+  mov.l   @r1, r7
+  INC_COUNTER cgba_dynarec_ibh_thumb_hot_count
+  mov     #REG_PC, r0
+  jmp     @r7
+  mov.l   r4, @(r0,r14)           /* delay slot: commit reg[REG_PC] */
+ibt_hash_miss:
+#endif
+  mov.l   ibh_mul, r3
+  dmulu.l r2, r3
+  sts     macl, r0
+  mov     #-(32-ROM_BRANCH_HASH_BITS), r1
+  shld    r1, r0
+  shll2   r0
+  mov.l   ibh_hash, r1
+  mov.l   @(r0,r1), r5
+  mov.l   ibh_tcache, r6
+ibt_walk:
+  tst     r5, r5
+  bt      .Libt_to_slow
+  mov     r5, r7
+  add     r6, r7
+  mov.l   @r7, r0
+  cmp/eq  r2, r0
+  bt      ibt_hit
+  mov.l   @(4,r7), r5
+  bra     ibt_walk
+  nop
+ibt_hit:
+  INC_COUNTER cgba_dynarec_ibh_thumb_hit_count
+  add     #8, r7
+#if CGBA_SH4_KNOWN_TARGET_CACHE
+  mov     r2, r0
+  and     #0x7e, r0
+  shll2   r0
+  mov.l   ibh_thot, r1
+  add     r0, r1
+  mov.l   r2, @r1
+  mov.l   r7, @(4,r1)
+#endif
+  mov     #REG_PC, r0
+  jmp     @r7
+  mov.l   r4, @(r0,r14)           /* delay slot: commit reg[REG_PC] */
+.Libt_to_slow:
+  mov.l   ibh_ibt_slow, r0
+  jmp     @r0
+  nop
+
+/* Hot subcase for Thumb BX when the generated code has already checked that the
+ * target bit is set. Current CPSR is already Thumb, so a hot cache / hash hit
+ * only needs to resolve the translated Thumb block and commit PC. */
+defsymbl(sh4_indirect_branch_dual_thumb_current)
+#ifdef CGBA_SH4_DIFF_HARNESS
+  mov.l   ibh_sb, r1
+  mov.l   @r1, r1
+  tst     r1, r1
+  bf      .Libd_to_slow
+#endif
+  mov     r4, r2                  /* caller verified bit0==1 -> key = target|1 */
+  mov.l   ibh_bios_limit, r1
+  cmp/hs  r1, r2                  /* T = key >= 0x4000 */
+  bf      .Libd_to_slow
+  mov     r2, r0
+  and     #0x7e, r0
+  shll2   r0
+  mov.l   ibh_dhot, r1
+  add     r0, r1
+  mov.l   @r1+, r3
+  cmp/eq  r2, r3
+  bf      .Libdc_miss
+  mov.l   @r1, r7
+  INC_COUNTER cgba_dynarec_ibh_dual_hot_thumb_count
+  mov     r2, r1
+  add     #-1, r1                 /* pc = key - 1 (bit0 == 1) */
+  mov     #REG_PC, r0
+  jmp     @r7
+  mov.l   r1, @(r0,r14)           /* delay slot: commit reg[REG_PC] */
+.Libdc_miss:
+  mov.l   ibh_mul, r3
+  dmulu.l r2, r3
+  sts     macl, r0
+  mov     #-(32-ROM_BRANCH_HASH_BITS), r1
+  shld    r1, r0
+  shll2   r0
+  mov.l   ibh_hash, r1
+  mov.l   @(r0,r1), r5
+  mov.l   ibh_tcache, r6
+.Libdc_walk:
+  tst     r5, r5
+  bt      .Libd_to_slow
+  mov     r5, r7
+  add     r6, r7
+  mov.l   @r7, r0
+  cmp/eq  r2, r0
+  bt      .Libdc_hit
+  mov.l   @(4,r7), r5
+  bra     .Libdc_walk
+  nop
+.Libdc_hit:
+  INC_COUNTER cgba_dynarec_ibh_dual_thumb_hit_count
+  add     #8, r7
+  mov     r2, r0
+  and     #0x7e, r0
+  shll2   r0
+  mov.l   ibh_dhot, r1
+  add     r0, r1
+  mov.l   r2, @r1
+  mov.l   r7, @(4,r1)
+  mov     r2, r1
+  add     #-1, r1                 /* pc = key - 1 (bit0 == 1) */
+  mov     #REG_PC, r0
+  jmp     @r7
+  mov.l   r1, @(r0,r14)           /* delay slot: CPSR.T already set */
+.Libd_to_slow:
+  mov.l   ibh_ibd_slow, r0
+  jmp     @r0
+  nop
+
+/* ---- hot cycle-budget exit & block exit (zero-wait-state ILRAM) ---------- */
+defsymbl(sh4_update_gba)
+  mov     #REG_PC, r0
+  mov.l   r4, @(r0,r14)           /* reg[REG_PC] = current PC */
+  CPSR_FLUSH
+  sts.l   pr, @-r15               /* save return into the block */
+  mov     r13, r4                 /* arg0 = remaining cycles */
+  mov.l   ibh_update_gba_c, r0
+  jsr     @r0
+  nop
+  CPSR_RELOAD_R1                  /* update_gba may take an IRQ (CPSR write) */
+  cmp/pz  r0
+  bt      1f                      /* bit31 clear -> keep running */
+  lds.l   @r15+, pr
+  mov.l   ibh_ret_main, r1
+  jmp     @r1
+  nop
+1:
+  mov     r0, r13
+  mov     #-1, r1
+  shlr16  r1
+  shlr    r1
+  and     r1, r13                 /* new cycle count = ret & 0x7FFF */
+  shll    r0                      /* test bit30 (PC changed) */
+  cmp/pz  r0
+  bf      .Lilram_lookup_pop      /* bit30 set -> re-dispatch on new PC */
+  lds.l   @r15+, pr               /* else resume the same block */
+  rts
+  nop
+
+.Lilram_lookup_pop:
+  lds.l   @r15+, pr
+.Lilram_lookup_pc:
+#ifdef CGBA_SH4_DIFF_HARNESS
+  mov.l   ibh_sb, r1
+  mov.l   @r1, r1
+  tst     r1, r1
+  bf      .Lilram_to_lookup_c
+#endif
+  mov     #REG_PC, r0
+  mov.l   @(r0,r14), r4
+  mov     #0x20, r0
+  tst     r0, r8                  /* T = (thumb bit clear); CPSR cached in R8 */
+  bt      1f                      /* ARM mode */
+  bra     sh4_indirect_branch_thumb
+  nop
+1:
+  bra     sh4_indirect_branch_arm
+  nop
+#ifdef CGBA_SH4_DIFF_HARNESS
+.Lilram_to_lookup_c:
+  mov.l   ibh_lookup_c, r0
+  jmp     @r0
+  nop
+#endif
+
+defsymbl(sh4_block_exit)
+  mov     #REG_PC, r0
+  mov.l   r4, @(r0,r14)           /* reg[REG_PC] = target PC */
+  CPSR_FLUSH
+#ifdef CGBA_SH4_DIFF_HARNESS
+  mov.l   ibh_sb, r0
+  mov.l   @r0, r0
+  tst     r0, r0
+  bt      1f
+  mov.l   ibh_ret_main, r1
+  jmp     @r1
+  mov     r13, r0                 /* single-block diff: return remaining cycles */
+1:
+#endif
+  mov     r13, r4                 /* arg0 = remaining cycles */
+  mov.l   ibh_update_gba_c, r0
+  jsr     @r0
+  nop
+  CPSR_RELOAD_R1                  /* update_gba may take an IRQ (CPSR write) */
+  cmp/pz  r0
+  bt      .Lblock_continue
+  mov.l   ibh_ret_main, r1
+  jmp     @r1                     /* bit31 set -> frame complete */
+  nop
+.Lblock_continue:
+  mov     r0, r13
+  mov     #-1, r1
+  shlr16  r1
+  shlr    r1
+  and     r1, r13                 /* cycles = ret & 0x7FFF */
+  bra     .Lilram_lookup_pc       /* always re-dispatch on reg[REG_PC] */
+  nop
+
+  .align 2
+#ifdef CGBA_SH4_DIFF_HARNESS
+ibh_sb:
+  .long   _cgba_dynarec_single_block
+ibh_lookup_c:
+  .long   lookup_pc_c
+#endif
+ibh_bios_limit:
+  .long   0x00004000
+ibh_mul:
+  .long   0x9E3779B1              /* 2654435761 (Knuth multiplicative hash) */
+ibh_hash:
+  .long   _rom_branch_hash
+ibh_tcache:
+  .long   _rom_translation_cache
+#if CGBA_SH4_KNOWN_TARGET_CACHE
+ibh_ahot:
+  .long   _cgba_dynarec_arm_hot
+ibh_thot:
+  .long   _cgba_dynarec_thumb_hot
+#endif
+ibh_dhot:
+  .long   _cgba_dynarec_dual_hot
+ibh_bios_fb:
+  .long   sh4_bios_fallback_entry
+ibh_iba_slow:
+  .long   iba_slow
+ibh_ibt_slow:
+  .long   ibt_slow
+ibh_ibd_slow:
+  .long   ibd_slow
+ibh_update_gba_c:
+  .long   _update_gba
+ibh_ret_main:
+  .long   return_to_main
+
+/* ---- cold dispatch / slow-path stubs (normal .text) ---------------------- */
+.section .text, "ax"
+.align 2
+
 /* ---- main entry: execute_arm_translate_internal(cycles, reg_ptr) ---- */
 /* R4 = cycle counter, R5 = pointer to reg[] */
 
@@ -239,45 +594,6 @@ return_to_main:
   rts
   mov.l   @r15+, r8               /* delay slot: final pop */
 
-/* ---- cycle counter ran out: process the next hardware event ---- */
-/* Entered from generated code with R4 = current GBA PC. */
-defsymbl(sh4_update_gba)
-  mov     #REG_PC, r0
-  mov.l   r4, @(r0,r14)           /* reg[REG_PC] = current PC */
-  CPSR_FLUSH
-  sts.l   pr, @-r15               /* save return into the block */
-
-  mov     r13, r4                 /* arg0 = remaining cycles */
-  CALL    update_gba
-  CPSR_RELOAD_R1                  /* update_gba may take an IRQ (CPSR write) */
-
-  cmp/pz  r0
-  bt      1f                      /* bit31 clear -> keep running */
-  /* Frame complete: DISCARD the saved in-block return before unwinding, or
-   * return_to_main pops it into PR and shifts every callee-saved restore by
-   * one slot (R14 <- caller's PR, ...), resuming C with a corrupted register
-   * file. Latent since bring-up (nothing called this entry until the idle-
-   * loop eliminate path); found via the on-screen crash report. */
-  lds.l   @r15+, pr
-  bra     return_to_main
-  nop
-1:
-  mov     r0, r13
-  mov     #-1, r1
-  shlr16  r1
-  shlr    r1
-  and     r1, r13                 /* new cycle count = ret & 0x7FFF */
-
-  shll    r0                      /* test bit30 (PC changed) */
-  cmp/pz  r0
-  bf      lookup_pc_pop           /* bit30 set -> re-dispatch on new PC */
-
-  lds.l   @r15+, pr               /* else resume the same block */
-  rts
-  nop
-
-lookup_pc_pop:
-  lds.l   @r15+, pr               /* discard saved in-block return */
 lookup_pc:
   /* Hot path: probe the inline ROM branch hash (sh4_indirect_branch_*)
    * instead of calling the C resolver. Every IRQ return, BIOS exit,
@@ -299,11 +615,18 @@ lookup_pc:
   mov     #0x20, r0
   tst     r0, r8                  /* T = (thumb bit clear); CPSR cached in R8 */
   bt      1f                      /* ARM mode */
-  bra     sh4_indirect_branch_thumb
+  mov.l   .Llp_ibt, r0
+  jmp     @r0
   nop
 1:
-  bra     sh4_indirect_branch_arm
+  mov.l   .Llp_iba, r0
+  jmp     @r0
   nop
+  .align 2
+.Llp_ibt:
+  .long   sh4_indirect_branch_thumb
+.Llp_iba:
+  .long   sh4_indirect_branch_arm
 #ifdef CGBA_SH4_DIFF_HARNESS
   .align 2
 lookup_sb:
@@ -352,142 +675,14 @@ cpu_sleep_loop:
   bra     lookup_pc
   nop
 
-/* ---- unified block exit: R4 = target GBA PC ----
- * Every translated block branch funnels here (jumped to, not called). It stores
- * the new PC, lets update_gba process pending hardware events, returns to the
- * main C caller when the frame is done, otherwise re-dispatches on the new PC.
- * The cheap direct-chaining fast path (when the cycle budget is not yet spent)
- * is handled inline in generated code and bypasses this entirely. */
-defsymbl(sh4_block_exit)
-  mov     #REG_PC, r0
-  mov.l   r4, @(r0,r14)           /* reg[REG_PC] = target PC */
-  CPSR_FLUSH
-  /* Differential-harness single-block mode: return to the C caller after one
-     block (PC already committed) so the interpreter can be diffed lockstep.
-     Local literal: the shared sb_flag pool drifted past MOV.L's +1KB forward
-     reach when the CPSR-cache sync sequences grew this region. */
-#ifdef CGBA_SH4_DIFF_HARNESS
-  mov.l   bx_sb, r0
-  mov.l   @r0, r0
-  tst     r0, r0
-  bt      1f
-  bra     return_to_main
-  mov     r13, r0                 /* single-block diff: return remaining cycles */
-1:
-#endif
-  mov     r13, r4                 /* arg0 = remaining cycles */
-  CALL    update_gba
-  CPSR_RELOAD_R1                  /* update_gba may take an IRQ (CPSR write) */
-  cmp/pz  r0
-  bt      .Lblock_continue
-  bra     return_to_main          /* bit31 set -> frame complete */
-  nop
-.Lblock_continue:
-  mov     r0, r13
-  mov     #-1, r1
-  shlr16  r1
-  shlr    r1
-  and     r1, r13                 /* cycles = ret & 0x7FFF */
-  bra     lookup_pc               /* always re-dispatch on reg[REG_PC] */
-  nop
-
-#ifdef CGBA_SH4_DIFF_HARNESS
-  .align 2
-bx_sb:
-  .long   _cgba_dynarec_single_block
-#endif
-
-/* ---- indirect branches (BX, computed PC); R4 = target GBA address ----
- * block_lookup_address_* commits reg[REG_PC] (see cpu_threaded.c), so after the
- * lookup the single-block diff mode can return to the C caller with PC correct,
- * exactly like sh4_block_exit. R0 = resolved host block; R13 = remaining cycles. */
-/* Inline ROM branch-hash fast path. The C resolver is a far call plus chain
- * walk on every BX/return/Thumb-BL suffix. For ROM targets that are already
- * translated, probe the ROM branch hash here and jump directly to the cached
- * host block. Keep single-block diff mode on the old C path, and keep open-BIOS
- * targets on the interpreter fallback used by the Metroid cutscene fix. */
-defsymbl(sh4_indirect_branch_arm)
-#ifdef CGBA_SH4_DIFF_HARNESS
-  mov.l   ibh_sb, r1
-  mov.l   @r1, r1
-  tst     r1, r1
-  bf      iba_slow                /* single-block diff -> unchanged C path */
-#endif
-  mov.l   ibh_bios_limit, r1
-  cmp/hs  r1, r4                  /* T = target >= 0x4000 */
-  bt      iba_hash
-  mov     #REG_PC, r0
-  mov.l   r4, @(r0,r14)           /* match resolver before BIOS fallback */
-  bra     sh4_bios_fallback_entry
-  nop
-iba_hash:
-  mov     r4, r2
-  shlr2   r2
-  shll2   r2                      /* key = pc & ~3 (ARM) */
-#if CGBA_SH4_KNOWN_TARGET_CACHE
-  mov     r2, r0
-  shlr2   r0
-  and     #0x3f, r0
-  shll2   r0
-  mov.l   ibh_ahot_key, r1
-  mov.l   @(r0,r1), r3
-  cmp/eq  r2, r3
-  bf      iba_hash_miss
-  mov.l   ibh_ahot_ptr, r1
-  mov.l   @(r0,r1), r7
-  tst     r7, r7
-  bt      iba_hash_miss
-  INC_COUNTER cgba_dynarec_ibh_arm_hot_count
-  mov     #REG_PC, r0
-  mov.l   r4, @(r0,r14)
-  jmp     @r7
-  nop
-iba_hash_miss:
-#endif
-  mov.l   ibh_mul, r3
-  dmulu.l r2, r3
-  sts     macl, r0
-  mov     #-(32-ROM_BRANCH_HASH_BITS), r1
-  shld    r1, r0                  /* hash index = product >> (32 - bits) */
-  shll2   r0                      /* * sizeof(u32) */
-  mov.l   ibh_hash, r1
-  mov.l   @(r0,r1), r5            /* blk_offset = rom_branch_hash[hash] */
-  mov.l   ibh_tcache, r6
-iba_walk:
-  tst     r5, r5
-  bt      iba_slow                /* miss */
-  mov     r5, r7
-  add     r6, r7                  /* r7 = &rom_translation_cache[blk_offset] */
-  mov.l   @r7, r0                 /* hashhdr_type.pc_value */
-  cmp/eq  r2, r0
-  bt      iba_hit
-  mov.l   @(4,r7), r5             /* hashhdr_type.next_entry */
-  bra     iba_walk
-  nop
-iba_hit:
-  INC_COUNTER cgba_dynarec_ibh_arm_hit_count
-  add     #8, r7                  /* sizeof(hashhdr_type) + prologue size */
-#if CGBA_SH4_KNOWN_TARGET_CACHE
-  mov     r2, r0
-  shlr2   r0
-  and     #0x3f, r0
-  shll2   r0
-  mov.l   ibh_ahot_key, r1
-  mov.l   r2, @(r0,r1)
-  mov.l   ibh_ahot_ptr, r1
-  mov.l   r7, @(r0,r1)
-#endif
-  mov     #REG_PC, r0
-  mov.l   r4, @(r0,r14)           /* commit reg[REG_PC] = pc */
-  jmp     @r7
-  nop
+/* ---- cold indirect-branch resolvers & general dual mode-switch stub ------ */
 iba_slow:
   INC_COUNTER cgba_dynarec_ibh_arm_slow_count
   CPSR_FLUSH
   CALL    block_lookup_address_arm
   CPSR_RELOAD_R1
 #ifdef CGBA_SH4_DIFF_HARNESS
-  mov.l   ibh_sb, r1
+  mov.l   txt_ibh_sb, r1
   mov.l   @r1, r1
   tst     r1, r1
   bt      iba_disp                /* not single-block -> dispatch */
@@ -499,88 +694,13 @@ iba_disp:
   jmp     @r0
   nop
 
-defsymbl(sh4_indirect_branch_thumb)
-#ifdef CGBA_SH4_DIFF_HARNESS
-  mov.l   ibh_sb, r1
-  mov.l   @r1, r1
-  tst     r1, r1
-  bf      ibt_slow
-#endif
-  mov.l   ibh_bios_limit, r1
-  cmp/hs  r1, r4                  /* T = target >= 0x4000 */
-  bt      ibt_hash
-  mov     #REG_PC, r0
-  mov.l   r4, @(r0,r14)
-  bra     sh4_bios_fallback_entry
-  nop
-ibt_hash:
-  mov     r4, r0
-  or      #1, r0
-  mov     r0, r2                  /* key = pc | 1 (Thumb) */
-#if CGBA_SH4_KNOWN_TARGET_CACHE
-  mov     r2, r0
-  shlr    r0
-  and     #0x3f, r0
-  shll2   r0
-  mov.l   ibh_thot_key, r1
-  mov.l   @(r0,r1), r3
-  cmp/eq  r2, r3
-  bf      ibt_hash_miss
-  mov.l   ibh_thot_ptr, r1
-  mov.l   @(r0,r1), r7
-  tst     r7, r7
-  bt      ibt_hash_miss
-  INC_COUNTER cgba_dynarec_ibh_thumb_hot_count
-  mov     #REG_PC, r0
-  mov.l   r4, @(r0,r14)
-  jmp     @r7
-  nop
-ibt_hash_miss:
-#endif
-  mov.l   ibh_mul, r3
-  dmulu.l r2, r3
-  sts     macl, r0
-  mov     #-(32-ROM_BRANCH_HASH_BITS), r1
-  shld    r1, r0
-  shll2   r0
-  mov.l   ibh_hash, r1
-  mov.l   @(r0,r1), r5
-  mov.l   ibh_tcache, r6
-ibt_walk:
-  tst     r5, r5
-  bt      ibt_slow
-  mov     r5, r7
-  add     r6, r7
-  mov.l   @r7, r0
-  cmp/eq  r2, r0
-  bt      ibt_hit
-  mov.l   @(4,r7), r5
-  bra     ibt_walk
-  nop
-ibt_hit:
-  INC_COUNTER cgba_dynarec_ibh_thumb_hit_count
-  add     #8, r7
-#if CGBA_SH4_KNOWN_TARGET_CACHE
-  mov     r2, r0
-  shlr    r0
-  and     #0x3f, r0
-  shll2   r0
-  mov.l   ibh_thot_key, r1
-  mov.l   r2, @(r0,r1)
-  mov.l   ibh_thot_ptr, r1
-  mov.l   r7, @(r0,r1)
-#endif
-  mov     #REG_PC, r0
-  mov.l   r4, @(r0,r14)
-  jmp     @r7
-  nop
 ibt_slow:
   INC_COUNTER cgba_dynarec_ibh_thumb_slow_count
   CPSR_FLUSH
   CALL    block_lookup_address_thumb
   CPSR_RELOAD_R1
 #ifdef CGBA_SH4_DIFF_HARNESS
-  mov.l   ibh_sb, r1
+  mov.l   txt_ibh_sb, r1
   mov.l   @r1, r1
   tst     r1, r1
   bt      ibt_disp
@@ -594,7 +714,7 @@ ibt_disp:
 
 defsymbl(sh4_indirect_branch_dual)
 #ifdef CGBA_SH4_DIFF_HARNESS
-  mov.l   ibh_sb, r1
+  mov.l   txt_ibh_sb, r1
   mov.l   @r1, r1
   tst     r1, r1
   bt      1f
@@ -614,7 +734,7 @@ defsymbl(sh4_indirect_branch_dual)
   mov     r2, r0
   or      #1, r0
   mov     r0, r2                  /* r2 = hash key */
-  mov.l   ibh_bios_limit, r1
+  mov.l   txt_ibh_bios_limit, r1
   cmp/hs  r1, r2                  /* T = key >= 0x4000 */
   bt      1f
   bra     ibd_slow
@@ -629,7 +749,7 @@ ibd_arm_hash:
   add     #2, r2
   shlr2   r2
   shll2   r2                      /* r2 = key = pc */
-  mov.l   ibh_bios_limit, r1
+  mov.l   txt_ibh_bios_limit, r1
   cmp/hs  r1, r2                  /* T = pc >= 0x4000 */
   bt      1f
   bra     ibd_slow
@@ -637,31 +757,28 @@ ibd_arm_hash:
 1:
 
   mov     r2, r0
-  shlr2   r0
-  and     #0x3f, r0
-  shll2   r0
-  mov.l   ibh_dhot_key, r1
-  mov.l   @(r0,r1), r3
+  and     #0xfc, r0
+  shll    r0
+  mov.l   txt_ibh_dhot, r1
+  add     r0, r1
+  mov.l   @r1+, r3
   cmp/eq  r2, r3
   bf      ibd_arm_hash_miss
-  mov.l   ibh_dhot_ptr, r1
-  mov.l   @(r0,r1), r7
-  tst     r7, r7
-  bt      ibd_arm_hash_miss
+  mov.l   @r1, r7
   INC_COUNTER cgba_dynarec_ibh_dual_hot_arm_count
   bra     ibd_arm_commit
   nop
 
 ibd_arm_hash_miss:
-  mov.l   ibh_mul, r3
+  mov.l   txt_ibh_mul, r3
   dmulu.l r2, r3
   sts     macl, r0
   mov     #-(32-ROM_BRANCH_HASH_BITS), r1
   shld    r1, r0
   shll2   r0
-  mov.l   ibh_hash, r1
+  mov.l   txt_ibh_hash, r1
   mov.l   @(r0,r1), r5
-  mov.l   ibh_tcache, r6
+  mov.l   txt_ibh_tcache, r6
 ibd_arm_walk:
   tst     r5, r5
   bf      1f
@@ -680,102 +797,43 @@ ibd_arm_hit:
   INC_COUNTER cgba_dynarec_ibh_dual_arm_hit_count
   add     #8, r7
   mov     r2, r0
-  shlr2   r0
-  and     #0x3f, r0
-  shll2   r0
-  mov.l   ibh_dhot_key, r1
-  mov.l   r2, @(r0,r1)
-  mov.l   ibh_dhot_ptr, r1
-  mov.l   r7, @(r0,r1)
+  and     #0xfc, r0
+  shll    r0
+  mov.l   txt_ibh_dhot, r1
+  add     r0, r1
+  mov.l   r2, @r1
+  mov.l   r7, @(4,r1)
 ibd_arm_commit:
   mov     #REG_PC, r0
   mov.l   r2, @(r0,r14)           /* commit reg[REG_PC] = pc */
   mov     #-33, r0
-  and     r0, r8                  /* clear CPSR.T (cached) */
   jmp     @r7
-  nop
-
-/* Hot subcase for Thumb BX when the generated code has already checked that the
- * target bit is set. Current CPSR is already Thumb, so a hot cache hit only needs
- * to resolve the translated Thumb block and commit PC; it skips the generic dual
- * ARM/Thumb split and the redundant CPSR.T store. Misses and single-block diff
- * mode rejoin the exact generic dual resolver below. */
-defsymbl(sh4_indirect_branch_dual_thumb_current)
-#ifdef CGBA_SH4_DIFF_HARNESS
-  mov.l   ibh_sb, r1
-  mov.l   @r1, r1
-  tst     r1, r1
-  bt      1f
-  bra     ibd_slow
-  nop
-1:
-#endif
-  mov     r4, r2
-  mov     #-2, r0
-  and     r0, r2                  /* r2 = pc = target & ~1 */
-  mov     r2, r0
-  or      #1, r0
-  mov     r0, r2                  /* r2 = hash key = pc | 1 */
-  mov.l   ibh_bios_limit, r1
-  cmp/hs  r1, r2                  /* T = key >= 0x4000 */
-  bt      2f
-  bra     ibd_slow
-  nop
-2:
-  mov     r2, r0
-  shlr    r0
-  and     #0x3f, r0
-  shll2   r0
-  mov.l   ibh_dhot_key, r1
-  mov.l   @(r0,r1), r3
-  cmp/eq  r2, r3
-  bt      3f
-  bra     ibd_thumb_hash_miss
-  nop
-3:
-  mov.l   ibh_dhot_ptr, r1
-  mov.l   @(r0,r1), r7
-  tst     r7, r7
-  bf      4f
-  bra     ibd_thumb_hash_miss
-  nop
-4:
-  INC_COUNTER cgba_dynarec_ibh_dual_hot_thumb_count
-  mov     r2, r1
-  mov     #-2, r0
-  and     r0, r1                  /* pc = key & ~1 */
-  mov     #REG_PC, r0
-  mov.l   r1, @(r0,r14)
-  jmp     @r7
-  nop
+  and     r0, r8                  /* delay slot: clear CPSR.T (cached) */
 
 ibd_thumb_hash:
   mov     r2, r0
-  shlr    r0
-  and     #0x3f, r0
+  and     #0x7e, r0
   shll2   r0
-  mov.l   ibh_dhot_key, r1
-  mov.l   @(r0,r1), r3
+  mov.l   txt_ibh_dhot, r1
+  add     r0, r1
+  mov.l   @r1+, r3
   cmp/eq  r2, r3
   bf      ibd_thumb_hash_miss
-  mov.l   ibh_dhot_ptr, r1
-  mov.l   @(r0,r1), r7
-  tst     r7, r7
-  bt      ibd_thumb_hash_miss
+  mov.l   @r1, r7
   INC_COUNTER cgba_dynarec_ibh_dual_hot_thumb_count
   bra     ibd_thumb_commit
   nop
 
 ibd_thumb_hash_miss:
-  mov.l   ibh_mul, r3
+  mov.l   txt_ibh_mul, r3
   dmulu.l r2, r3
   sts     macl, r0
   mov     #-(32-ROM_BRANCH_HASH_BITS), r1
   shld    r1, r0
   shll2   r0
-  mov.l   ibh_hash, r1
+  mov.l   txt_ibh_hash, r1
   mov.l   @(r0,r1), r5
-  mov.l   ibh_tcache, r6
+  mov.l   txt_ibh_tcache, r6
 ibd_thumb_walk:
   tst     r5, r5
   bt      ibd_slow
@@ -791,23 +849,20 @@ ibd_thumb_hit:
   INC_COUNTER cgba_dynarec_ibh_dual_thumb_hit_count
   add     #8, r7
   mov     r2, r0
-  shlr    r0
-  and     #0x3f, r0
+  and     #0x7e, r0
   shll2   r0
-  mov.l   ibh_dhot_key, r1
-  mov.l   r2, @(r0,r1)
-  mov.l   ibh_dhot_ptr, r1
-  mov.l   r7, @(r0,r1)
+  mov.l   txt_ibh_dhot, r1
+  add     r0, r1
+  mov.l   r2, @r1
+  mov.l   r7, @(4,r1)
 ibd_thumb_commit:
   mov     r2, r1
-  mov     #-2, r0
-  and     r0, r1                  /* pc = key & ~1 */
+  add     #-1, r1                 /* pc = key - 1 (bit0 == 1) */
   mov     #REG_PC, r0
   mov.l   r1, @(r0,r14)
   mov     #0x20, r0
-  or      r0, r8                  /* set CPSR.T (cached) */
   jmp     @r7
-  nop
+  or      r0, r8                  /* delay slot: set CPSR.T (cached) */
 
 ibd_slow:
   INC_COUNTER cgba_dynarec_ibh_dual_slow_count
@@ -815,7 +870,7 @@ ibd_slow:
   CALL    block_lookup_address_dual
   CPSR_RELOAD_R1                  /* the dual resolver writes CPSR.T */
 #ifdef CGBA_SH4_DIFF_HARNESS
-  mov.l   ibh_sb, r1
+  mov.l   txt_ibh_sb, r1
   mov.l   @r1, r1
   tst     r1, r1
   bt      1f
@@ -829,31 +884,19 @@ ibd_slow:
 
   .align 2
 #ifdef CGBA_SH4_DIFF_HARNESS
-ibh_sb:
+txt_ibh_sb:
   .long   _cgba_dynarec_single_block
 #endif
-ibh_bios_limit:
+txt_ibh_bios_limit:
   .long   0x00004000
-ibh_mul:
-  .long   0x9E3779B1              /* 2654435761 (Knuth multiplicative hash) */
-ibh_hash:
+txt_ibh_mul:
+  .long   0x9E3779B1
+txt_ibh_hash:
   .long   _rom_branch_hash
-ibh_tcache:
+txt_ibh_tcache:
   .long   _rom_translation_cache
-#if CGBA_SH4_KNOWN_TARGET_CACHE
-ibh_ahot_key:
-  .long   _cgba_dynarec_arm_hot_key
-ibh_ahot_ptr:
-  .long   _cgba_dynarec_arm_hot_ptr
-ibh_thot_key:
-  .long   _cgba_dynarec_thumb_hot_key
-ibh_thot_ptr:
-  .long   _cgba_dynarec_thumb_hot_ptr
-#endif
-ibh_dhot_key:
-  .long   _cgba_dynarec_dual_hot_key
-ibh_dhot_ptr:
-  .long   _cgba_dynarec_dual_hot_ptr
+txt_ibh_dhot:
+  .long   _cgba_dynarec_dual_hot
 
 /* ---- BIOS fallback: interpret the open-BIOS routine, then resume JIT. ---- */
 defsymbl(sh4_bios_fallback_entry)
@@ -947,7 +990,7 @@ defsymbl(sh4_helper_exit)
   mov     r1, r0
   tst     #2, r0                  /* T = 1: no alert -> pure PC change */
   bt      sh4_pc_redispatch
-  bra     sh4_block_exit          /* alert: process events (R4 = PC) */
+  jmp     @r10                    /* alert: process events (R4 = PC, R10 = sh4_block_exit) */
   nop
 
 /* ---- pure PC re-dispatch, no update_gba; R4 = target PC, current mode ---- */
@@ -1080,6 +1123,72 @@ defsymbl(sh4_fastmem_pc_mem_tramp)
   sub     r1, r13
   bra     op2_pc_common
   mov     #1, r7                    /* low-16 cycle descriptor */
+
+/* Ultra-compact non-writeback single fastmem slow-path trampoline.
+ * PR points directly to the 4-byte-aligned inline descriptor:
+ *   Thumb (bit31 of @PR == 0):
+ *     PR+0: pc
+ *     PR+4: (thumb_opcode << 16) | (cycle_count & 0xFFFF)
+ *     PR+8: continuation
+ *   ARM (bit31 of @PR == 1):
+ *     PR+0: pc | 0x80000000
+ *     PR+4: arm_opcode
+ *     PR+8: BRA +2 ; NOP (skipped on slow return)
+ *     PR+12: cycle_count
+ *     PR+16: continuation */
+defsymbl(sh4_fastmem_compact8_tramp)
+  sts     pr, r1
+  sts.l   pr, @-r15
+  CPSR_FLUSH
+  mov.l   @r1+, r5                  /* r5 = pc (bit31 = is_arm) */
+  cmp/pz  r5                        /* T = 1 -> Thumb, T = 0 -> ARM */
+  bf      .Lfm8_arm
+  mov.l   @r1, r4                   /* r4 = (thumb_op << 16) | cycles16 */
+  mov     r1, r12                   /* r12 -> cycles16; r12+4 = PR+8 resume */
+  mov.l   tram_thumb_ldst, r0
+  jsr     @r0
+  shlr16  r4                        /* delay slot: r4 = thumb_opcode */
+  bra     .Lfm8_post
+  mov     #1, r7                    /* low-16 cycle descriptor */
+.Lfm8_arm:
+  shll    r5
+  shlr    r5                        /* strip bit31 -> real ARM pc */
+  mov.l   @r1+, r4                  /* r4 = arm_opcode */
+  add     #4, r1                    /* skip BRA +2 ; NOP at PR+8 */
+  mov     r1, r12                   /* r12 -> cycle_count; r12+4 = PR+16 resume */
+  mov.l   tram_arm_ldst, r0
+  jsr     @r0
+  nop
+  mov     #0, r7                    /* full-32 cycle descriptor */
+.Lfm8_post:
+  CPSR_RELOAD_R1
+  mov.l   tram_extra, r1
+  mov.l   @r1, r1
+  sub     r1, r13
+  tst     r0, r0
+  bt      .Lfm8_cont
+  mov.l   @r12, r1
+  tst     r7, r7
+  bt      1f
+  extu.w  r1, r1
+1:
+  sub     r1, r13
+  mov     r0, r1
+  mov     #REG_PC, r0
+  mov.l   @(r0,r14), r4
+  lds.l   @r15+, pr
+  bra     sh4_helper_exit
+  nop
+.Lfm8_cont:
+  lds.l   @r15+, pr
+  add     #4, r12
+  jmp     @r12
+  nop
+.align 2
+tram_thumb_ldst:
+  .long   _cgba_sh4_thumb_ldst
+tram_arm_ldst:
+  .long   _cgba_sh4_arm_ldst
 #endif
 
 op2_pc_common:
@@ -1124,7 +1233,7 @@ defsymbl(sh4_lazy_link_rom_arm)
   mov.l   @r1, r1
   tst     r1, r1
   bt      1f
-  bra     sh4_block_exit
+  jmp     @r10
   nop
 1:
 #endif
@@ -1161,7 +1270,7 @@ defsymbl(sh4_lazy_link_rom_thumb)
   mov.l   @r1, r1
   tst     r1, r1
   bt      1f
-  bra     sh4_block_exit
+  jmp     @r10
   nop
 1:
 #endif

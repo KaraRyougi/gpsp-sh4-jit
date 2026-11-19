@@ -29,6 +29,7 @@ typedef int64_t  s64;
 u8 *memory_map_read[0x2000];
 u32 gamepak_size;
 const u8 * const *cgba_gamepak_fragment_blocks;
+u8 ewram[1024 * 256 * 2];
 u8 iwram[1024 * 32 * 2];
 u8 vram[1024 * 96];
 u16 io_registers[512];
@@ -84,7 +85,16 @@ void sh4_indirect_branch_thumb(u32 address)
 void sh4_op2_pc_mem_tramp(void)
 {
 }
+
+void sh4_fastmem_pc_mem_tramp(void)
+{
+}
+
+void sh4_fastmem_compact8_tramp(void)
+{
+}
 u8 *cgba_sh4_fastmem_routine[CGBA_FM_TOTAL];
+u8 *cgba_sh4_fastmem_io16_store;
 
 static _Alignas(32) u8 code[4096];
 static int fail;
@@ -289,10 +299,18 @@ int main(void)
                              0x04000130u);
   expect_thumb_const_io_load("const LDRB r1,[r0,#0] IO", 0x7801u,
                              0x04000130u);
-  expect_thumb_const_io_fallback("const STR r1,[r0,#0]", 0x6001u,
+  expect_thumb_const_io_load("const LDRH r1,[r0,#0] IWRAM", 0x8801u,
+                             0x03000130u);
+  expect_thumb_const_io_load("const LDR r1,[r0,#0] EWRAM", 0x6801u,
+                             0x02000130u);
+  expect_thumb_const_io_fallback("const STR r1,[r0,#0] IO", 0x6001u,
                                  0x04000130u);
-  expect_thumb_const_io_fallback("const LDRH r1,[r0,#0] non-IO", 0x8801u,
+  expect_thumb_const_io_fallback("const STR r1,[r0,#0] IWRAM", 0x6001u,
                                  0x03000130u);
+  expect_thumb_const_io_fallback("const LDRH r1,[r0,#0] unaligned IWRAM", 0x8801u,
+                                 0x03000131u);
+  expect_thumb_const_io_fallback("const LDRH r1,[r0,#0] ROM", 0x8801u,
+                                 0x08000130u);
   expect_fastmem_routine("shared STRH routine", CGBA_FM_STORE_UH);
 
   expect_arm_block_native_load("STMIA r0,{r1,r2}", 0xE8800006u);

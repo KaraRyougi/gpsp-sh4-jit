@@ -501,6 +501,70 @@ static inline unsigned sh4g_thumb_ldst_reg_index(u32 opcode)
   return opcode & 7u;
 }
 
+static inline int sh4g_thumb_ldst_is_load(u32 opcode)
+{
+  u32 hi = (opcode >> 8) & 0xFFu;
+  if (hi <= 0x4Fu)
+    return 1;
+  if (hi <= 0x5Fu)
+    return hi >= 0x56u;
+  return ((opcode >> 11) & 1u) != 0;
+}
+
+/* Propagate known Thumb register constants through ADD/SUB and immediate shifts
+ * so pointer arithmetic on literal-pool bases (e.g. LDR r0, =0x03001200;
+ * ADD r0, #0x40; LDRH r1, [r0, #2]) still hits the direct const-load path. */
+static inline void sh4g_thumb_const_update_dp(u32 opcode, u32 *mask, u32 val[16])
+{
+  u32 hi = (opcode >> 8) & 0xFFu;
+  u32 m = *mask;
+  if (hi >= 0x18u && hi <= 0x1Fu) {
+    u32 rd = opcode & 7u, rs = (opcode >> 3) & 7u, rn = (opcode >> 6) & 7u;
+    int is_sub = (opcode >> 9) & 1u;
+    int is_imm = (opcode >> 10) & 1u;
+    if ((m & (1u << rs)) && (is_imm || (m & (1u << rn)))) {
+      u32 rhs = is_imm ? rn : val[rn];
+      val[rd] = is_sub ? (val[rs] - rhs) : (val[rs] + rhs);
+      *mask = m | (1u << rd);
+    } else {
+      *mask = m & ~(1u << rd);
+    }
+    return;
+  }
+  if (hi >= 0x30u && hi <= 0x3Fu) {
+    u32 rd = (opcode >> 8) & 7u;
+    u32 imm8 = opcode & 0xFFu;
+    if (m & (1u << rd)) {
+      val[rd] = (hi >= 0x38u) ? (val[rd] - imm8) : (val[rd] + imm8);
+      *mask = m | (1u << rd);
+    } else {
+      *mask = m & ~(1u << rd);
+    }
+    return;
+  }
+  *mask = m & ~(1u << sh4g_thumb_dp_write_reg_index(opcode));
+}
+
+static inline void sh4g_thumb_const_update_shift_imm(u32 opcode, u32 *mask,
+                                                     u32 val[16])
+{
+  u32 rd = opcode & 7u, rs = (opcode >> 3) & 7u;
+  u32 imm5 = (opcode >> 6) & 0x1Fu;
+  u32 op = (opcode >> 11) & 3u;
+  u32 m = *mask;
+  if ((m & (1u << rs)) && op <= 2u) {
+    u32 v = val[rs];
+    if (op == 0u)      v = v << imm5;
+    else if (op == 1u) v = imm5 ? (v >> imm5) : 0u;
+    else               v = imm5 ? (u32)((s32)v >> imm5)
+                                : ((v & 0x80000000u) ? 0xFFFFFFFFu : 0u);
+    val[rd] = v;
+    *mask = m | (1u << rd);
+  } else {
+    *mask = m & ~(1u << rd);
+  }
+}
+
 #if (defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)) && \
     (!defined(CGBA_SH4_BLOCK_PROFILE) || CGBA_SH4_BLOCK_PROFILE)
 static inline void sh4g_prof_block_entry(u8 **tp, u32 pc, int thumb)
@@ -554,7 +618,8 @@ static inline void sh4g_prof_block_entry(u8 **tp, u32 pc, int thumb)
   do { if(!cgba_dynarec_single_block)                                         \
          sh4g_chain_patch((u8 *)(dest), (const void *)(offset)); } while(0)
 #define generate_branch_patch_internal(dest, offset)                          \
-  sh4g_chain_patch((u8 *)(dest), (const void *)(offset))
+  do { if((dest) != NULL)                                                     \
+         sh4g_chain_patch((u8 *)(dest), (const void *)(offset)); } while(0)
 #define generate_branch_patch_conditional(dest, offset)                       \
   sh4g_patch_cond_skip((u8 *)(dest), (const void *)(offset))
 
@@ -603,9 +668,15 @@ static inline void sh4g_prof_block_entry(u8 **tp, u32 pc, int thumb)
 #endif
 
 #define generate_branch_no_cycle_update(writeback_location, new_pc)           \
-  (writeback_location) =                                                      \
-    sh4g_branch_exit(&translation_ptr, (u32)(new_pc),                         \
-                     SH4_DEFAULT_BRANCH_EXIT(new_pc))
+  do { u32 _gbncu_pc = (u32)(new_pc);                                         \
+       if (!cgba_dynarec_single_block &&                                      \
+           _gbncu_pc >= block_start_pc && _gbncu_pc < block_end_pc)           \
+         (writeback_location) =                                               \
+           sh4g_branch_exit_internal(&translation_ptr, _gbncu_pc);            \
+       else                                                                   \
+         (writeback_location) =                                               \
+           sh4g_branch_exit(&translation_ptr, _gbncu_pc,                      \
+                            SH4_DEFAULT_BRANCH_EXIT(_gbncu_pc)); } while(0)
 
 /* ---- idle-loop elimination (dynarec mirror of the interpreter's) ---------
  * The interpreter zeroes the remaining cycle budget when it (a) arrives at the
@@ -661,8 +732,11 @@ static inline int sh4g_registered_idle_signature_ok(const u8 *map,
        generate_branch_no_cycle_update(writeback_location, new_pc); } while(0)
 
 #define generate_branch_cycle_update(cycle_type, writeback_location, new_pc)  \
-  do { cycle_count += ws_cyc_nseq[((u32)(new_pc) >> 24) & 0x0F][cycle_type];  \
-       generate_branch_current_update(writeback_location, new_pc); } while(0)
+  do { u32 _gbc_tgt = (u32)(new_pc);                                          \
+       sh4g_cycle_debit(&translation_ptr, (int)cycle_count +                  \
+         (int)ws_cyc_nseq[(_gbc_tgt >> 24) & 0x0F][cycle_type]);              \
+       cycle_count = 0;                                                       \
+       generate_branch_no_cycle_update(writeback_location, _gbc_tgt); } while(0)
 
 /* A CONDITIONAL branch's exit sequence is emitted INSIDE the condition guard
  * (the not-taken path skips it). So it must NOT reset the translate-time
@@ -672,9 +746,10 @@ static inline int sh4g_registered_idle_signature_ok(const u8 *map,
  * unconditional branch uses generate_branch_cycle_update, which DOES zero, since
  * it always exits.) */
 #define generate_branch_taken(cycle_type, writeback_location, new_pc)         \
-  do { sh4g_cycle_debit(&translation_ptr, (int)cycle_count +                  \
-         (int)ws_cyc_nseq[((u32)(new_pc) >> 24) & 0x0F][cycle_type]);         \
-       generate_branch_no_cycle_update(writeback_location, new_pc); } while(0)
+  do { u32 _gbt_tgt = (u32)(new_pc);                                          \
+       sh4g_cycle_debit(&translation_ptr, (int)cycle_count +                  \
+         (int)ws_cyc_nseq[(_gbt_tgt >> 24) & 0x0F][cycle_type]);              \
+       generate_branch_no_cycle_update(writeback_location, _gbt_tgt); } while(0)
 
 #define generate_arm_branch()                                                 \
   do {                                                                        \
@@ -749,7 +824,29 @@ static inline int sh4g_registered_idle_signature_ok(const u8 *map,
 #define generate_condition_gt()     generate_cond_emit(CGBA_CC_gt)
 #define generate_condition_le()     generate_cond_emit(CGBA_CC_le)
 
-#define arm_conditional_block_header()   generate_condition()
+#define arm_conditional_block_header()                                        \
+  do {                                                                        \
+    int _acbh_single =                                                        \
+      (block_data_position + 1 >= (s32)num_insns) ||                          \
+      block_data[block_data_position + 1].update_cycles ||                    \
+      (((pc + 4) >> 12) == pc_region &&                                       \
+       (readaddress32(pc_address_block, (pc + 4) & 0x0FFFu) >> 28) !=         \
+         condition);                                                          \
+    int _acbh_bounded = _acbh_single && (                                     \
+      ((opcode & 0x0E000000u) == 0x0A000000u) ||                              \
+      ((opcode & 0x0FC000F0u) == 0x00000090u &&                               \
+       ((opcode >> 16) & 15u) != 15u) ||                                      \
+      ((opcode & 0x0C000000u) == 0u &&                                        \
+       ((opcode & 0x02000000u) || !(opcode & 0x10u)) &&                       \
+       ((opcode >> 12) & 15u) != 15u &&                                       \
+       (opcode & 0x01900000u) != 0x01000000u));                               \
+    if (_acbh_bounded) {                                                      \
+      sh4g_litseg_reserve(&translation_ptr, 6);                               \
+      generate_cond_emit(condition);                                          \
+    } else {                                                                  \
+      generate_condition();                                                   \
+    }                                                                         \
+  } while (0)
 
 /* ================================================================== */
 /* Data-processing op-id maps                                          */
@@ -805,7 +902,8 @@ static inline int sh4g_registered_idle_signature_ok(const u8 *map,
 #define thumb_data_proc(type, name, rn_type, _rd, _rs, _rn)                   \
   do { if(!sh4g_thumb_dp_native(&translation_ptr, (u32)opcode, (u32)pc, (u32)flag_status, (int)cycle_count))      \
          SH4_CALL_OP2(cgba_sh4_thumb_dp);                                     \
-       sh4_thumb_const_kill(sh4g_thumb_dp_write_reg_index((u32)opcode)); } while(0)
+       sh4g_thumb_const_update_dp((u32)opcode, &sh4_thumb_const_mask,         \
+                                  sh4_thumb_const_val); } while(0)
 #define thumb_data_proc_test(type, name, rn_type, _rs, _rn)                   \
   do { if(!sh4g_thumb_dp_native(&translation_ptr, (u32)opcode, (u32)pc, (u32)flag_status, (int)cycle_count))      \
          SH4_CALL_OP2(cgba_sh4_thumb_dp); } while(0)
@@ -823,8 +921,14 @@ static inline int sh4g_registered_idle_signature_ok(const u8 *map,
 #define thumb_data_proc_hi(name)                                              \
   do { if(!sh4g_thumb_dp_native(&translation_ptr, (u32)opcode, (u32)pc, (u32)flag_status, (int)cycle_count))      \
          SH4_CALL_OP2_PC(cgba_sh4_thumb_dp);                                  \
-       { unsigned _ct_rd = (((u32)opcode >> 4) & 8u) | ((u32)opcode & 7u);     \
+       { unsigned _ct_rs = ((u32)opcode >> 3) & 0x0Fu;                        \
+         unsigned _ct_rd = (((u32)opcode >> 4) & 8u) | ((u32)opcode & 7u);    \
          if(_ct_rd == REG_PC) sh4_thumb_const_clear_all();                    \
+         else if((((u32)opcode >> 8) == 0x44u) && _ct_rs != REG_PC &&         \
+                 (sh4_thumb_const_mask & (1u << _ct_rd)) &&                   \
+                 (sh4_thumb_const_mask & (1u << _ct_rs)))                     \
+           sh4_thumb_const_set(_ct_rd, sh4_thumb_const_val[_ct_rd] +          \
+                                       sh4_thumb_const_val[_ct_rs]);          \
          else sh4_thumb_const_kill(_ct_rd); } } while(0)
 #define thumb_data_proc_test_hi(name)                                         \
   do { if(!sh4g_thumb_dp_native(&translation_ptr, (u32)opcode, (u32)pc, (u32)flag_status, (int)cycle_count))      \
@@ -844,14 +948,6 @@ static inline int sh4g_registered_idle_signature_ok(const u8 *map,
 
 #define SH4_THUMB_SHIFT_imm(decode_type, op_type)                             \
   do { u32 _sh_op = ((u32)opcode >> 11) & 3;                                  \
-       if (pc == 0x80998FCu) {                       /* TEMP diag */          \
-         volatile unsigned char *_d = (volatile unsigned char *)0xb7000000u;  \
-         static const char _h[] = "0123456789ABCDEF";                         \
-         *_d='F';*_d='S';*_d='@';*_d='L';*_d='S';*_d='L';*_d='=';             \
-         *_d=_h[((u32)flag_status>>8)&0xF];                                   \
-         *_d=_h[((u32)flag_status>>4)&0xF];                                   \
-         *_d=_h[(u32)flag_status&0xF];*_d='\n';                              \
-       }                                                                      \
        if (_sh_op <= 2)                                                        \
          sh4g_shift_imm(&translation_ptr, (int)_sh_op,                         \
                         (unsigned)((u32)opcode & 7),                           \
@@ -860,7 +956,8 @@ static inline int sh4g_registered_idle_signature_ok(const u8 *map,
                         (u32)flag_status & 0xFu);                              \
        else                                                                    \
          SH4_CALL_OP2(cgba_sh4_thumb_shift_imm);                               \
-       sh4_thumb_const_kill((u32)opcode & 7u);                                  \
+       sh4g_thumb_const_update_shift_imm((u32)opcode, &sh4_thumb_const_mask,  \
+                                         sh4_thumb_const_val);                \
   } while(0)
 
 #define SH4_THUMB_SHIFT_reg(decode_type, op_type)                             \
@@ -886,23 +983,48 @@ static inline int sh4g_registered_idle_signature_ok(const u8 *map,
 
 #define thumb_load_sp(_rd)                                                    \
   do { thumb_decode_imm();                                                    \
+       u32 _sp_off = (u32)(imm * 4);                                          \
        sh4g_load_greg(&translation_ptr, REG_SP, SH4_REG_T0);                  \
-       sh4g_const(&translation_ptr, (u32)(imm * 4), SH4_REG_T1);              \
-       sh4g_add_reg(&translation_ptr, SH4_REG_T1, SH4_REG_T0);                \
+       if (_sp_off) {                                                         \
+         if (_sp_off <= 127u) {                                               \
+           sh4_codegen _cg = sh4g_open(&translation_ptr);                     \
+           sh4_emit_add_imm(&_cg, (int)_sp_off, SH4_REG_T0);                  \
+           sh4g_close(&translation_ptr, &_cg);                                \
+         } else {                                                             \
+           sh4g_const(&translation_ptr, _sp_off, SH4_REG_T1);                 \
+           sh4g_add_reg(&translation_ptr, SH4_REG_T1, SH4_REG_T0);            \
+         }                                                                    \
+       }                                                                      \
        sh4g_store_greg(&translation_ptr, SH4_REG_T0, (_rd));                  \
        sh4_thumb_const_kill(_rd); } while(0)
 
-#define thumb_adjust_sp_up()                                                  \
-  sh4g_add_reg(&translation_ptr, SH4_REG_T1, SH4_REG_T0)
-#define thumb_adjust_sp_down()                                                \
-  sh4g_sub_reg(&translation_ptr, SH4_REG_T1, SH4_REG_T0)
+#define thumb_adjust_sp_up(_off)                                              \
+  do { if ((_off) <= 127u) {                                                  \
+         sh4_codegen _cg = sh4g_open(&translation_ptr);                       \
+         sh4_emit_add_imm(&_cg, (int)(_off), SH4_REG_T0);                     \
+         sh4g_close(&translation_ptr, &_cg);                                  \
+       } else {                                                               \
+         sh4g_const(&translation_ptr, (_off), SH4_REG_T1);                    \
+         sh4g_add_reg(&translation_ptr, SH4_REG_T1, SH4_REG_T0);              \
+       } } while(0)
+#define thumb_adjust_sp_down(_off)                                            \
+  do { if ((_off) <= 128u) {                                                  \
+         sh4_codegen _cg = sh4g_open(&translation_ptr);                       \
+         sh4_emit_add_imm(&_cg, -(int)(_off), SH4_REG_T0);                    \
+         sh4g_close(&translation_ptr, &_cg);                                  \
+       } else {                                                               \
+         sh4g_const(&translation_ptr, (_off), SH4_REG_T1);                    \
+         sh4g_sub_reg(&translation_ptr, SH4_REG_T1, SH4_REG_T0);              \
+       } } while(0)
 
 #define thumb_adjust_sp(direction)                                            \
   do { thumb_decode_add_sp();                                                 \
-       sh4g_load_greg(&translation_ptr, REG_SP, SH4_REG_T0);                  \
-       sh4g_const(&translation_ptr, (u32)(imm * 4), SH4_REG_T1);              \
-       thumb_adjust_sp_##direction();                                         \
-       sh4g_store_greg(&translation_ptr, SH4_REG_T0, REG_SP);                 \
+       u32 _sp_off = (u32)(imm * 4);                                          \
+       if (_sp_off) {                                                         \
+         sh4g_load_greg(&translation_ptr, REG_SP, SH4_REG_T0);                \
+         thumb_adjust_sp_##direction(_sp_off);                                \
+         sh4g_store_greg(&translation_ptr, SH4_REG_T0, REG_SP);               \
+       }                                                                      \
        sh4_thumb_const_kill(REG_SP); } while(0)
 
 #define thumb_load_pc_pool_const(rd, value)                                   \
@@ -1088,13 +1210,18 @@ static inline int sh4g_registered_idle_signature_ok(const u8 *map,
 /* Memory (single + block transfers). */
 #define thumb_access_memory(access_type, op_type, reg_rd, reg_rb, reg_ro,     \
                             address_type, offset, mem_type)                   \
-  do { if(!sh4g_thumb_ldst_const_native(&translation_ptr, (u32)opcode,        \
-                                        sh4_thumb_const_mask,                 \
-                                        sh4_thumb_const_val) &&               \
-         !sh4g_thumb_ldst_native(&translation_ptr, (u32)opcode, (u32)pc,    \
-                                  (int)cycle_count))                          \
+  do { int _const_cyc = sh4g_thumb_ldst_const_native(&translation_ptr,        \
+                                                     (u32)opcode,             \
+                                                     sh4_thumb_const_mask,    \
+                                                     sh4_thumb_const_val);    \
+       if (_const_cyc) {                                                      \
+         cycle_count += (u32)_const_cyc;                                      \
+       } else if (!sh4g_thumb_ldst_native(&translation_ptr, (u32)opcode,      \
+                                          (u32)pc, (int)cycle_count)) {       \
          SH4_CALL_OP2_PC_MEM(cgba_sh4_thumb_ldst);                            \
-       sh4_thumb_const_kill(sh4g_thumb_ldst_reg_index((u32)opcode)); } while(0)
+       }                                                                      \
+       if (sh4g_thumb_ldst_is_load((u32)opcode))                              \
+         sh4_thumb_const_kill(sh4g_thumb_ldst_reg_index((u32)opcode)); } while(0)
 #define thumb_block_memory(access_type, pre_op, post_op, base_reg)            \
   do { if(!sh4g_thumb_block_native(&translation_ptr, (u32)opcode, (u32)pc,    \
                                    (int)cycle_count))                         \

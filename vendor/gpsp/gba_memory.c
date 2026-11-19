@@ -537,6 +537,14 @@ void reload_timing_info()
     /* 32 bit accesses are a non-seq (16) + seq access (16) */
     ws_cyc_nseq[i][1] = 1 + ws_cyc_nseq[i][0] + ws_cyc_seq[i][0];
   }
+#ifdef SH4_ARCH
+  {
+    extern u8 *cgba_sh4_fastmem_routine[];
+    extern void cgba_sh4_fastmem_init(void);
+    if (cgba_sh4_fastmem_routine[0])
+      cgba_sh4_fastmem_init();
+  }
+#endif
 }
 
 u8 read_backup(u32 address)
@@ -943,8 +951,10 @@ cpu_alert_type function_cc write_io_register16(u32 address, u32 value)
   value &= 0xffff;
   cgba_timer_trace_io_write(ioreg, value);
 #ifdef CGBA_VRAM_DIRTY_ACTIVE
-  if (ioreg <= REG_BLDY && ioreg != REG_DISPSTAT && ioreg != REG_VCOUNT)
+  if (ioreg <= REG_BLDY && ioreg != REG_DISPSTAT && ioreg != REG_VCOUNT) {
+    cgba_video_flush_before_write();
     cgba_video_io_dirty = 1;
+  }
 #endif
   switch(ioreg)
   {
@@ -1360,16 +1370,37 @@ void function_cc write_backup(u32 address, u32 value)
 
 #ifdef CGBA_VRAM_DIRTY_ACTIVE
 volatile u32 cgba_vram_dirty = CGBA_VRAM_DIRTY_ALL;
+volatile u32 cgba_vram_sb_dirty = 0xFFFFFFFFu;
 volatile u32 cgba_video_io_dirty = 1;
-#define mark_vram_dirty_off(off) \
-  (cgba_vram_dirty |= ((off) < 0x10000u) ? CGBA_VRAM_DIRTY_BG : CGBA_VRAM_DIRTY_OBJ)
+#define mark_vram_dirty_off(off)                                              \
+  do {                                                                        \
+    u32 _vo = (u32)(off);                                                     \
+    if (_vo < 0x10000u) {                                                     \
+      cgba_vram_dirty |= CGBA_VRAM_DIRTY_BG;                                  \
+      cgba_vram_sb_dirty |= (1u << (_vo >> 11));                              \
+    } else {                                                                  \
+      cgba_vram_dirty |= CGBA_VRAM_DIRTY_OBJ;                                 \
+    }                                                                         \
+  } while (0)
 #define mark_vram_dirty_span(off, bytes)                                      \
   do {                                                                        \
-    u32 _vo = (off), _vb = (bytes);                                           \
-    if (_vo < 0x10000u) cgba_vram_dirty |= CGBA_VRAM_DIRTY_BG;                \
+    u32 _vo = (u32)(off), _vb = (u32)(bytes);                                 \
+    if (_vo < 0x10000u && _vb > 0u) {                                         \
+      u32 _hi = _vo + _vb - 1u;                                               \
+      if (_hi >= 0x10000u) _hi = 0xFFFFu;                                     \
+      u32 _s0 = _vo >> 11, _s1 = _hi >> 11;                                   \
+      u32 _m = (_s1 - _s0 >= 31u) ? 0xFFFFFFFFu                               \
+                                  : (((2u << (_s1 - _s0)) - 1u) << _s0);      \
+      cgba_vram_dirty |= CGBA_VRAM_DIRTY_BG;                                  \
+      cgba_vram_sb_dirty |= _m;                                               \
+    }                                                                         \
     if (_vo + _vb > 0x10000u) cgba_vram_dirty |= CGBA_VRAM_DIRTY_OBJ;         \
   } while (0)
-#define mark_vram_dirty_all() (cgba_vram_dirty = CGBA_VRAM_DIRTY_ALL)
+#define mark_vram_dirty_all()                                                 \
+  do {                                                                        \
+    cgba_vram_dirty = CGBA_VRAM_DIRTY_ALL;                                    \
+    cgba_vram_sb_dirty = 0xFFFFFFFFu;                                         \
+  } while (0)
 #else
 #define mark_vram_dirty_off(off) ((void)(off))
 #define mark_vram_dirty_span(off, bytes) do { (void)(off); (void)(bytes); } while (0)
@@ -1732,11 +1763,13 @@ void function_cc write_gpio(u32 address, u32 value) {
                                                                               \
     case 0x05:                                                                \
       /* palette RAM */                                                       \
+      cgba_video_flush_before_write();                                        \
       write_palette##type(address & 0x3FF, value);                            \
       break;                                                                  \
                                                                               \
     case 0x06:                                                                \
       /* VRAM */                                                              \
+      cgba_video_flush_before_write();                                        \
       address &= 0x1FFFF;                                                     \
       if(address >= 0x18000)                                                  \
         address -= 0x8000;                                                    \
@@ -1747,6 +1780,7 @@ void function_cc write_gpio(u32 address, u32 value) {
     case 0x07:                                                                \
       /* OAM RAM */                                                           \
       if (type != 8) {                                                        \
+        cgba_video_flush_before_write();                                      \
         reg[OAM_UPDATED] = 1;                                                 \
         address##type(oam_ram, address & 0x3FF) = eswap##type(value);         \
       }                                                                       \
@@ -2370,22 +2404,141 @@ static bool dma_bulk_copy(dma_transfer_type *dmach, u32 src, u32 dst,
 {
   u32 width = dmach->length_type == DMA_16BIT ? 2 : 4;
   u32 bytes = length * width;
-  u8 *st, *dt, *s, *d;
-  if (length < 8 || dmach->source_direction != 0 ||
+  u8 *st = NULL, *dt = NULL, *s = NULL, *d = NULL;
+  if (length < 8 ||
       (dmach->dest_direction != 0 && dmach->dest_direction != 3))
     return false;
-  s = dma_bulk_span(src, bytes, false, &st);
-  d = dma_bulk_span(dst, bytes, true, &dt);
-  if (!s || !d) return false;
-  /* DMA copies in address order. memmove is not equivalent for overlapping
-   * guest aliases (some software deliberately propagates a fill pattern). */
-  if ((uintptr_t)s < (uintptr_t)d + bytes &&
-      (uintptr_t)d < (uintptr_t)s + bytes)
+
+  /* Fixed-source fill (DmaFill16 / DmaFill32) into contiguous RAM/VRAM/OAM. */
+  if (dmach->source_direction == 2) {
+    s = dma_bulk_span(src, width, false, &st);
+    d = dma_bulk_span(dst, bytes, true, &dt);
+    if (!s || !d) return false;
+    if ((uintptr_t)s < (uintptr_t)d + bytes &&
+        (uintptr_t)d < (uintptr_t)s + width)
+      return false;
+    if (width == 2) {
+      u16 host_v = readaddress16(s, 0);
+      dma_bus_val = host_v;
+      if (host_v == 0) {
+        memset(d, 0, bytes);
+      } else {
+        u16 raw16 = address16(s, 0);
+        u16 *dp = (u16 *)d;
+        for (u32 i = 0; i < length; i++)
+          dp[i] = raw16;
+      }
+    } else {
+      u32 host_v = readaddress32(s, 0);
+      dma_bus_val = host_v;
+      if (host_v == 0) {
+        memset(d, 0, bytes);
+      } else {
+        u32 raw32 = address32(s, 0);
+        u32 *dp = (u32 *)d;
+        for (u32 i = 0; i < length; i++)
+          dp[i] = raw32;
+      }
+    }
+    *alert = CPU_ALERT_NONE;
+    if (dt) {
+      for (u32 off = 0; off < bytes; off += 2)
+        if (address16(dt, off)) {
+          *alert |= CPU_ALERT_SMC;
+          break;
+        }
+    }
+    if ((dst >> 24) == 6) {
+      u32 voff = dst & 0x1FFFFu;
+      if (voff >= 0x18000u) voff -= 0x8000u;
+      mark_vram_dirty_span(voff, bytes);
+    }
+    if ((dst >> 24) == 7) reg[OAM_UPDATED] = 1;
+    if (dmach->dest_direction != 3) dmach->dest_address = dst + bytes;
+    return true;
+  }
+
+  if (dmach->source_direction != 0)
     return false;
 
-  dma_bus_val = width == 2 ? readaddress16(s, bytes - 2) :
-                            readaddress32(s, bytes - 4);
-  memcpy(d, s, bytes);  /* Both spans have the same guest byte order. */
+  /* Palette RAM destination (e.g., per-VBlank TransferPlttBuffer): skip
+   * RGB555->RGB565 reconversion and dirty marking when bytes are unchanged. */
+  if ((dst >> 24) == 5) {
+    u32 poff = dst & 0x3FFu;
+    if (bytes > 0x400u - poff)
+      return false;
+    s = dma_bulk_span(src, bytes, false, &st);
+    if (!s)
+      return false;
+    dma_bus_val = width == 2 ? readaddress16(s, bytes - 2) :
+                              readaddress32(s, bytes - 4);
+    u8 *pd = (u8 *)palette_ram + poff;
+    if (memcmp(pd, s, bytes) != 0) {
+      memcpy(pd, s, bytes);
+      u16 *pr = (u16 *)pd;
+      u16 *pc = (u16 *)((u8 *)palette_ram_converted + poff);
+      u32 n16 = bytes >> 1;
+      for (u32 i = 0; i < n16; i++) {
+        u16 v = eswap16(pr[i]);
+        pc[i] = convert_palette(v);
+      }
+      mark_palette_ram_dirty();
+    }
+    *alert = CPU_ALERT_NONE;
+    dmach->source_address = src + bytes;
+    if (dmach->dest_direction != 3) dmach->dest_address = dst + bytes;
+    return true;
+  }
+
+  d = dma_bulk_span(dst, bytes, true, &dt);
+  if (!d) return false;
+
+  s = dma_bulk_span(src, bytes, false, &st);
+  if (s) {
+    /* DMA copies in address order. memmove is not equivalent for overlapping
+     * guest aliases (some software deliberately propagates a fill pattern). */
+    if ((uintptr_t)s < (uintptr_t)d + bytes &&
+        (uintptr_t)d < (uintptr_t)s + bytes)
+      return false;
+    dma_bus_val = width == 2 ? readaddress16(s, bytes - 2) :
+                              readaddress32(s, bytes - 4);
+    memcpy(d, s, bytes);  /* Both spans have the same guest byte order. */
+  } else {
+    /* Multi-4KiB-page ROM source -> contiguous RAM/VRAM/OAM destination. */
+    u32 sreg = src >> 24;
+    u32 soff = src & 0x01FFFFFFu;
+    if (sreg < 8 || sreg > 12 || soff >= gamepak_size ||
+        bytes > gamepak_size - soff)
+      return false;
+    {
+      u32 check_src = src, check_rem = bytes;
+      while (check_rem > 0) {
+        u32 chunk = 0x1000u - (check_src & 0xFFFu);
+        if (chunk > check_rem) chunk = check_rem;
+        if (!cgba_gamepak_resolve_4k(check_src))
+          return false;
+        check_src += chunk;
+        check_rem -= chunk;
+      }
+    }
+    u32 cur_src = src, rem = bytes;
+    u8 *cur_dst = d;
+    while (rem > 0) {
+      u32 page_off = cur_src & 0xFFFu;
+      u32 chunk = 0x1000u - page_off;
+      if (chunk > rem) chunk = rem;
+      u8 *cs = cgba_gamepak_resolve_4k(cur_src) + page_off;
+      memcpy(cur_dst, cs, chunk);
+      if (chunk == rem) {
+        dma_bus_val = width == 2 ? readaddress16(cs, chunk - 2) :
+                                  readaddress32(cs, chunk - 4);
+      }
+      cur_src += chunk;
+      cur_dst += chunk;
+      rem -= chunk;
+    }
+  }
+
   *alert = CPU_ALERT_NONE;
   if (dt) {
     for (u32 off = 0; off < bytes; off += 2)
@@ -2409,6 +2562,8 @@ static bool dma_bulk_copy(dma_transfer_type *dmach, u32 src, u32 dst,
 static cpu_alert_type dma_transfer_copy(
   dma_transfer_type *dmach, u32 src_ptr, u32 dest_ptr, u32 length)
 {
+  if (((dest_ptr >> 24) - 4u) <= 3u)
+    cgba_video_flush_before_write();
 #if defined(CGBA_BULK_DMA) && CGBA_BULK_DMA
   cpu_alert_type alert;
   if (dma_bulk_copy(dmach, src_ptr, dest_ptr, length, &alert))

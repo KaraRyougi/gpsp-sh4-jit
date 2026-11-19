@@ -338,10 +338,30 @@ extern volatile u32 palette_ram_dirty;
 #define CGBA_VRAM_DIRTY_OBJ  0x02u
 #define CGBA_VRAM_DIRTY_ALL  (CGBA_VRAM_DIRTY_BG | CGBA_VRAM_DIRTY_OBJ)
 #define CGBA_VRAM_DIRTY_ACTIVE CGBA_VRAM_DIRTY_ALL
+#define CGBA_VRAM_SB_DIRTY_ACTIVE 1
 /* Bitmask set by every path that writes VRAM (CPU, DMA, SWI HLE, native SH4
  * stores, reset and savestate load). Consumed by the dirty-scanline tracker. */
 extern volatile u32 cgba_vram_dirty;
+extern volatile u32 cgba_vram_sb_dirty;
 extern volatile u32 cgba_video_io_dirty;
+#ifndef CGBA_LCD_SCANLINE_STREAM
+#define CGBA_VIDEO_DEFERRED_ACTIVE 1
+extern volatile u32 cgba_pending_sl_count;
+extern u32 cgba_pending_sl_start;
+void cgba_flush_pending_scanlines(void);
+void cgba_discard_pending_scanlines(void);
+void cgba_queue_scanlines(u32 start_y, u32 count);
+static inline void cgba_video_flush_before_write(void) {
+  if (__builtin_expect(cgba_pending_sl_count != 0u, 0))
+    cgba_flush_pending_scanlines();
+}
+#else
+static inline void cgba_video_flush_before_write(void) {}
+static inline void cgba_discard_pending_scanlines(void) {}
+#endif
+#else
+static inline void cgba_video_flush_before_write(void) {}
+static inline void cgba_discard_pending_scanlines(void) {}
 #endif
 extern u16 io_registers[512];
 extern u8 vram[1024 * 96];

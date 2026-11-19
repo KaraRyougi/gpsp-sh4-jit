@@ -73,6 +73,7 @@ void sh4_block_exit(u32 pc){(void)pc;}
 void sh4_helper_exit(u32 pc){(void)pc;}
 void sh4_op2_pc_mem_tramp(void){}
 void sh4_fastmem_pc_mem_tramp(void){}
+void sh4_fastmem_compact8_tramp(void){}
 void sh4_op2_pc_tramp(void){}
 void sh4_op2_tramp(void){}
 void sh4_indirect_branch_thumb(u32 a){(void)a;}
@@ -112,6 +113,7 @@ volatile u32 palette_ram_dirty;
 #define CGBA_VRAM_DIRTY_ALL 3u
 #define CGBA_VRAM_DIRTY_ACTIVE 3u
 volatile u32 cgba_vram_dirty;
+volatile u32 cgba_video_io_dirty;
 #define CGBA_SH4_REG_FORWARD 1
 #include "ports/fxcg100/sh4/sh4_thumb_dp_emit.h"
 #include "ports/fxcg100/sh4/sh4_arm_ldst_emit.h"
@@ -124,6 +126,7 @@ u32 cgba_sh4_native_thumb_push_iwram_count2;
 #include "ports/fxcg100/sh4/sh4_thumb_block_emit.h"
 
 u8 *cgba_sh4_fastmem_routine[CGBA_FM_TOTAL];
+u8 *cgba_sh4_fastmem_io16_store;
 u8 *cgba_sh4_psr_rebank_routine;
 u32 cgba_idle_wait;
 static u8 psr_rebank_buf[512];
@@ -247,11 +250,15 @@ static void orc_write(u32 addr, u32 v, int size_log2, int *ok)
 static u32 orc_slow_target;        /* trunc(&sh4_op2_pc_mem_tramp) */
 static u32 orc_slow_target2;       /* trunc(&sh4_op2_pc_tramp) */
 static u32 orc_slow_target3;       /* trunc(&sh4_fastmem_pc_mem_tramp) */
+static u32 orc_slow_target4;       /* trunc(&sh4_fastmem_compact8_tramp) */
 static int orc_took_slow;
 static u32 orc_final_cycles;
 
 static int orc_is_slow_target(u32 a)
-{ return a == orc_slow_target || a == orc_slow_target2 || a == orc_slow_target3; }
+{
+  return a == orc_slow_target || a == orc_slow_target2 ||
+         a == orc_slow_target3 || a == orc_slow_target4;
+}
 
 static int orc_fastmem_io16_direct_store(u32 addr)
 {
@@ -315,23 +322,29 @@ static int run_at(u32 pc, u32 pc_end)
       next = PR;
     }
     else if ((op & 0xF0FF) == 0x400B) {                             /* JSR @Rn */
+      u32 target = R[nn];
       u32 slot = orc_read(pc + 2, 1, &okf);
-      if (!okf || (u16)slot != 0x0009) { snprintf(unmodeled, sizeof unmodeled, "jsr slot"); return 0; }
-      if (orc_is_slow_target(R[nn])) {          /* call into a C tramp stub */
+      if (!okf) { snprintf(unmodeled, sizeof unmodeled, "jsr slot"); return 0; }
+      if ((u16)slot == 0x0009) {}
+      else if ((slot & 0xF000u) == 0xE000u)
+        R[(slot >> 8) & 0xFu] = (u32)(s32)(s8)(slot & 0xFFu);
+      else { snprintf(unmodeled, sizeof unmodeled, "jsr slot %04x", (unsigned)slot); return 0; }
+      if (orc_is_slow_target(target)) {         /* call into a C tramp stub */
         orc_took_slow = 1;
         snprintf(unmodeled, sizeof unmodeled, "jmp/jsr (slow path taken)");
         return 0;
       }
       PR = pc + 4;
-      next = R[nn];
+      next = target;
     }
     else if ((op & 0xF0FF) == 0x402B) {                             /* JMP @Rn */
-      if (orc_is_slow_target(R[nn])) {
+      u32 target = R[nn];
+      if (orc_is_slow_target(target)) {
         orc_took_slow = 1;
         snprintf(unmodeled, sizeof unmodeled, "jmp/jsr (slow path taken)");
         return 0;
       }
-      if (R[nn] == (u32)(uintptr_t)sh4_helper_exit) {
+      if (target == (u32)(uintptr_t)sh4_helper_exit) {
         g_reg[SH4_GREG_CPSR] = R[SH4_REG_CPSR];
 #if CGBA_SH4_PIN_GUEST_R0
         g_reg[0] = R[SH4_REG_GUEST_R0];
@@ -339,8 +352,18 @@ static int run_at(u32 pc, u32 pc_end)
         orc_final_cycles = R[SH4_REG_CYCLES];
         return 1;                                      /* expected PC redispatch */
       }
-      snprintf(unmodeled, sizeof unmodeled, "jmp %08X", R[nn]);
-      return 0;
+      u32 slot = orc_read(pc + 2, 1, &okf);
+      if (!okf) { snprintf(unmodeled, sizeof unmodeled, "jmp slot"); return 0; }
+      if ((u16)slot == 0x0009) {}
+      else if ((slot & 0xF000u) == 0x7000u)
+        R[(slot >> 8) & 0xFu] += (u32)(s32)(s8)(slot & 0xFFu);
+      else if ((slot & 0xF00Fu) == 0x3008u)
+        R[(slot >> 8) & 0xFu] -= R[(slot >> 4) & 0xFu];
+      else {
+        snprintf(unmodeled, sizeof unmodeled, "jmp slot %04x", (unsigned)slot);
+        return 0;
+      }
+      next = target;
     }
     else if ((op & 0xF0FF) == 0x002A) R[nn] = PR;                   /* STS PR,Rn */
     else if ((op & 0xF000) == 0xE000) R[nn] = (u32)(s32)(s8)(op & 0xFF);
@@ -539,6 +562,7 @@ static int run_sh4x(const u8 *code, size_t n)
   orc_add_window(psr_rebank_buf, sizeof psr_rebank_buf, 0);
   orc_slow_target = (u32)(uintptr_t)sh4_op2_pc_mem_tramp;
   orc_slow_target3 = (u32)(uintptr_t)sh4_fastmem_pc_mem_tramp;
+  orc_slow_target4 = (u32)(uintptr_t)sh4_fastmem_compact8_tramp;
   orc_slow_target2 = (u32)(uintptr_t)sh4_op2_pc_tramp;
   return run_at((u32)(uintptr_t)code, (u32)(uintptr_t)code + (u32)n);
 }
@@ -1418,6 +1442,7 @@ int main(void)
     u8 *tp = fm_buf;
     const u32 pc = 0x08000100;
 
+    cgba_sh4_fastmem_io16_store = sh4g_fastmem_emit_io16_store(&tp);
     for (int fm = 0; fm < CGBA_FM_COUNT; fm++)
       cgba_sh4_fastmem_routine[fm] = sh4g_fastmem_emit_routine(&tp, fm);
     for (int fm = CGBA_FMB_LDM; fm < CGBA_FM_TOTAL; fm++)
@@ -1613,11 +1638,14 @@ int main(void)
           orc_add_window(sbuf, sizeof sbuf, 0);
           orc_add_window(fm_buf, sizeof fm_buf, 0);
           orc_add_window(io_registers, sizeof io_registers, 0);
+          orc_add_window((const void *)&cgba_video_io_dirty, sizeof(cgba_video_io_dirty), 0);
           orc_add_window(memory_map_read, 8192 * 4, 1);
           orc_add_window(giwram, giwram_size, 0);
           orc_add_window(ewram, sizeof ewram, 0);
           orc_add_window(vram, sizeof vram, 0);
           orc_add_window((const void *)&cgba_vram_dirty, sizeof(cgba_vram_dirty), 0);
+        orc_add_window((const void *)&cgba_video_io_dirty, sizeof(cgba_video_io_dirty), 0);
+          orc_add_window((const void *)&cgba_video_io_dirty, sizeof(cgba_video_io_dirty), 0);
           orc_add_window(rom, sizeof rom, 0);
           orc_add_window(ws_cyc_seq, sizeof ws_cyc_seq, 0);
           orc_add_window(ws_cyc_nseq, sizeof ws_cyc_nseq, 0);
@@ -1928,6 +1956,7 @@ int main(void)
         orc_add_window(ewram, sizeof ewram, 0);
         orc_add_window(vram, sizeof vram, 0);
         orc_add_window((const void *)&cgba_vram_dirty, sizeof(cgba_vram_dirty), 0);
+        orc_add_window((const void *)&cgba_video_io_dirty, sizeof(cgba_video_io_dirty), 0);
         orc_add_window(rom, sizeof rom, 0);
         orc_add_window(ws_cyc_seq, sizeof ws_cyc_seq, 0);
         orc_add_window(ws_cyc_nseq, sizeof ws_cyc_nseq, 0);
@@ -2002,6 +2031,7 @@ int main(void)
           orc_add_window(sbuf, sizeof sbuf, 0);
           orc_add_window(fm_buf, sizeof fm_buf, 0);
           orc_add_window(io_registers, sizeof io_registers, 0);
+          orc_add_window((const void *)&cgba_video_io_dirty, sizeof(cgba_video_io_dirty), 0);
           orc_add_window(memory_map_read, 8192 * 4, 1);
           orc_add_window(giwram, giwram_size, 0);
           orc_add_window(ewram, sizeof ewram, 0);
@@ -2080,6 +2110,7 @@ int main(void)
           orc_add_window(sbuf, sizeof sbuf, 0);
           orc_add_window(fm_buf, sizeof fm_buf, 0);
           orc_add_window(io_registers, sizeof io_registers, 0);
+          orc_add_window((const void *)&cgba_video_io_dirty, sizeof(cgba_video_io_dirty), 0);
           orc_add_window(memory_map_read, 8192 * 4, 1);
           orc_add_window(giwram, giwram_size, 0);
           orc_add_window(ewram, sizeof ewram, 0);
@@ -2174,6 +2205,7 @@ int main(void)
         orc_add_window(ewram, sizeof ewram, 0);
         orc_add_window(vram, sizeof vram, 0);
         orc_add_window((const void *)&cgba_vram_dirty, sizeof(cgba_vram_dirty), 0);
+        orc_add_window((const void *)&cgba_video_io_dirty, sizeof(cgba_video_io_dirty), 0);
         orc_add_window(rom, sizeof rom, 0);
         orc_add_window(ws_cyc_seq, sizeof ws_cyc_seq, 0);
         orc_add_window(ws_cyc_nseq, sizeof ws_cyc_nseq, 0);
@@ -2331,6 +2363,7 @@ int main(void)
         orc_add_window(ewram, sizeof ewram, 0);
         orc_add_window(vram, sizeof vram, 0);
         orc_add_window((const void *)&cgba_vram_dirty, sizeof(cgba_vram_dirty), 0);
+        orc_add_window((const void *)&cgba_video_io_dirty, sizeof(cgba_video_io_dirty), 0);
         orc_add_window(rom, sizeof rom, 0);
         orc_add_window(ws_cyc_seq, sizeof ws_cyc_seq, 0);
         orc_add_window(ws_cyc_nseq, sizeof ws_cyc_nseq, 0);

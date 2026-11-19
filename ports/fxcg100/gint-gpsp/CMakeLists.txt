@@ -79,7 +79,7 @@ option(CGBA_SH4_THUMB_BLOCK_NATIVE
   "Enable SH4 native Thumb RAM block-load fast path" ON)
 option(CGBA_SH4_SELECTIVE_R0_SYNC
   "Synchronize pinned r0 only when a fastmem transfer uses it" ON)
-option(CGBA_SH4_REG_FORWARD "Experimental adjacent ALU register forwarding" OFF)
+option(CGBA_SH4_REG_FORWARD "Adjacent ALU register forwarding" ON)
 option(CGBA_SH4_BLOCK_PROFILE
   "Emit block-entry counters in profiling/headless builds" ON)
 option(CGBA_SH4_PIN_GUEST_R0
@@ -177,12 +177,12 @@ set(CGBA_GPSP_ROM_BRANCH_HASH_BITS "12" CACHE STRING
   "SH4 dynarec ROM branch-hash = 2^N u32 entries; 12 is 16 KiB, which is friendlier to the SH7305 cache than the upstream 16 / 256 KiB table")
 if(CGBA_CLASSPAD)
   # The fx-CP400 arena is in the OS heap and not under the fx-CG ceiling
-  # above, so the ROM cache is 2.25 MiB there: Pokemon Emerald was seen to
-  # fill the 1 MiB one 11 times in a session. The last quarter is what the
-  # mini-ROM buffer used to take (CGBA_NO_MEMORY_ROM). The hash table is
-  # doubled to keep its chains about the same length. See classpad_gpsp.ld
+  # above, so the ROM cache is 2.125 MiB (2176 KiB) there: Pokemon Emerald was
+  # seen to fill the 1 MiB one 11 times in a session, while leaving ~100 KiB
+  # headroom in the 5.5 MiB arena for .cgba.core and .cgba.bss. The hash table
+  # is doubled to keep its chains about the same length. See classpad_gpsp.ld
   # for the room.
-  set(CGBA_GPSP_ROM_TRANSLATION_CACHE_SIZE 2359296)
+  set(CGBA_GPSP_ROM_TRANSLATION_CACHE_SIZE 2228224)
   set(CGBA_GPSP_ROM_BRANCH_HASH_BITS 13)
 endif()
 if(CGBA_DYNAREC)

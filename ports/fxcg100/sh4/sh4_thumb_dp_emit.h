@@ -162,6 +162,12 @@ static inline int sh4g_thumb_dp_native(u8 **tp, u32 opcode, u32 pc, u32 flag_sta
   /* fmt3 MOV Rd,#imm8  (001 00 ddd iiiiiiii) — N/Z only, C/V preserved. */
   if (hi >= 0x20 && hi <= 0x27) {
     unsigned rd = (opcode >> 8) & 7;
+#if CGBA_SH4_PIN_GUEST_R0
+    if (rd == 0 && !fm) {
+      sh4g_const(tp, opcode & 0xFF, SH4_REG_GUEST_R0);
+      return 1;
+    }
+#endif
     sh4g_const(tp, opcode & 0xFF, SH4_REG_T0);
     sh4g_store_greg(tp, SH4_REG_T0, rd);
     sh4g_set_nz_m(tp, SH4_REG_T0, fm);
@@ -172,12 +178,31 @@ static inline int sh4g_thumb_dp_native(u8 **tp, u32 opcode, u32 pc, u32 flag_sta
   if (hi >= 0x28 && hi <= 0x3F) {
     unsigned sub = (opcode >> 11) & 3;
     unsigned rd  = (opcode >> 8) & 7;
+    u32 imm8     = opcode & 0xFF;
     if (sub == 1 && !fm)
       return 1;                                         /* CMP, flags dead: nop */
+    if (!fm && sub >= 2 && imm8 <= 127u) {
+      int simm = (sub == 2) ? (int)imm8 : -(int)imm8;
+      sh4_codegen cg = sh4g_open(tp);
+#if CGBA_SH4_PIN_GUEST_R0
+      if (rd == 0) {
+        if (simm != 0)
+          sh4_emit_add_imm(&cg, simm, SH4_REG_GUEST_R0);
+        sh4g_close(tp, &cg);
+        return 1;
+      }
+#endif
+      sh4_emit_load_greg(&cg, rd, SH4_REG_T0);
+      if (simm != 0)
+        sh4_emit_add_imm(&cg, simm, SH4_REG_T0);
+      sh4_emit_store_greg(&cg, SH4_REG_T0, rd);
+      sh4g_close(tp, &cg);
+      return 1;
+    }
     { sh4_codegen cg = sh4g_open(tp);
       sh4_emit_load_greg(&cg, rd, SH4_REG_T0);          /* a = reg[rd] */
       sh4g_close(tp, &cg); }
-    sh4g_const(tp, opcode & 0xFF, SH4_REG_T1);          /* b = imm8 */
+    sh4g_const(tp, imm8, SH4_REG_T1);                   /* b = imm8 */
     if (sub == 2) sh4g_dp_addsub(tp, 0, rd, 1, fm);     /* ADD */
     else          sh4g_dp_addsub(tp, 1, rd, sub == 3, fm); /* CMP (no wb) / SUB */
     return 1;
@@ -191,6 +216,36 @@ static inline int sh4g_thumb_dp_native(u8 **tp, u32 opcode, u32 pc, u32 flag_sta
     unsigned arg = (opcode >> 6) & 7;
     unsigned is_sub = (opcode >> 9) & 1;
     unsigned is_imm = (opcode >> 10) & 1;
+    if (!fm && is_imm) {
+      int simm = is_sub ? -(int)arg : (int)arg;
+      sh4_codegen cg = sh4g_open(tp);
+#if CGBA_SH4_PIN_GUEST_R0
+      if (rd == 0) {
+        if (rn != 0)
+          sh4_emit_load_greg(&cg, rn, SH4_REG_GUEST_R0);
+        if (simm != 0)
+          sh4_emit_add_imm(&cg, simm, SH4_REG_GUEST_R0);
+        sh4g_close(tp, &cg);
+        return 1;
+      }
+      if (rn == 0 && simm == 0) {
+        sh4_emit_store_greg(&cg, SH4_REG_GUEST_R0, rd);
+        sh4g_close(tp, &cg);
+        return 1;
+      }
+#endif
+      sh4_emit_load_greg(&cg, rn, SH4_REG_T0);
+      if (simm != 0)
+        sh4_emit_add_imm(&cg, simm, SH4_REG_T0);
+      sh4_emit_store_greg(&cg, SH4_REG_T0, rd);
+      sh4g_close(tp, &cg);
+      return 1;
+    }
+#if CGBA_SH4_REG_FORWARD
+    if (!is_imm && !is_sub && *tp == sh4_forward_at && arg == sh4_forward_guest && rn != arg) {
+      unsigned tmp = rn; rn = arg; arg = tmp;
+    }
+#endif
     { sh4_codegen cg = sh4g_open(tp);
       sh4_emit_load_greg(&cg, rn, SH4_REG_T0);          /* a = reg[rn] */
       sh4g_close(tp, &cg); }
@@ -736,14 +791,15 @@ static inline void sh4g_charge_mem_cell(u8 **tp, const u8 *cell)
 }
 
 /* Fast path for the hot Thumb shape:
- *   LDR rB, [pc, #literal]   ; rB = fixed IO address
+ *   LDR rB, [pc, #literal]   ; rB = fixed IO / IWRAM / EWRAM address
  *   LDRH/LDRB/LDR rD, [rB, #offset]
  *
- * The generic native load is still correct, but it must rebuild the effective
- * address class, probe memory_map_read[], check alignment and read the wait-state
- * table at runtime. If translation knows the effective address is fixed IO, the
- * host pointer is stable and the read can be emitted directly. Loads only: IO
- * writes remain helper-owned. */
+ * The generic native load is still correct, but it must call into the ILRAM
+ * fastmem routine, probe region/alignment, and return via JMP. When translation
+ * knows the effective address is aligned static IO/IWRAM/EWRAM, the host
+ * pointer is permanent and the read emits directly with zero branches. Returns
+ * the fixed non-sequential cycle debit (1 for IO/IWRAM, 3 or 6 for EWRAM) so
+ * the caller folds it into block cycle_count without emitting an extra ADD. */
 static inline int sh4g_thumb_ldst_const_native(u8 **tp, u32 opcode,
   u32 const_mask, const u32 const_val[16])
 {
@@ -756,8 +812,10 @@ static inline int sh4g_thumb_ldst_const_native(u8 **tp, u32 opcode,
 #else
   u32 hi = (opcode >> 8) & 0xFF;
   u32 rd = opcode & 7, rb = (opcode >> 3) & 7;
-  u32 ro = 0, offset = 0, address;
+  u32 ro = 0, offset = 0, address, region;
   int reg_offset = 0, kind = SH4_THUMB_LDK_W, align_mask = 3, is_load = 1;
+  uintptr_t host_addr;
+  int debit;
 
   if (hi >= 0x50 && hi <= 0x5F) {
     u32 op = (opcode >> 10) & 3;
@@ -801,18 +859,30 @@ static inline int sh4g_thumb_ldst_const_native(u8 **tp, u32 opcode,
     return 0;
   }
 
+  if (!is_load)
+    return 0;
   if (!(const_mask & (1u << rb)))
     return 0;
   if (reg_offset && !(const_mask & (1u << ro)))
     return 0;
 
   address = const_val[rb] + offset + (reg_offset ? const_val[ro] : 0);
-  if (((address >> 24) & 0x0F) != 0x04)
-    return 0;
   if (align_mask && (address & (u32)align_mask))
     return 0;
-  if (!is_load)
+
+  region = address >> 24;
+  if (region == 0x03u) {
+    host_addr = (uintptr_t)(iwram + 0x8000u + (address & 0x7FFFu));
+    debit = 1;
+  } else if (region == 0x02u) {
+    host_addr = (uintptr_t)(ewram + (address & 0x3FFFFu));
+    debit = (kind == SH4_THUMB_LDK_W) ? 6 : 3;
+  } else if (region == 0x04u) {
+    host_addr = (uintptr_t)(((u8 *)io_registers) + (address & 0x3FFu));
+    debit = 1;
+  } else {
     return 0;
+  }
 
 #if (defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)) && \
   CGBA_SH4_LDST_DETAIL_COUNTERS
@@ -825,8 +895,7 @@ static inline int sh4g_thumb_ldst_const_native(u8 **tp, u32 opcode,
     sh4g_close(tp, &cg); }
 #endif
 
-  sh4g_const(tp, (u32)(uintptr_t)(((u8 *)io_registers) + (address & 0x3FFu)),
-             SH4_REG_T2);
+  sh4g_const(tp, (u32)host_addr, SH4_REG_T2);
   { sh4_codegen cg = sh4g_open(tp);
     switch (kind) {
     case SH4_THUMB_LDK_W:
@@ -856,8 +925,7 @@ static inline int sh4g_thumb_ldst_const_native(u8 **tp, u32 opcode,
     sh4_emit_store_greg(&cg, SH4_REG_T1, rd);
     sh4g_close(tp, &cg); }
 
-  sh4g_charge_mem_cell(tp, &ws_cyc_nseq[0x04][kind == SH4_THUMB_LDK_W]);
-  return 1;
+  return debit;
 #endif
 }
 
@@ -1036,8 +1104,19 @@ static inline int sh4g_thumb_ldst_native(u8 **tp, u32 opcode, u32 pc,
       sh4_emit_add_reg(&cg, SH4_REG_T1, SH4_REG_T0); /* R1 = base + reg[ro] */
       sh4g_close(tp, &cg);
     } else if (offset) {
-      sh4g_const(tp, offset, SH4_REG_T1);
-      sh4g_add_reg(tp, SH4_REG_T1, SH4_REG_T0);      /* R1 = base + offset */
+      if (offset <= 127u) {
+        sh4_codegen cg = sh4g_open(tp);
+        sh4_emit_add_imm(&cg, (int)offset, SH4_REG_T0); /* R1 = base + offset */
+        sh4g_close(tp, &cg);
+      } else if (offset <= 254u) {
+        sh4_codegen cg = sh4g_open(tp);
+        sh4_emit_add_imm(&cg, 127, SH4_REG_T0);
+        sh4_emit_add_imm(&cg, (int)(offset - 127u), SH4_REG_T0);
+        sh4g_close(tp, &cg);
+      } else {
+        sh4g_const(tp, offset, SH4_REG_T1);
+        sh4g_add_reg(tp, SH4_REG_T1, SH4_REG_T0);      /* R1 = base + offset */
+      }
     }
   }
 
@@ -1060,6 +1139,377 @@ static inline int sh4g_thumb_ldst_native(u8 **tp, u32 opcode, u32 pc,
   return 1;
 #endif
 }
+
+#ifdef CGBA_SH4_THUMB_LDST_NATIVE
+/* Fuse Thumb constant-RAM-base indexed array load:
+ *   op0: ADD rA, rIdx, rC  (fmt2, dead flags) OR ADD rA, rH (fmt5, no flags)
+ *        where one operand is a known IWRAM/EWRAM constant `base`
+ *   op1: LDRB/LDRH/LDR rD, [rA, #off]
+ * Checks `(u32)reg[rIdx] < (ram_size - (base_off + off))` (guaranteed in-region
+ * with zero 32-bit wrap) and alignment, then loads straight from host RAM
+ * without a fastmem call, skipping `reg[rA]` store when `rD == rA`.
+ * Returns 1 on fusion (writing `*out_rA` and `*out_rD`), 0 otherwise. */
+static inline int sh4g_thumb_ram_idx_load_native(u8 **tp, u32 op0, u32 op1,
+  u32 pc, int cc2, u32 const_mask, const u32 *const_val, int op0_flags_live,
+  unsigned *out_rA, unsigned *out_rD)
+{
+  unsigned rA = 0, rIdx = 0, rD;
+  u32 base = 0, off = 0, region, base_off, limit, host_base;
+  int kind, align, debit;
+  u8 *miss[2], *bra_done;
+  int nmiss = 0;
+
+  if ((op0 & 0xFE00u) == 0x1800u) {                  /* fmt2 ADD Rd, Rn, Rm */
+    unsigned rn, rm;
+    if (op0_flags_live) return 0;
+    rA = op0 & 7u;
+    rn = (op0 >> 3) & 7u;
+    rm = (op0 >> 6) & 7u;
+    if ((const_mask & (1u << rn)) && !(const_mask & (1u << rm))) {
+      base = const_val[rn]; rIdx = rm;
+    } else if ((const_mask & (1u << rm)) && !(const_mask & (1u << rn))) {
+      base = const_val[rm]; rIdx = rn;
+    } else {
+      return 0;
+    }
+  } else if ((op0 & 0xFF00u) == 0x4400u) {           /* fmt5 ADD Rd, Rs */
+    unsigned rs = (op0 >> 3) & 15u;
+    rA = (op0 & 7u) | ((op0 >> 4) & 8u);
+    if (rA >= 8u || rs == 15u) return 0;
+    if ((const_mask & (1u << rA)) && !(const_mask & (1u << rs))) {
+      base = const_val[rA]; rIdx = rs;
+    } else if ((const_mask & (1u << rs)) && !(const_mask & (1u << rA))) {
+      base = const_val[rs]; rIdx = rA;
+    } else {
+      return 0;
+    }
+  } else {
+    return 0;
+  }
+
+  if ((op1 & 0xF800u) == 0x7800u) {                  /* LDRB rD, [rA, #imm5] */
+    kind = SH4_THUMB_LDK_B; off = (op1 >> 6) & 31u; align = 0;
+  } else if ((op1 & 0xF800u) == 0x8800u) {           /* LDRH rD, [rA, #imm5*2] */
+    kind = SH4_THUMB_LDK_UH; off = ((op1 >> 6) & 31u) << 1; align = 1;
+  } else if ((op1 & 0xF800u) == 0x6800u) {           /* LDR rD, [rA, #imm5*4] */
+    kind = SH4_THUMB_LDK_W; off = ((op1 >> 6) & 31u) << 2; align = 3;
+  } else {
+    return 0;
+  }
+  if (((op1 >> 3) & 7u) != rA) return 0;
+  rD = op1 & 7u;
+
+  region = base >> 24;
+  if (region == 3u) {
+    base_off = base - 0x03000000u;
+    if (base_off >= 0x8000u || base_off + off >= 0x8000u) return 0;
+    limit = 0x8000u - (base_off + off);
+    host_base = (u32)(uintptr_t)(iwram + 0x8000u + base_off + off);
+    debit = 1;
+  } else if (region == 2u) {
+    base_off = base - 0x02000000u;
+    if (base_off >= 0x40000u || base_off + off >= 0x40000u) return 0;
+    limit = 0x40000u - (base_off + off);
+    host_base = (u32)(uintptr_t)(ewram + base_off + off);
+    debit = (kind == SH4_THUMB_LDK_W) ? 6 : 3;
+  } else {
+    return 0;
+  }
+  if (align && ((base + off) & (u32)align)) return 0;
+
+  sh4g_litseg_reserve_bytes(tp, 4, 112u);
+
+  /* Load idx -> R0, verify (u32)idx < limit (no wrap, in-region) and align. */
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_load_greg(&cg, rIdx, SH4_REG_RET);      /* R0 = reg[rIdx] */
+    sh4g_close(tp, &cg); }
+  sh4g_const(tp, limit, SH4_REG_T1);                 /* R2 = limit */
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_cmphs(&cg, SH4_REG_T1, SH4_REG_RET);    /* T = (R0 >= limit) */
+    sh4g_close(tp, &cg); }
+  miss[nmiss++] = sh4g_emit_bt_placeholder(tp);
+
+  if (align) {
+    sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_tst_imm(&cg, align);                    /* T = aligned */
+    sh4g_close(tp, &cg);
+    miss[nmiss++] = sh4g_emit_bf_placeholder(tp);
+  }
+
+  /* Fast path: optional reg[rA] commit (skipped when rD == rA), direct load. */
+  if (rD != rA) {
+    sh4g_const(tp, base, SH4_REG_T1);
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_add_reg(&cg, SH4_REG_RET, SH4_REG_T1);
+      sh4_emit_store_greg(&cg, SH4_REG_T1, rA);
+      sh4g_close(tp, &cg); }
+  }
+  sh4g_const(tp, host_base, SH4_REG_T2);             /* R3 = host_base */
+  { sh4_codegen cg = sh4g_open(tp);
+    unsigned dst = SH4_REG_T0;
+#if CGBA_SH4_PIN_GUEST_R0
+    if (rD == 0u && kind != SH4_THUMB_LDK_W)
+      dst = SH4_REG_GUEST_R0;
+#endif
+    switch (kind) {
+    case SH4_THUMB_LDK_B:
+      sh4_emit_mov_b_load_r0(&cg, SH4_REG_T2, dst);
+      sh4_emit_extu_b(&cg, dst, dst);
+      break;
+    case SH4_THUMB_LDK_UH:
+      sh4_emit_mov_w_load_r0(&cg, SH4_REG_T2, dst);
+      sh4_emit_swap_b(&cg, dst, dst);
+      sh4_emit_extu_w(&cg, dst, dst);
+      break;
+    default: /* SH4_THUMB_LDK_W */
+      sh4_emit_mov_l_load_r0(&cg, SH4_REG_T2, SH4_REG_T0);
+      sh4_emit_swap_b(&cg, SH4_REG_T0, SH4_REG_ARG0);
+      sh4_emit_swap_w(&cg, SH4_REG_ARG0, SH4_REG_ARG0);
+      sh4_emit_swap_b(&cg, SH4_REG_ARG0, SH4_REG_T0);
+      break;
+    }
+    if (dst == SH4_REG_T0)
+      sh4_emit_store_greg(&cg, SH4_REG_T0, rD);
+    sh4g_close(tp, &cg); }
+  bra_done = *tp;
+  sh4g_u16(tp, 0xA000);                              /* BRA done */
+  sh4g_u16(tp, (uint16_t)(0x7000 | (SH4_REG_CYCLES << 8) | ((-debit) & 0xFF)));
+
+  /* Cold fallback: R0 still holds original reg[rIdx]. */
+  while (nmiss)
+    sh4g_patch_cond(miss[--nmiss], *tp);
+  sh4g_const(tp, base, SH4_REG_T0);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_add_reg(&cg, SH4_REG_RET, SH4_REG_T0);  /* R1 = base + idx */
+    sh4_emit_store_greg(&cg, SH4_REG_T0, rA);
+    if (off)
+      sh4_emit_add_imm(&cg, (int)off, SH4_REG_T0);   /* R1 = addr */
+    sh4g_close(tp, &cg); }
+  sh4g_fastmem_site(tp, (int)kind,
+                    (const void *)cgba_sh4_thumb_ldst, (u32)op1, (u32)(pc + 2),
+                    cc2, rD, -1);
+
+  sh4g_patch_bra(bra_done, *tp);
+  if (out_rA) *out_rA = rA;
+  if (out_rD) *out_rD = rD;
+  return 1;
+}
+
+/* Fuse a run of 2..8 consecutive Thumb SP-relative word loads/stores
+ * (`LDR/STR Rd, [SP, #imm8*4]`, 0x9000..0x9FFF) with max offset <= 60 bytes.
+ * Validates canonical aligned IWRAM SP + straddle + store SMC tags ONCE,
+ * then runs all loads/stores inline (5 insns each vs ~28 insns + JSR/JMP). */
+static inline int sh4g_thumb_sp_run_native(u8 **tp, const u32 *ops,
+  const int *ccs, int cnt, u32 pc)
+{
+  u8 is_load[8], rd[8], woff[8];
+  u32 max_off = 0u, store_wmask = 0u;
+  int has_store = 0, k;
+  u8 *miss[3], *bra_done;
+  int nmiss = 0;
+
+  if (cnt < 2 || cnt > 8) return 0;
+  for (k = 0; k < cnt; k++) {
+    u32 op = ops[k];
+    u32 off;
+    if ((op & 0xF000u) != 0x9000u) return 0;
+    off = (op & 0xFFu) << 2;
+    if (off > 60u) return 0;
+    is_load[k] = (u8)((op >> 11) & 1u);
+    rd[k] = (u8)((op >> 8) & 7u);
+    woff[k] = (u8)(off >> 2);
+    if (off > max_off) max_off = off;
+    if (!is_load[k]) {
+      has_store = 1;
+      store_wmask |= (1u << woff[k]);
+    }
+  }
+
+  sh4g_litseg_reserve_bytes(tp, 5, (u32)(72 + cnt * 16));
+
+  /* Guard 1: SP in canonical IWRAM [0x03000000, 0x03007FFF - max_off - 3] & aligned. */
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_load_greg(&cg, 13, SH4_REG_T0);          /* R1 = reg[SP] */
+    sh4g_close(tp, &cg); }
+  sh4g_const(tp, 0x03000000u, SH4_REG_ARG0);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
+    sh4_emit_sub(&cg, SH4_REG_ARG0, SH4_REG_RET);     /* R0 = SP - 0x03000000 */
+    sh4g_close(tp, &cg); }
+  sh4g_const(tp, 0x8000u - (max_off + 3u), SH4_REG_T1);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_cmphs(&cg, SH4_REG_T1, SH4_REG_RET);     /* out of bounds? */
+    sh4g_close(tp, &cg); }
+  miss[nmiss++] = sh4g_emit_bt_placeholder(tp);
+
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_tst_imm(&cg, 3);                         /* word aligned? */
+    sh4g_close(tp, &cg); }
+  miss[nmiss++] = sh4g_emit_bf_placeholder(tp);
+
+  /* Guard 2: if any store, verify all destination IWRAM SMC tags are 0. */
+  if (has_store) {
+    int first = 1, w;
+    sh4g_const(tp, (u32)(uintptr_t)iwram, SH4_REG_T2);
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_add_reg(&cg, SH4_REG_RET, SH4_REG_T2); /* R3 = iwram + sp_off */
+      for (w = 0; w < 16; w++) {
+        if (!(store_wmask & (1u << w))) continue;
+        if (first) {
+          if (w == 0) sh4_emit_mov_l_load(&cg, SH4_REG_T2, SH4_REG_ARG0);
+          else        sh4_emit_mov_l_load_disp(&cg, SH4_REG_T2, SH4_REG_ARG0, (unsigned)w);
+          first = 0;
+        } else {
+          sh4_emit_mov_l_load_disp(&cg, SH4_REG_T2, SH4_REG_T1, (unsigned)w);
+          sh4_emit_or(&cg, SH4_REG_T1, SH4_REG_ARG0);
+        }
+      }
+      sh4_emit_tst(&cg, SH4_REG_ARG0, SH4_REG_ARG0);  /* T = all tags clear */
+      sh4g_close(tp, &cg); }
+    miss[nmiss++] = sh4g_emit_bf_placeholder(tp);
+  }
+
+  /* Hot body: zero guards, zero JSR/RTS, 5 insns per word load/store. */
+  sh4g_vec_load(tp, SH4G_VEC_iwram_data, SH4_REG_T2);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_add_reg(&cg, SH4_REG_RET, SH4_REG_T2);   /* R3 = iwram_data + sp_off */
+    for (k = 0; k < cnt; k++) {
+      unsigned w = woff[k];
+      if (is_load[k]) {
+        if (w == 0u) sh4_emit_mov_l_load(&cg, SH4_REG_T2, SH4_REG_T0);
+        else         sh4_emit_mov_l_load_disp(&cg, SH4_REG_T2, SH4_REG_T0, w);
+        sh4_emit_swap_b(&cg, SH4_REG_T0, SH4_REG_T1);
+        sh4_emit_swap_w(&cg, SH4_REG_T1, SH4_REG_T1);
+        sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T0);
+        sh4_emit_store_greg(&cg, SH4_REG_T0, rd[k]);
+      } else {
+        sh4_emit_load_greg(&cg, rd[k], SH4_REG_T0);
+        sh4_emit_swap_b(&cg, SH4_REG_T0, SH4_REG_T1);
+        sh4_emit_swap_w(&cg, SH4_REG_T1, SH4_REG_T1);
+        sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
+        if (w == 0u) sh4_emit_mov_l_store(&cg, SH4_REG_T1, SH4_REG_T2);
+        else         sh4_emit_mov_l_store_disp(&cg, SH4_REG_T1, SH4_REG_T2, w);
+      }
+    }
+    sh4g_close(tp, &cg); }
+  bra_done = *tp;
+  sh4g_u16(tp, 0xA000);                               /* BRA done */
+  sh4g_u16(tp, (uint16_t)(0x7000 | (SH4_REG_CYCLES << 8) | ((-cnt) & 0xFF)));
+
+  /* Cold fallback: exact normal emission (no guest state mutated on miss). */
+  while (nmiss)
+    sh4g_patch_cond(miss[--nmiss], *tp);
+  for (k = 0; k < cnt; k++) {
+    sh4_greg_forward_reset();
+    sh4g_thumb_ldst_native(tp, ops[k], pc + (u32)(k * 2), ccs[k]);
+  }
+  sh4g_patch_bra(bra_done, *tp);
+  return 1;
+}
+
+/* Fuse a run of 2..6 consecutive Thumb `(STRH rD, [rB, #0]; ADD rB, #even_step)`
+ * pairs (dead ADD flags, rD != rB, max store offset <= 30, total step <= 127).
+ * Validates canonical aligned IWRAM rB + straddle + halfword SMC tags ONCE,
+ * writes all halfwords inline (reusing swapped R0 when rD repeats), advances
+ * rB once, and debits npairs IWRAM cycles once. */
+static inline int sh4g_thumb_strh_stride_run_native(u8 **tp, const u32 *ops,
+  const int *ccs, int npairs, u32 pc)
+{
+  unsigned rB, rd[6];
+  u32 step[6], off[6], total_step = 0u;
+  int p;
+  u8 *miss[3], *bra_done;
+  int nmiss = 0;
+
+  if (npairs < 2 || npairs > 6) return 0;
+  if ((ops[0] & 0xFFC0u) != 0x8000u) return 0;
+  rB = (ops[0] >> 3) & 7u;
+  for (p = 0; p < npairs; p++) {
+    u32 op_s = ops[p * 2];
+    u32 op_a = ops[p * 2 + 1];
+    if ((op_s & 0xFFC0u) != 0x8000u || ((op_s >> 3) & 7u) != rB) return 0;
+    rd[p] = op_s & 7u;
+    if (rd[p] == rB) return 0;
+    if ((op_a & 0xFF00u) != (0x3000u | (rB << 8))) return 0;
+    step[p] = op_a & 0xFFu;
+    if (step[p] == 0u || (step[p] & 1u) != 0u) return 0;
+    off[p] = total_step;
+    if (off[p] > 30u) return 0;
+    total_step += step[p];
+    if (total_step > 127u) return 0;
+  }
+
+  sh4g_litseg_reserve_bytes(tp, 5, (u32)(96 + npairs * 16));
+
+  /* Guard 1: rB in canonical aligned IWRAM with zero 32 KiB wrap. */
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_load_greg(&cg, rB, SH4_REG_T0);          /* R1 = reg[rB] */
+    sh4g_close(tp, &cg); }
+  sh4g_const(tp, 0x03000000u, SH4_REG_ARG0);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
+    sh4_emit_sub(&cg, SH4_REG_ARG0, SH4_REG_RET);     /* R0 = rB - 0x03000000 */
+    sh4g_close(tp, &cg); }
+  sh4g_const(tp, 0x8000u - (off[npairs - 1] + 2u), SH4_REG_T1);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_cmphs(&cg, SH4_REG_T1, SH4_REG_RET);
+    sh4g_close(tp, &cg); }
+  miss[nmiss++] = sh4g_emit_bt_placeholder(tp);
+
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_tst_imm(&cg, 1);                         /* halfword aligned? */
+    sh4_emit_mov_reg(&cg, SH4_REG_RET, SH4_REG_ARG1); /* R5 = iw_off */
+    sh4g_close(tp, &cg); }
+  miss[nmiss++] = sh4g_emit_bf_placeholder(tp);
+
+  /* Guard 2: verify every destination IWRAM halfword SMC tag is 0. */
+  sh4g_const(tp, (u32)(uintptr_t)iwram, SH4_REG_T2);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_add_reg(&cg, SH4_REG_ARG1, SH4_REG_T2);  /* R3 = iwram + iw_off */
+    sh4_emit_mov_w_load(&cg, SH4_REG_T2, SH4_REG_ARG0); /* off[0] == 0 */
+    for (p = 1; p < npairs; p++) {
+      sh4_emit_mov_w_load_disp(&cg, SH4_REG_T2, off[p] >> 1);
+      sh4_emit_or(&cg, SH4_REG_RET, SH4_REG_ARG0);
+    }
+    sh4_emit_tst(&cg, SH4_REG_ARG0, SH4_REG_ARG0);    /* T = all tags clear */
+    sh4g_close(tp, &cg); }
+  miss[nmiss++] = sh4g_emit_bf_placeholder(tp);
+
+  /* Hot body: write all npairs halfwords inline, commit rB += total_step. */
+  sh4g_vec_load(tp, SH4G_VEC_iwram_data, SH4_REG_T2);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_add_reg(&cg, SH4_REG_ARG1, SH4_REG_T2);  /* R3 = iwram_data + off */
+    for (p = 0; p < npairs; p++) {
+      if (p == 0 || rd[p] != rd[p - 1]) {
+        sh4_emit_load_greg(&cg, rd[p], SH4_REG_RET);
+        sh4_emit_swap_b(&cg, SH4_REG_RET, SH4_REG_RET);
+      }
+      if (off[p] == 0u) sh4_emit_mov_w_store(&cg, SH4_REG_RET, SH4_REG_T2);
+      else              sh4_emit_mov_w_store_disp(&cg, SH4_REG_T2, off[p] >> 1);
+    }
+    sh4_emit_add_imm(&cg, (int)total_step, SH4_REG_T0);
+    sh4_emit_store_greg(&cg, SH4_REG_T0, rB);
+    sh4g_close(tp, &cg); }
+  bra_done = *tp;
+  sh4g_u16(tp, 0xA000);                               /* BRA done */
+  sh4g_u16(tp, (uint16_t)(0x7000 | (SH4_REG_CYCLES << 8) | ((-npairs) & 0xFF)));
+
+  /* Cold fallback: exact per-pair emission (ADD flags were proven dead). */
+  while (nmiss)
+    sh4g_patch_cond(miss[--nmiss], *tp);
+  for (p = 0; p < npairs; p++) {
+    sh4_greg_forward_reset();
+    sh4g_thumb_ldst_native(tp, ops[p * 2], pc + (u32)(p * 4), ccs[p * 2]);
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_load_greg(&cg, rB, SH4_REG_T0);
+      sh4_emit_add_imm(&cg, (int)step[p], SH4_REG_T0);
+      sh4_emit_store_greg(&cg, SH4_REG_T0, rB);
+      sh4g_close(tp, &cg); }
+  }
+  sh4g_patch_bra(bra_done, *tp);
+  return 1;
+}
+#endif
 
 /* Set CPSR bit29 (C) to the constant c (0/1), preserving the rest. Used for the
  * ARM logical-with-immediate shifter carry, which is a translate-time constant. */
@@ -1103,33 +1553,71 @@ static inline void sh4g_arm_load_op2(u8 **tp, int is_imm, u32 op2, unsigned rm,
  * vs arm_shifter_operand. Does NOT compute the shifter carry (arith ops take C/V
  * from the ALU; logical+S handles the carry separately). SH4 shld/shad take a
  * signed amount: +n left, -n right, with mov #imm sign-extending. */
-static inline void sh4g_arm_shift_imm_op2(u8 **tp, u32 type, u32 amount, unsigned rm)
+static inline void sh4g_arm_shift_imm_reg(u8 **tp, u32 type, u32 amount,
+                                          unsigned rm, unsigned dst)
 {
   sh4_codegen cg = sh4g_open(tp);
-  const unsigned op2 = SH4_REG_T1;                 /* R2 */
-  sh4_emit_load_greg(&cg, rm, op2);
+  sh4_emit_load_greg(&cg, rm, dst);
   if (type == 0) {                                 /* LSL #amount (amount 1..31) */
-    sh4_emit_mov_imm(&cg, (int)amount, SH4_REG_RET);
-    sh4_emit_shld(&cg, SH4_REG_RET, op2);
+    switch (amount) {
+    case 1:  sh4_emit_shll(&cg, dst); break;
+    case 2:  sh4_emit_shll2(&cg, dst); break;
+    case 8:  sh4_emit_shll8(&cg, dst); break;
+    case 16: sh4_emit_shll16(&cg, dst); break;
+    case 24: sh4_emit_shll16(&cg, dst); sh4_emit_shll8(&cg, dst); break;
+    default:
+      sh4_emit_mov_imm(&cg, (int)amount, SH4_REG_RET);
+      sh4_emit_shld(&cg, SH4_REG_RET, dst);
+      break;
+    }
   } else if (type == 1) {                          /* LSR */
-    if (amount == 0) {                             /* LSR #32 -> 0 */
-      sh4_emit_mov_imm(&cg, 0, op2);
-    } else {
+    switch (amount) {
+    case 0:  sh4_emit_mov_imm(&cg, 0, dst); break; /* LSR #32 -> 0 */
+    case 1:  sh4_emit_shlr(&cg, dst); break;
+    case 2:  sh4_emit_shlr2(&cg, dst); break;
+    case 8:  sh4_emit_shlr8(&cg, dst); break;
+    case 16: sh4_emit_shlr16(&cg, dst); break;
+    case 24: sh4_emit_shlr16(&cg, dst); sh4_emit_shlr8(&cg, dst); break;
+    default:
       sh4_emit_mov_imm(&cg, -(int)amount, SH4_REG_RET);
-      sh4_emit_shld(&cg, SH4_REG_RET, op2);        /* logical right */
+      sh4_emit_shld(&cg, SH4_REG_RET, dst);        /* logical right */
+      break;
     }
   } else if (type == 2) {                          /* ASR */
-    sh4_emit_mov_imm(&cg, amount == 0 ? -32 : -(int)amount, SH4_REG_RET);
-    sh4_emit_shad(&cg, SH4_REG_RET, op2);          /* arithmetic right (#32 = sign) */
+    if (amount == 1) {
+      sh4_emit_shar(&cg, dst);
+    } else {
+      sh4_emit_mov_imm(&cg, amount == 0 ? -32 : -(int)amount, SH4_REG_RET);
+      sh4_emit_shad(&cg, SH4_REG_RET, dst);        /* arithmetic right (#32 = sign) */
+    }
+  } else if (amount == 16) {                       /* ROR #16 */
+    sh4_emit_swap_w(&cg, dst, dst);
+  } else if (amount == 8) {                        /* ROR #8: (v>>8)|(v<<24) */
+    sh4_emit_mov_reg(&cg, dst, SH4_REG_T2);
+    sh4_emit_shlr8(&cg, dst);
+    sh4_emit_shll16(&cg, SH4_REG_T2);
+    sh4_emit_shll8(&cg, SH4_REG_T2);
+    sh4_emit_or(&cg, SH4_REG_T2, dst);
+  } else if (amount == 24) {                       /* ROR #24: (v>>24)|(v<<8) */
+    sh4_emit_mov_reg(&cg, dst, SH4_REG_T2);
+    sh4_emit_shll8(&cg, dst);
+    sh4_emit_shlr16(&cg, SH4_REG_T2);
+    sh4_emit_shlr8(&cg, SH4_REG_T2);
+    sh4_emit_or(&cg, SH4_REG_T2, dst);
   } else {                                         /* ROR #n (n = 1..31) */
-    sh4_emit_mov_reg(&cg, op2, SH4_REG_T2);        /* R3 = v */
+    sh4_emit_mov_reg(&cg, dst, SH4_REG_T2);        /* R3 = v */
     sh4_emit_mov_imm(&cg, -(int)amount, SH4_REG_RET);
-    sh4_emit_shld(&cg, SH4_REG_RET, op2);          /* T1 = v >> n */
+    sh4_emit_shld(&cg, SH4_REG_RET, dst);          /* dst = v >> n */
     sh4_emit_mov_imm(&cg, (int)(32 - amount), SH4_REG_RET);
     sh4_emit_shld(&cg, SH4_REG_RET, SH4_REG_T2);   /* R3 = v << (32-n) */
-    sh4_emit_or(&cg, SH4_REG_T2, op2);             /* T1 = ROR(v, n) */
+    sh4_emit_or(&cg, SH4_REG_T2, dst);             /* dst = ROR(v, n) */
   }
   sh4g_close(tp, &cg);
+}
+
+static inline void sh4g_arm_shift_imm_op2(u8 **tp, u32 type, u32 amount, unsigned rm)
+{
+  sh4g_arm_shift_imm_reg(tp, type, amount, rm, SH4_REG_T1);
 }
 
 /* Set CPSR bit29 (C) from bit0 of creg (a 0/1 value), preserving the rest. For
@@ -1325,8 +1813,20 @@ static inline int sh4g_arm_dp_native(u8 **tp, u32 opcode, u32 pc, u32 flag_statu
   case 0x2: case 0x4: case 0xA: case 0xB: {      /* SUB / ADD / CMP / CMN */
     int is_sub = (op == 0x2 || op == 0xA);
     int write  = (op == 0x2 || op == 0x4);
+    int op2_first = 0;
     if (!write && !fm)
       return 1;                                  /* CMP/CMN, flags dead: nop */
+#if CGBA_SH4_REG_FORWARD
+    if (op == 0x4 && !is_imm && !shifted && rn != 15 && rm != 15 &&
+        *tp == sh4_forward_at && rm == sh4_forward_guest && rn != rm) {
+      u32 tmp = rn; rn = rm; rm = tmp;
+    } else if (shifted && !reg_shifted && rm != 15 &&
+               *tp == sh4_forward_at && rm == sh4_forward_guest && rn != rm) {
+      op2_first = 1;
+    }
+#endif
+    if (op2_first)
+      sh4g_arm_shift_imm_op2(tp, shift_type, shift_amount, rm);
     if (rn == 15) {
       sh4g_const(tp, pc + 8, SH4_REG_T0);        /* rn = PC: constant */
     } else {
@@ -1334,14 +1834,29 @@ static inline int sh4g_arm_dp_native(u8 **tp, u32 opcode, u32 pc, u32 flag_statu
       sh4_emit_load_greg(&cg, rn, SH4_REG_T0);
       sh4g_close(tp, &cg);
     }
-    if (shifted) sh4g_arm_shift_imm_op2(tp, shift_type, shift_amount, rm);
-    else         sh4g_arm_load_op2(tp, is_imm, op2, rm, pc);
+    if (is_imm && !fm && write) {
+      int32_t simm = is_sub ? -(int32_t)op2 : (int32_t)op2;
+      if (simm >= -128 && simm <= 127) {
+        sh4_codegen cg = sh4g_open(tp);
+        if (simm != 0)
+          sh4_emit_add_imm(&cg, (int)simm, SH4_REG_T0);
+        sh4_emit_store_greg(&cg, SH4_REG_T0, rd);
+        sh4g_close(tp, &cg);
+        return 1;
+      }
+    }
+    if (!op2_first) {
+      if (shifted) sh4g_arm_shift_imm_op2(tp, shift_type, shift_amount, rm);
+      else         sh4g_arm_load_op2(tp, is_imm, op2, rm, pc);
+    }
     sh4g_dp_addsub(tp, is_sub, rd, write, fm);
     return 1;
   }
   case 0x0: case 0x1: case 0xC: case 0xD:        /* AND/EOR/ORR/MOV */
   case 0xE: case 0xF: case 0x8: case 0x9: {      /* BIC/MVN/TST/TEQ */
     int dpop, write;
+    int op2_first = 0;
+    unsigned mov_reg = SH4_REG_T1;
     switch (op) {
     case 0x0: dpop = SH4DP_AND; write = 1; break;
     case 0x1: dpop = SH4DP_EOR; write = 1; break;
@@ -1354,6 +1869,19 @@ static inline int sh4g_arm_dp_native(u8 **tp, u32 opcode, u32 pc, u32 flag_statu
     }
     if (!write && !fm)
       return 1;                                  /* TST/TEQ, flags dead: nop */
+#if CGBA_SH4_REG_FORWARD
+    if (!is_imm && !shifted && rn != 15 && rm != 15 &&
+        (dpop == SH4DP_AND || dpop == SH4DP_EOR || dpop == SH4DP_ORR) &&
+        *tp == sh4_forward_at && rm == sh4_forward_guest && rn != rm) {
+      u32 tmp = rn; rn = rm; rm = tmp;
+    } else if (shifted && !reg_shifted && !(fm & 0x2) && rm != 15 &&
+               !(dpop == SH4DP_MOV || dpop == SH4DP_MVN) &&
+               *tp == sh4_forward_at && rm == sh4_forward_guest && rn != rm) {
+      op2_first = 1;
+    }
+#endif
+    if (op2_first)
+      sh4g_arm_shift_imm_op2(tp, shift_type, shift_amount, rm);
     if (!(dpop == SH4DP_MOV || dpop == SH4DP_MVN)) { /* MOV/MVN: second only */
       if (rn == 15) {
         sh4g_const(tp, pc + 8, SH4_REG_T0);      /* rn = PC: constant */
@@ -1363,19 +1891,53 @@ static inline int sh4g_arm_dp_native(u8 **tp, u32 opcode, u32 pc, u32 flag_statu
         sh4g_close(tp, &cg);
       }
     }
-    if (reg_shifted) {
+    if (op2_first) {
+      /* op2 already shifted into R2 */
+    } else if (reg_shifted) {
       sh4g_arm_shift_reg_op2_noflags(tp, shift_type, rm, shift_rs);
     } else if (shifted) {                        /* operand2 = shifted reg[rm] */
-      if (fm & 0x2) sh4g_arm_shift_imm_full(tp, shift_type, shift_amount, rm, SH4_REG_ARG2);
-      else          sh4g_arm_shift_imm_op2(tp, shift_type, shift_amount, rm);
+      if (fm & 0x2) {
+        sh4g_arm_shift_imm_full(tp, shift_type, shift_amount, rm, SH4_REG_ARG2);
+      } else {
+#if CGBA_SH4_REG_FORWARD
+        if (dpop == SH4DP_MOV && !fm &&
+            *tp == sh4_forward_at && rm == sh4_forward_guest &&
+            sh4_forward_host == SH4_REG_T0)
+          mov_reg = SH4_REG_T0;                  /* shift R1 in place, skip MOV */
+#endif
+        sh4g_arm_shift_imm_reg(tp, shift_type, shift_amount, rm, mov_reg);
+      }
+    } else if (dpop == SH4DP_AND && is_imm && write &&
+               (op2 == 0xFFu || op2 == 0xFFFFu)) {
+      sh4_codegen cg = sh4g_open(tp);
+      if (op2 == 0xFFu) sh4_emit_extu_b(&cg, SH4_REG_T0, SH4_REG_T0);
+      else              sh4_emit_extu_w(&cg, SH4_REG_T0, SH4_REG_T0);
+      sh4_emit_store_greg(&cg, SH4_REG_T0, rd);
+      sh4g_close(tp, &cg);
+      goto arm_logic_flags;
+    } else if (dpop == SH4DP_BIC && is_imm) {
+      /* Pre-invert immediate at translate time: AND with ~op2 skips NOT. */
+      sh4g_const(tp, ~op2, SH4_REG_T1);
+      dpop = SH4DP_AND;
     } else {
+#if CGBA_SH4_PIN_GUEST_R0
+      if (dpop == SH4DP_MOV && is_imm && !fm && rd == 0) {
+        sh4g_const(tp, op2, SH4_REG_GUEST_R0);
+        return 1;
+      }
+#endif
       sh4g_arm_load_op2(tp, is_imm, op2, rm, pc);
     }
     { sh4_codegen cg = sh4g_open(tp);
-      sh4g_dp_compute(&cg, dpop);
-      if (write)
-        sh4_emit_store_greg(&cg, SH4_REG_T0, rd);
+      if (dpop == SH4DP_MOV && !fm) {
+        sh4_emit_store_greg(&cg, mov_reg, rd);
+      } else {
+        sh4g_dp_compute(&cg, dpop);
+        if (write)
+          sh4_emit_store_greg(&cg, SH4_REG_T0, rd);
+      }
       sh4g_close(tp, &cg); }
+arm_logic_flags:
     if (fm) {                                    /* N/Z; V kept; C from shifter */
       int have_c = (fm & 0x2) && (shifted || c_const >= 0);
       if (have_c) {
@@ -1418,6 +1980,356 @@ static inline int sh4g_arm_dp_native(u8 **tp, u32 opcode, u32 pc, u32 flag_statu
   }
   default: return 0;
   }
+}
+
+/* Fuse ARM `MOVS Rd, Rm{, LSL/LSR/ASR #imm5}` + single conditional
+ * `ADD/SUB{EQ/NE/MI/PL} Rd, Rd, #imm` (non-S) when flags are provably dead
+ * after op1 (e.g., signed division rounding `movs r6, r6, asr #9; addmi r6, r6, #1`).
+ * Emits 7 SH-4 instructions instead of ~34 (no CPSR pack/unpack or carry). */
+static inline int sh4g_arm_movs_cond_addsub_native(u8 **tp, u32 op0, u32 op1)
+{
+  u32 rd = (op0 >> 12) & 0xFu;
+  u32 rm = op0 & 0xFu;
+  u32 sh_type = (op0 >> 5) & 3u;
+  u32 sh_imm = (op0 >> 7) & 0x1Fu;
+  u32 cond = op1 >> 28;
+  u32 op1_alu = (op1 >> 21) & 0xFu;
+  u32 imm = op1 & 0xFFu;
+  u32 rot = ((op1 >> 8) & 0xFu) * 2u;
+  u32 val = rot ? ((imm >> rot) | (imm << (32u - rot))) : imm;
+  int delta;
+  u8 *skip;
+
+  if ((op0 & 0xFFFF0010u) != 0xE1B00000u) return 0;
+  if (rd == 15u || rm == 15u || sh_type > 2u) return 0;
+  if (sh_type != 0u && sh_imm == 0u) return 0;
+  if (cond != 0u && cond != 1u && cond != 4u && cond != 5u) return 0;
+  if ((op1 & 0x0E100000u) != 0x02000000u) return 0;   /* imm, non-S */
+  if (op1_alu != 0x4u && op1_alu != 0x2u) return 0;   /* ADD or SUB */
+  if (((op1 >> 12) & 0xFu) != rd || ((op1 >> 16) & 0xFu) != rd) return 0;
+  if (val > 127u) return 0;
+  delta = (op1_alu == 0x4u) ? (int)val : -(int)val;
+
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_load_greg(&cg, rm, SH4_REG_T0);          /* R1 = reg[rm] */
+    if (sh_imm != 0u) {
+      sh4_emit_mov_imm(&cg, (sh_type == 0u) ? (int)sh_imm : -(int)sh_imm, SH4_REG_RET);
+      if (sh_type == 2u) sh4_emit_shad(&cg, SH4_REG_RET, SH4_REG_T0);
+      else               sh4_emit_shld(&cg, SH4_REG_RET, SH4_REG_T0);
+    }
+    if (cond <= 1u) sh4_emit_tst(&cg, SH4_REG_T0, SH4_REG_T0);
+    else            sh4_emit_cmppz(&cg, SH4_REG_T0);
+    sh4g_close(tp, &cg); }
+  skip = (cond == 1u || cond == 4u) ? sh4g_emit_bt_placeholder(tp)
+                                    : sh4g_emit_bf_placeholder(tp);
+  { sh4_codegen cg = sh4g_open(tp);
+    if (delta != 0)
+      sh4_emit_add_imm(&cg, delta, SH4_REG_T0);
+    sh4g_close(tp, &cg); }
+  sh4g_patch_cond(skip, *tp);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_store_greg(&cg, SH4_REG_T0, rd);
+    sh4g_close(tp, &cg); }
+  return 1;
+}
+
+/* General ARM IWRAM same-Rn same-shift DP run (2..8 ops, non-S, rd!=rn):
+ * caches reg[rn] in R3 and shift amount in R0 across the run (-2 insns and
+ * -1 greg load per op, e.g. audio packing `8x AND rX, r12, rX, LSR #7`). */
+static inline int sh4g_arm_dp_same_rn_run_native(u8 **tp, const u32 *ops, int cnt)
+{
+  u32 op0 = ops[0];
+  u32 alu = (op0 >> 21) & 0xFu;          /* 0x0=AND, 0x1=EOR, 0x4=ADD, 0xC=ORR */
+  unsigned rn = (op0 >> 16) & 0xFu;
+  unsigned sh_type = (op0 >> 5) & 3u;    /* 0=LSL, 1=LSR, 2=ASR */
+  unsigned sh_imm = (op0 >> 7) & 0x1Fu;
+  int i;
+
+  if (cnt < 2 || cnt > 8 || rn == 15u)
+    return 0;
+  if (alu != 0x0u && alu != 0x1u && alu != 0x4u && alu != 0xCu)
+    return 0;
+  if (sh_type > 2u || (sh_type != 0u && sh_imm == 0u))
+    return 0;
+
+  for (i = 0; i < cnt; i++) {
+    u32 op = ops[i];
+    unsigned rd = (op >> 12) & 0xFu;
+    unsigned rm = op & 0xFu;
+    if ((op & 0xFFF00FF0u) != (op0 & 0xFFF00FF0u) ||
+        rd == 15u || rm == 15u || rd == rn)
+      return 0;
+  }
+
+  sh4g_litseg_reserve_bytes(tp, 0, (u32)(8 + cnt * 8));
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_load_greg(&cg, rn, SH4_REG_T2);         /* R3 = reg[rn] */
+    if (sh_imm != 0u)
+      sh4_emit_mov_imm(&cg, (sh_type == 0u) ? (int)sh_imm : -(int)sh_imm, SH4_REG_RET);
+    for (i = 0; i < cnt; i++) {
+      unsigned rd = (ops[i] >> 12) & 0xFu;
+      unsigned rm = ops[i] & 0xFu;
+      sh4_emit_load_greg(&cg, rm, SH4_REG_T0);       /* R1 = reg[rm] */
+      if (sh_imm != 0u) {
+        if (sh_type == 2u)
+          sh4_emit_shad(&cg, SH4_REG_RET, SH4_REG_T0);
+        else
+          sh4_emit_shld(&cg, SH4_REG_RET, SH4_REG_T0);
+      }
+      if (alu == 0x0u)      sh4_emit_and(&cg, SH4_REG_T2, SH4_REG_T0);
+      else if (alu == 0x1u) sh4_emit_xor(&cg, SH4_REG_T2, SH4_REG_T0);
+      else if (alu == 0x4u) sh4_emit_add_reg(&cg, SH4_REG_T2, SH4_REG_T0);
+      else                  sh4_emit_or(&cg, SH4_REG_T2, SH4_REG_T0);
+      sh4_emit_store_greg(&cg, SH4_REG_T0, rd);
+    }
+    sh4g_close(tp, &cg); }
+  return 1;
+}
+
+/* General ARM same-Rd accumulator DP run (2..8 ops, non-S, rd==rn==accum,
+ * rm!=accum, register op2 with optional immediate LSL/LSR/ASR): keeps reg[rd]
+ * live in R1 across the entire run, saving 2 greg memops per op (e.g.
+ * `3x ADD r6, r6, rX` or `3x ORR r4, r4, rX, LSL #8/#16/#24`). */
+static inline int sh4g_arm_dp_same_rd_run_native(u8 **tp, const u32 *ops, int cnt)
+{
+  unsigned rd = (ops[0] >> 12) & 0xFu;
+  int i;
+
+  if (cnt < 2 || cnt > 8 || rd == 15u)
+    return 0;
+
+  for (i = 0; i < cnt; i++) {
+    u32 op = ops[i];
+    u32 alu = (op >> 21) & 0xFu;
+    unsigned rn = (op >> 16) & 0xFu;
+    unsigned rm = op & 0xFu;
+    unsigned sh_type = (op >> 5) & 3u;
+    unsigned sh_imm = (op >> 7) & 0x1Fu;
+    if ((op & 0xFE100010u) != 0xE0000000u) return 0;
+    if (alu != 0x0u && alu != 0x1u && alu != 0x2u && alu != 0x4u && alu != 0xCu)
+      return 0;
+    if (((op >> 12) & 0xFu) != rd || rn != rd || rm == 15u || rm == rd)
+      return 0;
+    if (sh_type > 2u || (sh_type != 0u && sh_imm == 0u))
+      return 0;
+  }
+
+  sh4g_litseg_reserve_bytes(tp, 0, (u32)(8 + cnt * 12));
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_load_greg(&cg, rd, SH4_REG_T0);          /* R1 = accum */
+    sh4g_close(tp, &cg); }
+  for (i = 0; i < cnt; i++) {
+    u32 op = ops[i];
+    u32 alu = (op >> 21) & 0xFu;
+    unsigned rm = op & 0xFu;
+    unsigned sh_type = (op >> 5) & 3u;
+    unsigned sh_imm = (op >> 7) & 0x1Fu;
+    if (sh_imm != 0u) {
+      sh4g_arm_shift_imm_op2(tp, sh_type, sh_imm, rm); /* R2 = op2, R1 intact */
+    } else {
+      sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_load_greg(&cg, rm, SH4_REG_T1);
+      sh4g_close(tp, &cg);
+    }
+    { sh4_codegen cg = sh4g_open(tp);
+      if (alu == 0x0u)      sh4_emit_and(&cg, SH4_REG_T1, SH4_REG_T0);
+      else if (alu == 0x1u) sh4_emit_xor(&cg, SH4_REG_T1, SH4_REG_T0);
+      else if (alu == 0x2u) sh4_emit_sub(&cg, SH4_REG_T1, SH4_REG_T0);
+      else if (alu == 0x4u) sh4_emit_add_reg(&cg, SH4_REG_T1, SH4_REG_T0);
+      else                  sh4_emit_or(&cg, SH4_REG_T1, SH4_REG_T0);
+      sh4g_close(tp, &cg); }
+  }
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_store_greg(&cg, SH4_REG_T0, rd);
+    sh4g_close(tp, &cg); }
+  return 1;
+}
+
+/* ---- Fused CMP / TST / SUBS / ADDS / NZ-ALU / SHIFT + Bcc on SH-4 T bit - *
+ * Evaluates the compare/test/add/sub/shift/logical condition directly into
+ * SH-4 T without packing/unpacking CPSR NZCV on any edge where the flags are
+ * provably dead. On any live edge AND on the cold R13 <= 0 slow path before
+ * sh4_block_exit, the exact architectural flags are materialized into R8 so
+ * CPSR is 100% bit-exact at every cycle gate, IRQ, and frame boundary.
+ *
+ * Caller has loaded operand `a` in R1 (SH4_REG_T0) and `b` in R2 (SH4_REG_T1),
+ * verified (taken_dead || fall_dead), and reserved literal pool space.
+ * kind: 0 = CMP(a-b), 1 = TST(a&b), 2 = SUBS(rd=a-b), 3 = ADDS(rd=a+b),
+ *       4 = CMP(a,#0), 5 = precomputed NZ-only result in R1 (reg[rd] written),
+ *       6 = precomputed LSL/LSR/ASR #imm5 result in R1 (reg[rd] written),
+ *           original Rs in R2, extra = carry_shift (-31..0).                 */
+static inline void sh4g_fused_mat_flags(u8 **tp, int kind, int extra)
+{
+  if (kind == 0) {
+    sh4g_dp_addsub(tp, 1, 0, 0, 0xF);
+  } else if (kind == 4) {                                /* CMP a, #0 (b uninit) */
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_imm(&cg, 0, SH4_REG_T1);
+      sh4g_close(tp, &cg); }
+    sh4g_dp_addsub(tp, 1, 0, 0, 0xF);
+  } else if (kind == 1) {
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_and(&cg, SH4_REG_T1, SH4_REG_T0);
+      sh4g_close(tp, &cg); }
+    sh4g_set_nz_m(tp, SH4_REG_T0, 0xC);
+  } else if (kind == 5) {                                /* NZ-only result in R1 */
+    sh4g_set_nz_m(tp, SH4_REG_T0, 0xC);
+  } else if (kind == 6) {                                /* shift imm5: R1=res, R2=orig */
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_reg(&cg, SH4_REG_T1, SH4_REG_ARG0);
+      if (extra != 0) {
+        sh4_emit_mov_imm(&cg, extra, SH4_REG_RET);
+        sh4_emit_shld(&cg, SH4_REG_RET, SH4_REG_ARG0);
+      }
+      sh4_emit_mov_reg(&cg, SH4_REG_ARG0, SH4_REG_RET);
+      sh4_emit_and_imm(&cg, 1);
+      sh4_emit_mov_reg(&cg, SH4_REG_RET, SH4_REG_ARG0);
+      sh4g_close(tp, &cg); }
+    sh4g_set_flags(tp, SH4_REG_T0, SH4_REG_ARG0, SH4_REG_ARG0, 0xE);
+  } else if (kind == 2) {
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_add_reg(&cg, SH4_REG_T1, SH4_REG_T0);     /* restore a = res + b */
+      sh4g_close(tp, &cg); }
+    sh4g_dp_addsub(tp, 1, 0, 0, 0xF);
+  } else {
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_sub(&cg, SH4_REG_T1, SH4_REG_T0);         /* restore a = res - b */
+      sh4g_close(tp, &cg); }
+    sh4g_dp_addsub(tp, 0, 0, 0, 0xF);
+  }
+}
+
+static inline u8 *sh4g_emit_fused_cmp_bcc_ex(
+  u8 **tp, int kind, unsigned rd, unsigned cond,
+  int taken_debit, uint32_t target_pc, int is_internal,
+  const void *block_exit_fn, int taken_dead, int fall_dead, int extra)
+{
+  const unsigned a = SH4_REG_T0;                         /* R1 */
+  const unsigned b = SH4_REG_T1;                         /* R2 */
+  int skip_if_true = 0;
+  u8 *skip, *site;
+
+  { sh4_codegen cg = sh4g_open(tp);
+    if (kind == 4) {                                     /* CMP a, #0 (no R2!) */
+      switch (cond) {
+      case 0x0: sh4_emit_tst(&cg, a, a);   skip_if_true = 0; break; /* EQ */
+      case 0x1: sh4_emit_tst(&cg, a, a);   skip_if_true = 1; break; /* NE */
+      case 0xA: sh4_emit_cmppz(&cg, a);    skip_if_true = 0; break; /* GE */
+      case 0xB: sh4_emit_cmppz(&cg, a);    skip_if_true = 1; break; /* LT */
+      case 0xC: sh4_emit_cmppl(&cg, a);    skip_if_true = 0; break; /* GT */
+      default:  sh4_emit_cmppl(&cg, a);    skip_if_true = 1; break; /* 0xD LE */
+      }
+    } else if (kind == 0) {                              /* CMP a, b */
+      switch (cond) {
+      case 0x0: sh4_emit_cmpeq(&cg, b, a); skip_if_true = 0; break;
+      case 0x1: sh4_emit_cmpeq(&cg, b, a); skip_if_true = 1; break;
+      case 0x2: sh4_emit_cmphs(&cg, b, a); skip_if_true = 0; break;
+      case 0x3: sh4_emit_cmphs(&cg, b, a); skip_if_true = 1; break;
+      case 0x8: sh4_emit_cmphi(&cg, b, a); skip_if_true = 0; break;
+      case 0x9: sh4_emit_cmphi(&cg, b, a); skip_if_true = 1; break;
+      case 0xA: sh4_emit_cmpge(&cg, b, a); skip_if_true = 0; break;
+      case 0xB: sh4_emit_cmpge(&cg, b, a); skip_if_true = 1; break;
+      case 0xC: sh4_emit_cmpgt(&cg, b, a); skip_if_true = 0; break;
+      default:  sh4_emit_cmpgt(&cg, b, a); skip_if_true = 1; break; /* 0xD LE */
+      }
+    } else if (kind == 1) {                              /* TST a, b */
+      sh4_emit_tst(&cg, b, a);
+      skip_if_true = (cond == 0x1);
+    } else if (kind == 5 || kind == 6) {                 /* precomputed in R1 */
+      if (cond == 0x0 || cond == 0x1) {
+        sh4_emit_tst(&cg, a, a);
+        skip_if_true = (cond == 0x1);
+      } else if (cond == 0x4 || cond == 0x5) {           /* MI (0x4) / PL (0x5) */
+        sh4_emit_cmppz(&cg, a);
+        skip_if_true = (cond == 0x4);
+      } else {                                           /* CS (0x2) / CC (0x3) for kind==6 */
+        sh4_emit_mov_reg(&cg, b, SH4_REG_RET);
+        if (extra != 0) {
+          sh4_emit_mov_imm(&cg, extra, SH4_REG_T2);
+          sh4_emit_shld(&cg, SH4_REG_T2, SH4_REG_RET);
+        }
+        sh4_emit_tst_imm(&cg, 1);                        /* T = (C == 0) */
+        skip_if_true = (cond == 0x2);
+      }
+    } else {                                             /* SUBS / ADDS */
+      if (kind == 2) sh4_emit_sub(&cg, b, a);
+      else           sh4_emit_add_reg(&cg, b, a);
+      sh4_emit_store_greg(&cg, a, rd);
+      if (cond == 0x0 || cond == 0x1) {
+        sh4_emit_tst(&cg, a, a);
+        skip_if_true = (cond == 0x1);
+      } else {                                           /* MI (0x4) / PL (0x5) */
+        sh4_emit_cmppz(&cg, a);
+        skip_if_true = (cond == 0x4);
+      }
+    }
+    sh4g_close(tp, &cg); }
+
+  skip = skip_if_true ? sh4g_emit_bt_placeholder(tp)
+                      : sh4g_emit_bf_placeholder(tp);
+
+  /* --- TAKEN path (R1, R2 still intact!) --- */
+  sh4g_cycle_debit_r0(tp, taken_debit);
+  if (taken_dead) {
+    u8 *bt, *bt2 = NULL;
+    { sh4_codegen cg = sh4g_open(tp);
+      if (taken_dead == 1) {
+        sh4_emit_cmppl(&cg, SH4_REG_CYCLES);             /* T = (cycles > 0) */
+      } else {
+        /* External ROM lookahead (step 1..5): require cycles > 96 so neither a
+         * mid-block gate nor cold-interp chunk can stop before the killer. */
+        sh4_emit_mov_imm(&cg, 96, SH4_REG_RET);
+        sh4_emit_cmpgt(&cg, SH4_REG_RET, SH4_REG_CYCLES); /* T = (cycles > 96) */
+      }
+      sh4g_close(tp, &cg); }
+    bt = sh4g_emit_bt_placeholder(tp);                   /* 98%+: hot jump, skip CPSR */
+    sh4g_fused_mat_flags(tp, kind, extra);               /* cold: exact CPSR */
+    if (taken_dead != 1) {
+      /* 0 < cycles <= 96: CPSR is now exact; still jump to target without
+       * calling update_gba prematurely. */
+      sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_cmppl(&cg, SH4_REG_CYCLES);               /* T = (cycles > 0) */
+      sh4g_close(tp, &cg);
+      bt2 = sh4g_emit_bt_placeholder(tp);
+    }
+    sh4g_const(tp, target_pc, SH4_REG_ARG0);
+    sh4g_block_exit_jmp(tp);
+    sh4g_patch_cond(bt, *tp);
+    if (bt2)
+      sh4g_patch_cond(bt2, *tp);
+    if (is_internal) {
+      site = sh4g_emit_patch_jump(tp);                   /* patched -> BRA body_offset */
+    } else {
+      sh4g_const(tp, target_pc, SH4_REG_ARG0);           /* R4 = target_pc (lazy link) */
+#if CGBA_SH4_LAZY_CHAIN
+      site = sh4g_emit_patch_call(tp);
+#else
+      site = sh4g_emit_patch_jump(tp);
+#endif
+      sh4g_patch_jump(site, block_exit_fn);
+    }
+  } else {
+    sh4g_fused_mat_flags(tp, kind, extra);
+    site = is_internal ? sh4g_branch_exit_internal(tp, target_pc)
+                       : sh4g_branch_exit(tp, target_pc, block_exit_fn);
+  }
+
+  /* --- NOT-TAKEN fallthrough (R1, R2 still intact!) --- */
+  sh4g_patch_cond(skip, *tp);
+  if (!fall_dead)
+    sh4g_fused_mat_flags(tp, kind, extra);
+
+  return site;
+}
+
+static inline u8 *sh4g_emit_fused_cmp_bcc(
+  u8 **tp, int kind, unsigned rd, unsigned cond,
+  int taken_debit, uint32_t target_pc, int is_internal,
+  const void *block_exit_fn, int taken_dead, int fall_dead)
+{
+  return sh4g_emit_fused_cmp_bcc_ex(
+    tp, kind, rd, cond, taken_debit, target_pc, is_internal,
+    block_exit_fn, taken_dead, fall_dead, 0);
 }
 
 #endif /* CGBA_SH4_THUMB_DP_EMIT_H */

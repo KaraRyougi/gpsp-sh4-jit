@@ -79,9 +79,15 @@ static inline void sh4g_close(u8 **tp, sh4_codegen *cg) { *tp = cg->ptr; }
 
 static inline void sh4g_u16(u8 **tp, uint16_t op)
 {
+#if defined(__sh__) && defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+  u8 *p = *tp;
+  *(uint16_t *)p = op;
+  *tp = p + 2;
+#else
   sh4_codegen cg = sh4g_open(tp);
   sh4_emit_u16(&cg, op);
   sh4g_close(tp, &cg);
+#endif
 }
 
 /* ---- constant materialization (self-contained) --------------------------- */
@@ -207,10 +213,10 @@ extern unsigned long cgba_em_pool_flush_n, cgba_em_pool_bytes;
 #define SH4G_POOLSTAT(expr) ((void)0)
 #endif
 
-static inline void sh4g_litseg_flush(u8 **tp)
+static inline void sh4g_litseg_flush_mode(u8 **tp, int emit_bra)
 {
-  u8 *bra;
-  int i, j;
+  u8 *bra = NULL;
+  int i;
   unsigned unique = 0;
   unsigned long bytes0;
 
@@ -218,49 +224,78 @@ static inline void sh4g_litseg_flush(u8 **tp)
     return;
 
   bytes0 = (unsigned long)(uintptr_t)*tp;
-  bra = *tp;
-  sh4g_u16(tp, 0xA000);                              /* BRA over pool */
-  sh4g_u16(tp, 0x0009);                              /* delay NOP */
+  if (emit_bra) {
+    bra = *tp;
+    sh4g_u16(tp, 0xA000);                              /* BRA over pool */
+    sh4g_u16(tp, 0x0009);                              /* delay NOP */
+  }
   if ((uintptr_t)*tp & 3u)
     sh4g_u16(tp, 0x0009);
 
-  for (i = 0; i < sh4g_litseg.nrefs; i++) {
-    u8 *entry;
-    int prior = 0;
-    for (j = 0; j < i; j++) {
-      if (sh4g_litseg.refs[j].value == sh4g_litseg.refs[i].value) {
-        prior = 1;
-        break;
+  {
+    /* Generation-stamped 64-entry open-addressed table for O(1) exact dedup
+     * (SH4G_LITSEG_MAX_REFS=48 < 64 guarantees >=16 free slots). */
+    static uint16_t hgen = 0;
+    static uint16_t htag[64];
+    static uint32_t hval[64];
+    static u8      *hent[64];
+    int nrefs = sh4g_litseg.nrefs;
+    u8 *cur = *tp;
+    uint16_t gen = (uint16_t)(hgen + 1u);
+    if (__builtin_expect(gen == 0u, 0)) {
+      int z;
+      for (z = 0; z < 64; z++) htag[z] = 0u;
+      gen = 1u;
+    }
+    hgen = gen;
+    for (i = 0; i < nrefs; i++) {
+      uint32_t v = sh4g_litseg.refs[i].value;
+      u8 *site = sh4g_litseg.refs[i].site;
+      u8 *entry;
+      unsigned slot = ((v >> 2) ^ (v >> 10) ^ (v >> 18)) & 63u;
+      uintptr_t site_base;
+      while (htag[slot] == gen) {
+        if (hval[slot] == v) {
+          entry = hent[slot];
+          goto have_entry;
+        }
+        slot = (slot + 1u) & 63u;
+      }
+      entry = cur;
+      htag[slot] = gen;
+      hval[slot] = v;
+      hent[slot] = entry;
+      unique++;
+#if defined(__sh__) && defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+      *(uint32_t *)cur = v;
+      cur += 4;
+#else
+      { sh4_codegen cg;
+        cg.ptr = cur;
+        cg.limit = cur + 4;
+        cg.overflow = 0;
+        sh4_emit_u32_be(&cg, v);
+        cur = cg.ptr; }
+#endif
+    have_entry:
+      site_base = ((uintptr_t)site & ~(uintptr_t)3u) + 4u;
+      if ((uintptr_t)entry >= site_base) {
+        uintptr_t disp = ((uintptr_t)entry - site_base) >> 2;
+        if (disp <= 255u) {
+          site[1] = (u8)disp;
+          SH4G_RESYNC(site, 2);
+        }
       }
     }
-    if (prior)
-      continue;
-
-    entry = *tp;
-    { sh4_codegen cg = sh4g_open(tp);
-      sh4_emit_u32_be(&cg, sh4g_litseg.refs[i].value);
-      sh4g_close(tp, &cg); }
-    unique++;
-
-    for (j = i; j < sh4g_litseg.nrefs; j++) {
-      u8 *site;
-      long disp;
-      if (sh4g_litseg.refs[j].value != sh4g_litseg.refs[i].value)
-        continue;
-      site = sh4g_litseg.refs[j].site;
-      disp = ((long)(uintptr_t)entry -
-              (((long)(uintptr_t)site & ~3L) + 4L)) / 4L;
-      if (disp >= 0 && disp <= 255) {
-        site[1] = (u8)disp;
-        SH4G_RESYNC(site, 2);
-      }
-    }
+    *tp = cur;
   }
 
-  { long d = ((long)(uintptr_t)*tp - ((long)(uintptr_t)bra + 4L)) / 2L;
-    bra[0] = (u8)(0xA0 | ((d >> 8) & 0x0F));
+  if (emit_bra) {
+    uintptr_t d = ((uintptr_t)*tp - ((uintptr_t)bra + 4u)) >> 1;
+    bra[0] = (u8)(0xA0u | ((d >> 8) & 0x0Fu));
     bra[1] = (u8)d;
-    SH4G_RESYNC(bra, 2); }
+    SH4G_RESYNC(bra, 2);
+  }
 
   SH4G_POOLSTAT((cgba_em_pool_flush_n++,
                  cgba_em_pool_unique_n += unique,
@@ -271,6 +306,11 @@ static inline void sh4g_litseg_flush(u8 **tp)
   sh4g_litseg.nrefs = 0;
 }
 
+static inline void sh4g_litseg_flush(u8 **tp)
+{
+  sh4g_litseg_flush_mode(tp, 1);
+}
+
 static inline void sh4g_litseg_begin(void)
 {
   sh4g_litseg.active = 1;
@@ -279,15 +319,39 @@ static inline void sh4g_litseg_begin(void)
 
 static inline void sh4g_litseg_maybe_flush(u8 **tp)
 {
-  if (sh4g_litseg.active && sh4g_litseg.nrefs &&
+  /* Invariant: nrefs > 0 implies active != 0. */
+  if (sh4g_litseg.nrefs &&
       (size_t)(*tp - sh4g_litseg.refs[0].site) >=
         SH4G_LITSEG_FLUSH_DISTANCE)
     sh4g_litseg_flush(tp);
 }
 
+/* Flush early if fewer than `need` literal slots remain or the next `bytes`
+ * sequence could push the oldest ref past flush distance. */
+static inline void sh4g_litseg_reserve_bytes(u8 **tp, int need, size_t bytes)
+{
+  if (sh4g_litseg.nrefs &&
+      (sh4g_litseg.nrefs + need >= SH4G_LITSEG_MAX_REFS ||
+       (size_t)(*tp - sh4g_litseg.refs[0].site) + bytes >=
+         SH4G_LITSEG_FLUSH_DISTANCE))
+    sh4g_litseg_flush(tp);
+}
+
+static inline void sh4g_litseg_reserve(u8 **tp, int need)
+{
+  sh4g_litseg_reserve_bytes(tp, need, 128u);
+}
+
 static inline void sh4g_litseg_end(u8 **tp)
 {
   sh4g_litseg_flush(tp);
+  sh4g_litseg.active = 0;
+}
+
+/* Flush at an unreachable routine tail (after RTS/JMP): omits the skip BRA. */
+static inline void sh4g_litseg_end_tail(u8 **tp)
+{
+  sh4g_litseg_flush_mode(tp, 0);
   sh4g_litseg.active = 0;
 }
 
@@ -313,20 +377,46 @@ static inline int sh4g_litseg_add(u8 **tp, uint32_t value, unsigned rn)
 #else
 static inline void sh4g_litseg_begin(void) {}
 static inline void sh4g_litseg_maybe_flush(u8 **tp) { (void)tp; }
+static inline void sh4g_litseg_reserve(u8 **tp, int need) { (void)tp; (void)need; }
+static inline void sh4g_litseg_reserve_bytes(u8 **tp, int need, size_t bytes)
+{ (void)tp; (void)need; (void)bytes; }
 static inline void sh4g_litseg_end(u8 **tp) { (void)tp; }
+static inline void sh4g_litseg_end_tail(u8 **tp) { (void)tp; }
 static inline void sh4g_litseg_abort(void) {}
 static inline int sh4g_litseg_add(u8 **tp, uint32_t value, unsigned rn)
 { (void)tp; (void)value; (void)rn; return 0; }
 #endif
 
-static inline void sh4g_const(u8 **tp, uint32_t value, unsigned rn)
+static __attribute__((noinline)) int
+sh4g_const_try_shift(u8 **tp, uint32_t value, unsigned rn)
 {
-  if ((int32_t)value >= -128 && (int32_t)value <= 127) {
-    SH4G_EMSTAT(cgba_em_const_small++);
-    sh4g_u16(tp, (uint16_t)(0xE000 | (rn << 8) | (value & 0xFF)));   /* MOV #imm8 */
-    return;
+  static const u8 sh4g_shift_cand[8] = {16, 8, 2, 24, 18, 10, 4, 26};
+  unsigned tz = (unsigned)__builtin_ctz(value);
+  unsigned k;
+  for (k = 0; k < 8; k++) {
+    unsigned n = sh4g_shift_cand[k];     /* ordered by shift-op count */
+    int32_t sv;
+    if (n > tz)
+      continue;                          /* low bits would be lost */
+    sv = (int32_t)value >> n;            /* n <= tz => (sv << n) == value */
+    if (sv >= -128 && sv <= 127) {
+      unsigned r;
+      SH4G_EMSTAT(cgba_em_const_small++);
+      sh4g_u16(tp, (uint16_t)(0xE000 | (rn << 8) | ((uint32_t)sv & 0xFF)));
+      for (r = n; r >= 16; r -= 16)
+        sh4g_u16(tp, (uint16_t)(0x4028 | (rn << 8)));        /* SHLL16 */
+      for (; r >= 8; r -= 8)
+        sh4g_u16(tp, (uint16_t)(0x4018 | (rn << 8)));        /* SHLL8 */
+      for (; r >= 2; r -= 2)
+        sh4g_u16(tp, (uint16_t)(0x4008 | (rn << 8)));        /* SHLL2 */
+      return 1;
+    }
   }
+  return 0;
+}
 
+static __attribute__((noinline)) void sh4g_const_slow(u8 **tp, uint32_t value, unsigned rn)
+{
   /* Cheap synthesis tiers before paying for a 10-12B literal island. Every op
    * used here (EXTU.B, NOT, SHLL2/SHLL8/SHLL16) leaves the T bit alone, so
    * these are drop-in safe anywhere a literal was. */
@@ -344,31 +434,14 @@ static inline void sh4g_const(u8 **tp, uint32_t value, unsigned rn)
   }
   /* value == s8 << n with n composed from {16,8,2} (T-safe shifts only):
    * MOV #s8 + 1..3 shifts = 4-8B. Covers 0x80000000 (-128<<24), 0x40000
-   * (1<<18), SP/PC*4 offsets, etc. The ctz pre-filter keeps this O(1) for
-   * the dominant address-literal case — sh4g_const runs tens of millions of
-   * times in flush-thrash scenes, so the search itself must stay cheap. */
-  if ((value & 3) == 0 && value != 0) {
-    static const u8 sh4g_shift_cand[8] = {16, 8, 2, 24, 18, 10, 4, 26};
-    unsigned tz = (unsigned)__builtin_ctz(value);
-    unsigned k;
-    for (k = 0; k < 8; k++) {
-      unsigned n = sh4g_shift_cand[k];     /* ordered by shift-op count */
-      int32_t sv;
-      if (n > tz)
-        continue;                          /* low bits would be lost */
-      sv = (int32_t)value >> n;            /* n <= tz => (sv << n) == value */
-      if (sv >= -128 && sv <= 127) {
-        unsigned r;
-        SH4G_EMSTAT(cgba_em_const_small++);
-        sh4g_u16(tp, (uint16_t)(0xE000 | (rn << 8) | ((uint32_t)sv & 0xFF)));
-        for (r = n; r >= 16; r -= 16)
-          sh4g_u16(tp, (uint16_t)(0x4028 | (rn << 8)));        /* SHLL16 */
-        for (; r >= 8; r -= 8)
-          sh4g_u16(tp, (uint16_t)(0x4018 | (rn << 8)));        /* SHLL8 */
-        for (; r >= 2; r -= 2)
-          sh4g_u16(tp, (uint16_t)(0x4008 | (rn << 8)));        /* SHLL2 */
+   * (1<<18), SP/PC*4 offsets, etc. O(1) bit-width pre-filter rejects 99%+ of
+   * 32-bit addresses without calling software __ctzsi2 on SH-4. */
+  if ((value & 3u) == 0u && value != 0u) {
+    uint32_t low = value & (0u - value);
+    uint32_t x = value ^ (uint32_t)((int32_t)value >> 31);
+    if (__builtin_expect(low >= 0x02000000u || x < (low << 7), 0)) {
+      if (sh4g_const_try_shift(tp, value, rn))
         return;
-      }
     }
   }
 
@@ -403,6 +476,16 @@ static inline void sh4g_const(u8 **tp, uint32_t value, unsigned rn)
     }
     SH4G_EMSTAT((cgba_em_const_large++, cgba_em_const_bytes += (unsigned long)(*tp - load)));
   }
+}
+
+static inline void sh4g_const(u8 **tp, uint32_t value, unsigned rn)
+{
+  if ((int32_t)value >= -128 && (int32_t)value <= 127) {
+    SH4G_EMSTAT(cgba_em_const_small++);
+    sh4g_u16(tp, (uint16_t)(0xE000 | (rn << 8) | (value & 0xFF)));   /* MOV #imm8 */
+    return;
+  }
+  sh4g_const_slow(tp, value, rn);
 }
 
 /* small two-operand emitters used by a few handlers */
@@ -464,6 +547,13 @@ static inline void sh4g_far_jmp(u8 **tp, const void *fn)
   u8 *load = *tp, *lit;
   SH4G_EMSTAT(cgba_em_fjmp_n++);
   long ld_disp;
+
+  if (sh4g_litseg_add(tp, (uint32_t)(uintptr_t)fn, SH4_REG_RET)) {
+    sh4g_u16(tp, (uint16_t)(0x402B | (SH4_REG_RET << 8)));                    /* JMP @R0 */
+    sh4g_u16(tp, 0x0009);                                                     /* NOP (delay) */
+    SH4G_EMSTAT(cgba_em_fjmp_bytes += (unsigned long)(*tp - load));
+    return;
+  }
 
   lit = (u8 *)(((uintptr_t)(load + 6) + 3u) & ~(uintptr_t)3u);
   ld_disp = ((long)lit - (((long)load & ~3L) + 4)) / 4;
@@ -588,43 +678,38 @@ static inline void sh4g_set_flags(u8 **tp, unsigned result, unsigned rc,
                                   unsigned rv, u32 eff)
 {
   sh4_codegen cg;
-  unsigned r_cpsr = SH4_REG_T1;               /* R2 */
   unsigned r_tmp  = SH4_REG_T2;               /* R3 */
 
   if (!eff)
     return;
   cg = sh4g_open(tp);
-  sh4_emit_mov_reg(&cg, SH4_REG_CPSR, r_cpsr);   /* cached CPSR (R8) */
-  switch (eff) {                              /* drop the live top bits */
+  switch (eff) {                              /* drop the live top bits in R8 */
   case 0x8:
-    sh4_emit_shll(&cg, r_cpsr);  break;
+    sh4_emit_shll(&cg, SH4_REG_CPSR);  break;
   case 0xC:
-    sh4_emit_shll2(&cg, r_cpsr); break;
+    sh4_emit_shll2(&cg, SH4_REG_CPSR); break;
   case 0xE:
-    sh4_emit_shll2(&cg, r_cpsr); sh4_emit_shll(&cg, r_cpsr); break;
+    sh4_emit_shll2(&cg, SH4_REG_CPSR); sh4_emit_shll(&cg, SH4_REG_CPSR); break;
   default:                                    /* 0xF */
-    sh4_emit_shll2(&cg, r_cpsr); sh4_emit_shll2(&cg, r_cpsr); break;
+    sh4_emit_shll2(&cg, SH4_REG_CPSR); sh4_emit_shll2(&cg, SH4_REG_CPSR); break;
   }
 
   if (eff & 0x1) {                            /* V in first (ends at bit28) */
-    sh4_emit_mov_reg(&cg, rv, r_tmp);
-    sh4_emit_shlr(&cg, r_tmp);                /* T = rv (0/1) */
-    sh4_emit_rotcr(&cg, r_cpsr);
+    sh4_emit_shlr(&cg, rv);                   /* T = rv (0/1); rv is dead temp */
+    sh4_emit_rotcr(&cg, SH4_REG_CPSR);
   }
   if (eff & 0x2) {                            /* C */
-    sh4_emit_mov_reg(&cg, rc, r_tmp);
-    sh4_emit_shlr(&cg, r_tmp);                /* T = rc (0/1) */
-    sh4_emit_rotcr(&cg, r_cpsr);
+    sh4_emit_shlr(&cg, rc);                   /* T = rc (0/1); rc is dead temp */
+    sh4_emit_rotcr(&cg, SH4_REG_CPSR);
   }
   if (eff & 0x4) {                            /* Z */
     sh4_emit_tst(&cg, result, result);        /* T = (result == 0) */
-    sh4_emit_rotcr(&cg, r_cpsr);
+    sh4_emit_rotcr(&cg, SH4_REG_CPSR);
   }
   /* N last: lands at bit31 */
   sh4_emit_mov_reg(&cg, result, r_tmp);
   sh4_emit_shll(&cg, r_tmp);                  /* T = result bit31 */
-  sh4_emit_rotcr(&cg, r_cpsr);
-  sh4_emit_mov_reg(&cg, r_cpsr, SH4_REG_CPSR);   /* commit cached CPSR */
+  sh4_emit_rotcr(&cg, SH4_REG_CPSR);
   sh4g_close(tp, &cg);
 }
 
@@ -759,6 +844,20 @@ static inline void sh4g_cycle_debit(u8 **tp, int n)
   } else {
     sh4g_const(tp, (uint32_t)(-n), SH4_REG_T0);
     sh4g_u16(tp, (uint16_t)(0x300C | (SH4_REG_CYCLES << 8) | (SH4_REG_T0 << 4))); /* ADD R1 */
+  }
+}
+
+/* Same as sh4g_cycle_debit but uses R0 (SH4_REG_RET) for large debits so R1/R2
+ * operands survive intact across fused CMP/TST/SUBS + Bcc taken paths. */
+static inline void sh4g_cycle_debit_r0(u8 **tp, int n)
+{
+  if (n == 0)
+    return;
+  if (n >= -128 && n <= 127) {
+    sh4g_u16(tp, (uint16_t)(0x7000 | (SH4_REG_CYCLES << 8) | ((-n) & 0xFF))); /* ADD #-n */
+  } else {
+    sh4g_const(tp, (uint32_t)(-n), SH4_REG_RET);
+    sh4g_u16(tp, (uint16_t)(0x300C | (SH4_REG_CYCLES << 8) | (SH4_REG_RET << 4))); /* ADD R0 */
   }
 }
 
@@ -1070,6 +1169,25 @@ static inline u8 *sh4g_branch_exit(u8 **tp, uint32_t new_pc,
   return site;
 }
 
+/* Internal intra-block branch exit: always patched to the target's body_offset
+ * before the block runs, so R4 = new_pc is only needed on the cold R13 <= 0
+ * exit path. Saves a literal D-load on every taken loop back-edge and skips
+ * the duplicate CMP/PL R13 gate at the target. */
+static inline u8 *sh4g_branch_exit_internal(u8 **tp, uint32_t new_pc)
+{
+  u8 *bt, *site;
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_cmppl(&cg, SH4_REG_CYCLES);        /* T = (cycles > 0) */
+    sh4g_close(tp, &cg); }
+  bt = *tp;
+  sh4g_u16(tp, 0x8900);                         /* BT over (budget left) */
+  sh4g_const(tp, new_pc, SH4_REG_ARG0);         /* cold: R4 = new_pc */
+  sh4g_block_exit_jmp(tp);                      /* exhausted: events + redispatch */
+  { long d = ((long)(*tp) - ((long)bt + 4)) / 2; bt[1] = (uint8_t)(d & 0xFF); }
+  site = sh4g_emit_patch_jump(tp);              /* patched to BRA body_offset */
+  return site;
+}
+
 /* Idle-loop branch exit — the dynarec mirror of the interpreter's idle
  * handling (gba_over.h idle_loop_target_pc + the port's b-to-self detector,
  * cpu.cc) and of arm_emit.h's generate_branch_idle_eliminate: the branch burns
@@ -1167,59 +1285,81 @@ static inline void sh4g_redispatch_if_r0_debit(u8 **tp, int cycle_count)
  * Scratch: R0 (RET) accumulator, R1 (T0) holds CPSR, R2 (T1) temp.            */
 static inline void sh4g_cond_to_T(u8 **tp, unsigned cond)
 {
-  static const struct { unsigned char pos, want; } cc[8] = {
-    {30, 1}, /* EQ: Z set */ {30, 0}, /* NE: Z clear */
-    {29, 1}, /* CS: C set */ {29, 0}, /* CC: C clear */
-    {31, 1}, /* MI: N set */ {31, 0}, /* PL: N clear */
-    {28, 1}, /* VS: V set */ {28, 0}, /* VC: V clear */
-  };
   sh4_codegen cg = sh4g_open(tp);
   unsigned cc4 = cond & 0x0F;
 
   if (cc4 == 0x0E) { sh4_emit_sett(&cg); sh4g_close(tp, &cg); return; }   /* AL */
   if (cc4 == 0x0F) { sh4_emit_clrt(&cg); sh4g_close(tp, &cg); return; }   /* NV */
 
-  if (cc4 < 8) {                                          /* single-flag */
-    sh4_emit_load_greg(&cg, SH4_GREG_CPSR, SH4_REG_RET);         /* R0 = CPSR */
-    sh4_emit_mov_imm(&cg, -(int)cc[cc4].pos, SH4_REG_T2);        /* R3 = -pos */
-    sh4_emit_shld(&cg, SH4_REG_T2, SH4_REG_RET);                 /* R0 >>= pos */
-    sh4_emit_and_imm(&cg, 1);                                    /* R0 &= 1 */
-    sh4_emit_cmpeq_imm(&cg, cc[cc4].want);                       /* T = flag==want */
-    sh4g_close(tp, &cg);
-    return;
-  }
-
-  /* Compound: R1 = CPSR, build the pair's "positive form" into R0's sign bit. */
-  sh4_emit_load_greg(&cg, SH4_GREG_CPSR, SH4_REG_T0);            /* R1 = CPSR */
   switch (cc4) {
+  case 0x0: /* EQ: Z (bit30) == 1 */
+    sh4_emit_mov_reg(&cg, SH4_REG_CPSR, SH4_REG_RET);
+    sh4_emit_shll(&cg, SH4_REG_RET);
+    sh4_emit_shll(&cg, SH4_REG_RET);
+    break;
+  case 0x1: /* NE: Z (bit30) == 0 */
+    sh4_emit_mov_reg(&cg, SH4_REG_CPSR, SH4_REG_RET);
+    sh4_emit_shll(&cg, SH4_REG_RET);
+    sh4_emit_cmppz(&cg, SH4_REG_RET);
+    break;
+  case 0x2: /* CS: C (bit29) == 1 */
+    sh4_emit_mov_reg(&cg, SH4_REG_CPSR, SH4_REG_RET);
+    sh4_emit_shll2(&cg, SH4_REG_RET);
+    sh4_emit_shll(&cg, SH4_REG_RET);
+    break;
+  case 0x3: /* CC: C (bit29) == 0 */
+    sh4_emit_mov_reg(&cg, SH4_REG_CPSR, SH4_REG_RET);
+    sh4_emit_shll2(&cg, SH4_REG_RET);
+    sh4_emit_cmppz(&cg, SH4_REG_RET);
+    break;
+  case 0x4: /* MI: N (bit31) == 1 */
+    sh4_emit_mov_reg(&cg, SH4_REG_CPSR, SH4_REG_RET);
+    sh4_emit_shll(&cg, SH4_REG_RET);
+    break;
+  case 0x5: /* PL: N (bit31) == 0 */
+    sh4_emit_cmppz(&cg, SH4_REG_CPSR);
+    break;
+  case 0x6: /* VS: V (bit28) == 1 */
+    sh4_emit_mov_reg(&cg, SH4_REG_CPSR, SH4_REG_RET);
+    sh4_emit_shll2(&cg, SH4_REG_RET);
+    sh4_emit_shll(&cg, SH4_REG_RET);
+    sh4_emit_shll(&cg, SH4_REG_RET);
+    break;
+  case 0x7: /* VC: V (bit28) == 0 */
+    sh4_emit_mov_reg(&cg, SH4_REG_CPSR, SH4_REG_RET);
+    sh4_emit_shll2(&cg, SH4_REG_RET);
+    sh4_emit_shll(&cg, SH4_REG_RET);
+    sh4_emit_cmppz(&cg, SH4_REG_RET);
+    break;
   case 0x8: /* HI */ case 0x9: /* LS */
-    sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);             /* R0 = CPSR    */
-    sh4_emit_shll2(&cg, SH4_REG_RET);                           /* R0 = C<<31.. */
-    sh4_emit_not(&cg, SH4_REG_T0, SH4_REG_T1);                  /* R2 = ~CPSR   */
+    sh4_emit_mov_reg(&cg, SH4_REG_CPSR, SH4_REG_RET);
+    sh4_emit_shll2(&cg, SH4_REG_RET);                           /* R0 sign = C  */
+    sh4_emit_not(&cg, SH4_REG_CPSR, SH4_REG_T1);                /* R2 = ~CPSR   */
     sh4_emit_shll(&cg, SH4_REG_T1);                             /* R2 sign = !Z */
     sh4_emit_and(&cg, SH4_REG_T1, SH4_REG_RET);                 /* R0 sign = HI */
+    if (cc4 == 0x8) sh4_emit_shll(&cg, SH4_REG_RET);
+    else            sh4_emit_cmppz(&cg, SH4_REG_RET);
     break;
   case 0xA: /* GE */ case 0xB: /* LT */
-    sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);             /* R0 = CPSR    */
+    sh4_emit_mov_reg(&cg, SH4_REG_CPSR, SH4_REG_RET);
     sh4_emit_shll2(&cg, SH4_REG_RET);
     sh4_emit_shll(&cg, SH4_REG_RET);                            /* R0 sign = V  */
-    sh4_emit_xor(&cg, SH4_REG_T0, SH4_REG_RET);                 /* R0 sign = LT */
+    sh4_emit_xor(&cg, SH4_REG_CPSR, SH4_REG_RET);               /* R0 sign = LT */
+    if (cc4 == 0xB) sh4_emit_shll(&cg, SH4_REG_RET);
+    else            sh4_emit_cmppz(&cg, SH4_REG_RET);
     break;
   default:  /* 0xC GT / 0xD LE */
-    sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);             /* R0 = CPSR    */
+    sh4_emit_mov_reg(&cg, SH4_REG_CPSR, SH4_REG_RET);
     sh4_emit_shll2(&cg, SH4_REG_RET);
     sh4_emit_shll(&cg, SH4_REG_RET);                            /* R0 sign = V  */
-    sh4_emit_xor(&cg, SH4_REG_T0, SH4_REG_RET);                 /* R0 sign = N^V*/
-    sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_T1);              /* R2 = CPSR    */
+    sh4_emit_xor(&cg, SH4_REG_CPSR, SH4_REG_RET);               /* R0 sign = N^V*/
+    sh4_emit_mov_reg(&cg, SH4_REG_CPSR, SH4_REG_T1);
     sh4_emit_shll(&cg, SH4_REG_T1);                             /* R2 sign = Z  */
     sh4_emit_or(&cg, SH4_REG_T1, SH4_REG_RET);                  /* R0 sign = LE */
+    if (cc4 == 0xD) sh4_emit_shll(&cg, SH4_REG_RET);
+    else            sh4_emit_cmppz(&cg, SH4_REG_RET);
     break;
   }
-  /* HI/LT/LE read the sign directly; LS/GE/GT take its complement. */
-  if (cc4 == 0x8 || cc4 == 0xB || cc4 == 0xD)
-    sh4_emit_shll(&cg, SH4_REG_RET);                            /* T = sign  */
-  else
-    sh4_emit_cmppz(&cg, SH4_REG_RET);                           /* T = !sign */
   sh4g_close(tp, &cg);
 }
 

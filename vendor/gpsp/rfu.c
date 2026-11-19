@@ -116,7 +116,8 @@ static inline u32 leupack32(const u8 *ptr) {
 
 
 static u32 rfu_prev_data;
-static u32 rfu_comstate, rfu_cnt, rfu_state;
+extern u32 rfu_comstate;
+static u32 rfu_cnt, rfu_state;
 static u32 rfu_buf[255];
 static u8 rfu_cmd, rfu_plen;
 static u32 rfu_timeout_cycles, rfu_resp_timeout;

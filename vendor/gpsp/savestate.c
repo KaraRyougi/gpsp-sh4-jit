@@ -153,9 +153,13 @@ bool gba_load_state(const void* src)
 #endif
 #ifdef CGBA_VRAM_DIRTY_ACTIVE
   cgba_vram_dirty = CGBA_VRAM_DIRTY_ALL;
+#ifdef CGBA_VRAM_SB_DIRTY_ACTIVE
+  cgba_vram_sb_dirty = 0xFFFFFFFFu;
+#endif
   cgba_video_io_dirty = 1;
 #endif
   video_invalidate_scanline_cache(0, 160);
+  cgba_discard_pending_scanlines();
 
   video_reload_counters();
 
@@ -176,6 +180,8 @@ void gba_save_state(void* dst)
 {
   u8 *stptr = (u8*)dst;
   u8 *wrptr = (u8*)dst;
+
+  cgba_video_flush_before_write();
 
   // Initial bson size
   bson_write_u32(wrptr, 0);

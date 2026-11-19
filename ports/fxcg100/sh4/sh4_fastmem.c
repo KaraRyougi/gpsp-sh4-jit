@@ -28,6 +28,7 @@ extern u8 cgba_ilram_fastmem_end[];
 #endif
 
 u8 *cgba_sh4_fastmem_routine[CGBA_FM_TOTAL];
+u8 *cgba_sh4_fastmem_io16_store;
 u8 *cgba_sh4_psr_rebank_routine;
 
 #if CGBA_SH4_FASTMEM_XYRAM
@@ -56,12 +57,12 @@ void cgba_sh4_fastmem_init(void)
     CGBA_FM_STORE_W,
     CGBA_FM_LOAD_UH,
     CGBA_FM_LOAD_B,
+    CGBA_FM_STORE_UH,
     CGBA_FMB_LDM_WB,
     CGBA_FMB_STM_WB,
     CGBA_FM_STORE_B,
-    CGBA_FM_STORE_UH,
-    CGBA_FM_LOAD_SH,
     CGBA_FM_LOAD_SB,
+    CGBA_FM_LOAD_SH,
     CGBA_FMB_LDM,
     CGBA_FMB_STM,
     CGBA_FM_LOAD_W + CGBA_FM_WB,
@@ -84,8 +85,23 @@ void cgba_sh4_fastmem_init(void)
     (CGBA_SH4_FASTMEM_XYRAM || CGBA_SH4_FASTMEM_ILRAM)
   gint_set_onchip_save_mode(CGBA_GINT_ONCHIP_BACKUP, cgba_onchip_backup);
 #endif
-  if (cgba_sh4_fastmem_routine[0])       /* idempotent (re-init on reset) */
+  static const u8 * const *last_frag_blocks;
+  static u32 last_gamepak_size;
+  static u8 last_ws8_0, last_ws8_1;
+  if (cgba_sh4_fastmem_routine[0] &&
+      last_frag_blocks == cgba_gamepak_fragment_blocks &&
+      last_gamepak_size == gamepak_size &&
+      last_ws8_0 == ws_cyc_nseq[8][0] &&
+      last_ws8_1 == ws_cyc_nseq[8][1])
     return;
+  last_frag_blocks = cgba_gamepak_fragment_blocks;
+  last_gamepak_size = gamepak_size;
+  last_ws8_0 = ws_cyc_nseq[8][0];
+  last_ws8_1 = ws_cyc_nseq[8][1];
+  /* Emit the out-of-line IO16 store handler into .bss first so STORE_UH can
+   * reference it and shrink from ~1140 B to ~360 B (fitting in ILRAM). */
+  tp = (u8 *)(((uintptr_t)tp + 3u) & ~(uintptr_t)3u);
+  cgba_sh4_fastmem_io16_store = sh4g_fastmem_emit_io16_store(&tp);
   for (i = 0; i < CGBA_FM_TOTAL; i++) {
     int fm = emit_order[i];
     u8 *entry;
