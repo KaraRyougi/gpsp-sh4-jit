@@ -81,8 +81,8 @@ static const uint8_t *fps_glyph(char c)
 	}
 }
 
-static void fps_draw_text(uint16_t *pixels, int x, int y, const char *s,
-	uint16_t fg)
+static void fps_draw_text_stride(uint16_t *buf, int stride, int max_w, int max_h,
+	int x, int y, const char *s, uint16_t fg)
 {
 	for(; *s; s++) {
 		const uint8_t *g = fps_glyph(*s);
@@ -90,16 +90,17 @@ static void fps_draw_text(uint16_t *pixels, int x, int y, const char *s,
 
 		for(r = 0; r < FPS_GLYPH_H; r++) {
 			uint8_t bits = g[r];
+			int py = y + r;
 			int col;
 
+			if(py < 0 || py >= max_h)
+				continue;
 			for(col = 0; col < FPS_GLYPH_W; col++) {
 				int px = x + col;
-				int py = y + r;
 
 				if((bits & (0x10 >> col)) &&
-						px >= 0 && px < GBA_W &&
-						py >= 0 && py < GBA_H)
-					pixels[py * GBA_W + px] = fg;
+						px >= 0 && px < max_w)
+					buf[py * stride + px] = fg;
 			}
 		}
 		x += FPS_ADVANCE;
@@ -115,15 +116,22 @@ extern void video_invalidate_scanline_cache(uint32_t start_y, uint32_t end_y);
  *   line 1: emulated FPS (E, core throughput) and drawn FPS (D, post-skip)
  *   line 2: speed % of the 60 Hz target and average frame time in ms
  * The per-second emulated FPS is the stable A/B instrument for build tuning.
+ * Cached as a pre-rendered badge and rebuilt only when the numbers change.
  */
+#define FPS_BOX_H       (2 * FPS_GLYPH_H + 3)
+#define FPS_BADGE_MAX_W 128
+
+static uint16_t fps_badge[FPS_BOX_H][FPS_BADGE_MAX_W];
+static unsigned fps_cached_emu;
+static unsigned fps_cached_draw;
+static int fps_cached_w;
+static int fps_badge_valid;
+
 void fxcg100_lcd_overlay_fps(uint16_t *pixels, unsigned emu_fps,
 	unsigned draw_fps)
 {
 	const uint16_t fg = 0xFFFF;   /* white */
-	const uint16_t bg = 0x0000;   /* black */
-	char l1[24], l2[24];
-	unsigned spd, ms;
-	int box_w, w, r, col;
+	int r;
 
 	if(!pixels)
 		return;
@@ -131,26 +139,42 @@ void fxcg100_lcd_overlay_fps(uint16_t *pixels, unsigned emu_fps,
 		emu_fps = 999;
 	if(draw_fps > 999)
 		draw_fps = 999;
-	spd = emu_fps * 100u / 60u;
-	ms = emu_fps ? 1000u / emu_fps : 0u;
-	snprintf(l1, sizeof(l1), "FPS E:%u D:%u", emu_fps, draw_fps);
-	snprintf(l2, sizeof(l2), "SPD:%u%% %uMS", spd, ms);
 
-	box_w = (int)strlen(l1);
-	w = (int)strlen(l2);
-	if(w > box_w)
-		box_w = w;
-	box_w = box_w * FPS_ADVANCE + 1;
-	if(box_w > GBA_W)
-		box_w = GBA_W;
+	if(!fps_badge_valid || emu_fps != fps_cached_emu ||
+			draw_fps != fps_cached_draw) {
+		char l1[24], l2[24];
+		unsigned spd = emu_fps * 100u / 60u;
+		unsigned ms = emu_fps ? 1000u / emu_fps : 0u;
+		int box_w, w;
 
-	for(r = 0; r < 2 * FPS_GLYPH_H + 3 && r < GBA_H; r++)
-		for(col = 0; col < box_w; col++)
-			pixels[r * GBA_W + col] = bg;
+		snprintf(l1, sizeof(l1), "FPS E:%u D:%u", emu_fps, draw_fps);
+		snprintf(l2, sizeof(l2), "SPD:%u%% %uMS", spd, ms);
 
-	fps_draw_text(pixels, 1, 1, l1, fg);
-	fps_draw_text(pixels, 1, 1 + FPS_GLYPH_H + 1, l2, fg);
+		box_w = (int)strlen(l1);
+		w = (int)strlen(l2);
+		if(w > box_w)
+			box_w = w;
+		box_w = box_w * FPS_ADVANCE + 1;
+		if(box_w > FPS_BADGE_MAX_W)
+			box_w = FPS_BADGE_MAX_W;
+		if(box_w > GBA_W)
+			box_w = GBA_W;
+
+		memset(fps_badge, 0, sizeof(fps_badge));
+		fps_draw_text_stride(&fps_badge[0][0], FPS_BADGE_MAX_W,
+			box_w, FPS_BOX_H, 1, 1, l1, fg);
+		fps_draw_text_stride(&fps_badge[0][0], FPS_BADGE_MAX_W,
+			box_w, FPS_BOX_H, 1, 1 + FPS_GLYPH_H + 1, l2, fg);
+		fps_cached_emu = emu_fps;
+		fps_cached_draw = draw_fps;
+		fps_cached_w = box_w;
+		fps_badge_valid = 1;
+	}
+
+	for(r = 0; r < FPS_BOX_H && r < GBA_H; r++)
+		memcpy(&pixels[r * GBA_W], fps_badge[r],
+			(size_t)fps_cached_w * sizeof(uint16_t));
 #if defined(CGBA_VIDEO_DIRTY_SCANLINE) && CGBA_VIDEO_DIRTY_SCANLINE && !defined(CGBA_HOST_TEST)
-	video_invalidate_scanline_cache(0, (uint32_t)(2 * FPS_GLYPH_H + 3));
+	video_invalidate_scanline_cache(0, (uint32_t)FPS_BOX_H);
 #endif
 }

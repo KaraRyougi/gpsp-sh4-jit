@@ -527,6 +527,8 @@ static void blit_gba_scaled_full(const uint16_t *pixels)
 	lcd_frame_synced = 1;
 }
 
+extern void cgba_copy_32b_sh4(void *dst, const void *src, uint32_t nbytes);
+
 void fxcg100_lcd_blit_gba(const uint16_t *pixels)
 {
 	int ox = (DWIDTH - GBA_W) / 2;   /* 78 */
@@ -558,16 +560,16 @@ void fxcg100_lcd_blit_gba(const uint16_t *pixels)
 
 	y = 0;
 	rows = STRIP_LINES;
-	memcpy(strips[0], &pixels[y * GBA_W],
-		(size_t)rows * GBA_W * sizeof(uint16_t));
+	cgba_copy_32b_sh4(strips[0], &pixels[y * GBA_W],
+		(uint32_t)(rows * GBA_W * sizeof(uint16_t)));
 	start_strip_dma(strips[0], ox, oy + y, GBA_W, rows);
 
 	bi = 1;
 	y += rows;
 	while(y < GBA_H) {
 		rows = (y + STRIP_LINES > GBA_H) ? (GBA_H - y) : STRIP_LINES;
-		memcpy(strips[bi], &pixels[y * GBA_W],
-			(size_t)rows * GBA_W * sizeof(uint16_t));
+		cgba_copy_32b_sh4(strips[bi], &pixels[y * GBA_W],
+			(uint32_t)(rows * GBA_W * sizeof(uint16_t)));
 		wait_lcd_dma();   /* wait for the previous strip's DMA */
 		start_strip_dma(strips[bi], ox, oy + y, GBA_W, rows);
 		bi ^= 1;

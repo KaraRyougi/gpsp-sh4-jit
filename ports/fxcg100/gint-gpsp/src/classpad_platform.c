@@ -1261,6 +1261,9 @@ static inline int strip_order(int index, int count, int in_order)
 }
 
 /* Portrait 1:1: the framebuffer is already in panel order; 16 rows a strip. */
+#if !defined(CGBA_HOST_TEST)
+extern void cgba_copy_32b_sh4(void *dst, const void *src, uint32_t nbytes);
+#endif
 static void blit_portrait_1x(const uint16_t *pixels, cp_rect img)
 {
 	int flipped = cp_view_is_flipped(cp_view, cp_rotation);
@@ -1268,8 +1271,13 @@ static void blit_portrait_1x(const uint16_t *pixels, cp_rect img)
 
 	for(s = 0; s < CP_GBA_H / 16; s++) {
 		y = strip_order(s, CP_GBA_H / 16, flipped) * 16;
+#if !defined(CGBA_HOST_TEST)
+		cgba_copy_32b_sh4(strip_buffer(), pixels + y * CP_GBA_W,
+			(uint32_t)(16 * CP_GBA_W * sizeof(uint16_t)));
+#else
 		memcpy(strip_buffer(), pixels + y * CP_GBA_W,
 			16 * CP_GBA_W * sizeof(uint16_t));
+#endif
 		portrait_strip_send(img.x, img.y + y, CP_GBA_W, 16);
 	}
 }
