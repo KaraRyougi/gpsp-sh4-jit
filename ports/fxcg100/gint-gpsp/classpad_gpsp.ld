@@ -22,9 +22,11 @@
 	calls: what is left above that and what is free below the arena.
 
 	The program headers are explicit because the HollyHock loader copies
-	every PT_LOAD to its address without any check. Arena sections are in
-	no segment (:NONE), so the loader never writes to heap memory that has
-	not been reserved.
+	every PT_LOAD to its address without any check, while stricter launchers
+	(such as Hollyhock Custom Launcher) reject PT_LOAD segments outside
+	0x8c000000..0x8d000000. Both the arena sections and .ilram (0xe5200000)
+	are in no segment (:NONE), so the launcher only loads `low` and
+	classpad_loader.c copies .cgba.core and .ilram into place at start-up.
 */
 
 OUTPUT_ARCH(sh4)
@@ -43,7 +45,6 @@ MEMORY
 PHDRS
 {
 	low   PT_LOAD FLAGS(7);
-	ilram PT_LOAD FLAGS(7);
 	note  PT_NOTE FLAGS(4);
 }
 
@@ -154,14 +155,19 @@ SECTIONS
 
 	_sgbss = SIZEOF(.gint.bss);
 
+	/* Kept in the file in no PT_LOAD segment: classpad_loader.c reads it into
+	   0xe5200000 at start-up so launchers restricting PT_LOAD to SDRAM accept
+	   the ELF. */
 	. = ORIGIN(ilram);
 	.ilram ALIGN(4) : ALIGN(4) {
-		_lilram = ABSOLUTE(LOADADDR(.ilram) + ORIGIN(ram));
+		_lilram = ABSOLUTE(0);
 		_rilram = . ;
+		_cgba_ilram_start = . ;
 		*(.ilram.dispatch .ilram.dispatch.*)
 		*(.ilram)
 		. = ALIGN(16);
-	} > ilram :ilram
+		_cgba_ilram_end = . ;
+	} > ilram :NONE
 
 	_cgba_ilram_fastmem_start = ALIGN(ORIGIN(ilram) + SIZEOF(.ilram), 32);
 	_cgba_ilram_fastmem_end = ORIGIN(ilram) + LENGTH(ilram);

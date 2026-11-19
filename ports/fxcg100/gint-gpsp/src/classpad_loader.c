@@ -42,6 +42,7 @@ extern uint8_t cgba_arena_start[], cgba_arena_end[];
 /* End of what is linked into the arena; the rest of it is spare. */
 extern uint8_t cgba_highbss_end[];
 extern uint8_t cgba_core_start[], cgba_core_end[];
+extern uint8_t cgba_ilram_start[], cgba_ilram_end[];
 
 extern int BFile_Open(const char *path, int flags);
 extern int BFile_Read(int fd, void *buf, int size);
@@ -59,10 +60,12 @@ const char cgba_core_stamp[sizeof(CORE_STAMP)]
 #define RETRY_STEP    (256u * 1024u)
 #define ROM_PAGE      0x8000u
 #define SELF_PATH_MAX 128
+#define CP_ILRAM_SIZE 4096u
 
 /* ILRAM holds the JIT dispatch stubs. On the fx-CG gint reloads on-chip
  * memory from the add-in image after every OS call; on this model it cannot
- * (the launcher loaded it once), so have gint save and restore it around each
+ * (we load .ilram ourselves in cgba_classpad_arena_init so the ELF has no
+ * PT_LOAD outside SDRAM), so have gint save and restore it around each
  * world switch instead. Lives in the arena like any other .bss here. */
 static uint8_t onchip_backup[GINT_ONCHIP_BUFSIZE];
 
@@ -71,19 +74,29 @@ static uint32_t reserved_size LOW_DATA = 0;
 static uint32_t heap_mark LOW_DATA = 0;
 static char self_path[SELF_PATH_MAX] LOW_DATA = "\\fls0\\gpSP.hh3";
 static uint32_t file_getaddr LOW_DATA = 0;
+static uint32_t sym_file_open LOW_DATA = 0;
+static uint32_t sym_mem_malloc LOW_DATA = 0;
+static uint32_t sym_mem_free LOW_DATA = 0;
+static uint32_t sym_mem_sbrk LOW_DATA = 0;
+static uint32_t sym_mem_sbrk_mode LOW_DATA = 0;
 
 /* OS guard string; HollyHock-3's symbol table starts with the same one. */
 #define OS_GUARD ((const char *)0x814fffe0u)
 
-/* ELF entry point: remember which file the launcher started and where the
- * launcher's symbol table puts File_GetAddr (gint binds only the calls it
- * wraps, and the table may be overwritten once the arena is in use), then
- * continue into gint's normal HollyHock entry. */
+/* ELF entry point: remember which file the launcher started and the OS
+ * symbols gpSP needs beyond gint's own bindings (the symbol table may be
+ * overwritten once the arena is in use), then continue into gint's normal
+ * HollyHock entry. */
 extern int hhk3_entry(int argc, char **argv, char **envp);
 
 int cgba_hhk3_entry(int argc, char **argv, char **envp)
 {
 	file_getaddr = cp_hhk_env_symbol(envp, OS_GUARD, "File_GetAddr");
+	sym_file_open = cp_hhk_env_symbol(envp, OS_GUARD, "File_Open");
+	sym_mem_malloc = cp_hhk_env_symbol(envp, OS_GUARD, "Mem_Malloc");
+	sym_mem_free = cp_hhk_env_symbol(envp, OS_GUARD, "Mem_Free");
+	sym_mem_sbrk = cp_hhk_env_symbol(envp, OS_GUARD, "Mem_Sbrk");
+	sym_mem_sbrk_mode = cp_hhk_env_symbol(envp, OS_GUARD, "Mem_SbrkMode");
 	if(argc > 0 && argv && argv[0] && argv[0][0] == '\\') {
 		unsigned i = 0;
 
@@ -110,6 +123,21 @@ extern void __free(void *ptr);
 
 /* ---- the OS heap, when it is the one classpad_heap.h describes ------------ */
 
+typedef void *(*cp_malloc_fn)(size_t);
+typedef signed char (*cp_sbrk_mode_fn)(signed char);
+
+static cp_malloc_fn heap_malloc_fn LOW_DATA = NULL;
+
+static const uint8_t *cp_loader_os_code(void *ctx, uint32_t address,
+	uint32_t size)
+{
+	(void)ctx;
+	if(address < 0x80000000u || address >= 0x82000000u ||
+			size > 0x82000000u - address)
+		return NULL;
+	return (const uint8_t *)(uintptr_t)address;
+}
+
 static uint32_t heap_read32(uint32_t address)
 {
 	return *(const uint32_t *)(uintptr_t)address;
@@ -117,6 +145,8 @@ static uint32_t heap_read32(uint32_t address)
 
 static uint32_t heap_alloc(uint32_t size)
 {
+	if(heap_malloc_fn)
+		return (uint32_t)(uintptr_t)heap_malloc_fn(size);
 	return (uint32_t)(uintptr_t)__malloc(size);
 }
 
@@ -125,68 +155,63 @@ static void heap_release(uint32_t address)
 	__free((void *)(uintptr_t)address);
 }
 
-/* The allocator's state, read out of its code (OS 02.01.7003: malloc
- * 0x800a8744, free 0x800a86ac, sbrk 0x800cee9e, Mem_Malloc 0x800d0ad8).
- * The code is checked to be that code; where it keeps its state is taken
- * from its literals, because that differs between calculators. Returns
- * zero if this is the allocator classpad_heap.h describes; otherwise
- * heap_differs has a bit for each thing that is not as expected (shown with
- * the error and on the Settings page). */
+/* The allocator's state, discovered dynamically by following PC-relative
+ * literals starting from Mem_Malloc in HollyHock-3's symbol table (verified
+ * on OS 02.01.2000, 02.01.7002 and 02.01.7003). Returns nonzero if this is
+ * the allocator classpad_heap.h describes; otherwise heap_differs has a bit
+ * for each check that failed (shown with the error and on the Settings
+ * page). */
 static uint32_t heap_differs LOW_DATA = 0;
 static cp_heap_os heap_os LOW_DATA = { 0, 0, 0, 0, heap_read32, heap_alloc,
 	heap_release };
 
-static int in_ram(uint32_t a)
-{
-	return a >= 0x8c000000u && a < 0x8d000000u && (a & 3u) == 0;
-}
-
 static int os_heap_known(void)
 {
-	uint32_t d = 0, unit_at;
+	uint32_t mem_malloc = sym_mem_malloc ? sym_mem_malloc : CP_MEM_MALLOC_KNOWN;
+	cp_hhk_heap_info info;
 
-	if(*(const uint16_t *)0x800a8744u != 0x2fc6u) d |= 0x01u;       /* malloc */
-	if(*(const uint32_t *)0x800a8818u != 0x800a86acu) d |= 0x02u;   /* -> free */
-	if(*(const uint32_t *)0x800a8820u != 0x800a7f14u) d |= 0x04u;   /* division */
-	if(*(const uint32_t *)0x800a8824u != 0x800cee9eu) d |= 0x04u;   /* -> sbrk */
-	if(*(const uint16_t *)0x800cee9eu != 0x4f22u) d |= 0x08u;       /* sbrk */
-	if(*(const uint32_t *)0x800d0b30u != 0x800a8744u) d |= 0x80u;   /* Mem_Malloc */
+	heap_malloc_fn = NULL;
+	if(!cp_hhk_find_heap(cp_loader_os_code, NULL, mem_malloc, sym_mem_free,
+			sym_mem_sbrk, (uint32_t)(uintptr_t)cgba_highbss_end, &info,
+			&heap_differs))
+		return 0;
 
-	heap_os.head = *(const uint32_t *)0x800a8814u;
-	heap_os.brk = *(const uint32_t *)0x800cef34u;
-	heap_os.limit = *(const uint32_t *)0x800cef38u;
-	unit_at = *(const uint32_t *)0x800a881cu;
-	if(!in_ram(heap_os.head) || *(const uint32_t *)0x800a8740u != heap_os.head)
-		d |= 0x10u;                               /* malloc and free agree */
-	if(!in_ram(heap_os.brk))
-		d |= 0x20u;
-	if(!in_ram(heap_os.limit - 4u) || heap_os.limit <=
-			(uint32_t)(uintptr_t)cgba_arena_end)
-		d |= 0x20u;
-	if(unit_at < 0x80000000u || unit_at >= 0x82000000u || (unit_at & 3u)) {
-		d |= 0x40u;
-	} else {
-		heap_os.unit = *(const uint32_t *)(uintptr_t)unit_at;
-		if(heap_os.unit < 0x10u || heap_os.unit > 0x100000u ||
-				(heap_os.unit & 3u))
-			d |= 0x40u;
-	}
-	heap_differs = d;
-	return d == 0;
+	heap_os.head = info.head;
+	heap_os.brk = info.brk;
+	heap_os.limit = info.limit;
+	heap_os.unit = info.unit;
+	heap_malloc_fn = (cp_malloc_fn)(uintptr_t)info.malloc_fn;
+	return 1;
+}
+
+static cp_sbrk_mode_fn os_sbrk_mode_call(void)
+{
+	uint32_t entry = sym_mem_sbrk_mode;
+
+	if(!entry && (!sym_mem_malloc || sym_mem_malloc == CP_MEM_MALLOC_KNOWN))
+		entry = CP_MEM_SBRK_MODE_KNOWN;
+	if(!cp_hhk_sbrk_mode_ok(cp_loader_os_code, NULL, entry))
+		return NULL;
+	return (cp_sbrk_mode_fn)(uintptr_t)entry;
 }
 
 /* The arena is linked at fixed addresses, so one heap block has to be found
- * that contains what is linked into it. The break is raised 373 KiB
- * past that on a fresh heap: 26 KiB of small blocks were seen at the top of
- * the old block on a second start, and the tests allow for 330 KiB. */
-#define HEAP_GROW_TO 0x8ce40000u
+ * that contains what is linked into it. On a fresh heap the break is raised
+ * to 256 KiB below the heap ceiling (0x8ce40000 on a 0x8ce80000 heap):
+ * 26 KiB of small blocks were seen at the top of the old block on a second
+ * start, and the tests allow for 330 KiB, while keeping 256 KiB free above
+ * the break for OS allocations. */
+#define HEAP_TOP_MARGIN 0x40000u
 
 static const char *reserve_arena_known(void)
 {
 	static char message[48] LOW_DATA;
+	uint32_t used_end = (uint32_t)(uintptr_t)cgba_highbss_end;
+	uint32_t grow_to = heap_os.limit > used_end + HEAP_TOP_MARGIN
+		? heap_os.limit - HEAP_TOP_MARGIN : heap_os.limit;
 	cp_heap_result r;
 	int status = cp_heap_reserve(&heap_os, (uint32_t)(uintptr_t)cgba_arena_start,
-		(uint32_t)(uintptr_t)cgba_highbss_end, HEAP_GROW_TO, &r);
+		used_end, grow_to, &r);
 
 	heap_mark = r.brk;
 	if(status == CP_HEAP_OK) {
@@ -204,12 +229,14 @@ static const char *reserve_arena_known(void)
 }
 
 /* Any other OS: its heap is not known, so ask and see. A block is assumed
- * to start where a probe did, or just above it. */
-static const char *reserve_arena_unknown(void)
+ * to start where a probe did, or just above it. Runs under Mem_SbrkMode(1)
+ * whenever available so oversized attempts return NULL instead of raising
+ * the OS "Insufficient System Memory to Run" dialog. */
+static const char *reserve_arena_unknown(int sbrk_guarded)
 {
 	uint32_t used_size = (uint32_t)(cgba_highbss_end - cgba_arena_start);
 	uint8_t *probe, *block;
-	uint32_t size;
+	uint32_t size, max_size;
 
 	probe = malloc(PROBE_BYTES);
 	if(!probe)
@@ -224,8 +251,14 @@ static const char *reserve_arena_unknown(void)
 		return message;
 	}
 
-	for(size = (uint32_t)(cgba_arena_end - probe); size >= used_size;
-			size -= RETRY_STEP) {
+	max_size = (uint32_t)(cgba_arena_end - probe);
+	/* Without Mem_SbrkMode(1), avoid overshooting the 0x8ce80000 ceiling
+	 * when the 1 MiB probe advanced the break to probe + PROBE_BYTES. */
+	if(!sbrk_guarded && max_size > PROBE_BYTES &&
+			max_size - PROBE_BYTES >= used_size)
+		max_size -= PROBE_BYTES;
+
+	for(size = max_size; size >= used_size; size -= RETRY_STEP) {
 		block = malloc(size);
 		if(!block)
 			continue;
@@ -243,7 +276,19 @@ static const char *reserve_arena_unknown(void)
 
 static const char *reserve_arena(void)
 {
-	return os_heap_known() ? reserve_arena_known() : reserve_arena_unknown();
+	cp_sbrk_mode_fn sbrk_mode = os_sbrk_mode_call();
+	signed char prev_mode = 0;
+	const char *error;
+
+	/* Suppress the OS "Insufficient System Memory to Run" dialog while
+	 * reserving the arena so any failed allocation returns NULL cleanly. */
+	if(sbrk_mode)
+		prev_mode = sbrk_mode(1);
+	error = os_heap_known() ? reserve_arena_known()
+		: reserve_arena_unknown(sbrk_mode != NULL);
+	if(sbrk_mode)
+		(void)sbrk_mode(prev_mode);
+	return error;
 }
 
 uint32_t cgba_classpad_heap_differs(void)
@@ -281,6 +326,11 @@ uint32_t cgba_classpad_file_getaddr(void)
 	return file_getaddr;
 }
 
+uint32_t cgba_classpad_file_open(void)
+{
+	return sym_file_open;
+}
+
 /* ---- loading the core ----------------------------------------------------- */
 
 static int self_read(void *ctx, void *dst, uint32_t offset, uint32_t size)
@@ -292,20 +342,31 @@ static int self_read(void *ctx, void *dst, uint32_t offset, uint32_t size)
 	return BFile_Read(fd, dst, (int)size) == (int)size;
 }
 
-/* Runs in the OS world. */
+/* Runs in the OS world. Reads .cgba.core directly into the reserved arena and
+ * stages .ilram in the leading 4 KiB of onchip_backup (copied to 0xe5200000
+ * after leaving the OS world so OS file calls cannot clobber ILRAM). */
 static int load_core(void)
 {
-	uint32_t size = (uint32_t)(cgba_core_end - cgba_core_start);
+	uint32_t core_size = (uint32_t)(cgba_core_end - cgba_core_start);
+	uint32_t ilram_size = (uint32_t)(cgba_ilram_end - cgba_ilram_start);
 	uint32_t offset = 0;
-	int fd = BFile_Open(self_path, 1);
-	int ok;
+	int fd, ok;
 
+	if(ilram_size == 0 || ilram_size > CP_ILRAM_SIZE)
+		return -11;
+	fd = BFile_Open(self_path, 1);
 	if(fd < 0)
 		return -10;
 	ok = cp_elf_find_section(self_read, &fd,
-		(uint32_t)(uintptr_t)cgba_core_start, size, &offset);
-	if(ok == 0 && !self_read(&fd, cgba_core_start, offset, size))
+		(uint32_t)(uintptr_t)cgba_core_start, core_size, &offset);
+	if(ok == 0 && !self_read(&fd, cgba_core_start, offset, core_size))
 		ok = -5;
+	if(ok == 0) {
+		ok = cp_elf_find_section(self_read, &fd,
+			(uint32_t)(uintptr_t)cgba_ilram_start, ilram_size, &offset);
+		if(ok == 0 && !self_read(&fd, onchip_backup, offset, ilram_size))
+			ok = -6;
+	}
 	BFile_Close(fd);
 	return ok;
 }
@@ -319,7 +380,9 @@ const char *cgba_classpad_arena_init(void)
 
 	/* The linker script puts every emulator .bss in the arena. */
 	memset(cgba_arena_start, 0, (size_t)(cgba_highbss_end - cgba_arena_start));
-	gint_set_onchip_save_mode(GINT_ONCHIP_BACKUP, onchip_backup);
+	/* Keep on-chip save/restore off while load_core stages .ilram into
+	 * onchip_backup, so gint_world_switch does not overwrite it on entry. */
+	gint_set_onchip_save_mode(GINT_ONCHIP_NOTHING, NULL);
 
 	if(gint_world_switch(GINT_CALL(load_core)) != 0) {
 		cgba_classpad_arena_release();
@@ -329,8 +392,14 @@ const char *cgba_classpad_arena_init(void)
 		cgba_classpad_arena_release();
 		return "gpSP.hh3 on storage is a different build";
 	}
-	/* The core arrived through the data cache; make it executable. */
+	/* Populate ILRAM (and zero its unused tail) now that we are back in the
+	 * gint world, then enable backup/restore around later OS calls. */
+	memcpy(cgba_ilram_start, onchip_backup, CP_ILRAM_SIZE);
+	/* The core and ILRAM stubs arrived through the data cache; make them
+	 * executable. */
 	cgba_sh4_cache_sync(cgba_core_start, cgba_core_end);
+	cgba_sh4_cache_sync(cgba_ilram_start, cgba_ilram_end);
+	gint_set_onchip_save_mode(GINT_ONCHIP_BACKUP, onchip_backup);
 	return NULL;
 }
 

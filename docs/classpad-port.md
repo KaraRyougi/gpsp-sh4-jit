@@ -394,13 +394,20 @@ At start-up `gint-gpsp/src/classpad_loader.c`:
    the break is first raised to 0x8ce40000; after that the block runs from
    the arena's start to the end of the free area around it. If something
    else is in the way, gpSP shows a message and exits without having asked
-   for anything. On an OS other than 02.01.7003 the heap's layout is not
-   known and the block is found by trying, as before;
-2. clears the arena and reads the `.cgba.core` section out of its own
-   `gpSP.hh3` (found through the ELF section headers), then compares a build
-   stamp linked into both halves;
-3. tells gint to save/restore ILRAM (the JIT dispatch stubs) around OS calls,
-   since gint cannot reload it from the image on this model.
+   for anything. The allocator's state (`head`, `brk`, `limit`, `unit`) is
+   discovered dynamically by following PC-relative literals from `Mem_Malloc`
+   in HollyHock-3's symbol table (working across OS 02.01.2000, 02.01.7002
+   and 02.01.7003 without hardcoded addresses), and `Mem_SbrkMode(1)` is set
+   around reservation so any out-of-memory fallback returns `NULL` instead of
+   raising the OS dialog;
+2. clears the arena and reads both `.cgba.core` and `.ilram` out of its own
+   `gpSP.hh3` (found through the ELF section headers; neither is in a
+   `PT_LOAD` segment, so launchers that restrict `PT_LOAD` to SDRAM
+   `0x8c000000..0x8d000000` accept the ELF), then compares a build stamp
+   linked into both halves;
+3. copies the staged `.ilram` dispatch stubs into `0xe5200000` and tells
+   gint to save/restore ILRAM around OS calls, since gint cannot reload it
+   from the image on this model.
 
 ### ROM
 
@@ -419,21 +426,26 @@ and fx-CG500) it is at the same address with the same code:
 
 gint binds only the symbols it wraps (`Mem_Malloc`, `Mem_Free` and 14
 `File_*` calls), not `File_GetAddr`. So the ELF entry
-(`cgba_hhk3_entry`) looks the name up in the table the launcher passes in
-`envp` (`HHK_SYMBOL_TABLE`, `HHK_SYMBOL_TABLE_LEN`), before gint starts and
-before the arena can overwrite the launcher's memory. The table must start
-with the OS guard string at 0x814fffe0; a later entry with the same name
-(from the launcher's override file) wins, as in gint. If the table has no
-`File_GetAddr`, 0x80058c88 is tried.
+(`cgba_hhk3_entry`) looks `File_GetAddr` and `File_Open` up in the table the
+launcher passes in `envp` (`HHK_SYMBOL_TABLE`, `HHK_SYMBOL_TABLE_LEN`), before
+gint starts and before the arena can overwrite the launcher's memory. The table
+must start with the OS guard string at 0x814fffe0; a later entry with the same
+name (from the launcher's override file) wins, as in gint.
 
-Before the address is called, `classpad_hhk.h` checks the code there: the
-whole entry routine, that it sets SR.BL and IMASK, the forwarding routine
-up to its jump into the core, and the core's cluster-to-sector arithmetic.
-It follows the PC-relative literals that link the three rather than using
-fixed addresses, so the same code at another address passes. If it
-matches, every block of the ROM is mapped where it lies in flash, as on the
-fx-CG100, and the addresses are asked for again after anything is written
-to storage. No RAM is used for the ROM and nothing is paged.
+Before calling it, `cp_hhk_resolve_file_getaddr()` (`classpad_hhk.h`) checks the
+code there: the whole entry routine, that it sets SR.BL and IMASK, the
+forwarding routine up to its jump into the core, and the core's
+cluster-to-sector arithmetic. It follows the PC-relative literals that link the
+three rather than using fixed addresses, so the same code at another address
+passes. On OS 02.01.2000, HollyHock-3's `addresses.json` points `File_GetAddr`
+at the inner forwarding routine (`0x80057c6a`) instead of the outer
+interrupt-masking wrapper (`0x80058188`); `cp_hhk_resolve_file_getaddr()`
+detects that and locates the verified outer wrapper that calls it (and can also
+locate it relative to `File_Open` if `File_GetAddr` is absent from the symbol
+table, falling back to `0x80058c88`). If it matches, every block of the ROM is
+mapped where it lies in flash, as on the fx-CG100, and the addresses are asked
+for again after anything is written to storage. No RAM is used for the ROM and
+nothing is paged.
 
 If it does not match, the RAM pool below is used instead.
 

@@ -233,12 +233,10 @@ static cp_block_address_fn cp_block_address_call(void)
 #ifdef CGBA_HOST_TEST
 	return NULL;
 #else
-	uint32_t named = cgba_classpad_file_getaddr();
-	uint32_t entry = named ? named : CP_FILE_GETADDR_KNOWN;
+	uint32_t entry = cp_hhk_resolve_file_getaddr(cp_os_code, NULL,
+		cgba_classpad_file_getaddr(), cgba_classpad_file_open());
 
-	if(!cp_hhk_file_getaddr_ok(cp_os_code, NULL, entry))
-		return NULL;
-	return (cp_block_address_fn)(uintptr_t)entry;
+	return entry ? (cp_block_address_fn)(uintptr_t)entry : NULL;
 #endif
 }
 

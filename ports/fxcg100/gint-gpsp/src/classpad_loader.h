@@ -18,9 +18,10 @@ void cgba_classpad_arena_release(void);
  * ROM. The size is a multiple of 32 KiB and may be zero. */
 void cgba_classpad_rom_pool(uint8_t **base, uint32_t *size);
 
-/* Address that HollyHock-3's symbol table gives for File_GetAddr, read at
- * the ELF entry; 0 if the table has no such entry. Not yet checked: see
- * cp_hhk_file_getaddr_ok in classpad_hhk.h. */
+/* Addresses that HollyHock-3's symbol table gives for File_GetAddr and
+ * File_Open, read at the ELF entry; 0 if the table has no such entry. Not
+ * yet checked: see cp_hhk_resolve_file_getaddr in classpad_hhk.h. */
 uint32_t cgba_classpad_file_getaddr(void);
+uint32_t cgba_classpad_file_open(void);
 
 #endif

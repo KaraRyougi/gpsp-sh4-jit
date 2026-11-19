@@ -236,6 +236,174 @@ static void test_check(void)
 		"relocated routines rejected");
 	CHECK(!cp_hhk_file_getaddr_ok(image_view, &img, entry),
 		"old address accepted after relocation");
+
+	/* cp_hhk_resolve_file_getaddr:
+	 * 1. Direct outer wrapper (OS 02.01.7002 / 02.01.7003). */
+	build(&img, entry, forward, core);
+	CHECK(cp_hhk_resolve_file_getaddr(image_view, &img, entry, 0) == entry,
+		"resolve direct 7003 wrapper failed");
+
+	/* 2. Inner forward address from OS 02.01.2000 addresses.json (0x80057c6a):
+	 *    must locate the outer interrupt-masking wrapper at +0x51e (0x80058188). */
+	build(&img, 0x80058188u, 0x80057c6au, 0x80047118u);
+	CHECK(cp_hhk_resolve_file_getaddr(image_view, &img, 0x80057c6au, 0) ==
+		0x80058188u, "resolve OS 2000 inner forward -> outer wrapper failed");
+
+	/* 3. Inner forward with non-standard offset to outer wrapper (scan path). */
+	build(&img, 0x80058400u, 0x80057c6au, 0x80047118u);
+	CHECK(cp_hhk_resolve_file_getaddr(image_view, &img, 0x80057c6au, 0) ==
+		0x80058400u, "resolve inner forward via scan failed");
+
+	/* 4. Absent File_GetAddr, resolved relative to File_Open (+0x26c and scan). */
+	build(&img, 0x80058188u, 0x80057c6au, 0x80047118u);
+	CHECK(cp_hhk_resolve_file_getaddr(image_view, &img, 0, 0x80057f1cu) ==
+		0x80058188u, "resolve via File_Open + 0x26c failed");
+	build(&img, 0x80058320u, 0x80057c6au, 0x80047118u);
+	CHECK(cp_hhk_resolve_file_getaddr(image_view, &img, 0, 0x80057f1cu) ==
+		0x80058320u, "resolve via File_Open scan failed");
+
+	/* 5. Corrupt image: must return 0 rather than an unverified address. */
+	memset(img.data, 0x09, img.size);
+	CHECK(cp_hhk_resolve_file_getaddr(image_view, &img, 0x80057c6au,
+		0x80057f1cu) == 0, "corrupt image resolved non-zero");
+}
+
+static void put16(struct os_image *img, uint32_t address, uint16_t value)
+{
+	uint8_t *p = at(img, address);
+
+	p[0] = (uint8_t)(value >> 8);
+	p[1] = (uint8_t)value;
+}
+
+static void put32(struct os_image *img, uint32_t address, uint32_t value)
+{
+	uint8_t *p = at(img, address);
+
+	p[0] = (uint8_t)(value >> 24); p[1] = (uint8_t)(value >> 16);
+	p[2] = (uint8_t)(value >> 8); p[3] = (uint8_t)value;
+}
+
+/* Emit a "mov.l @(disp,PC), Rn" at `insn` and store `value` at `lit_addr`. */
+static void put_movl_pc(struct os_image *img, uint32_t insn, unsigned reg,
+	uint32_t lit_addr, uint32_t value)
+{
+	uint32_t base = (insn & ~3u) + 4u;
+	uint32_t disp = (lit_addr - base) / 4u;
+
+	put16(img, insn, (uint16_t)(0xd000u | ((reg & 0xfu) << 8) | (disp & 0xffu)));
+	put32(img, lit_addr, value);
+}
+
+static void build_heap_os(struct os_image *img, uint32_t mem_malloc,
+	uint32_t malloc_fn, uint32_t mem_free, uint32_t mem_sbrk,
+	uint32_t mem_sbrk_mode, uint32_t head, uint32_t brk, uint32_t limit,
+	uint32_t unit_at, uint32_t unit, uint32_t mode_flag)
+{
+	static const uint8_t malloc_prolog[8] = {
+		0x2f,0xc6, 0x2f,0xd6, 0x2f,0xe6, 0x4f,0x22
+	};
+	static const uint8_t morecore_prolog[6] = {
+		0x2f,0xe6, 0x4f,0x22, 0x4f,0x12
+	};
+	static const uint8_t sbrk_check[8] = {
+		0x60,0x72, 0x66,0x03, 0x36,0x4c, 0x36,0x26
+	};
+	static const uint8_t mode_tail[16] = {
+		0x62,0x4c, 0x65,0x5c, 0x32,0x50, 0x8d,0x01,
+		0x66,0x10, 0x21,0x40, 0x00,0x0b, 0x60,0x63
+	};
+	uint32_t morecore = malloc_fn + 0x90u;
+	uint32_t bsr_disp = ((morecore - (malloc_fn + 0x2eu + 4u)) / 2u) & 0xfffu;
+
+	memset(img->data, 0x09, img->size);
+
+	/* Mem_Malloc */
+	put_movl_pc(img, mem_malloc + 0x1cu, 11, (mem_malloc + 0x58u) & ~3u,
+		malloc_fn);
+	put16(img, mem_malloc + 0x22u, 0x4b0bu);
+
+	/* malloc + morecore */
+	memcpy(at(img, malloc_fn), malloc_prolog, sizeof(malloc_prolog));
+	put_movl_pc(img, malloc_fn + 0x0eu, 2, (malloc_fn + 0xccu) & ~3u,
+		0x7fffffffu);
+	put_movl_pc(img, malloc_fn + 0x16u, 1, (malloc_fn + 0xd0u) & ~3u, head);
+	put16(img, malloc_fn + 0x2eu, (uint16_t)(0xb000u | bsr_disp));
+	put_movl_pc(img, malloc_fn + 0x40u, 2, (malloc_fn + 0xd4u) & ~3u, mem_free);
+	memcpy(at(img, morecore), morecore_prolog, sizeof(morecore_prolog));
+	put_movl_pc(img, morecore + 0x06u, 5, (malloc_fn + 0xd8u) & ~3u, unit_at);
+	put_movl_pc(img, morecore + 0x20u, 2, (malloc_fn + 0xe0u) & ~3u, mem_sbrk);
+	put32(img, unit_at, unit);
+
+	/* Mem_Free */
+	put16(img, mem_free, 0x2fe6u);
+	put_movl_pc(img, mem_free + 0x08u, 2, (mem_free + 0x94u) & ~3u, head);
+
+	/* Mem_Sbrk */
+	put16(img, mem_sbrk, 0x4f22u);
+	put_movl_pc(img, mem_sbrk + 0x02u, 7, (mem_sbrk + 0x96u) & ~3u, brk);
+	put_movl_pc(img, mem_sbrk + 0x04u, 2, (mem_sbrk + 0x9au) & ~3u, limit);
+	memcpy(at(img, mem_sbrk + 0x06u), sbrk_check, sizeof(sbrk_check));
+
+	/* Mem_SbrkMode */
+	put16(img, mem_sbrk_mode, 0xe5ffu);
+	put_movl_pc(img, mem_sbrk_mode + 0x02u, 1,
+		(mem_sbrk_mode + 0x7au) & ~3u, mode_flag);
+	memcpy(at(img, mem_sbrk_mode + 0x04u), mode_tail, sizeof(mode_tail));
+}
+
+static void test_heap_discovery(void)
+{
+	static uint8_t mem[0x40000];
+	struct os_image img = { mem, 0x800a0000u, sizeof(mem) };
+	cp_hhk_heap_info info;
+	uint32_t differs = 0;
+
+	/* OS 02.01.7002 / 02.01.7003 layout */
+	build_heap_os(&img, CP_MEM_MALLOC_KNOWN, 0x800a8744u, CP_MEM_FREE_KNOWN,
+		CP_MEM_SBRK_KNOWN, CP_MEM_SBRK_MODE_KNOWN, 0x8c1a35f0u, 0x8c2233ccu,
+		0x8ce80000u, 0x800de000u, 0x400u, 0x8c1a2dc0u);
+	CHECK(cp_hhk_find_heap(image_view, &img, CP_MEM_MALLOC_KNOWN,
+		CP_MEM_FREE_KNOWN, CP_MEM_SBRK_KNOWN, 0x8cde6da0u, &info, &differs),
+		"7003 heap layout rejected (differs=0x%x)", (unsigned)differs);
+	CHECK(info.head == 0x8c1a35f0u && info.brk == 0x8c2233ccu &&
+		info.limit == 0x8ce80000u && info.unit == 0x400u &&
+		info.malloc_fn == 0x800a8744u, "7003 extracted fields mismatch");
+	CHECK(cp_hhk_sbrk_mode_ok(image_view, &img, CP_MEM_SBRK_MODE_KNOWN),
+		"7003 Mem_SbrkMode rejected");
+
+	/* OS 02.01.2000 layout (different code addresses AND different brk RAM address) */
+	build_heap_os(&img, 0x800cfb00u, 0x800a7794u, 0x800a76fcu,
+		0x800cdec6u, 0x800aedf6u, 0x8c1a35f0u, 0x8c2233a0u,
+		0x8ce80000u, 0x800de004u, 0x400u, 0x8c1a2dc0u);
+	CHECK(cp_hhk_find_heap(image_view, &img, 0x800cfb00u, 0x800a76fcu,
+		0x800cdec6u, 0x8cde6da0u, &info, &differs),
+		"2000 heap layout rejected (differs=0x%x)", (unsigned)differs);
+	CHECK(info.head == 0x8c1a35f0u && info.brk == 0x8c2233a0u &&
+		info.limit == 0x8ce80000u && info.unit == 0x400u &&
+		info.malloc_fn == 0x800a7794u, "2000 extracted fields mismatch");
+	CHECK(cp_hhk_sbrk_mode_ok(image_view, &img, 0x800aedf6u),
+		"2000 Mem_SbrkMode rejected");
+
+	/* Works without optional Mem_Free / Mem_Sbrk symbol hints too. */
+	CHECK(cp_hhk_find_heap(image_view, &img, 0x800cfb00u, 0, 0,
+		0x8cde6da0u, &info, &differs),
+		"heap discovery failed when optional hints omitted");
+
+	/* Limit below arena end must be rejected with bit 0x20. */
+	build_heap_os(&img, 0x800cfb00u, 0x800a7794u, 0x800a76fcu,
+		0x800cdec6u, 0x800aedf6u, 0x8c1a35f0u, 0x8c2233a0u,
+		0x8cd00000u, 0x800de004u, 0x400u, 0x8c1a2dc0u);
+	CHECK(!cp_hhk_find_heap(image_view, &img, 0x800cfb00u, 0x800a76fcu,
+		0x800cdec6u, 0x8cde6da0u, &info, &differs) && (differs & 0x20u),
+		"undersized heap limit accepted");
+
+	/* Corrupted Mem_SbrkMode flag outside RAM must be rejected. */
+	build_heap_os(&img, 0x800cfb00u, 0x800a7794u, 0x800a76fcu,
+		0x800cdec6u, 0x800aedf6u, 0x8c1a35f0u, 0x8c2233a0u,
+		0x8ce80000u, 0x800de004u, 0x400u, 0x80000000u);
+	CHECK(!cp_hhk_sbrk_mode_ok(image_view, &img, 0x800aedf6u),
+		"Mem_SbrkMode with ROM flag accepted");
 }
 
 static void test_dump(const char *path)
@@ -243,18 +411,47 @@ static void test_dump(const char *path)
 	FILE *f = fopen(path, "rb");
 	static uint8_t data[0x2000000];
 	struct os_image img = { data, 0x80000000, 0 };
+	cp_hhk_heap_info heap;
+	uint32_t differs = 0;
+	const char *guard;
+	int is_2000;
+	uint32_t fga, fga_sym, mm, mf, ms, msm, fopen_addr, resolved;
 
 	CHECK(f != NULL, "cannot open %s", path);
 	if (!f)
 		return;
 	img.size = (uint32_t)fread(data, 1, sizeof(data), f);
 	fclose(f);
-	CHECK(cp_hhk_file_getaddr_ok(image_view, &img, CP_FILE_GETADDR_KNOWN),
-		"%s: File_GetAddr at %08x rejected", path, CP_FILE_GETADDR_KNOWN);
-	CHECK(!cp_hhk_file_getaddr_ok(image_view, &img, 0x80058a1c),
+	guard = (const char *)data + 0x14fffe0;
+	is_2000 = memcmp(guard, "2017.0512.1515", 14) == 0;
+	fga = is_2000 ? 0x80058188u : CP_FILE_GETADDR_KNOWN;
+	/* What HollyHock-3's addresses.json actually lists for File_GetAddr:
+	 * outer wrapper on 7002/7003, inner forward routine on 2000. */
+	fga_sym = is_2000 ? 0x80057c6au : CP_FILE_GETADDR_KNOWN;
+	mm  = is_2000 ? 0x800cfb00u : CP_MEM_MALLOC_KNOWN;
+	mf  = is_2000 ? 0x800a76fcu : CP_MEM_FREE_KNOWN;
+	ms  = is_2000 ? 0x800cdec6u : CP_MEM_SBRK_KNOWN;
+	msm = is_2000 ? 0x800aedf6u : CP_MEM_SBRK_MODE_KNOWN;
+	fopen_addr = is_2000 ? 0x80057f1cu : 0x80058a1cu;
+
+	CHECK(cp_hhk_file_getaddr_ok(image_view, &img, fga),
+		"%s: File_GetAddr at %08x rejected", path, fga);
+	resolved = cp_hhk_resolve_file_getaddr(image_view, &img, fga_sym, fopen_addr);
+	CHECK(resolved == fga,
+		"%s: resolve(sym=%08x, open=%08x) returned %08x, expected %08x",
+		path, fga_sym, fopen_addr, resolved, fga);
+	CHECK(cp_hhk_resolve_file_getaddr(image_view, &img, 0, fopen_addr) == fga,
+		"%s: resolve(0, open=%08x) failed", path, fopen_addr);
+	CHECK(!cp_hhk_file_getaddr_ok(image_view, &img, fopen_addr),
 		"%s: File_Open accepted as File_GetAddr", path);
-	printf("%s: guard \"%.15s\", File_GetAddr at %08x checked\n", path,
-		(const char *)data + 0x14fffe0, CP_FILE_GETADDR_KNOWN);
+	CHECK(cp_hhk_find_heap(image_view, &img, mm, mf, ms, 0x8cde6da0u,
+		&heap, &differs),
+		"%s: heap discovery failed (differs=0x%x)", path, (unsigned)differs);
+	CHECK(cp_hhk_sbrk_mode_ok(image_view, &img, msm),
+		"%s: Mem_SbrkMode at %08x rejected", path, msm);
+	printf("%s: guard \"%.15s\", File_GetAddr sym=%08x -> %08x, heap head=%08x "
+		"brk=%08x limit=%08x unit=%x\n", path, guard, fga_sym, resolved,
+		heap.head, heap.brk, heap.limit, heap.unit);
 }
 
 int main(int argc, char **argv)
@@ -262,6 +459,7 @@ int main(int argc, char **argv)
 	test_table();
 	test_env();
 	test_check();
+	test_heap_discovery();
 	if (argc == 2)
 		test_dump(argv[1]);
 
