@@ -35,6 +35,7 @@
 #include "fxcg100_platform.h"
 #include "classpad_layout.h"
 #include "classpad_clock.h"
+#include "classpad_font.h"
 #include "classpad_gfx.h"
 #include "classpad_theme.h"
 
@@ -1720,8 +1721,8 @@ static void leave_settings(cp_ui *ui)
 static fxcg100_menu_result screen_settings(cp_ui *ui)
 {
 	static const char *const turn[] = { "Portrait", "CW", "CCW", "180" };
-	static const char *const size_portrait[] = { "1:1", "Fit width" };
-	static const char *const size_landscape[] = { "1:1", "1.5x", "2x" };
+	static const char *const size_portrait[] = { "Original", "Full Width" };
+	static const char *const size_landscape[] = { "Original", "1.5x", "2x" };
 	static const char *const filter[] = { "Smooth", "Sharp", "Crisp" };
 	static const char *const transfer[] = { "DMA", "CPU" };
 	static const char *const frameskip[] = { "Auto", "Manual", "Off" };

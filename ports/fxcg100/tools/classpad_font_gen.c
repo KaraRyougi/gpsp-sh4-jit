@@ -1,25 +1,39 @@
-/* Rasterises a TrueType font into the 4-bit-per-pixel glyph tables used by
- * the fx-CP400 interface (ports/fxcg100/classpad_font.h).
+/* Rasterises TrueType / OpenType fonts into the 4-bit-per-pixel glyph
+ * tables of the calculator interfaces: ports/fxcg100/classpad_font.h
+ * (fx-CP400) and ports/fxcg100/cg_font.h (fx-CG50 / fx-CG100).
  *
  *   cc classpad_font_gen.c $(pkg-config --cflags --libs freetype2) -o gen
- *   ./gen NAME PIXEL_SIZE FONT.ttf [NAME PIXEL_SIZE FONT.ttf ...] > classpad_font.h
+ *   ./gen [-p PREFIX] NAME SIZE FONT[,FACE[,WGHT]] ... > header.h
  *
- * Each font covers ASCII 32..126. A glyph is stored as its tight bitmap,
- * two pixels to a byte (first pixel in the top four bits), rows padded to a
- * byte, coverage quantised to 0..15.
+ * Each table is named PREFIX_font_NAME (PREFIX is "cp" unless given) and
+ * covers ASCII 32..126. FACE picks a face in a collection (.ttc); WGHT sets
+ * the wght axis of a variable font. Glyphs are rendered with
+ * FT_LOAD_TARGET_LIGHT. A glyph is stored as its tight bitmap, two pixels to
+ * a byte (first pixel in the top four bits), rows padded to a byte, coverage
+ * quantised to 0..15. The table layout is in classpad_font_types.h.
  *
- * The checked-in header was generated from Source Sans 3 (SIL Open Font
- * License 1.1, see ports/fxcg100/fonts/; the TTFs are at
+ * classpad_font.h was generated from Source Sans 3 (SIL Open Font License
+ * 1.1, see ports/fxcg100/fonts/; the TTFs are at
  * github.com/adobe-fonts/source-sans, release branch, TTF/):
  *
  *   ./gen small 15 SourceSans3-Medium.ttf body 18 SourceSans3-Regular.ttf \
  *         title 24 SourceSans3-Semibold.ttf
  *
  * The small size uses the Medium weight: at 15 px a Regular stem is barely
- * over a pixel wide and comes out uneven. */
+ * over a pixel wide and comes out uneven.
+ *
+ * cg_font.h is one weight heavier throughout (a 16 px Regular stem is about
+ * 1.5 px and looks faint on the dark schemes). It was generated from the
+ * Latin glyphs of the Source Han Sans variable font, which are Source Sans:
+ *
+ *   ./gen -p cg title 16 SourceHanSans-VF.otf.ttc,0,700 \
+ *         body 16 SourceHanSans-VF.otf.ttc,0,500 \
+ *         small 14 SourceHanSans-VF.otf.ttc,0,600 \
+ *         key 11 SourceHanSans-VF.otf.ttc,0,700 */
 
 #include <ft2build.h>
 #include FT_FREETYPE_H
+#include FT_MULTIPLE_MASTERS_H
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -28,16 +42,58 @@
 #define FIRST 32
 #define LAST 126
 
+static const char *prefix = "cp";
+
+/* FONT[,FACE[,WGHT]]: open the face and set its weight. */
+static FT_Face open_face(FT_Library lib, const char *spec)
+{
+	char path[1024];
+	const char *comma = strchr(spec, ',');
+	long index = 0, wght = 0;
+	FT_Face face;
+
+	snprintf(path, sizeof(path), "%.*s",
+		comma ? (int)(comma - spec) : (int)strlen(spec), spec);
+	if (comma) {
+		index = strtol(comma + 1, NULL, 10);
+		comma = strchr(comma + 1, ',');
+		if (comma)
+			wght = strtol(comma + 1, NULL, 10);
+	}
+	if (FT_New_Face(lib, path, index, &face)) {
+		fprintf(stderr, "cannot load %s\n", path);
+		exit(1);
+	}
+	if (wght) {
+		FT_MM_Var *mm;
+		FT_Fixed coords[16];
+		unsigned a;
+
+		if (!FT_HAS_MULTIPLE_MASTERS(face) || FT_Get_MM_Var(face, &mm)) {
+			fprintf(stderr, "%s has no weight axis\n", path);
+			exit(1);
+		}
+		for (a = 0; a < mm->num_axis && a < 16; a++) {
+			coords[a] = mm->axis[a].def;
+			if (mm->axis[a].tag == FT_MAKE_TAG('w', 'g', 'h', 't'))
+				coords[a] = (FT_Fixed)(wght << 16);
+		}
+		FT_Set_Var_Design_Coordinates(face, a, coords);
+		FT_Done_MM_Var(lib, mm);
+	}
+	return face;
+}
+
 static void emit_font(FT_Library lib, const char *name, int size,
-	const char *path)
+	const char *spec)
 {
 	static unsigned char data[1 << 18];
 	struct { int off, w, h, left, top, adv; } g[LAST - FIRST + 1];
-	FT_Face face;
+	FT_Face face = open_face(lib, spec);
 	int used = 0, c, ascent, height;
 
-	if (FT_New_Face(lib, path, 0, &face) || FT_Set_Pixel_Sizes(face, 0, size)) {
-		fprintf(stderr, "cannot load %s\n", path);
+	if (FT_Set_Pixel_Sizes(face, 0, size)) {
+		fprintf(stderr, "cannot set %d px for %s\n", size, spec);
 		exit(1);
 	}
 	ascent = (int)((face->size->metrics.ascender + 32) >> 6);
@@ -49,7 +105,7 @@ static void emit_font(FT_Library lib, const char *name, int size,
 
 		if (FT_Load_Char(face, (FT_ULong)c,
 				FT_LOAD_RENDER | FT_LOAD_TARGET_LIGHT)) {
-			fprintf(stderr, "no glyph for %d in %s\n", c, path);
+			fprintf(stderr, "no glyph for %d in %s\n", c, spec);
 			exit(1);
 		}
 		slot = face->glyph;
@@ -73,56 +129,64 @@ static void emit_font(FT_Library lib, const char *name, int size,
 		}
 	}
 
-	printf("static const uint8_t cp_font_%s_data[%d] = {", name, used);
+	printf("static const uint8_t %s_font_%s_data[%d] = {", prefix, name, used);
 	for (c = 0; c < used; c++)
 		printf("%s%u,", c % 20 ? "" : "\n\t", data[c]);
 	printf("\n};\n\n");
-	printf("static const cp_glyph cp_font_%s_glyphs[%d] = {\n", name,
+	printf("static const cp_glyph %s_font_%s_glyphs[%d] = {\n", prefix, name,
 		LAST - FIRST + 1);
 	for (c = FIRST; c <= LAST; c++)
 		printf("\t{ %d, %d, %d, %d, %d, %d },\n", g[c - FIRST].off,
 			g[c - FIRST].w, g[c - FIRST].h, g[c - FIRST].left,
 			g[c - FIRST].top, g[c - FIRST].adv);
 	printf("};\n\n");
-	printf("static const cp_font cp_font_%s = {\n"
-		"\tcp_font_%s_glyphs, cp_font_%s_data, %d, %d\n};\n\n",
-		name, name, name, height, ascent);
+	printf("static const cp_font %s_font_%s = {\n"
+		"\t%s_font_%s_glyphs, %s_font_%s_data, %d, %d\n};\n\n",
+		prefix, name, prefix, name, prefix, name, height, ascent);
 	FT_Done_Face(face);
 }
 
 int main(int argc, char **argv)
 {
 	FT_Library lib;
-	int i;
+	char guard[64];
+	int i, first = 1;
 
-	if (argc < 4 || (argc - 1) % 3 || FT_Init_FreeType(&lib)) {
-		fprintf(stderr, "usage: %s NAME SIZE FONT.ttf ...\n", argv[0]);
+	if (argc > 2 && !strcmp(argv[1], "-p")) {
+		prefix = argv[2];
+		first = 3;
+	}
+	if (argc - first < 3 || (argc - first) % 3 || FT_Init_FreeType(&lib)) {
+		fprintf(stderr, "usage: %s [-p PREFIX] NAME SIZE FONT[,FACE[,WGHT]] ...\n",
+			argv[0]);
 		return 1;
 	}
-	printf("#ifndef CGBA_CLASSPAD_FONT_H\n#define CGBA_CLASSPAD_FONT_H\n\n"
+	if (!strcmp(prefix, "cp"))
+		snprintf(guard, sizeof(guard), "CGBA_CLASSPAD_FONT_H");
+	else {
+		char *g;
+
+		snprintf(guard, sizeof(guard), "CGBA_%s_FONT_H", prefix);
+		for (g = guard; *g; g++)
+			if (*g >= 'a' && *g <= 'z')
+				*g = (char)(*g - 'a' + 'A');
+	}
+	printf("#ifndef %s\n#define %s\n\n"
 		"/* Generated by ports/fxcg100/tools/classpad_font_gen.c - do not edit.\n"
-		" *\n"
-		" * Glyph tables for the fx-CP400 interface, rasterised from Source Sans 3\n"
-		" * (Copyright 2010-2020 Adobe, SIL Open Font License 1.1; the licence is in\n"
-		" * ports/fxcg100/fonts/OFL.txt). ASCII 32..126, 4 bits of coverage per\n"
-		" * pixel, two pixels to a byte with the first pixel in the top bits, rows\n"
-		" * padded to a byte. */\n\n"
-		"#include <stdint.h>\n\n"
-		"typedef struct cp_glyph {\n"
-		"\tuint16_t offset;      /* into the font's data */\n"
-		"\tuint8_t w, h;         /* bitmap size */\n"
-		"\tint8_t left, top;     /* bitmap origin from the pen and the line top */\n"
-		"\tuint8_t advance;\n"
-		"} cp_glyph;\n\n"
-		"typedef struct cp_font {\n"
-		"\tconst cp_glyph *glyphs;\n"
-		"\tconst uint8_t *data;\n"
-		"\tuint8_t height;       /* line height */\n"
-		"\tuint8_t ascent;\n"
-		"} cp_font;\n\n"
-		"#define CP_FONT_FIRST %d\n#define CP_FONT_LAST %d\n\n", FIRST, LAST);
-	for (i = 1; i + 2 < argc; i += 3)
+		" * See that file for the command line and the fonts used (SIL Open\n"
+		" * Font License 1.1; the licence is in ports/fxcg100/fonts/OFL.txt).\n"
+		" *\n", guard, guard);
+	for (i = first; i + 2 < argc; i += 3) {
+		const char *base = strrchr(argv[i + 2], '/');
+
+		printf(" *   %s_font_%s: %s px, %s\n", prefix, argv[i], argv[i + 1],
+			base ? base + 1 : argv[i + 2]);
+	}
+	printf(" *\n"
+		" * ASCII %d..%d, 4 bits of coverage per pixel (classpad_font_types.h). */\n\n"
+		"#include \"classpad_font_types.h\"\n\n", FIRST, LAST);
+	for (i = first; i + 2 < argc; i += 3)
 		emit_font(lib, argv[i], atoi(argv[i + 1]), argv[i + 2]);
-	printf("#endif /* CGBA_CLASSPAD_FONT_H */\n");
+	printf("#endif /* %s */\n", guard);
 	return 0;
 }

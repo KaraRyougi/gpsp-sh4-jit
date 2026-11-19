@@ -2,14 +2,13 @@
 
 # gpSP for CASIO: A GBA Emulator for CASIO Graphing Calculators
 
-gpSP for CASIO brings Game Boy Advance games to the **CASIO fx-CG50 / Graph 90+E** and **fx-CG100 / Graph Math+** graphing calculators. This port is based on [gpSP emulator maintained by libretro](https://github.com/libretro/gpsp), with an added dynamic recompiler ("dynarec" / "JIT") for the calculators' SH-4A CPU. It also includes a built-in overclocking profile. With dynarec and overclocking, many GBA games will run at or close to full speed on the calculator. For more demanding games, automatic or manual frameskip can help keep gameplay smooth.
+gpSP for CASIO brings Game Boy Advance games to the **CASIO fx-CG50 / Graph 90+E** and **fx-CG100 / Graph Math+** graphing calculators. This port is based on [gpSP emulator maintained by libretro](https://github.com/libretro/gpsp), with an added dynamic recompiler ("dynarec" / "JIT") for the calculators' SH-4A CPU. gpSP does not overclock the calculator itself; apply a Ptune profile (such as Ptune4's F5) before launching it for the best speed. With dynarec and an overclock, many GBA games will run at or close to full speed on the calculator. For more demanding games, automatic or manual frameskip can help keep gameplay smooth.
 
 The dynarec is *fully* vibe-coded using GPT-5.5 / Opus 4.8, and later GPT-5.6 Sol / Fable 5. It has been extensively tested to ensure compatibility, although there still can be issues.
 
 ## Features
 
 - SH-4A dynamic recompiler (JIT) - it's the first GBA dynarec for the SuperH architecture!
-- Built-in overclocking while the emulator is running
 - ROM picker for `.gba` files in main storage
 - Three display sizes and three scaling filters
 - Automatic and manual frameskip
@@ -31,22 +30,26 @@ The two calculator builds are model-specific, so make sure you download the righ
 
 ## Usage
 
-When gpSP opens, you will see the settings menu. Highlight **ROM SOURCE** and use Left or Right to choose a game, then select **LOAD NEW GAME**. During gameplay, press your calculator's menu key at any time to pause and return to this menu:
+gpSP opens on the list of games. Choose one with the arrow keys and press `EXE` (or `OK` on the fx-CG100) to play. During play, press the menu key to pause:
 
-| Action                              | fx-CG50 / Graph 90+E | fx-CG100 / Graph Math+ |
-| ----------------------------------- | -------------------- | ---------------------- |
-| Open the gpSP menu                  | `AC/ON`              | `ON`                   |
-| Move through the menu               | Arrow keys           | Arrow keys             |
-| Change a setting                    | Left / Right         | Left / Right           |
-| Select                              | `EXE`                | `EXE` or `OK`          |
-| Go back                             | `EXIT`               | `BACK`                 |
-| Exit gpSP immediately from the menu | `MENU`               | `HOME`                 |
+| Action                                         | fx-CG50 / Graph 90+E | fx-CG100 / Graph Math+ |
+| ---------------------------------------------- | -------------------- | ---------------------- |
+| Open the pause menu (during play)              | `AC/ON`              | `ON`                   |
+| Move up and down (hold to repeat)              | Up / Down            | Up / Down              |
+| Change a value; turn a page of the game list   | Left / Right         | Left / Right           |
+| Select, open                                   | `EXE`                | `EXE` or `OK`          |
+| Go back (in the pause menu: resume the game)   | `EXIT`               | `BACK`                 |
+| Settings, from any page                        | `OPTN`               | `SETTINGS`             |
+| Exit gpSP (asks first; press it again to exit) | `MENU`               | `HOME`                 |
+| Pick a savestate slot in the pause menu        | `0`–`9`              | `0`–`9`                |
 
-The interface will feel familiar if you have used the gpSP port for the TI-Nspire CX. Settings are not saved automatically, so choose **SAVE CONFIG** after changing the controls or graphics options if you want to keep them for the next launch.
+The bar at the bottom of every page lists the keys the highlighted row takes, and shows results such as "State saved to slot 3" until you press a key (or for two seconds).
+
+The pause menu has **Resume**, **Save state** and **Load state** (the slot is shown at the end of the row), **Settings**, **Games**, **Restart** and **Exit gpSP**. Restart, Exit and switching to another game ask before they act. Settings are saved automatically when you leave the Settings page; **Colour** under Appearance picks one of eight colour schemes.
 
 ### Default key bindings
 
-Want a different layout? You can remap every GBA button under **CONFIGURE GAMEPAD INPUT**. Only the gpSP menu key is reserved. Emulator hotkeys start unassigned, so they will not interfere with the normal controls.
+Want a different layout? Go to **Settings → Key mapping**, highlight a button, press `EXE` (`OK`) and then the key it should use. A key that something else already uses is swapped, so every GBA button always has a key. Only the gpSP menu key is reserved; pressing it cancels.
 
 #### fx-CG50 / Graph 90+E
 
@@ -74,7 +77,7 @@ Want a different layout? You can remap every GBA button under **CONFIGURE GAMEPA
 | R           | `END`             |
 | gpSP menu   | `ON`              |
 
-You can also assign hotkeys for **Fast Forward**, **Load State**, **Save State**, and **Display FPS**. **Save+Exit** appears in the menu, but it is not implemented yet.
+Under **Shortcuts** on the same page you can give keys to **Fast forward**, **Save state**, **Load state** and **Show frame rate**. They start with no key, so they do not interfere with the normal controls; `DEL` takes a shortcut's key away again.
 
 ## fx-CP400 / ClassPad II (experimental)
 
@@ -92,8 +95,8 @@ touch, and the keypad works as well (cursor keys, `EXE`, backspace for back).
 
 | Layout (Settings → Orientation and Picture size) | Picture | Touch keys |
 | ------------------------------------------------ | ------: | ---------- |
-| Portrait, 1:1                                    | 240×160 | Full pad below the picture |
-| Portrait, fit width (default)                    | 320×212 | Full pad below the picture |
+| Portrait, Original                               | 240×160 | Full pad below the picture |
+| Portrait, Full Width (default)                   | 320×212 | Full pad below the picture |
 | Landscape, 1.5x                                  | 360×240 | L/R and D-pad on the left; Select/Start and B/A below the picture |
 | Landscape, 2x                                    | 480×320 | L, R, Select, Start strip; D-pad and A/B on the keypad |
 
@@ -137,33 +140,33 @@ stops gpSP from starting, hold Clear while launching it.
 
 ## Display modes
 
-The **GRAPHICS OPTIONS** menu offers three ways to fit the GBA picture onto the calculator's 396×224 display:
+**Settings → Picture size** offers three ways to fit the GBA picture onto the calculator's screen:
 
 | Menu setting | Resolution |       Aspect ratio | What it looks like                                           |
 | ------------ | ---------: | -----------------: | ------------------------------------------------------------ |
-| Unscaled 1:1 |    240×160 |                3:2 | The original GBA resolution, centered with a border and no scaling |
-| 4:3          |    320×212 | 80:53 (almost 3:2) | A larger image that stays very close to the GBA's original shape |
-| Fullscreen   |    384×216 |               16:9 | The largest picture; it nearly fills the screen but stretches the original 3:2 image horizontally |
+| Original     |    240×160 |                3:2 | The original GBA resolution, centered with a border and no scaling |
+| Full Height  |    320×212 | 80:53 (almost 3:2) | A larger image that stays very close to the GBA's original shape |
+| Full Screen  |    384×216 |               16:9 | The largest picture; it nearly fills the screen but stretches the original 3:2 image horizontally |
 
-The **4:3** name refers to the scaling factor—approximately four output pixels for every three source pixels—not the picture's aspect ratio. Its 320×212 output is still very close to the GBA's native 3:2 ratio. **Fullscreen** uses a true 16:9 picture ratio.
+**Full Height** scales by about four output pixels for every three source pixels; its 320×212 picture nearly fills the screen's height and stays very close to the GBA's native 3:2 ratio. **Full Screen** stretches the picture to a true 16:9 ratio.
 
-For either scaled mode, you can choose the look you prefer:
+For either scaled mode, **Scaling filter** chooses the look you prefer:
 
 - **Smooth** softens the image and blends jagged edges.
 - **Sharp** keeps more definition while still using some blending.
 - **Crisp** uses nearest-neighbor scaling for hard, pixelated edges.
 
-If a game feels slow, try **Automatic** frameskip first. **Manual** gives you a fixed frameskip value, while **Off** draws every frame. The optional FPS overlay shows both the emulation rate (`E`) and the number of frames actually drawn to the screen (`D`).
+If a game feels slow, try **Frame skipping: Auto** first. **Manual** gives you a fixed number of frames to skip, while **Off** draws every frame. **Show frame rate** displays both the emulation rate (`E`) and the number of frames actually drawn to the screen (`D`).
 
-The **60 FPS LIMIT** option is enabled by default. It keeps games from running faster than the GBA’s native rate. This limit is global regardless of the frameskip setting. It only caps games that would otherwise run too quickly. It cannot speed up a game running below 60 FPS. **Fast Forward** temporarily bypasses the limit. Turn the option off if you want unrestricted speed or are benchmarking performance.
+The **Limit to 60 fps** option is enabled by default. It keeps games from running faster than the GBA’s native rate. This limit is global regardless of the frameskip setting. It only caps games that would otherwise run too quickly. It cannot speed up a game running below 60 FPS. The **Fast forward** shortcut temporarily bypasses the limit. Turn the option off if you want unrestricted speed or are benchmarking performance.
 
 ## Save data and savestates
 
 Regular in-game GBA saves are supported and stored in `.SAV` files named after the ROM. gpSP writes new save data to storage when you change games or exit the emulator.
 
-To make sure your latest progress is written safely, use **EXIT GPSP**, press `MENU` on the fx-CG50 or `HOME` on the fx-CG100 while the gpSP menu is open, or load another game before turning off or resetting the calculator.
+To make sure your latest progress is written safely, exit with **Exit gpSP** (or `MENU` on the fx-CG50, `HOME` on the fx-CG100, then confirm), or load another game before turning off or resetting the calculator.
 
-Savestates are stored in ROM-named `.SVS` files. Choose a slot from 0 to 9, then select **SAVE STATE TO SLOT** or **LOAD STATE FROM SLOT**. If you prefer, you can assign quick-save and quick-load hotkeys for the currently selected slot.
+Savestates are stored in ROM-named `.SVS` files. In the pause menu, pick a slot from 0 to 9 with Left / Right on the **Save state** or **Load state** row (or with the digit keys), then press `EXE` (`OK`). Saving keeps the menu open and confirms at the bottom; loading goes back to the game. If you prefer, you can assign quick-save and quick-load shortcuts for the selected slot.
 
 gpSP forms save filenames from the first six alphanumeric characters in the ROM filename. Make those six characters unique for each game so that two ROMs do not accidentally share the same save files.
 
@@ -172,10 +175,10 @@ Savestates may not work across different gpSP releases, so regular in-game saves
 ## Notes and current limitations
 
 - There is no sound support yet.
-- The Cheats menu is present, but the cheat loader is not implemented.
-- `Save+Exit`, link cable, wireless, netplay, and rumble are not supported.
+- Cheats, link cable, wireless, netplay, and rumble are not supported.
 - Not every game will work perfectly.
 - The built-in overclock is active only while gpSP is running. gint restores the calculator's previous clock settings when gpSP exits or calls the OS.
+- If the calculator is already running faster than the built-in profile (for example, a custom Ptune setting with a faster CPU and bus), gpSP keeps that setting instead of lowering it.
 
 ## Reporting gameplay issues
 
