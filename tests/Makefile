@@ -19,11 +19,11 @@ DEAD_STRIP := $(if $(filter Darwin,$(shell uname -s)),\
 
 .PHONY: all smoke audit core litpool thumb cond native-ldst input config-version storage lcd-cleanup scale classpad fxcg-ui rtc backup-dirty nor-world-switch overclock cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc \
 	swi-overlap swi-oam udiv udiv-emitter idle-signature video-opaque \
-	video-blend-cache video-backdrop-shadow video-sprite-decode video-tile-row-cache video-text-fastpaths arm-mixer m4a-skip clean
+	video-blend-cache video-backdrop-shadow video-sprite-decode video-tile-row-cache video-text-fastpaths video-dirty-scanline arm-mixer m4a-skip clean
 
 all: smoke core litpool thumb cond native-ldst rtc pacing backup-dirty nor-world-switch overclock input config-version storage lcd-cleanup scale classpad fxcg-ui cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc swi-overlap swi-oam udiv \
 	udiv-emitter idle-signature video-opaque video-blend-cache \
-	video-backdrop-shadow video-sprite-decode video-tile-row-cache video-text-fastpaths arm-mixer m4a-skip audit
+	video-backdrop-shadow video-sprite-decode video-tile-row-cache video-text-fastpaths video-dirty-scanline arm-mixer m4a-skip audit
 
 # Execution oracle: run emitted native code in a mini SH4 interpreter against
 # the C-helper semantics (closes the pixel-soak blind spot on the audio path).
@@ -358,6 +358,14 @@ video-tile-row-cache: $(ROOT)/tests/video_tile_row_cache_test.cc $(ROOT)/vendor/
 	  $(DEAD_STRIP) $(ROOT)/tests/video_tile_row_cache_test.cc \
 	  -o $(BIN)-video-tile-row-cache
 	$(BIN)-video-tile-row-cache
+
+video-dirty-scanline: $(ROOT)/tests/video_dirty_scanline_test.cc $(ROOT)/vendor/gpsp/video.cc
+	$(CXX) $(CXXFLAGS) -ffunction-sections -fdata-sections \
+	  -I$(ROOT)/vendor/gpsp -I$(ROOT)/vendor/gpsp/libretro \
+	  -I$(ROOT)/vendor/gpsp/libretro/libretro-common/include \
+	  $(DEAD_STRIP) $(ROOT)/tests/video_dirty_scanline_test.cc \
+	  -o $(BIN)-video-dirty-scanline
+	$(BIN)-video-dirty-scanline
 
 video-text-fastpaths: $(ROOT)/tests/video_text_fastpaths_test.cc $(ROOT)/vendor/gpsp/video.cc
 	$(CXX) $(CXXFLAGS) -ffunction-sections -fdata-sections \

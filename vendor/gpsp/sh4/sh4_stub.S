@@ -21,6 +21,9 @@
 #ifndef CGBA_SH4_PIN_GUEST_R0
 #define CGBA_SH4_PIN_GUEST_R0 1
 #endif
+#ifndef CGBA_SH4_LAZY_CHAIN
+#define CGBA_SH4_LAZY_CHAIN 1
+#endif
 
 /* The Casio sh-elf toolchain (fxSDK) uses a leading-underscore C ABI: a C
  * symbol `foo` is `_foo` at link time (cf. bios_data.S). Export both spellings
@@ -174,8 +177,12 @@ defsymbl(cgba_sh4_vec_table)
   .long   _ewram                                /* 13 SH4G_VEC_ewram_data    */
 #if defined(CGBA_VIDEO_BLEND_PALETTE_CACHE) || \
     defined(CGBA_VIDEO_BACKDROP_SHADOW_PALETTE) || \
-    defined(CGBA_VIDEO_TILE_ROW_CACHE)
+    defined(CGBA_VIDEO_TILE_ROW_CACHE) || \
+    (defined(CGBA_VIDEO_DIRTY_SCANLINE) && CGBA_VIDEO_DIRTY_SCANLINE)
   .long   _palette_ram_dirty                    /* 14 SH4G_VEC_palette_dirty */
+#endif
+#if defined(CGBA_VIDEO_DIRTY_SCANLINE) && CGBA_VIDEO_DIRTY_SCANLINE
+  .long   _cgba_vram_dirty                      /* 15 SH4G_VEC_vram_dirty    */
 #endif
 
 /* ---- main entry: execute_arm_translate_internal(cycles, reg_ptr) ---- */
@@ -1098,6 +1105,114 @@ op2_pc_common:
 .align 2
 tram_extra:
   .long   _cgba_sh4_extra_cycles
+
+#if CGBA_SH4_LAZY_CHAIN
+/* ---- lazy ROM-to-ROM dynamic branch chaining ----------------------------
+ * Entered via JSR @R0 from an unpatched ROM-cache branch exit when R13 > 0.
+ * R4 = target GBA PC (>= 0x08000000); PR = site + 6, so the 4-byte-aligned
+ * literal slot is (PR + 3) & ~3.
+ *
+ * Probing rom_branch_hash inline guarantees both caller and target live inside
+ * rom_translation_cache (never BIOS, never RAM cache, never cold, never ~0).
+ * On hit, overwrite the 4-byte data literal (no I-cache sync required) and jump
+ * straight to the target without invoking update_gba(). On miss, hand off to
+ * iba_slow / ibt_slow so the target heats/translates without update_gba(); the
+ * next execution after translation hits and links permanently. */
+defsymbl(sh4_lazy_link_rom_arm)
+#ifdef CGBA_SH4_DIFF_HARNESS
+  mov.l   ll_sb, r1
+  mov.l   @r1, r1
+  tst     r1, r1
+  bt      1f
+  bra     sh4_block_exit
+  nop
+1:
+#endif
+  mov     r4, r2
+  shlr2   r2
+  shll2   r2                      /* key = pc & ~3 (ARM) */
+  mov.l   ll_mul, r3
+  dmulu.l r2, r3
+  sts     macl, r0
+  mov     #-(32-ROM_BRANCH_HASH_BITS), r1
+  shld    r1, r0
+  shll2   r0
+  mov.l   ll_hash, r1
+  mov.l   @(r0,r1), r5
+  mov.l   ll_tcache, r6
+lla_walk:
+  tst     r5, r5
+  bf      1f
+  bra     iba_slow                /* untranslated/cold: resolve without update_gba */
+  nop
+1:
+  mov     r5, r7
+  add     r6, r7
+  mov.l   @r7, r0
+  cmp/eq  r2, r0
+  bt      ll_patch_and_go
+  mov.l   @(4,r7), r5
+  bra     lla_walk
+  nop
+
+defsymbl(sh4_lazy_link_rom_thumb)
+#ifdef CGBA_SH4_DIFF_HARNESS
+  mov.l   ll_sb, r1
+  mov.l   @r1, r1
+  tst     r1, r1
+  bt      1f
+  bra     sh4_block_exit
+  nop
+1:
+#endif
+  mov     r4, r0
+  or      #1, r0
+  mov     r0, r2                  /* key = pc | 1 (Thumb) */
+  mov.l   ll_mul, r3
+  dmulu.l r2, r3
+  sts     macl, r0
+  mov     #-(32-ROM_BRANCH_HASH_BITS), r1
+  shld    r1, r0
+  shll2   r0
+  mov.l   ll_hash, r1
+  mov.l   @(r0,r1), r5
+  mov.l   ll_tcache, r6
+llt_walk:
+  tst     r5, r5
+  bf      1f
+  bra     ibt_slow                /* untranslated/cold: resolve without update_gba */
+  nop
+1:
+  mov     r5, r7
+  add     r6, r7
+  mov.l   @r7, r0
+  cmp/eq  r2, r0
+  bt      ll_patch_and_go
+  mov.l   @(4,r7), r5
+  bra     llt_walk
+  nop
+
+ll_patch_and_go:
+  add     #8, r7                  /* target host block entry in ROM cache */
+  sts     pr, r0                  /* PR = site + 6 */
+  add     #3, r0
+  mov     #-4, r1
+  and     r1, r0                  /* r0 = 4-byte aligned literal slot */
+  jmp     @r7
+  mov.l   r7, @r0                 /* delay slot: data-side patch */
+
+  .align 2
+#ifdef CGBA_SH4_DIFF_HARNESS
+ll_sb:
+  .long   _cgba_dynarec_single_block
+#endif
+ll_mul:
+  .long   0x9E3779B1
+ll_hash:
+  .long   _rom_branch_hash
+ll_tcache:
+  .long   _rom_translation_cache
+#endif /* CGBA_SH4_LAZY_CHAIN */
 
 #if defined(__linux__) && defined(__ELF__)
   .section .note.GNU-stack,"",%progbits

@@ -101,11 +101,17 @@ static void orc_vec_put(unsigned idx, const void *pf)
   orc_vec_table[idx * 4 + 3] = (u8)v;
 }
 
-/* Exercise the renderer-cache invalidation ABI of native palette stores.
+/* Exercise the renderer-cache invalidation ABI of native palette/VRAM stores.
  * This standalone emitter harness does not include the full memory header. */
 #define CGBA_VIDEO_TILE_ROW_CACHE 1
-#define CGBA_PALETTE_DIRTY_ACTIVE 7u
+#define CGBA_VIDEO_DIRTY_SCANLINE 1
+#define CGBA_PALETTE_DIRTY_ACTIVE 15u
 volatile u32 palette_ram_dirty;
+#define CGBA_VRAM_DIRTY_BG 1u
+#define CGBA_VRAM_DIRTY_OBJ 2u
+#define CGBA_VRAM_DIRTY_ALL 3u
+#define CGBA_VRAM_DIRTY_ACTIVE 3u
+volatile u32 cgba_vram_dirty;
 #define CGBA_SH4_REG_FORWARD 1
 #include "ports/fxcg100/sh4/sh4_thumb_dp_emit.h"
 #include "ports/fxcg100/sh4/sh4_arm_ldst_emit.h"
@@ -140,6 +146,7 @@ static void orc_vec_init(void)
   orc_vec_put(SH4G_VEC_iwram_data, (const void *)(iwram + 0x8000));
   orc_vec_put(SH4G_VEC_ewram_data, (const void *)ewram);
   orc_vec_put(SH4G_VEC_palette_dirty, (const void *)&palette_ram_dirty);
+  orc_vec_put(SH4G_VEC_vram_dirty, (const void *)&cgba_vram_dirty);
 }
 
 /* ---- guest state used by the interpreter ---- */
@@ -295,7 +302,16 @@ static int run_at(u32 pc, u32 pc_end)
     else if (op == 0x0008) T = 0;
     else if (op == 0x000B) {                                        /* RTS */
       u32 slot = orc_read(pc + 2, 1, &okf);
-      if (!okf || (u16)slot != 0x0009) { snprintf(unmodeled, sizeof unmodeled, "rts slot"); return 0; }
+      if (!okf) { snprintf(unmodeled, sizeof unmodeled, "rts slot"); return 0; }
+      if ((u16)slot == 0x0009) { /* NOP */ }
+      else if ((slot & 0xF000u) == 0x7000u)
+        R[(slot >> 8) & 0xFu] += (u32)(s32)(s8)(slot & 0xFFu);
+      else if ((slot & 0xF00Fu) == 0x3008u)
+        R[(slot >> 8) & 0xFu] -= R[(slot >> 4) & 0xFu];
+      else {
+        snprintf(unmodeled, sizeof unmodeled, "rts slot %04x", (unsigned)slot);
+        return 0;
+      }
       next = PR;
     }
     else if ((op & 0xF0FF) == 0x400B) {                             /* JSR @Rn */
@@ -463,6 +479,12 @@ static int run_at(u32 pc, u32 pc_end)
     else if ((op & 0xF00F) == 0x6002) {                             /* MOV.L @Rm,Rn */
       R[nn] = orc_read(R[mm], 2, &okf);
       if (!okf) { snprintf(unmodeled, sizeof unmodeled, "mov.l @%08X", R[mm]); return 0; }
+    }
+    else if ((op & 0xF00F) == 0x6006) {                             /* MOV.L @Rm+,Rn */
+      u32 addr = R[mm];
+      R[mm] = addr + 4;
+      R[nn] = orc_read(addr, 2, &okf);
+      if (!okf) { snprintf(unmodeled, sizeof unmodeled, "mov.l @%08X+", addr); return 0; }
     }
     else if ((op & 0xF00F) == 0x2001) {                             /* MOV.W Rm,@Rn */
       orc_write(R[nn], R[mm], 1, &okf);
@@ -1443,6 +1465,56 @@ int main(void)
         }
       }
 
+    /* Native STR/STRH/STM to VRAM notify cgba_vram_dirty with exact BG/OBJ
+     * bit (including the 0x06018000 OBJ mirror). */
+    {
+      static const struct { u32 addr; u32 want; const char *nm; } vcases[] = {
+        { 0x06000020u, CGBA_VRAM_DIRTY_BG,  "bg0" },
+        { 0x06008020u, CGBA_VRAM_DIRTY_BG,  "bg1" },
+        { 0x06010020u, CGBA_VRAM_DIRTY_OBJ, "obj" },
+        { 0x06018020u, CGBA_VRAM_DIRTY_OBJ, "obj_mirror" }
+      };
+      memory_map_read[0x06000000u >> 15] = vram;
+      memory_map_read[0x06008000u >> 15] = vram + 0x8000;
+      memory_map_read[0x06010000u >> 15] = vram + 0x10000;
+      memory_map_read[0x06018000u >> 15] = vram + 0x10000;
+      for (unsigned ci = 0; ci < sizeof(vcases) / sizeof(vcases[0]); ci++) {
+        for (unsigned mode = 0; mode < 3; mode++) {
+          u8 sbuf[512], *sp = sbuf;
+          u32 op = (mode == 0) ? 0xe5823000u /* STR r3,[r2] */
+                 : (mode == 1) ? 0xe1c230b0u /* STRH r3,[r2] */
+                               : 0xe8820038u;/* STMIA r2,{r3-r5} */
+          memset(g_reg, 0, sizeof(g_reg));
+          g_reg[2] = vcases[ci].addr;
+          g_reg[3] = 0x11223344u;
+          g_reg[4] = 0x55667788u;
+          g_reg[5] = 0x99aabbccu;
+          cgba_vram_dirty = 0;
+          int emitted = (mode < 2) ? sh4g_arm_ldst_native(&sp, op, pc, 0)
+                                   : sh4g_arm_block_native(&sp, op, pc, 0);
+          orc_reset_windows();
+          orc_add_window(sbuf, sizeof(sbuf), ORC_WIN_BYTES);
+          orc_add_window(fm_buf, sizeof(fm_buf), ORC_WIN_BYTES);
+          orc_add_window(memory_map_read, 8192 * 4, ORC_WIN_READ_MAP);
+          orc_add_window(vram, sizeof(vram), ORC_WIN_BYTES);
+          orc_add_window((const void *)&cgba_vram_dirty, sizeof(cgba_vram_dirty), ORC_WIN_BYTES);
+          orc_add_window(orc_vec_table, sizeof(orc_vec_table), ORC_WIN_BYTES);
+          orc_add_window(ws_cyc_seq, sizeof(ws_cyc_seq), ORC_WIN_BYTES);
+          orc_add_window(ws_cyc_nseq, sizeof(ws_cyc_nseq), ORC_WIN_BYTES);
+          int ok = 1;
+          cases++;
+          if (!emitted || !run_at((u32)(uintptr_t)sbuf, (u32)(uintptr_t)sp) ||
+              orc_read((u32)(uintptr_t)&cgba_vram_dirty, 2, &ok) != vcases[ci].want || !ok) {
+            printf("FAIL native VRAM dirty %s mode=%u got=%u want=%u (%s)\n",
+                   vcases[ci].nm, mode,
+                   orc_read((u32)(uintptr_t)&cgba_vram_dirty, 2, &ok),
+                   vcases[ci].want, unmodeled);
+            fails++;
+          }
+        }
+      }
+    }
+
     memset(memory_map_read, 0, sizeof memory_map_read);
     memset(giwram, 0, 0x10000);
     memory_map_read[0x02000000u >> 15] = ewram;
@@ -1467,7 +1539,8 @@ int main(void)
     struct tgt { u32 base; int slow_ld; int slow_st; const char *nm; } tgts[] = {
       { 0x03000100u, 0, 0, "iwram" },
       { 0x02000200u, 0, 0, "ewram" },
-      { 0x02052340u, 0, 1, "ewram-mirror-high" },
+      { 0x02052340u, 0, 0, "ewram-mirror-high" },
+      { 0x02042340u, 0, 2, "ewram-mirror-smc" },
       { 0x06000300u, 0, -1, "vram" },           /* -1: word/half ok, byte slow */
       { 0x04000000u, 0, 1, "io" },
       { 0x08000400u, 0, 1, "rom" },
@@ -1544,6 +1617,7 @@ int main(void)
           orc_add_window(giwram, giwram_size, 0);
           orc_add_window(ewram, sizeof ewram, 0);
           orc_add_window(vram, sizeof vram, 0);
+          orc_add_window((const void *)&cgba_vram_dirty, sizeof(cgba_vram_dirty), 0);
           orc_add_window(rom, sizeof rom, 0);
           orc_add_window(ws_cyc_seq, sizeof ws_cyc_seq, 0);
           orc_add_window(ws_cyc_nseq, sizeof ws_cyc_nseq, 0);
@@ -1853,6 +1927,7 @@ int main(void)
         orc_add_window(giwram, giwram_size, 0);
         orc_add_window(ewram, sizeof ewram, 0);
         orc_add_window(vram, sizeof vram, 0);
+        orc_add_window((const void *)&cgba_vram_dirty, sizeof(cgba_vram_dirty), 0);
         orc_add_window(rom, sizeof rom, 0);
         orc_add_window(ws_cyc_seq, sizeof ws_cyc_seq, 0);
         orc_add_window(ws_cyc_nseq, sizeof ws_cyc_nseq, 0);
@@ -2098,6 +2173,7 @@ int main(void)
         orc_add_window(giwram, giwram_size, 0);
         orc_add_window(ewram, sizeof ewram, 0);
         orc_add_window(vram, sizeof vram, 0);
+        orc_add_window((const void *)&cgba_vram_dirty, sizeof(cgba_vram_dirty), 0);
         orc_add_window(rom, sizeof rom, 0);
         orc_add_window(ws_cyc_seq, sizeof ws_cyc_seq, 0);
         orc_add_window(ws_cyc_nseq, sizeof ws_cyc_nseq, 0);
@@ -2254,6 +2330,7 @@ int main(void)
         orc_add_window(giwram, giwram_size, 0);
         orc_add_window(ewram, sizeof ewram, 0);
         orc_add_window(vram, sizeof vram, 0);
+        orc_add_window((const void *)&cgba_vram_dirty, sizeof(cgba_vram_dirty), 0);
         orc_add_window(rom, sizeof rom, 0);
         orc_add_window(ws_cyc_seq, sizeof ws_cyc_seq, 0);
         orc_add_window(ws_cyc_nseq, sizeof ws_cyc_nseq, 0);

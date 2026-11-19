@@ -64,6 +64,10 @@ void sh4_indirect_branch_arm(u32 address);
 void sh4_indirect_branch_thumb(u32 address);
 void sh4_indirect_branch_dual(u32 address);
 void sh4_indirect_branch_dual_thumb_current(u32 address);
+#if CGBA_SH4_LAZY_CHAIN
+void sh4_lazy_link_rom_arm(u32 address);
+void sh4_lazy_link_rom_thumb(u32 address);
+#endif
 void sh4_bios_fallback_entry(void);
 /* Port-provided trap for an executed wild guest branch (untranslatable PC):
  * panics with the guest target on-screen instead of jumping to garbage. */
@@ -398,6 +402,37 @@ static inline int sh4g_m4a_skip_emit(u8 **tp, u32 base, u32 pc, u32 opcode)
   return 1;
 }
 
+#ifdef CGBA_SH4_M4A_LOOP_FOLD
+extern volatile s32 cgba_sh4_m4a_loop_budget;
+int cgba_sh4_m4a_loop_try(u32 kind, u32 pc);
+
+/* Prefix at a loop head inside the verified image.  `at_seam` is the
+ * translator's guarantee that every earlier instruction's cycles have been
+ * debited (block start or a branch-target flush), so R13 is the true budget.
+ * The helper leaves guest state at the same loop head; the ordinary
+ * translation follows and runs whatever was not folded. */
+static inline void sh4g_m4a_loop_entry(u8 **tp, u32 base, u32 pc, int at_seam)
+{
+  u32 kind;
+  if (!base || !at_seam)
+    return;
+  kind = pc - base;
+  if (kind != CGBA_SH4_M4A_LOOP_REVERB && kind != CGBA_SH4_M4A_LOOP_INTERP)
+    return;
+  sh4g_const(tp, (u32)(uintptr_t)&cgba_sh4_m4a_loop_budget, SH4_REG_T0);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_l_store(&cg, SH4_REG_CYCLES, SH4_REG_T0);
+    sh4g_close(tp, &cg); }
+  sh4g_op2_tramp_call(tp, (const void *)sh4_op2_tramp,
+                      (const void *)cgba_sh4_m4a_loop_try, kind, pc, 0, 0);
+  sh4g_cycle_debit_from_global(tp, &cgba_sh4_extra_cycles);
+}
+#define arm_instruction_prefix()                                             \
+  sh4g_m4a_loop_entry(&translation_ptr, sh4_m4a_skip_image, (u32)pc,         \
+    block_data_position == 0 ||                                              \
+    block_data[block_data_position].update_cycles)
+#endif
+
 #define arm_translate_override()                                             \
   sh4g_m4a_skip_emit(&translation_ptr, sh4_m4a_skip_image, (u32)pc,          \
                      (u32)opcode)
@@ -554,9 +589,23 @@ static inline void sh4g_prof_block_entry(u8 **tp, u32 pc, int thumb)
   do { if(condition == 0x0E) generate_indirect_branch_cycle_update(dual);     \
        else generate_indirect_branch_no_cycle_update(dual); } while(0)
 
+#if CGBA_SH4_LAZY_CHAIN
+#define SH4_DEFAULT_BRANCH_EXIT(new_pc)                                       \
+  (cgba_dynarec_single_block                                                  \
+    ? (const void *)sh4_block_exit                                            \
+    : ((!ram_region && ((u32)(new_pc) >= 0x08000000u))                        \
+        ? (sh4_block_is_thumb ? (const void *)sh4_lazy_link_rom_thumb         \
+                              : (const void *)sh4_lazy_link_rom_arm)          \
+        : (sh4_block_is_thumb ? (const void *)sh4_indirect_branch_thumb       \
+                              : (const void *)sh4_indirect_branch_arm)))
+#else
+#define SH4_DEFAULT_BRANCH_EXIT(new_pc) ((void)(new_pc), (const void *)sh4_block_exit)
+#endif
+
 #define generate_branch_no_cycle_update(writeback_location, new_pc)           \
   (writeback_location) =                                                      \
-    sh4g_branch_exit(&translation_ptr, (u32)(new_pc), (const void *)sh4_block_exit)
+    sh4g_branch_exit(&translation_ptr, (u32)(new_pc),                         \
+                     SH4_DEFAULT_BRANCH_EXIT(new_pc))
 
 /* ---- idle-loop elimination (dynarec mirror of the interpreter's) ---------
  * The interpreter zeroes the remaining cycle budget when it (a) arrives at the
@@ -604,7 +653,7 @@ static inline int sh4g_registered_idle_signature_ok(const u8 *map,
 
 #define generate_branch_idle_eliminate(writeback_location, new_pc)            \
   (writeback_location) = sh4g_branch_exit_idle(&translation_ptr,              \
-      (u32)(new_pc), (const void *)sh4_block_exit)
+      (u32)(new_pc), SH4_DEFAULT_BRANCH_EXIT(new_pc))
 
 #define generate_branch_current_update(writeback_location, new_pc)            \
   do { sh4g_cycle_debit(&translation_ptr, (int)cycle_count);                  \

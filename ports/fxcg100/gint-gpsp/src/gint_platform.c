@@ -60,6 +60,9 @@ static int lcd_window_partial;
  * world switch. Centered gameplay does not cover that top-right border, so
  * remember the activity until a full update or gameplay blit removes it. */
 static int lcd_os_overlay_dirty;
+/* True once a complete gameplay frame has been pushed to the LCD without an
+ * intervening menu/status update, scale/filter change, or OS overlay draw. */
+static int lcd_frame_synced;
 
 static void wait_lcd_dma(void)
 {
@@ -220,18 +223,21 @@ uint32_t fxcg100_ticks(void)
 void fxcg100_lcd_init(void)
 {
 	lcd_os_overlay_dirty = 0;
+	lcd_frame_synced = 0;
 }
 
 void fxcg100_lcd_shutdown(void)
 {
 	restore_full_window();
 	wait_lcd_dma();
+	lcd_frame_synced = 0;
 }
 
 void fxcg100_lcd_clear(uint16_t color)
 {
 	wait_lcd_dma();
 	dclear((int)color);
+	lcd_frame_synced = 0;
 }
 
 void fxcg100_lcd_fill_rect(unsigned x, unsigned y, unsigned w, unsigned h,
@@ -264,6 +270,7 @@ void fxcg100_lcd_update(void)
 	wait_lcd_dma();
 	dupdate();
 	lcd_os_overlay_dirty = 0;
+	lcd_frame_synced = 0;
 }
 
 void fxcg100_lcd_update_rows(unsigned y, unsigned h)
@@ -282,6 +289,7 @@ void fxcg100_lcd_update_rows(unsigned y, unsigned h)
 	restore_full_window();
 	wait_lcd_dma();
 	r61524_display(gint_vram, (int)y, (int)(y1 - y), R61524_DMA_WAIT);
+	lcd_frame_synced = 0;
 }
 
 void fxcg100_lcd_status(const char *text)
@@ -295,11 +303,13 @@ void fxcg100_lcd_status(const char *text)
 	dtext_opt(4, 2, fg, bg, DTEXT_LEFT, DTEXT_TOP, text ? text : "");
 	dupdate();
 	lcd_os_overlay_dirty = 0;
+	lcd_frame_synced = 0;
 }
 
 void fxcg100_lcd_note_os_activity(void)
 {
 	lcd_os_overlay_dirty = 1;
+	lcd_frame_synced = 0;
 }
 
 /* Start the DMA of one prepared YRAM strip to the LCD window. Falls back to CPU
@@ -364,11 +374,18 @@ static void clear_os_overlay_before_blit(void)
 void fxcg100_lcd_set_scale(uint32_t mode)
 {
 	lcd_scale_mode = (mode <= 2) ? mode : 0;
+	lcd_frame_synced = 0;
 }
 
 void fxcg100_lcd_set_filter(uint32_t filter)
 {
 	lcd_scale_filter = (filter <= CGBA_SCALE_FILTER_CRISP) ? filter : 0;
+	lcd_frame_synced = 0;
+}
+
+int fxcg100_lcd_is_synced(void)
+{
+	return lcd_frame_synced && !lcd_os_overlay_dirty;
 }
 
 typedef void (*cgba_hscale_fn)(const uint16_t *, uint16_t *);
@@ -426,16 +443,16 @@ static void blit_gba_scaled_43(const uint16_t *pixels)
 			uint16_t *r3 = sp + (g * 4 + 3) * 320;
 
 			hs(A, r0);
-			hs(B, scale_scratch);
 			hs(C, r3);
 			if (filter == CGBA_SCALE_FILTER_SMOOTH) {
+				hs(B, scale_scratch);
 				cgba_scale_row_avg(r0, scale_scratch, r1, 320);
 				cgba_scale_row_avg(scale_scratch, r3, r2, 320);
 			} else if (filter == CGBA_SCALE_FILTER_SHARP) {
-				memcpy(r1, scale_scratch, 320 * sizeof(uint16_t));
-				cgba_scale_row_avg(scale_scratch, r3, r2, 320);
+				hs(B, r1);
+				cgba_scale_row_avg(r1, r3, r2, 320);
 			} else {                               /* CRISP: A,B,C,C */
-				memcpy(r1, scale_scratch, 320 * sizeof(uint16_t));
+				hs(B, r1);
 				memcpy(r2, r3, 320 * sizeof(uint16_t));
 			}
 		}
@@ -446,6 +463,7 @@ static void blit_gba_scaled_43(const uint16_t *pixels)
 		y += rows;
 	}
 	lcd_window_partial = 1;
+	lcd_frame_synced = 1;
 }
 
 /* Fullscreen: hscaled source rows are cached in two slots keyed by
@@ -506,6 +524,7 @@ static void blit_gba_scaled_full(const uint16_t *pixels)
 		y += rows;
 	}
 	lcd_window_partial = 1;
+	lcd_frame_synced = 1;
 }
 
 void fxcg100_lcd_blit_gba(const uint16_t *pixels)
@@ -565,6 +584,7 @@ void fxcg100_lcd_blit_gba(const uint16_t *pixels)
 	 * buffer itself is free to be overwritten (the DMA reads on-chip RAM).
 	 */
 	lcd_window_partial = 1;   /* window narrowed; menu restores it */
+	lcd_frame_synced = 1;
 }
 
 /* ---- Scanline-streamed unscaled presentation ---------------------------
@@ -577,6 +597,7 @@ void fxcg100_lcd_blit_gba(const uint16_t *pixels)
 static int lcd_stream_active;
 static unsigned lcd_stream_next_y;
 static unsigned lcd_stream_bank;
+static int lcd_stream_strip_dirty;
 
 int fxcg100_lcd_stream_begin(void)
 {
@@ -586,11 +607,12 @@ int fxcg100_lcd_stream_begin(void)
 	clear_os_overlay_before_blit();
 	lcd_stream_next_y = 0;
 	lcd_stream_bank = 0;
+	lcd_stream_strip_dirty = !lcd_frame_synced;
 	lcd_stream_active = 1;
 	return 1;
 }
 
-void fxcg100_lcd_stream_scanline(const uint16_t *row, unsigned y)
+void fxcg100_lcd_stream_scanline(const uint16_t *row, unsigned y, int dirty)
 {
 	uint16_t *const strips[2] = {
 		(uint16_t *)STRIP_BUF0,
@@ -602,6 +624,8 @@ void fxcg100_lcd_stream_scanline(const uint16_t *row, unsigned y)
 
 	if(!lcd_stream_active || !row || y >= GBA_H)
 		return;
+	if(dirty)
+		lcd_stream_strip_dirty = 1;
 	if(y + 1 < lcd_stream_next_y + STRIP_LINES && y + 1 != GBA_H)
 		return;
 	if(y + 1 > lcd_stream_next_y + STRIP_LINES && y + 1 != GBA_H) {
@@ -614,26 +638,30 @@ void fxcg100_lcd_stream_scanline(const uint16_t *row, unsigned y)
 		lcd_stream_active = 0;
 		return;
 	}
-	memcpy(strips[lcd_stream_bank], row - (rows - 1) * GBA_W,
-		(size_t)rows * GBA_W * sizeof(uint16_t));
-	if(lcd_stream_next_y != 0)
+	if(lcd_stream_strip_dirty) {
+		memcpy(strips[lcd_stream_bank], row - (rows - 1) * GBA_W,
+			(size_t)rows * GBA_W * sizeof(uint16_t));
 		wait_lcd_dma();
-	start_strip_dma(strips[lcd_stream_bank], ox,
-		oy + (int)lcd_stream_next_y, GBA_W, (int)rows);
-	lcd_stream_bank ^= 1;
+		start_strip_dma(strips[lcd_stream_bank], ox,
+			oy + (int)lcd_stream_next_y, GBA_W, (int)rows);
+		lcd_stream_bank ^= 1;
+		lcd_window_partial = 1;
+	}
 	lcd_stream_next_y += rows;
-	lcd_window_partial = 1;
+	lcd_stream_strip_dirty = !lcd_frame_synced;
 }
 
 int fxcg100_lcd_stream_end(void)
 {
 	int complete = lcd_stream_active && lcd_stream_next_y == GBA_H;
 	lcd_stream_active = 0;
+	if(complete)
+		lcd_frame_synced = 1;
 	return complete;
 }
 #else
 int fxcg100_lcd_stream_begin(void) { return 0; }
-void fxcg100_lcd_stream_scanline(const uint16_t *row, unsigned y)
-{ (void)row; (void)y; }
+void fxcg100_lcd_stream_scanline(const uint16_t *row, unsigned y, int dirty)
+{ (void)row; (void)y; (void)dirty; }
 int fxcg100_lcd_stream_end(void) { return 0; }
 #endif

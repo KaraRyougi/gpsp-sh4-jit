@@ -402,6 +402,15 @@ u8 gamepak_backup[1024 * 128] CGBA_HIGH_BSS;
 
 u32 dma_bus_val;
 dma_transfer_type dma[4];
+u8 cgba_hblank_dma_mask;
+
+static inline void cgba_update_hblank_dma_mask(u32 dma_number, u32 start_type)
+{
+  if (start_type == DMA_START_HBLANK)
+    cgba_hblank_dma_mask |= (u8)(1u << dma_number);
+  else
+    cgba_hblank_dma_mask &= (u8)~(1u << dma_number);
+}
 
 // ROM memory is allocated in blocks of 1MB to better map the native block
 // mapping system. We will try to allocate 32 of them to allow loading
@@ -858,6 +867,7 @@ static cpu_alert_type trigger_dma(u32 dma_number, u32 value)
       dma[dma_number].source_direction = ((value >>  7) & 3);
       dma[dma_number].repeat_type = ((value >> 9) & 0x01);
       dma[dma_number].start_type = start_type;
+      cgba_update_hblank_dma_mask(dma_number, start_type);
       dma[dma_number].irq = ((value >> 14) & 0x1);
 
       /* If it is sound FIFO DMA make sure the settings are a certain way */
@@ -913,6 +923,7 @@ static cpu_alert_type trigger_dma(u32 dma_number, u32 value)
   else
   {
     dma[dma_number].start_type = DMA_INACTIVE;
+    cgba_update_hblank_dma_mask(dma_number, DMA_INACTIVE);
     dma[dma_number].direct_sound_channel = DMA_NO_DIRECT_SOUND;
     write_dmareg(REG_DMA0CNT_H, dma_number, value);
   }
@@ -931,6 +942,10 @@ cpu_alert_type function_cc write_io_register16(u32 address, u32 value)
   uint32_t ioreg = ((address & 0xffffff) >> 1);
   value &= 0xffff;
   cgba_timer_trace_io_write(ioreg, value);
+#ifdef CGBA_VRAM_DIRTY_ACTIVE
+  if (ioreg <= REG_BLDY && ioreg != REG_DISPSTAT && ioreg != REG_VCOUNT)
+    cgba_video_io_dirty = 1;
+#endif
   switch(ioreg)
   {
     case REG_DISPCNT:
@@ -1343,15 +1358,36 @@ void function_cc write_backup(u32 address, u32 value)
 
 #define write_backup32()                                                      \
 
+#ifdef CGBA_VRAM_DIRTY_ACTIVE
+volatile u32 cgba_vram_dirty = CGBA_VRAM_DIRTY_ALL;
+volatile u32 cgba_video_io_dirty = 1;
+#define mark_vram_dirty_off(off) \
+  (cgba_vram_dirty |= ((off) < 0x10000u) ? CGBA_VRAM_DIRTY_BG : CGBA_VRAM_DIRTY_OBJ)
+#define mark_vram_dirty_span(off, bytes)                                      \
+  do {                                                                        \
+    u32 _vo = (off), _vb = (bytes);                                           \
+    if (_vo < 0x10000u) cgba_vram_dirty |= CGBA_VRAM_DIRTY_BG;                \
+    if (_vo + _vb > 0x10000u) cgba_vram_dirty |= CGBA_VRAM_DIRTY_OBJ;         \
+  } while (0)
+#define mark_vram_dirty_all() (cgba_vram_dirty = CGBA_VRAM_DIRTY_ALL)
+#else
+#define mark_vram_dirty_off(off) ((void)(off))
+#define mark_vram_dirty_span(off, bytes) do { (void)(off); (void)(bytes); } while (0)
+#define mark_vram_dirty_all() ((void)0)
+#endif
+
 #define write_vram8()                                                         \
   address &= ~0x01;                                                           \
-  address16(vram, address) = eswap16((value << 8) | value)                    \
+  address16(vram, address) = eswap16((value << 8) | value);                   \
+  mark_vram_dirty_off(address)                                                \
 
 #define write_vram16()                                                        \
-  address16(vram, address) = eswap16(value)                                   \
+  address16(vram, address) = eswap16(value);                                  \
+  mark_vram_dirty_off(address)                                                \
 
 #define write_vram32()                                                        \
-  address32(vram, address) = eswap32(value)                                   \
+  address32(vram, address) = eswap32(value);                                  \
+  mark_vram_dirty_off(address)                                                \
 
 // RTC code derived from VBA's (due to lack of any real publically available
 // documentation...)
@@ -2028,6 +2064,7 @@ const dma_region_type dma_region_map[17] =
   u32 wraddr = type##_ptr & 0x1FFFF;                                          \
   if (wraddr >= 0x18000) wraddr -= 0x8000;                                    \
   address##tfsize(vram, wraddr) = eswap##tfsize(read_value);                  \
+  mark_vram_dirty_off(wraddr);                                                \
 }
 
 #define dma_write_io(type, tfsize)                                            \
@@ -2357,6 +2394,11 @@ static bool dma_bulk_copy(dma_transfer_type *dmach, u32 src, u32 dst,
         break;
       }
   }
+  if ((dst >> 24) == 6) {
+    u32 voff = dst & 0x1FFFFu;
+    if (voff >= 0x18000u) voff -= 0x8000u;
+    mark_vram_dirty_span(voff, bytes);
+  }
   if ((dst >> 24) == 7) reg[OAM_UPDATED] = 1;
   dmach->source_address = src + bytes;
   if (dmach->dest_direction != 3) dmach->dest_address = dst + bytes;
@@ -2437,6 +2479,7 @@ cpu_alert_type dma_transfer(unsigned dma_chan, int *usedcycles)
     u32 cntrl = read_dmareg(REG_DMA0CNT_H, dma_chan);
     write_dmareg(REG_DMA0CNT_H, dma_chan, cntrl & (~0x8000));
     dmach->start_type = DMA_INACTIVE;
+    cgba_update_hblank_dma_mask(dma_chan, DMA_INACTIVE);
   }
 
   // Trigger an IRQ if configured to do so.
@@ -2798,6 +2841,7 @@ void init_memory(void)
     dma[i].repeat_type = DMA_NO_REPEAT;
     dma[i].direct_sound_channel = DMA_NO_DIRECT_SOUND;
   }
+  cgba_hblank_dma_mask = 0;
 
   // Fill memory map regions, areas marked as NULL must be checked directly
   map_region(read, 0x0000000, 0x1000000, 1, bios_rom);
@@ -2818,6 +2862,7 @@ void init_memory(void)
   memset(iwram, 0, sizeof(iwram));
   memset(ewram, 0, sizeof(ewram));
   memset(vram, 0, sizeof(vram));
+  mark_vram_dirty_all();
 
   write_ioreg(REG_DISPCNT, 0x80);
   write_ioreg(REG_P1, 0x3FF);
@@ -2992,6 +3037,7 @@ bool memory_read_savestate(const u8 *src)
       bson_read_int32(dmastr, "dsc", &dma[i].direct_sound_channel) &&
       bson_read_int32(dmastr, "irq", &dma[i].irq)))
       return false;
+    cgba_update_hblank_dma_mask((u32)i, dma[i].start_type);
   }
 
   rtc_data = rtc_data_array[0] | (((u64)rtc_data_array[1]) << 32);
