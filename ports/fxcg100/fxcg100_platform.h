@@ -277,6 +277,9 @@ void cp_ui_status(const fxcg100_menu_state *state, const char *line1,
 /* 128 Hz ticks. fx-CP400: from a timer, or from the RTC once it is seen to
  * run. fx-CG: the RTC. */
 uint32_t fxcg100_ticks(void);
+/* Wait until all physical keys are released (with debounce and safety timeout)
+ * before entering an OS/Fugue world switch. */
+void fxcg100_wait_keys_released(void);
 
 /* Work around a libgint-cg.a _drv_tmu world-switch race on SH7305:
  * _drv_tmu's hsave double-reads volatile ETMU.TCNT and its hrestore sets

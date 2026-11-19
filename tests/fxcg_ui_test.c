@@ -68,6 +68,8 @@ uint32_t fxcg100_poll_app_keys(void)
 	return held_app;
 }
 
+void fxcg100_wait_keys_released(void) {}
+
 int fxcg100_key_down(int key)
 {
 	return key && key == held_phys;

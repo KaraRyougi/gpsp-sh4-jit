@@ -1222,6 +1222,7 @@ static void save_settings(cg_ui *ui)
 	if (!ui->settings_dirty)
 		return;
 	ui->settings_dirty = 0;
+	fxcg100_wait_keys_released();
 	if (fxcg100_config_save(ui->state))
 		message(ui, 0, "Settings saved", NULL, NULL);
 	else
@@ -1653,6 +1654,7 @@ static fxcg100_menu_result cg_ui_step(cg_ui *ui)
 	}
 	if (result != FXCG100_MENU_CONTINUE) {
 		if (ui->settings_dirty) {
+			fxcg100_wait_keys_released();
 			fxcg100_config_save(ui->state);
 			ui->settings_dirty = 0;
 		}

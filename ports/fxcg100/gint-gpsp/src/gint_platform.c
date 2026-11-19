@@ -220,6 +220,49 @@ uint32_t fxcg100_ticks(void)
 	return rtc_ticks();
 }
 
+void fxcg100_wait_keys_released(void)
+{
+#if !defined(CGBA_GPSP_HEADLESS_TEST) && !defined(CGBA_HOST_TEST)
+	volatile uint16_t *keysc = (volatile uint16_t *)0xa44b0000u;
+	uint32_t start = rtc_ticks();
+	uint32_t last_tick = start;
+	unsigned clear_ticks = 0;
+	unsigned clear_polls = 0;
+
+	/* Wait until both gint's key state and the raw SH7305 KEYSC matrix
+	 * report no key held across two 128 Hz RTC ticks (~16 ms debounce),
+	 * bounded so a stuck matrix or stopped RTC can never deadlock. On
+	 * fx-CG100, entering a Fugue world switch while a physical key is
+	 * still down can leave the OS call or return stuck. */
+	for(unsigned poll = 0; poll < 60000u; poll++) {
+		uint32_t now = rtc_ticks();
+		uint32_t app = fxcg100_poll_app_keys();
+		uint16_t raw = (uint16_t)(keysc[0] | keysc[1] | keysc[2] |
+			keysc[3] | keysc[4] | keysc[5]);
+
+		if(app == 0 && raw == 0) {
+			clear_polls++;
+			if(now != last_tick) {
+				last_tick = now;
+				if(++clear_ticks >= 2u)
+					break;
+			} else if(clear_polls >= 64u) {
+				break;
+			}
+		} else {
+			clear_ticks = 0;
+			clear_polls = 0;
+			last_tick = now;
+		}
+		if((uint32_t)(now - start) >= 384u)
+			break;
+		for(volatile unsigned i = 0; i < 4000; i++)
+			;
+	}
+	clearevents();
+#endif
+}
+
 void fxcg100_lcd_init(void)
 {
 	lcd_os_overlay_dirty = 0;

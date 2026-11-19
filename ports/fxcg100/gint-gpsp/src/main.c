@@ -330,12 +330,7 @@ static void wait_status(void)
 
 static void wait_for_keys_released(void)
 {
-	for(unsigned poll = 0; poll < 20000; poll++) {
-		if(fxcg100_poll_app_keys() == 0)
-			break;
-		for(volatile unsigned i = 0; i < 2000; i++)
-			;
-	}
+	fxcg100_wait_keys_released();
 }
 
 static void prepare_exit_to_os(const char *detail)
@@ -2365,6 +2360,10 @@ static int gpsp_main(void)
 						? "Saving state to slot %u..."
 						: "Loading state from slot %u...", slot);
 					cg_ui_show_progress(line);
+					/* Do not enter a Fugue world switch while OK/EXE is still
+					 * physically held: on fx-CG100 that can leave the OS call
+					 * or return stuck with the flash icon still on screen. */
+					wait_for_keys_released();
 					if(!save && !cgba_gpsp_storage_sync()) {
 						storage_failed = 1;
 						break;
@@ -2508,6 +2507,7 @@ static int gpsp_main(void)
 #else
 			cgba_frame_limiter_stop();
 			draw_status("Loading state", slot_line);
+			wait_for_keys_released();
 			draw_status(cgba_gpsp_state_load(menu_state.savestate_slot)
 				? "State loaded" : "Could not load the state", slot_line);
 			wait_status();
@@ -2534,6 +2534,7 @@ static int gpsp_main(void)
 				snprintf(slot_line, sizeof slot_line, "Slot %u",
 					(unsigned)menu_state.savestate_slot);
 				draw_status("Saving state", slot_line);
+				wait_for_keys_released();
 				ok = cgba_gpsp_state_save(menu_state.savestate_slot);
 				storage_ok = ok || cgba_gpsp_storage_sync();
 #ifdef CGBA_SAVE_TIMING

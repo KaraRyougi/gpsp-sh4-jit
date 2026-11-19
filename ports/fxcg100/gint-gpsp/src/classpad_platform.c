@@ -1227,6 +1227,16 @@ uint32_t fxcg100_poll_app_keys(void)
 	return keys;
 }
 
+void fxcg100_wait_keys_released(void)
+{
+	for(unsigned poll = 0; poll < 20000u; poll++) {
+		if(fxcg100_poll_app_keys() == 0)
+			break;
+		for(volatile unsigned i = 0; i < 2000; i++)
+			;
+	}
+}
+
 /* ---- gameplay presentation ------------------------------------------------ */
 
 /* Send a strip built for the upright picture: `rows` rows of `width` at
