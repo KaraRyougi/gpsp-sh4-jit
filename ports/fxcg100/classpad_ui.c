@@ -62,6 +62,7 @@
 #define T_SNACK_OUT 12
 #define T_SNACK (5u * TICKS_PER_SECOND / 2u)
 #define SCRIM 150              /* of 256: how far a dialog darkens the page */
+#define SCRIM_LIGHT 100        /* softer scrim for light themes */
 
 enum {
 	SCREEN_LIBRARY = 0,
@@ -106,6 +107,7 @@ typedef struct cp_ui {
 	cp_theme t, base;
 	uint16_t faint;            /* disabled marks, the scroll indicator */
 	uint32_t theme_shown;
+	uint32_t dark_shown;
 	cp_theme theme_from;
 	uint32_t theme_t0;
 	int theme_fading;
@@ -318,14 +320,16 @@ static uint16_t ui_tint(const cp_ui *ui, uint16_t color)
  * coming in. Returns how far the content should be slid sideways. */
 static int ui_resolve_theme(cp_ui *ui)
 {
-	const cp_theme *chosen = cp_theme_get(ui->state->theme);
+	uint32_t dark = ui->state->dark_mode != 0;
+	const cp_theme *chosen = cp_theme_get_mode(ui->state->theme, dark);
 	cp_theme shown;
 	int p, fade = 0;
 
-	if(ui->state->theme != ui->theme_shown) {
+	if(ui->state->theme != ui->theme_shown || dark != ui->dark_shown) {
 		ui->theme_from = ui->base;
 		ui->theme_t0 = ui->now;
 		ui->theme_shown = ui->state->theme;
+		ui->dark_shown = dark;
 		ui->theme_fading = 1;
 	}
 	if(ui->theme_fading) {
@@ -1159,12 +1163,17 @@ static int ui_swatches(cp_ui *ui, cp_rect r, int cols, uint32_t *value)
 
 		if(flags & HIT_CLICK)
 			*value = (uint32_t)i;
-		cp_disc(&ui->s, cx, cy, 15, ui_tint(ui, cp_themes[i].primary));
-		if((uint32_t)i == *value) {
-			cp_round_ring(&ui->s, ring.x, ring.y, 40, 40, 20, 2,
-				focused ? ui->t.primary : ui->t.on_surface);
-			ui_icon(ui, ICON_CHECK, cx, cy,
-				ui_tint(ui, cp_themes[i].on_primary));
+		{
+			const cp_theme *sw = cp_theme_get_mode((uint32_t)i,
+				ui->state->dark_mode);
+
+			cp_disc(&ui->s, cx, cy, 15, ui_tint(ui, sw->primary));
+			if((uint32_t)i == *value) {
+				cp_round_ring(&ui->s, ring.x, ring.y, 40, 40, 20, 2,
+					focused ? ui->t.primary : ui->t.on_surface);
+				ui_icon(ui, ICON_CHECK, cx, cy,
+					ui_tint(ui, sw->on_primary));
+			}
 		}
 		ui_layer(ui, id, ring, 20, flags, ui->t.on_surface);
 		ui_mark(cp_theme_names[i], c);
@@ -1992,6 +2001,7 @@ static fxcg100_menu_result screen_settings(cp_ui *ui)
 		st->theme = 0;
 	changed |= ui_swatches(ui, setting_row_h(ui, &y, "Colour",
 		cp_theme_names[st->theme], 96), 4, &st->theme);
+	changed |= row_switch(ui, &y, "Dark mode", NULL, &st->dark_mode);
 	changed |= row_switch(ui, &y, "Animations", NULL, &st->animations);
 	card_end(ui, &y);
 
@@ -2807,7 +2817,8 @@ void cp_ui_begin(cp_ui *ui, fxcg100_menu_state *state, int in_game)
 	ui->entering = 1;
 	ui->enter_black = 1;
 	ui->theme_shown = state->theme;
-	ui->base = *cp_theme_get(state->theme);
+	ui->dark_shown = state->dark_mode != 0;
+	ui->base = *cp_theme_get_mode(state->theme, state->dark_mode);
 
 	/* Whatever opened the menu is still held: do not let it act here. */
 	ui->prev_keys = fxcg100_poll_app_keys();
@@ -2876,7 +2887,8 @@ fxcg100_menu_result cp_ui_step(cp_ui *ui)
 		ui->modal_t0 = ui->now;
 		ui->ripple_live = 0;
 	}
-	ui->dim = ui_approach(ui, ui->dim, modal ? SCRIM : 0, 14);
+	ui->dim = ui_approach(ui, ui->dim,
+		modal ? (ui->state->dark_mode ? SCRIM : SCRIM_LIGHT) : 0, 14);
 	shown = ui->t;
 	if(ui->dim) {
 		cp_theme dark;
@@ -2945,7 +2957,7 @@ void cp_ui_status(const fxcg100_menu_state *state, const char *line1,
 	memset(&ui, 0, sizeof(ui));
 	ui.state = (fxcg100_menu_state *)state;
 	ui_refresh_orientation(&ui);
-	ui_use(&ui, cp_theme_get(state->theme));
+	ui_use(&ui, cp_theme_get_mode(state->theme, state->dark_mode));
 	w = ui.w - 48 > 312 ? 312 : ui.w - 48;
 	x = (ui.w - w) / 2;
 	y = (ui.h - 104) / 2;
@@ -2970,6 +2982,7 @@ void fxcg100_menu_init(fxcg100_menu_state *state)
 	memset(state, 0, sizeof(*state));
 	state->screen_scale = CP_VIEW_PORTRAIT_43;
 	state->touch_keys = 1;
+	state->dark_mode = 1;
 	state->animations = 1;
 	state->frameskip_type = 1;
 	state->frameskip_value = 1;

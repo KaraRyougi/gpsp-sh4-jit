@@ -1451,7 +1451,42 @@ static void test_ui(const char *dir)
 			ui_shot(dir, "ui-settings-violet");
 	}
 	CHECK(ui_state.theme == CP_THEME_GREEN, "the default scheme is green");
+	CHECK(ui_state.dark_mode == 1, "dark mode is on by default");
 	ui_shot(dir, "ui-settings-appearance");
+
+	/* Dark mode off: switches to the light schemes, while in-game touch keys
+	 * remain on the dark palette. */
+	r = ui_find("Dark mode", 0);
+	if (!r || r->y + r->h > 520) {
+		ui.scroll[SCREEN_SETTINGS] += r ? r->y + r->h - 400 : 120;
+		ui.redraw = 1;
+		ui_settle(ui_frame());
+	}
+	ui_tap_on("Dark mode", 0);
+	CHECK(ui_state.dark_mode == 0, "tapping Dark mode turns it off");
+	for (unsigned t = CP_THEME_COUNT; t-- > 0;) {
+		r = ui_find(cp_theme_names[t], 0);
+		if (!r || r->y < ui.bar_h || r->y + r->h > 520) {
+			ui.scroll[SCREEN_SETTINGS] += r ? r->y - 200 : -120;
+			ui.redraw = 1;
+			ui_settle(ui_frame());
+		}
+		ui_tap_on(cp_theme_names[t], 0);
+		CHECK(ui.t.primary == cp_themes_light[t].primary &&
+			user_pixel(CP_VIEW_PORTRAIT_43, 0, 2, 200) ==
+			cp_themes_light[t].surface,
+			"page did not take light scheme %s", cp_theme_names[t]);
+	}
+	ui_shot(dir, "ui-settings-appearance-light");
+	r = ui_find("Dark mode", 0);
+	if (!r || r->y + r->h > 520) {
+		ui.scroll[SCREEN_SETTINGS] += r ? r->y + r->h - 400 : 120;
+		ui.redraw = 1;
+		ui_settle(ui_frame());
+	}
+	ui_tap_on("Dark mode", 0);
+	CHECK(ui_state.dark_mode == 1 && ui.t.surface == cp_themes[0].surface,
+		"tapping Dark mode restores dark scheme");
 
 	/* Motion: a new screen starts faded and slid, and comes to rest. */
 	ui_open(1, CP_VIEW_PORTRAIT_43);

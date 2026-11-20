@@ -786,6 +786,7 @@ void fxcg100_menu_init(fxcg100_menu_state *state)
   state->frameskip_value = 1;
   state->frameskip_variation = 0;
   state->frame_limit = 1;
+  state->dark_mode = 1;
   state->show_fps = 0;
   fxcg100_keymap_defaults(state->keymap);
   fxcg100_hotkey_defaults(state->hotkey_map);

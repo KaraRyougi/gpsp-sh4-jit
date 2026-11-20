@@ -125,9 +125,10 @@ typedef struct fxcg100_menu_state {
    * the system set. */
   uint32_t backlight;
   uint32_t backlight_pwm;
-  /* fx-CP400 only: colour scheme (CP_THEME_*) and whether the interface
-   * animates. */
+  /* Interface appearance: colour scheme (CP_THEME_*), dark mode (1 = dark,
+   * 0 = light), and whether the fx-CP400 interface animates. */
   uint32_t theme;
+  uint32_t dark_mode;
   uint32_t animations;
   uint16_t keymap[FXCG100_GBA_KEY_COUNT];
   uint16_t hotkey_map[FXCG100_HOTKEY_COUNT];

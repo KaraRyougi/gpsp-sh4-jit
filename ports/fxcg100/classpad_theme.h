@@ -1,14 +1,15 @@
 #ifndef CGBA_CLASSPAD_THEME_H
 #define CGBA_CLASSPAD_THEME_H
 
-/* Colour schemes for the fx-CP400 interface and touch keys.
+/* Colour schemes for the fx-CP400 / fx-CG interface and touch keys.
  *
- * Each scheme is a set of Material 3 colour roles for a dark theme, built
- * around one primary colour: the surfaces and the text are tinted slightly
- * towards it, so a scheme reads as one tone rather than a colour laid on
- * black. The interface only ever asks for a role, never for a colour.
+ * Each scheme is a set of Material 3 colour roles in both dark and light
+ * variants, built around one primary colour: the surfaces and the text are
+ * tinted slightly towards it, so a scheme reads as one tone rather than a
+ * colour laid on black or white. The interface only ever asks for a role,
+ * never for a colour.
  *
- * The first scheme is the default (a zeroed configuration selects it). */
+ * The first scheme (Green, dark) is the default. */
 
 #include <stdint.h>
 
@@ -47,10 +48,16 @@ enum {
 	CP_THEME_COUNT
 };
 
-#define CP_THEME(p, op, pc, opc, sc, osc, s, c, ch, os, ov, ol) \
+#define CP_THEME_ERR(p, op, pc, opc, sc, osc, s, c, ch, os, ov, ol, err) \
 	{ CP_HEX(p), CP_HEX(op), CP_HEX(pc), CP_HEX(opc), CP_HEX(sc), \
 	  CP_HEX(osc), CP_HEX(s), CP_HEX(c), CP_HEX(ch), CP_HEX(os), CP_HEX(ov), \
-	  CP_HEX(ol), CP_HEX(0xFFB4AB) }
+	  CP_HEX(ol), CP_HEX(err) }
+
+#define CP_THEME(p, op, pc, opc, sc, osc, s, c, ch, os, ov, ol) \
+	CP_THEME_ERR(p, op, pc, opc, sc, osc, s, c, ch, os, ov, ol, 0xFFB4AB)
+
+#define CP_THEME_LIGHT(p, op, pc, opc, sc, osc, s, c, ch, os, ov, ol) \
+	CP_THEME_ERR(p, op, pc, opc, sc, osc, s, c, ch, os, ov, ol, 0xBA1A1A)
 
 static const cp_theme cp_themes[CP_THEME_COUNT] = {
 	[CP_THEME_GREEN] = CP_THEME(0x7EDB7B, 0x00390A, 0x00530F, 0x99F895,
@@ -79,6 +86,33 @@ static const cp_theme cp_themes[CP_THEME_COUNT] = {
 		0xC6C6C6, 0x8F8F8F),
 };
 
+static const cp_theme cp_themes_light[CP_THEME_COUNT] = {
+	[CP_THEME_GREEN] = CP_THEME_LIGHT(0x216C2E, 0xFFFFFF, 0xA8F5A6, 0x002205,
+		0xCDE6C9, 0x101F10, 0xF6FBF2, 0xE8EEE4, 0xDCE3D8, 0x181D17,
+		0x424940, 0x72796F),
+	[CP_THEME_TEAL] = CP_THEME_LIGHT(0x006A60, 0xFFFFFF, 0x74F8E5, 0x00201C,
+		0xC6E6DF, 0x05201C, 0xF4FBF8, 0xE6EFEA, 0xDAE4DF, 0x161D1B,
+		0x3F4946, 0x6F7976),
+	[CP_THEME_BLUE] = CP_THEME_LIGHT(0x295EA7, 0xFFFFFF, 0xC2DCFF, 0x001C3B,
+		0xD4DFEE, 0x121C2B, 0xF7F9FF, 0xE9EEF6, 0xDDE3EC, 0x181C20,
+		0x43474E, 0x74777F),
+	[CP_THEME_INDIGO] = CP_THEME_LIGHT(0x4B52B5, 0xFFFFFF, 0xD6D8FF, 0x050C68,
+		0xDCDDF0, 0x171A2C, 0xFAF8FF, 0xECEBF5, 0xE0DFEC, 0x1A1B21,
+		0x46464F, 0x777680),
+	[CP_THEME_VIOLET] = CP_THEME_LIGHT(0x6750A4, 0xFFFFFF, 0xE4D4FF, 0x21005D,
+		0xE4DAF0, 0x1D192B, 0xFCF8FF, 0xEFEAF5, 0xE3DEEB, 0x1D1B20,
+		0x49454F, 0x79747E),
+	[CP_THEME_MAGENTA] = CP_THEME_LIGHT(0x8D3A9C, 0xFFFFFF, 0xFCCBFF, 0x35003F,
+		0xEDD8EB, 0x291529, 0xFFF7FC, 0xF3EAF1, 0xE7DEE6, 0x1F1A1F,
+		0x4D444C, 0x7E747D),
+	[CP_THEME_AMBER] = CP_THEME_LIGHT(0x885200, 0xFFFFFF, 0xFFD8A6, 0x2B1700,
+		0xEEDDC8, 0x26190A, 0xFFF8F2, 0xF4ECE3, 0xE8DFD5, 0x201B16,
+		0x4F453B, 0x807569),
+	[CP_THEME_MONO] = CP_THEME_LIGHT(0x303030, 0xFFFFFF, 0xDCDCDC, 0x141414,
+		0xD4D4D4, 0x1B1B1B, 0xF8F8F8, 0xEAEAEA, 0xDEDEDE, 0x1A1A1A,
+		0x474747, 0x767676),
+};
+
 static const char *const cp_theme_names[CP_THEME_COUNT] = {
 	"Green", "Teal", "Blue", "Indigo", "Violet", "Magenta", "Amber", "Mono"
 };
@@ -86,6 +120,14 @@ static const char *const cp_theme_names[CP_THEME_COUNT] = {
 static inline const cp_theme *cp_theme_get(uint32_t index)
 {
 	return &cp_themes[index < CP_THEME_COUNT ? index : 0];
+}
+
+static inline const cp_theme *cp_theme_get_mode(uint32_t index,
+	uint32_t dark_mode)
+{
+	const cp_theme *table = dark_mode ? cp_themes : cp_themes_light;
+
+	return &table[index < CP_THEME_COUNT ? index : 0];
 }
 
 /* out = a + (b - a) * t / 256 for every role: a scheme part-way between two

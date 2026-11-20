@@ -434,6 +434,17 @@ static void test_settings(void)
 	CHECK(st.theme == 1, "colour");
 	press(FXCG100_APPKEY_LEFT);
 	press(FXCG100_APPKEY_DOWN);
+	CHECK(selected_row(&ui_main)->id == ID_DARK_MODE, "dark mode row: %d",
+		selected_row(&ui_main)->id);
+	CHECK(st.dark_mode == 1, "dark mode default");
+	press(FXCG100_APPKEY_RIGHT);
+	CHECK(st.dark_mode == 0 && ui_main.t.surface == cp_themes_light[0].surface,
+		"dark mode off");
+	snap("settings-light");
+	press(FXCG100_APPKEY_EXE);
+	CHECK(st.dark_mode == 1 && ui_main.t.surface == cp_themes[0].surface,
+		"EXE toggles dark mode back on");
+	press(FXCG100_APPKEY_DOWN);
 	CHECK(selected_row(&ui_main)->id == ID_FRAMESKIP, "rows: %d",
 		selected_row(&ui_main)->id);
 	press(FXCG100_APPKEY_DOWN);
@@ -459,6 +470,7 @@ static void test_settings(void)
 	press(FXCG100_APPKEY_UP);
 	press(FXCG100_APPKEY_UP);
 	press(FXCG100_APPKEY_UP);
+	press(FXCG100_APPKEY_UP);
 	CHECK(selected_row(&ui_main)->id == ID_SIZE, "back at the top");
 	held_app = FXCG100_APPKEY_DOWN;
 	step();
@@ -471,7 +483,7 @@ static void test_settings(void)
 	CHECK(selected_row(&ui_main)->id == ID_COLOUR, "no repeat after 400 ms");
 	now_ticks += 10;
 	step();
-	CHECK(selected_row(&ui_main)->id == ID_FRAMESKIP, "no repeat after 80 ms");
+	CHECK(selected_row(&ui_main)->id == ID_DARK_MODE, "no repeat after 80 ms");
 	/* Held to the end, it stops there rather than going round. */
 	for (i = 0; i < 20; i++) {
 		now_ticks += 10;
@@ -481,7 +493,7 @@ static void test_settings(void)
 		selected_row(&ui_main)->id);
 	held_app = 0;
 	step();
-	for (i = 0; i < 6; i++)
+	for (i = 0; i < 7; i++)
 		press(FXCG100_APPKEY_UP);
 	CHECK(selected_row(&ui_main)->id == ID_SIZE, "back up: %d",
 		selected_row(&ui_main)->id);
@@ -679,11 +691,15 @@ static void test_status(void)
 	cg_ui_status(&st, "loading ROM", "Metroid Fusion.gba", NULL);
 	snap("status-plain");
 	CHECK(band_is(-4, 20, cp_theme_get(0)->surface), "plain page");
+	st.dark_mode = 0;
+	cg_ui_status(&st, "loading ROM", "Metroid Fusion.gba", NULL);
+	CHECK(band_is(-4, 20, cp_theme_get_mode(0, 0)->surface),
+		"plain page light");
 }
 
 int main(int argc, char **argv)
 {
-	int t;
+	int t, dark;
 
 	outdir = argc > 1 ? argv[1] : NULL;
 	test_library_start();
@@ -694,15 +710,18 @@ int main(int argc, char **argv)
 	test_baselines();
 	test_status();
 
-	/* Every colour scheme draws every page. */
-	for (t = 0; t < CP_THEME_COUNT; t++) {
-		fxcg100_menu_init(&st);
-		st.theme = (uint32_t)t;
-		st.rom_source = 7;
-		begin(1);
-		press(FXCG100_APPKEY_SETTINGS);
-		press(FXCG100_APPKEY_HOME);
-		press(FXCG100_APPKEY_BACK);
+	/* Every colour scheme draws every page, in dark and light mode. */
+	for (dark = 1; dark >= 0; dark--) {
+		for (t = 0; t < CP_THEME_COUNT; t++) {
+			fxcg100_menu_init(&st);
+			st.theme = (uint32_t)t;
+			st.dark_mode = (uint32_t)dark;
+			st.rom_source = 7;
+			begin(1);
+			press(FXCG100_APPKEY_SETTINGS);
+			press(FXCG100_APPKEY_HOME);
+			press(FXCG100_APPKEY_BACK);
+		}
 	}
 
 	CHECK(hint_overflows == 0, "%d footers did not fit", hint_overflows);

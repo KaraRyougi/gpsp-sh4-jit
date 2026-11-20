@@ -69,6 +69,7 @@
 #define T_REPEAT_DELAY 51u     /* a held cursor key repeats after 400 ms */
 #define T_REPEAT 10u           /* ... every 80 ms */
 #define DIM 141                /* of 256: how far a dialog darkens the page */
+#define DIM_LIGHT 100          /* softer scrim for light themes */
 
 #define F_TITLE (&cg_font_title)
 #define F_BODY (&cg_font_body)
@@ -113,7 +114,8 @@ enum { RK_SECTION = 0, RK_PLAIN, RK_SUB, RK_VALUE, RK_KEY, RK_COLOUR };
 enum {
 	ID_NONE = 0,
 	ID_RESUME, ID_SAVE, ID_LOAD, ID_SETTINGS, ID_GAMES, ID_RESTART, ID_EXIT,
-	ID_SIZE, ID_FILTER, ID_COLOUR, ID_FRAMESKIP, ID_SKIP_N, ID_SKIP_PATTERN,
+	ID_SIZE, ID_FILTER, ID_COLOUR, ID_DARK_MODE, ID_FRAMESKIP, ID_SKIP_N,
+	ID_SKIP_PATTERN,
 	ID_LIMIT, ID_SHOW_FPS, ID_KEYMAP, ID_DEBUG,
 	ID_RESET_KEYS,
 	ID_BIND0,                  /* + binding index */
@@ -160,7 +162,7 @@ typedef struct cg_ui {
 	int nrows, list_h;
 	int sel_y, sel_h;          /* screen band of the highlighted row */
 	/* what the panel shows */
-	int shown, shown_page, shown_scroll, shown_dialog, shown_theme;
+	int shown, shown_page, shown_scroll, shown_dialog, shown_theme, shown_dark;
 	int shown_sel_y, shown_sel_h;
 } cg_ui;
 
@@ -586,8 +588,8 @@ static void draw_row(cg_ui *ui, int y, const ui_row *r, int sel)
 
 			if (sel)
 				cp_disc(&ui->s, sx, cy, 7, t->on_primary);
-			cp_disc(&ui->s, sx, cy, 5, cp_theme_get(ui->state->theme)
-				->primary);
+			cp_disc(&ui->s, sx, cy, 5, cp_theme_get_mode(ui->state->theme,
+				ui->state->dark_mode)->primary);
 			vw += 16;
 		}
 		if (sel && r->lr) {
@@ -682,6 +684,7 @@ static void rows_settings(cg_ui *ui)
 	r = add_value(ui, ID_COLOUR, "Colour", cp_theme_names[st->theme <
 		CP_THEME_COUNT ? st->theme : 0]);
 	r->kind = RK_COLOUR;
+	add_value(ui, ID_DARK_MODE, "Dark mode", st->dark_mode ? "On" : "Off");
 	add_row(ui, RK_SECTION, ID_NONE, "Speed");
 	add_value(ui, ID_FRAMESKIP, "Frame skipping", pick(frameskip_names, 3,
 		st->frameskip_type));
@@ -1124,7 +1127,7 @@ static void draw_capture(cg_ui *ui)
 
 static void draw(cg_ui *ui)
 {
-	ui->t = *cp_theme_get(ui->state->theme);
+	ui->t = *cp_theme_get_mode(ui->state->theme, ui->state->dark_mode);
 	cp_surface_init(&ui->s, gint_vram, DWIDTH, DHEIGHT, CP_SURFACE_UPRIGHT);
 	ui->s.ox = SCR_X;
 	ui->s.oy = SCR_Y;
@@ -1133,7 +1136,8 @@ static void draw(cg_ui *ui)
 		cp_theme shown = ui->t;
 
 		/* The page underneath, darkened and without its footer. */
-		cp_theme_toward(&ui->t, &shown, 0x0000, DIM);
+		cp_theme_toward(&ui->t, &shown, 0x0000,
+			ui->state->dark_mode ? DIM : DIM_LIGHT);
 		draw_page(ui);
 		ui->t = shown;
 		if (ui->dialog == DIALOG_CAPTURE)
@@ -1172,7 +1176,8 @@ static void render(cg_ui *ui)
 	draw(ui);
 	same = ui->shown && !ui->dialog && !ui->shown_dialog &&
 		ui->shown_page == ui->page && ui->shown_scroll == page_scroll(ui) &&
-		ui->shown_theme == (int)ui->state->theme;
+		ui->shown_theme == (int)ui->state->theme &&
+		ui->shown_dark == (ui->state->dark_mode != 0);
 	if (same && mode == REDRAW_SELECTION) {
 		push_band(-SCR_Y, HEAD + SCR_Y);
 		push_band(ui->shown_sel_y, ui->shown_sel_h);
@@ -1188,6 +1193,7 @@ static void render(cg_ui *ui)
 	ui->shown_scroll = page_scroll(ui);
 	ui->shown_dialog = ui->dialog;
 	ui->shown_theme = (int)ui->state->theme;
+	ui->shown_dark = ui->state->dark_mode != 0;
 	ui->shown_sel_y = ui->sel_y;
 	ui->shown_sel_h = ui->sel_h;
 	ui->redraw = REDRAW_NONE;
@@ -1334,6 +1340,9 @@ static void change_setting(cg_ui *ui, int id, int delta)
 		break;
 	case ID_COLOUR:
 		st->theme = cycle(st->theme, CP_THEME_COUNT, delta);
+		break;
+	case ID_DARK_MODE:
+		st->dark_mode = !st->dark_mode;
 		break;
 	case ID_FRAMESKIP:
 		st->frameskip_type = cycle(st->frameskip_type, 3, delta);
@@ -1487,7 +1496,8 @@ static void input_settings(cg_ui *ui)
 			goto_page(ui, PAGE_KEYS);
 		else if (r->id == ID_DEBUG)
 			goto_page(ui, PAGE_DEBUG);
-		else if (r->id == ID_LIMIT || r->id == ID_SHOW_FPS)
+		else if (r->id == ID_DARK_MODE || r->id == ID_LIMIT ||
+				r->id == ID_SHOW_FPS)
 			change_setting(ui, r->id, 1);
 	}
 }
@@ -1809,7 +1819,8 @@ void cg_ui_status(const fxcg100_menu_state *state, const char *line1,
 
 	memset(&ui, 0, sizeof(ui));
 	ui.state = (fxcg100_menu_state *)state;
-	ui.t = *cp_theme_get(state ? state->theme : 0);
+	ui.t = *cp_theme_get_mode(state ? state->theme : 0,
+		state ? state->dark_mode : 1);
 	cp_surface_init(&ui.s, gint_vram, DWIDTH, DHEIGHT, CP_SURFACE_UPRIGHT);
 	ui.s.ox = SCR_X;
 	ui.s.oy = SCR_Y;
@@ -1845,6 +1856,7 @@ void fxcg100_menu_init(fxcg100_menu_state *state)
 	state->frameskip_type = 1;
 	state->frameskip_value = 1;
 	state->frame_limit = 1;
+	state->dark_mode = 1;
 	fxcg100_keymap_defaults(state->keymap);
 	fxcg100_hotkey_defaults(state->hotkey_map);
 	state->random_lfsr = 0x00c6ba5eu;
