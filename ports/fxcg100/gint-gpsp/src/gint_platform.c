@@ -99,6 +99,7 @@ static uint32_t cg_sync_orig_period;
 static int cg_sync_regs_saved;
 static int cg_sync_regs_dirty;
 static uint32_t cg_sync_applied_mhz;
+static uint32_t cg_sync_failed_mhz;
 
 static inline void cg_sync_poll_fmark(void)
 {
@@ -275,6 +276,7 @@ static void cg_sync_apply_rate(uint32_t want_mhz)
 	if(cg_sync_hw_state != CG_SYNC_HW_READY || !cg_sync_regs_saved)
 		return;
 	if(want_mhz == 0u) {
+		cg_sync_failed_mhz = 0u;
 		cg_sync_restore_timing();
 		return;
 	}
@@ -292,6 +294,7 @@ static void cg_sync_apply_rate(uint32_t want_mhz)
 		r61524_set(0x010, new10);
 		if(r61524_get(0x008) != new8 || r61524_get(0x010) != new10) {
 			cg_sync_restore_timing();
+			cg_sync_failed_mhz = want_mhz;
 			return;
 		}
 	} else if(cg_sync_panel == CG_PANEL_HIMAX) {
@@ -321,9 +324,11 @@ static void cg_sync_apply_rate(uint32_t want_mhz)
 		cg_sync.anchor_valid = 1;
 		cg_sync.pace_valid = 0;
 		cg_sync_applied_mhz = want_mhz;
+		cg_sync_failed_mhz = 0u;
 		cg_sync_regs_dirty = 0;
 	} else {
 		cg_sync_restore_timing();
+		cg_sync_failed_mhz = want_mhz;
 	}
 }
 
@@ -364,6 +369,7 @@ static void cg_sync_probe_hw(void)
 	cg_sync_regs_saved = 1;
 	cg_sync_regs_dirty = 0;
 	cg_sync_applied_mhz = 0u;
+	cg_sync_failed_mhz = 0u;
 	cg_sync.bp_rows = cg_sync_orig_bp;
 	cg_sync.total_rows = cg_sync_orig_total;
 
@@ -429,7 +435,9 @@ static uint32_t cg_sync_before_frame(uint32_t mode, uint32_t y0, uint32_t h)
 	if(cg_sync_hw_state != CG_SYNC_HW_READY || !cg_sync_tcnt)
 		return 0u;
 
-	if(cg_sync_applied_mhz != want_mhz || cg_sync_regs_dirty)
+	if((cg_sync_applied_mhz != want_mhz || cg_sync_regs_dirty) &&
+	   !(want_mhz != 0u && want_mhz == cg_sync_failed_mhz &&
+	     !cg_sync_regs_dirty))
 		cg_sync_apply_rate(want_mhz);
 
 	/* If VSync is off (user only selected a custom refresh rate), we are done. */
@@ -521,6 +529,7 @@ void fxcg100_lcd_set_sync(uint32_t wait, uint32_t offset)
 {
 	(void)offset;
 	cg_sync.enabled = wait ? 1u : 0u;
+	cg_sync_failed_mhz = 0u;
 	if(!cg_sync.enabled) {
 		if(cg_sync_target_mhz(cg_sync_refresh_mode, 0u) == 0u)
 			cg_sync_restore_timing();
@@ -532,6 +541,7 @@ void fxcg100_lcd_set_sync(uint32_t wait, uint32_t offset)
 void fxcg100_lcd_set_refresh(uint32_t rate)
 {
 	cg_sync_refresh_mode = (rate <= 6u) ? rate : 0u;
+	cg_sync_failed_mhz = 0u;
 	if(cg_sync_target_mhz(cg_sync_refresh_mode, cg_sync.enabled) == 0u)
 		cg_sync_restore_timing();
 }
@@ -787,6 +797,7 @@ void fxcg100_lcd_init(void)
 	cg_sync_regs_saved = 0;
 	cg_sync_regs_dirty = 0;
 	cg_sync_applied_mhz = 0u;
+	cg_sync_failed_mhz = 0u;
 	cg_sync.anchor_valid = 0;
 	cg_sync.pace_valid = 0;
 }
@@ -800,6 +811,7 @@ void fxcg100_lcd_shutdown(void)
 	cg_sync_hw_state = CG_SYNC_HW_UNKNOWN;
 	cg_sync_panel = CG_PANEL_NONE;
 	cg_sync_regs_saved = 0;
+	cg_sync_failed_mhz = 0u;
 	cg_sync.anchor_valid = 0;
 	cg_sync.pace_valid = 0;
 	lcd_frame_synced = 0;
@@ -883,6 +895,7 @@ void fxcg100_lcd_note_os_activity(void)
 	lcd_os_overlay_dirty = 1;
 	lcd_frame_synced = 0;
 	cg_sync_regs_dirty = 1;
+	cg_sync_failed_mhz = 0u;
 	cg_sync.anchor_valid = 0;
 	cg_sync.pace_valid = 0;
 }
