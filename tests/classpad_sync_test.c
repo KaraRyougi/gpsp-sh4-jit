@@ -402,6 +402,105 @@ int main(void)
 		}
 	}
 
+	/* Full-window calibration probe (cp_sync_window_probe): eliminates the
+	 * opposite-side false-clean band (e.g. positions 4..12 on a 555-row
+	 * R61523 or on a 548-row 0x16 when |lines - rows| < total/2), while
+	 * still leaving a clean position when the true start sits midway between
+	 * two stops (even at the late edge of the 4-row polling slot). */
+	{
+		static const struct {
+			uint32_t total, lines, strip;
+			int same_dir;
+		} probe_cases[] = {
+			{ 555u, 440u,  0u, 1 }, /* R61523 faster write */
+			{ 555u, 600u,  0u, 1 }, /* R61523 slower write (4..12 band) */
+			{ 555u, 620u,  0u, 1 }, /* R61523 slower write */
+			{ 555u, 680u,  0u, 1 }, /* R61523 slow write */
+			{ 548u, 400u, 16u, 0 }, /* 0x16 faster write */
+			{ 548u, 600u, 16u, 0 }, /* 0x16 slower write */
+			{ 548u, 640u, 16u, 0 }, /* 0x16 stock write */
+			{ 548u, 750u, 16u, 0 }, /* 0x16 very slow write */
+		};
+		const uint32_t rows = 528u, strips = 33u;
+
+		for(c = 0; c < sizeof(probe_cases) / sizeof(probe_cases[0]); c++) {
+			uint32_t total = probe_cases[c].total;
+			uint32_t lines = probe_cases[c].lines;
+			uint32_t strip = probe_cases[c].strip;
+			int same_dir = probe_cases[c].same_dir;
+			uint32_t lo, hi, pos, k, ts;
+
+			CHECK(cp_sync_window_part(total, rows, lines, 0,
+				CP_SYNC_PART_CALIBRATE, strip, &lo, &hi),
+				"probe case %u: no window", c);
+
+			/* True start at 0: position 0 is clean at every probe slot and
+			 * every wrong position 1..15 tears on at least one slot. */
+			for(pos = 0; pos < 16u; pos++) {
+				uint32_t shift = total * pos / 16u;
+				int tore = 0;
+
+				for(k = 0; k < CP_SYNC_CALIBRATE_STEPS; k++) {
+					uint32_t plo = lo, phi = hi;
+					uint32_t at;
+
+					cp_sync_window_probe(&plo, &phi, k);
+					CHECK(plo >= lo && phi <= hi &&
+						phi - plo <= CP_SYNC_END_ROWS,
+						"probe case %u step %u: slot [%u,%u) outside [%u,%u)",
+						c, (unsigned)k, (unsigned)plo, (unsigned)phi,
+						(unsigned)lo, (unsigned)hi);
+					at = (plo + shift) % total;
+					if(same_dir ? frame_in_strips_same_dir(total, rows, lines,
+							strips, at)
+						: frame_in_strips(total, rows, lines, strips, at))
+						tore = 1;
+				}
+				if(pos == 0)
+					CHECK(!tore, "probe case %u: true position 0 tore", c);
+				else
+					CHECK(tore, "probe case %u: wrong position %u stayed clean",
+						c, (unsigned)pos);
+			}
+
+			/* True start midway between stops 0 and 1 (ts = total/32): at
+			 * least one of position 0 or 1 remains clean across all 16 slots,
+			 * even when polling triggers at the last row of each 4-row slot. */
+			ts = total / 32u;
+			{
+				int any_clean = 0;
+
+				for(pos = 0; pos <= 1u; pos++) {
+					uint32_t shift = total * pos / 16u;
+					int tore = 0;
+
+					for(k = 0; k < CP_SYNC_CALIBRATE_STEPS; k++) {
+						uint32_t plo = lo, phi = hi;
+						uint32_t at0, at1;
+
+						cp_sync_window_probe(&plo, &phi, k);
+						at0 = (plo + shift + total - ts) % total;
+						at1 = (phi - 1u + shift + total - ts) % total;
+						if(same_dir
+							? (frame_in_strips_same_dir(total, rows, lines,
+									strips, at0) ||
+								frame_in_strips_same_dir(total, rows, lines,
+									strips, at1))
+							: (frame_in_strips(total, rows, lines, strips,
+									at0) ||
+								frame_in_strips(total, rows, lines, strips,
+									at1)))
+							tore = 1;
+					}
+					if(!tore)
+						any_clean = 1;
+				}
+				CHECK(any_clean, "probe case %u: midway true start %u had no "
+					"clean position", c, (unsigned)ts);
+			}
+		}
+	}
+
 	/* R61523 refresh direction from 0x0b (get_address_mode). */
 	CHECK(cp_r61523_refresh_bottom_up(0x00, 1) == 0, "R61523 0x00 top-down");
 	CHECK(cp_r61523_refresh_bottom_up(0x40, 1) == 0, "R61523 0x40 top-down");

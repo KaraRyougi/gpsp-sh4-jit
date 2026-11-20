@@ -1549,8 +1549,8 @@ static uint32_t cp_sync_offset;
 static int sync_calibrating;
 
 #ifndef CGBA_HOST_TEST
-/* Which end of the window the next frame of that page starts at. */
-static int sync_late;
+/* Which probe slot across the window the next calibration frame starts at. */
+static uint32_t sync_probe_step;
 enum { SCAN_UNKNOWN = 0, SCAN_USABLE, SCAN_NONE };
 static int scan_state;
 static uint32_t scan_total, scan_hz;
@@ -1670,12 +1670,13 @@ static void sync_begin(int top, int rows, int kind)
 			strip, &lo, &hi)) {
 		uint32_t start = fxcg100_ticks(), n;
 
-		/* Setting the offset: the two ends of the window in turn
-		 * (cp_sync_window_end), so a position too high tears as well
-		 * as one too low. */
+		/* Setting the offset: sweep across [lo, hi) in narrow slots
+		 * (cp_sync_window_probe) so neither end nor the middle of the
+		 * window can hide a forbidden zone behind a wrong position. */
 		if(sync_calibrating) {
-			cp_sync_window_end(&lo, &hi, sync_late);
-			sync_late = !sync_late;
+			cp_sync_window_probe(&lo, &hi, sync_probe_step);
+			sync_probe_step = (sync_probe_step + 1u)
+				% CP_SYNC_CALIBRATE_STEPS;
 		}
 		/* At most one refresh; given up after 47 ms whatever happens. */
 		for(n = 0; n < 400000u; n++) {
@@ -1714,8 +1715,10 @@ void fxcg100_lcd_sync_calibrate(uint32_t on)
 #ifndef CGBA_HOST_TEST
 	/* Count the rows again as the page opens, so that what it shows, and
 	 * what the offset is set against, is this start's count. */
-	if(on && !sync_calibrating)
+	if(on && !sync_calibrating) {
 		scan_state = SCAN_UNKNOWN;
+		sync_probe_step = 0;
+	}
 #endif
 	sync_calibrating = on != 0;
 }

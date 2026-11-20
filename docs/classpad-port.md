@@ -161,18 +161,19 @@ one frame goes out (measured on the frame before), the two do not meet.
   back button and the rows and refresh rate the counter was found to have
   at the top and a pill for the slider at the bottom, all leaving the
   colour showing beside them, so a line can be seen on any row of the
-  panel. While the page is open frames wait with half a step to spare (a
-  32nd of a refresh instead of an eighth), so the step nearest to where the
-  picture starts gives a screen without a line across it and the others do
-  not. (It was a 48th: then a start falling between two steps left no step
-  clean, only some that tore less often.) Frames on the page start at the
-  early and the late end of the window in turn (`cp_sync_window_end`):
-  waiting for the window and starting as it opens only ever tries the
-  early end, where a position too low tears but one too high just starts
-  the frame later and stays clean until the delay uses up the window. The
-  interface's frames always arrive early enough to wait, so before this
-  positions 0 to 6 all looked clean on the unit where 0 is right. The page
-  is behind a photosensitive-epilepsy warning.
+  panel. While the page is open frames wait with a 24th of a refresh to
+  spare (~23 rows at 555, slightly above half a step so a start midway
+  between two stops still survives polling jitter, while well below a full
+  step so one step out tears), and sweep across the whole `[lo, hi)` window
+  in 16 narrow slots in low-discrepancy order (`cp_sync_window_probe`:
+  early end, late end, middle, quarters, ...). Testing only the early end
+  left positions too high clean (0..6 on a 0x16 unit where 0 is right);
+  testing only the two ends left an opposite-side false-clean band whenever
+  the forbidden zone was narrower than half a refresh (positions 4..12 on a
+  555-row R61523), because both ends cleared the forbidden zone while the
+  middle of the window straddled it. Sweeping all 16 slots eliminates that
+  false-clean band on both panel families. The page is behind a
+  photosensitive-epilepsy warning.
 - On a bottom-up panel the strips go the way of the refresh, but each one is
   filled from its top row down, against it: its top row is written as it
   starts and its bottom row, the one the refresh comes to first, a strip's
@@ -222,8 +223,11 @@ while the page still tried only the early end of the window, and 0, the
 lowest of them, is the right one, as 20 rows of blanking would suggest:
 the picture starts within half a step (17 rows) of where the count does.
 0 is the default. With frames starting at both ends of the window, the
-page shows only 0 clean on that unit, every other position tearing. The R61523 family has not
-been tried at all.
+page showed only 0 clean on that 0x16 unit, every other position tearing.
+On an R61523 unit, `0x45` measured **555 rows at 60 Hz** (528 visible +
+27 blanking) and the two-end calibration exposed the opposite-side
+false-clean band across positions 4..12, which motivated the 16-slot
+full-window sweep (`cp_sync_window_probe`); default position remains 0.
 
 ### Backlight
 

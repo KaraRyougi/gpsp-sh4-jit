@@ -175,38 +175,49 @@ static inline int cp_sync_window_part(uint32_t total, uint32_t rows,
  * is being set by eye, when what is wanted is the opposite of safety: an
  * offset one step out (a sixteenth of a refresh) should already tear.
  *
- * While setting it, half a step: wherever the picture really starts, the
- * step nearest to it is then at most half a step out and gives a clean
- * screen, and every other step is more than that and tears. With less (a
- * 48th was tried), a start that falls between two steps leaves no step
- * clean at all, only some that tear less often than others, and which of
- * those looks clean depends on how long it is watched. */
+ * While setting it, a 24th (~23 rows at 555): slightly above half a step
+ * (~17 rows) so a true start falling midway between two positions still
+ * survives the 4-row polling slot and minor jitter without tearing, while
+ * remaining well below a full step (~34 rows) so an offset one step out
+ * always tears. */
 #define CP_SYNC_PART 8u
 #define CP_SYNC_PART_GAME 6u
-#define CP_SYNC_PART_CALIBRATE 32u
+#define CP_SYNC_PART_CALIBRATE 24u
 
 /* While the offset is being set, a frame does not start wherever it finds
- * the window but at one end of it, the two ends in turn. Waiting for the
- * window and starting as it opens only ever tries the early end: there an
- * offset set too low shows, but one set too high only makes the frame
- * start later, with the refresh further ahead, and stays clean until the
- * delay uses up the whole window. The interface's frames always arrive
- * early enough to wait, so on an fx-CP400 positions 0 to 6 all looked
- * clean when only 0 was right. At the late end it is the other way round.
+ * the window but sweeps across [lo, hi) in CP_SYNC_CALIBRATE_STEPS narrow
+ * slots, visited in low-discrepancy order (early end, late end, middle,
+ * quarters, ...). Testing only the early end leaves offsets too high clean
+ * until they exhaust the window; testing only the two ends leaves an
+ * opposite-side false-clean band whenever the forbidden zone is narrower
+ * than half a refresh (for example positions 4..12 on a 555-row R61523),
+ * because both ends clear the forbidden zone while the middle of the window
+ * straddles it. Sweeping the whole window makes every wrong offset tear.
  *
- * The end is a few rows wide so that the polling cannot step over it; a
- * frame starts at the first of them. Narrows [*lo, *hi) to the early end,
- * or to the late one if `late`. */
+ * Each slot is a few rows wide so that polling cannot step over it. */
 #define CP_SYNC_END_ROWS 4u
+#define CP_SYNC_CALIBRATE_STEPS 16u
+
+static inline void cp_sync_window_probe(uint32_t *lo, uint32_t *hi,
+	uint32_t step)
+{
+	static const uint8_t order[CP_SYNC_CALIBRATE_STEPS] = {
+		0, 15, 8, 4, 12, 2, 10, 6, 14, 1, 9, 5, 13, 3, 11, 7
+	};
+	uint32_t span, start;
+
+	if(*hi - *lo <= CP_SYNC_END_ROWS)
+		return;
+	span = *hi - *lo - CP_SYNC_END_ROWS;
+	start = *lo + span * order[step % CP_SYNC_CALIBRATE_STEPS]
+		/ (CP_SYNC_CALIBRATE_STEPS - 1u);
+	*lo = start;
+	*hi = start + CP_SYNC_END_ROWS;
+}
 
 static inline void cp_sync_window_end(uint32_t *lo, uint32_t *hi, int late)
 {
-	if(*hi - *lo <= CP_SYNC_END_ROWS)
-		return;
-	if(late)
-		*lo = *hi - CP_SYNC_END_ROWS;
-	else
-		*hi = *lo + CP_SYNC_END_ROWS;
+	cp_sync_window_probe(lo, hi, late ? 1u : 0u);
 }
 
 static inline int cp_sync_window(uint32_t total, uint32_t rows, uint32_t lines,
