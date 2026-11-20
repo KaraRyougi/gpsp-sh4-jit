@@ -322,6 +322,11 @@ extern u16 palette_ram_converted[512];
 #else
 #define CGBA_PALETTE_SCANLINE_BIT 0
 #endif
+#if defined(CGBA_VIDEO_TEXT_FAST4BPP) && CGBA_VIDEO_TEXT_FAST4BPP && \
+    (defined(__SH4__) || defined(__SH4_NOFPU__) || defined(__SH4A__) || \
+     defined(__sh__)) && defined(MSB_FIRST)
+#define CGBA_SH4_ASM_4BPP 1
+#endif
 #if !defined(CGBA_VIDEO_TILE_ROW_CACHE) && defined(CGBA_SH4_ASM_4BPP) && \
     defined(CGBA_VIDEO_BACKDROP_SHADOW_PALETTE) && defined(CGBA_VIDEO_PAIR_PALETTE)
 #define CGBA_PALETTE_FOLDED_BIT CGBA_PALETTE_DIRTY_FOLDED

@@ -454,6 +454,22 @@ static bool run_tests(void)
   reg[OAM_UPDATED] = 1;
   CHECK(verify_frame("mode0-direct-blend-with-st-obj"));
   CHECK(cgba_m0.blend_bg_layer == 0u);
+  /* Palette fade / change while BLDCNT + BLDALPHA stay constant: both BG and
+   * OBJ palette mutations must invalidate blend/folded caches cleanly. */
+  write_ioreg(REG_BLDALPHA, 0x0907u);
+  oam_ram[0] = eswap16(54u);
+  reg[OAM_UPDATED] = 1;
+  CHECK(verify_frame("mode0-direct-blend-pre-fade"));
+  for (unsigned i = 0; i < 512; i++)
+    palette_ram_converted[i] = (u16)((palette_ram_converted[i] >> 1) & 0x7BEFu);
+  palette_ram_dirty = CGBA_PALETTE_DIRTY_ACTIVE;
+  CHECK(verify_frame("mode0-direct-blend-post-fade"));
+  /* Full cache invalidation (e.g. reset / buffer swap) must drop blend cache
+   * even if palette_ram_dirty was not set explicitly. */
+  for (unsigned i = 0; i < 256; i++)
+    palette_ram_converted[i] ^= 0x0841u;
+  video_invalidate_scanline_cache(0, 160);
+  CHECK(verify_frame("mode0-direct-blend-after-invalidate"));
 
   return true;
 }

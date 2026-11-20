@@ -25,10 +25,7 @@ extern "C" {
 #ifdef CGBA_LCD_SCANLINE_STREAM
 extern "C" void fxcg100_lcd_stream_scanline(const u16 *row, unsigned y, int dirty);
 #endif
-#if defined(CGBA_VIDEO_TEXT_FAST4BPP) && CGBA_VIDEO_TEXT_FAST4BPP && \
-    (defined(__SH4__) || defined(__SH4_NOFPU__) || defined(__SH4A__) || \
-     defined(__sh__)) && defined(MSB_FIRST)
-#define CGBA_SH4_ASM_4BPP 1
+#ifdef CGBA_SH4_ASM_4BPP
 extern "C" {
 void cgba_render_4bpp_span_over_sh4(
   const u16 *map_ptr, u32 todraw, u16 *dest_ptr,
@@ -3458,6 +3455,7 @@ static bool cgba_bg_plan_valid = false;
 
 static inline void cgba_bg_vram_invalidate(void);
 static inline void cgba_bg_plan_invalidate_all(void);
+static inline void cgba_blend_caches_invalidate(void);
 
 extern "C" void video_invalidate_scanline_cache(u32 start_y, u32 end_y)
 {
@@ -3478,6 +3476,7 @@ extern "C" void video_invalidate_scanline_cache(u32 start_y, u32 end_y)
     cgba_bg_plan_valid = false;
     cgba_bg_vram_invalidate();
     cgba_bg_plan_invalidate_all();
+    cgba_blend_caches_invalidate();
   }
   cgba_video_frame_dirty_rows = 160;
 }
@@ -5306,17 +5305,17 @@ static __attribute__((noinline)) void cgba_render_4bpp_bg_blend_span(
 static __attribute__((noinline)) void cgba_folded_palette_prepare(
   u16 p1, u32 eva, u32 evb)
 {
+#if !CGBA_PALETTE_FOLDED_BIT
+#error "CGBA_PALETTE_FOLDED_BIT must be non-zero when cgba_folded_palette_prepare is enabled"
+#endif
+  static_assert((CGBA_PALETTE_DIRTY_ACTIVE & CGBA_PALETTE_DIRTY_FOLDED) != 0u,
+                "CGBA_PALETTE_DIRTY_ACTIVE must include CGBA_PALETTE_DIRTY_FOLDED");
   u32 key = ((u32)p1 << 16) | (eva << 8) | evb;
   bool key_changed = !cgba_folded_valid || (cgba_folded_key != key);
-#if CGBA_PALETTE_FOLDED_BIT
   if (__builtin_expect(!key_changed &&
                        !(palette_ram_dirty & CGBA_PALETTE_DIRTY_FOLDED), 1))
     return;
   palette_ram_dirty &= ~CGBA_PALETTE_DIRTY_FOLDED;
-#else
-  if (__builtin_expect(!key_changed, 1))
-    return;
-#endif
   u32 ta = (((u32)p1 | ((u32)p1 << 16)) & BLND_MSK) * eva;
   bool sat = (eva + evb) > 16u;
   bool bd_changed = key_changed ||
@@ -5896,6 +5895,28 @@ void cgba_queue_scanlines(u32 start_y, u32 count)
     cgba_flush_pending_scanlines();
   cgba_pending_sl_start = start_y;
   cgba_pending_sl_count = count;
+}
+#endif
+
+#if defined(CGBA_VIDEO_DIRTY_SCANLINE) && CGBA_VIDEO_DIRTY_SCANLINE
+static inline void cgba_blend_caches_invalidate(void)
+{
+#ifdef CGBA_PALETTE_DIRTY_ACTIVE
+  palette_ram_dirty = CGBA_PALETTE_DIRTY_ACTIVE;
+#endif
+#if defined(CGBA_VIDEO_DEFERRED_ACTIVE) && !defined(CGBA_VIDEO_TILE_ROW_CACHE) && \
+    defined(CGBA_SH4_ASM_4BPP) && defined(CGBA_VIDEO_BACKDROP_SHADOW_PALETTE) && \
+    defined(CGBA_VIDEO_PAIR_PALETTE)
+  cgba_folded_valid = false;
+#endif
+#ifdef CGBA_VIDEO_BLEND_PALETTE_CACHE
+  blend_palette_cache_a.valid = false;
+  blend_palette_cache_a.pending = false;
+  blend_palette_cache_b.valid = false;
+  blend_palette_cache_b.pending = false;
+#elif CGBA_PALETTE_BLEND_BIT
+  cgba_direct_term_a_eva = 0xFFFFFFFFu;
+#endif
 }
 #endif
 
