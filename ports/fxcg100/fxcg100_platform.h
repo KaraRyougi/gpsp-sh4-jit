@@ -130,6 +130,8 @@ typedef struct fxcg100_menu_state {
    * the system set. */
   uint32_t backlight;
   uint32_t backlight_pwm;
+  /* ClassPad II only: panel refresh rate preset (0 = System, 1..8 = 60..100 Hz). */
+  uint32_t lcd_refresh;
   /* Interface appearance: colour scheme (CP_THEME_*), dark mode (1 = dark,
    * 0 = light), and whether the ClassPad II interface animates. */
   uint32_t theme;
@@ -249,6 +251,8 @@ void fxcg100_lcd_set_transfer(uint32_t cpu_writes);
 /* ClassPad II: start each frame where the panel's refresh will not meet it
  * (classpad_sync.h), and what is known about that refresh. */
 void fxcg100_lcd_set_sync(uint32_t wait, uint32_t offset);
+/* ClassPad II: panel refresh rate preset (0 = System, 1..8 = 60..100 Hz). */
+void fxcg100_lcd_set_refresh(uint32_t rate);
 /* While the page that sets the offset is open: every frame waits, with
  * almost no room to spare, so that a wrong offset shows. Opening it counts
  * the panel's rows again. */
@@ -257,6 +261,9 @@ void fxcg100_lcd_sync_calibrate(uint32_t on);
  * refreshes a second. Returns 1 if the panel has a usable row counter, -1 if
  * it has none, 0 if it has not been read yet. */
 int fxcg100_lcd_sync_info(uint32_t *rows, uint32_t *hz);
+/* Nonzero if the last synced frame fit inside a tear-free window; 0 if the
+ * frame transfer was too slow for the current refresh rate. */
+int fxcg100_lcd_sync_fits(void);
 /* Compact diagnostic text shown on the calibration page when scan_probe()
  * fails to recognise a row counter (panel ID, max row, Hz, believed/samples). */
 void fxcg100_lcd_sync_diag(char *buf, size_t size);

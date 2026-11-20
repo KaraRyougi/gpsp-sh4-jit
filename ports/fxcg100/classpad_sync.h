@@ -282,15 +282,62 @@ static inline void cp_sync_track_strip(cp_sync_track *t, uint32_t shown,
 }
 
 /* Rows shown while the frame was written: what was seen up to the start of
- * the last strip, scaled up by that strip. */
-static inline uint32_t cp_sync_track_lines(const cp_sync_track *t)
+ * the last strip, scaled up by that strip. `total_strips` allows sparse
+ * sampling (e.g. first, midpoint, and last strip only) without losing the
+ * exact 1/N last-strip scaling. */
+static inline uint32_t cp_sync_track_lines_n(const cp_sync_track *t,
+	uint32_t total_strips)
 {
 	uint32_t span;
 
-	if(t->strips < 2u)
+	if(t->strips < 2u || total_strips < 2u)
 		return 0;
 	span = t->wraps * t->total + t->last - t->first;
-	return span * t->strips / (t->strips - 1u);
+	return span * total_strips / (total_strips - 1u);
+}
+
+static inline uint32_t cp_sync_track_lines(const cp_sync_track *t)
+{
+	return cp_sync_track_lines_n(t, t->strips);
+}
+
+/* Smooth per-kind frame write duration (in panel rows): follow increases
+ * quickly so slower frames tighten the window right away, and decay
+ * decreases slowly so an unusually fast frame cannot cause edge tearing. */
+static inline uint32_t cp_sync_smooth_lines(uint32_t cur, uint32_t measured,
+	uint32_t total)
+{
+	if(!measured || !total || measured > total * 3u)
+		return cur;
+	if(!cur)
+		return measured;
+	if(measured >= cur)
+		return (cur + measured + 1u) / 2u;
+	return (cur * 7u + measured + 4u) / 8u;
+}
+
+/* Conservative backoff delay (in microseconds) while waiting for the panel
+ * row `at` to reach window start `lo`. Returns 0 when within 28 rows of `lo`
+ * so the caller tight-polls the final approach without overshooting.
+ *
+ * Uses 35 % of (delta - 24) rows (capped at 2 ms): the platform busy-wait
+ * `lcd_delay_ns()` is a conservative lower bound (up to ~2x nominal on SH-4A),
+ * so 35 % x 2 = 70 % stays strictly short of `lo` even at 100 Hz. */
+static inline uint32_t cp_sync_wait_backoff_us(uint32_t at, uint32_t lo,
+	uint32_t total, uint32_t hz)
+{
+	uint32_t delta, us;
+
+	if(!total || !hz)
+		return 0u;
+	delta = (lo % total + total - at % total) % total;
+	if(delta <= 28u)
+		return 0u;
+	us = (uint32_t)(((uint64_t)(delta - 24u) * 350000ull) /
+		((uint64_t)total * hz));
+	if(us > 2000u)
+		us = 2000u;
+	return us;
 }
 
 /* ---- R61523 refresh direction and register validation --------------------- */
@@ -379,6 +426,51 @@ static inline uint32_t cp_backlight_pwm_hz(uint32_t pwm)
 static inline uint32_t cp_backlight_min_level(uint32_t pwm)
 {
 	return pwm >= 5u && pwm <= 9u ? pwm - 4u : 0u;
+}
+
+/* ---- panel refresh rate (OS 02.01.7003 @ 0x8003887e / [FRAME Freq SET]) --- */
+
+/* 0 = System (leave OS default untouched), 1..8 = 60..100 Hz presets drawn
+ * directly from Casio OS's [FRAME Freq SET] RTN tables (0x80817c24 for
+ * 0x16/0x52, 0x80817b04 for R61523). */
+#define CP_REFRESH_COUNT 9u
+
+static inline uint32_t cp_refresh_hz(uint32_t rate)
+{
+	static const uint8_t hz[CP_REFRESH_COUNT] = {
+		0, 60, 66, 72, 78, 85, 90, 95, 100
+	};
+
+	return rate < CP_REFRESH_COUNT ? (uint32_t)hz[rate] : 0u;
+}
+
+/* RTN byte for 0x16/0x52 (0xB2 byte 6 and 0xDF byte 12; OS range 50..253,
+ * default 0x9D = 157, nominal 58 Hz / ~56-57 Hz real). Stop 1 (0x8C) sits
+ * just above 60 Hz even on units with a -3% internal RC oscillator. */
+static inline uint8_t cp_refresh_rtn_new(uint32_t rate)
+{
+	static const uint8_t rtn[CP_REFRESH_COUNT] = {
+		0x9du, 0x8cu, 0x7au, 0x6bu, 0x5cu, 0x4au, 0x42u, 0x3au, 0x32u
+	};
+
+	return rate < CP_REFRESH_COUNT ? rtn[rate] : 0x9du;
+}
+
+/* RTN byte for R61523 (0xC1/0xC3 byte 3; OS range 18..63, default 0x1F = 31). */
+static inline uint8_t cp_refresh_rtn_r61523(uint32_t rate)
+{
+	static const uint8_t rtn[CP_REFRESH_COUNT] = {
+		31u, 30u, 27u, 25u, 23u, 21u, 20u, 19u, 18u
+	};
+
+	return rate < CP_REFRESH_COUNT ? rtn[rate] : 31u;
+}
+
+/* Sanity-check a 5-byte R61523 C1h (Display Timing Setting for Normal Mode)
+ * snapshot before modifying byte 3 (RTN[5:0], legal OS range 18..63). */
+static inline int cp_r61523_c1_valid(const uint8_t c1[5])
+{
+	return c1[2] >= 18u && c1[2] <= 63u;
 }
 
 #endif /* CGBA_CLASSPAD_SYNC_H */

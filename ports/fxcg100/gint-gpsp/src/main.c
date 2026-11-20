@@ -298,6 +298,7 @@ static void apply_display_options(const fxcg100_menu_state *state)
 	fxcg100_lcd_set_touch_keys(state->touch_keys);
 	fxcg100_lcd_set_transfer(state->lcd_cpu);
 	fxcg100_lcd_set_sync(state->lcd_sync, state->lcd_sync_offset);
+	fxcg100_lcd_set_refresh(state->lcd_refresh);
 	fxcg100_lcd_set_backlight(state->backlight, state->backlight_pwm);
 	fxcg100_lcd_set_theme(state->theme);
 	{

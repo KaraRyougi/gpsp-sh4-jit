@@ -301,6 +301,31 @@ static void r61523_mcap_restore(uint8_t saved)
 	}
 }
 
+/* Unlock all R61523 manufacturer commands (B1h..FFh, including C1h/C3h display
+ * timing) with MCAP = 0x00 and restore the previous value afterwards. */
+static uint8_t r61523_mcap_unlock_all(void)
+{
+	uint8_t saved;
+
+	lcd_select(0xb0);
+	(void)r61523_read_word();
+	saved = cp_r61523_mcap_restore_value(
+		(uint8_t)(r61523_read_word() & 0xffu));
+	if(saved != 0x00u) {
+		lcd_select(0xb0);
+		lcd_param(0x00u);
+	}
+	return saved;
+}
+
+static void r61523_mcap_restore_all(uint8_t saved)
+{
+	if(saved != 0x00u) {
+		lcd_select(0xb0);
+		lcd_param(saved);
+	}
+}
+
 /* Open a write window (bounds inclusive, panel coordinates) and leave the
  * controller ready to receive its pixels in row-major order. Any strip still
  * on the bus is allowed to finish first, so every panel access may simply
@@ -873,6 +898,10 @@ void fxcg100_lcd_set_backlight(uint32_t level, uint32_t pwm)
 #endif
 }
 
+#ifndef CGBA_HOST_TEST
+static void refresh_restore(void);
+#endif
+
 void fxcg100_lcd_shutdown(void)
 {
 	wait_lcd_dma();
@@ -882,6 +911,8 @@ void fxcg100_lcd_shutdown(void)
 		backlight_level = backlight_rate = 0;
 		backlight_write(0, 0);
 	}
+	/* Give the system its panel refresh rate back. */
+	refresh_restore();
 #endif
 	cp_game_screen = 0;
 #ifndef CGBA_HOST_TEST
@@ -1579,9 +1610,12 @@ static uint32_t scan_diag_samples, scan_diag_believed, scan_diag_max;
 static uint32_t scan_diag_ticks;
 static cp_sync_track sync_track;
 static int sync_tracking;
+static int sync_frame_top, sync_frame_bot;
+static uint32_t sync_strip_count;
 static uint32_t sync_lines[SYNC_KINDS];   /* rows shown during the last frame */
 static uint32_t sync_strips[SYNC_KINDS];  /* strips it was sent in */
 static int sync_kind;
+static int sync_last_fit = 1;
 
 /* The row the panel is showing: DCS get_scanline, two bytes after a dummy
  * read, as for the ID register above. On R61523 (datasheet p.131), the
@@ -1696,11 +1730,23 @@ static uint32_t scan_position(void)
 
 static void sync_strip(int r0, int rows)
 {
-	if(sync_tracking) {
-		uint32_t row = lcd_refresh_bottom_up()
-			? (uint32_t)(CP_PANEL_H - r0 - rows) : (uint32_t)r0;
+	if(!sync_tracking)
+		return;
+	sync_strip_count++;
+	{
+		int bottom_up = lcd_refresh_bottom_up();
+		int is_first = (sync_track.strips == 0u);
+		int is_last = bottom_up ? (r0 <= sync_frame_top)
+			: (r0 + rows >= sync_frame_bot);
+		/* Sample only the first strip, every 12th strip (to catch
+		 * refreshes that wrap mid-frame), and the last strip instead
+		 * of hitting DCS 0x45 on every single strip. */
+		if(is_first || is_last || (sync_strip_count % 12u) == 0u) {
+			uint32_t row = bottom_up
+				? (uint32_t)(CP_PANEL_H - r0 - rows) : (uint32_t)r0;
 
-		cp_sync_track_strip(&sync_track, scan_position(), row);
+			cp_sync_track_strip(&sync_track, scan_position(), row);
+		}
 	}
 }
 
@@ -1708,30 +1754,41 @@ static void sync_strip(int r0, int rows)
  * in the panel's refresh order. */
 static void sync_begin(int top, int rows, int kind)
 {
-	uint32_t lo, hi, strip;
-	int bottom_up = lcd_refresh_bottom_up();
-	uint32_t first = bottom_up
-		? (uint32_t)(CP_PANEL_H - top - rows) : (uint32_t)top;
+	uint32_t lo, hi, strip, est_lines;
+	int bottom_up;
+	uint32_t first;
 
+	/* Zero overhead when VSync is off and not calibrating: skip the
+	 * 250 ms scan_probe() and all per-frame 0x45 bus reads. */
+	if(!cp_sync && !sync_calibrating)
+		return;
 	if(scan_state == SCAN_UNKNOWN)
 		scan_probe();
 	if(scan_state != SCAN_USABLE)
 		return;
 
+	bottom_up = lcd_refresh_bottom_up();
+	first = bottom_up
+		? (uint32_t)(CP_PANEL_H - top - rows) : (uint32_t)top;
+
 	sync_kind = kind;
+	sync_frame_top = top;
+	sync_frame_bot = top + rows;
+	sync_strip_count = 0;
+	est_lines = sync_lines[kind] ? sync_lines[kind] : (uint32_t)(rows / 2);
 	/* When the refresh is bottom-up, each strip's window is still filled
 	 * top-to-bottom (against the refresh), so the window keeps one strip's
 	 * height and time clear (classpad_sync.h). Top-down fills with the
 	 * refresh and needs no intra-strip penalty. */
 	strip = bottom_up && sync_strips[kind]
 		? ((uint32_t)rows + sync_strips[kind] - 1u) / sync_strips[kind] : 0;
-	if((cp_sync || sync_calibrating) && cp_sync_window_part(scan_total,
-			(uint32_t)rows, sync_lines[kind], 0,
+	if(cp_sync_window_part(scan_total, (uint32_t)rows, est_lines, 0,
 			sync_calibrating ? CP_SYNC_PART_CALIBRATE
 			: kind == SYNC_GAME ? CP_SYNC_PART_GAME : CP_SYNC_PART,
 			strip, &lo, &hi)) {
 		uint32_t start = fxcg100_ticks(), n;
 
+		sync_last_fit = 1;
 		/* Setting the offset: sweep across [lo, hi) in narrow slots
 		 * (cp_sync_window_probe) so neither end nor the middle of the
 		 * window can hide a forbidden zone behind a wrong position. */
@@ -1746,9 +1803,19 @@ static void sync_begin(int top, int rows, int kind)
 
 			if(at >= lo && at < hi)
 				break;
-			if((n & 63u) == 63u && fxcg100_ticks() - start > 6u)
+			if(fxcg100_ticks() - start > 6u)
 				break;
+			/* Tight-poll narrow calibration slots directly so conservative
+			 * busy-wait rounding can never step past them at high Hz. */
+			if(!sync_calibrating) {
+				uint32_t backoff_us = cp_sync_wait_backoff_us(at, lo,
+					scan_total, scan_hz);
+				if(backoff_us)
+					lcd_delay_ns(backoff_us * 1000u);
+			}
 		}
+	} else {
+		sync_last_fit = 0;
 	}
 	cp_sync_track_begin(&sync_track, scan_total);
 	sync_tracking = 1;
@@ -1756,11 +1823,15 @@ static void sync_begin(int top, int rows, int kind)
 
 static void sync_end(void)
 {
+	uint32_t measured;
+
 	if(!sync_tracking)
 		return;
 	sync_tracking = 0;
-	sync_lines[sync_kind] = cp_sync_track_lines(&sync_track);
-	sync_strips[sync_kind] = sync_track.strips;
+	measured = cp_sync_track_lines_n(&sync_track, sync_strip_count);
+	sync_lines[sync_kind] = cp_sync_smooth_lines(sync_lines[sync_kind],
+		measured, scan_total);
+	sync_strips[sync_kind] = sync_strip_count;
 }
 #endif
 
@@ -1770,6 +1841,147 @@ void fxcg100_lcd_set_sync(uint32_t wait, uint32_t offset)
 	offset &= 15u;
 	cp_sync = wait;
 	cp_sync_offset = offset;
+}
+
+/* ---- panel refresh rate (OS 02.01.7003 @ 0x8003887e) ----------------------
+ * Both panel families allow live RTN adjustment without turning the display
+ * off, keeping the total scanline count unchanged:
+ *   0x16/0x52  0xB2 (6 B: 00 34 26 08 08 <rtn>) + 0xDF (12 B, byte 12 = <rtn>)
+ *   R61523     0xC1 and 0xC3 byte 3 = <rtn> behind MCAP 0xB0 = 0x00 unlock.
+ * Updates wait briefly for VBlank when the row counter is usable so a change
+ * never glitches mid-scan, and stock RTN is restored in fxcg100_lcd_shutdown(). */
+#ifndef CGBA_HOST_TEST
+static int refresh_saved;
+static int refresh_c1_ok;
+static uint8_t refresh_c1[5];
+static uint8_t refresh_c3[5];
+static uint32_t refresh_rate;
+
+static void refresh_wait_vblank(void)
+{
+	uint32_t start, n;
+
+	if(scan_state != SCAN_USABLE || !scan_total)
+		return;
+	start = fxcg100_ticks();
+	for(n = 0; n < 200000u; n++) {
+		uint32_t at = scan_position();
+
+		if(at >= CP_PANEL_H || at < 4u)
+			break;
+		if((n & 63u) == 63u && fxcg100_ticks() - start > 4u)
+			break;
+	}
+}
+
+static void refresh_write(uint32_t rate)
+{
+	wait_lcd_dma();
+	if(!lcd_is_r61523()) {
+		uint8_t rtn = cp_refresh_rtn_new(rate);
+
+		refresh_wait_vblank();
+		lcd_select(0xb2);
+		lcd_param(0x00);
+		lcd_param(0x34);
+		lcd_param(0x26);
+		lcd_param(0x08);
+		lcd_param(0x08);
+		lcd_param(rtn);
+
+		lcd_select(0xdf);
+		lcd_param(0x08);
+		lcd_param(0x00);
+		lcd_param(0x73);
+		lcd_param(0x33);
+		lcd_param(0x2a);
+		lcd_param(0x77);
+		lcd_param(0x73);
+		lcd_param(0x77);
+		lcd_param(0x73);
+		lcd_param(0x08);
+		lcd_param(0x08);
+		lcd_param(rtn);
+	} else if(refresh_c1_ok) {
+		uint8_t rtn = rate ? cp_refresh_rtn_r61523(rate) : refresh_c1[2];
+		uint8_t mcap;
+
+		refresh_wait_vblank();
+		mcap = r61523_mcap_unlock_all();
+		lcd_select(0xc1);
+		lcd_param(refresh_c1[0]);
+		lcd_param(refresh_c1[1]);
+		lcd_param(rtn);
+		lcd_param(refresh_c1[3]);
+		lcd_param(refresh_c1[4]);
+
+		lcd_select(0xc3);
+		lcd_param(refresh_c3[0]);
+		lcd_param(refresh_c3[1]);
+		lcd_param(rtn);
+		lcd_param(refresh_c3[3]);
+		lcd_param(refresh_c3[4]);
+		r61523_mcap_restore_all(mcap);
+	}
+}
+
+static void refresh_restore(void)
+{
+	if(refresh_saved && refresh_rate) {
+		refresh_rate = 0;
+		refresh_write(0);
+	}
+}
+#endif
+
+void fxcg100_lcd_set_refresh(uint32_t rate)
+{
+#ifndef CGBA_HOST_TEST
+	uint32_t old_rate, old_hz, new_hz;
+	int k;
+
+	if(rate >= CP_REFRESH_COUNT)
+		rate = 0;
+	if(!refresh_saved) {
+		if(rate == 0)
+			return;                  /* nothing asked for: touch nothing */
+		if(lcd_is_r61523()) {
+			uint8_t mcap;
+			int i;
+
+			wait_lcd_dma();
+			mcap = r61523_mcap_unlock_all();
+			lcd_select(0xc1);
+			(void)r61523_read_word();
+			for(i = 0; i < 5; i++)
+				refresh_c1[i] = (uint8_t)(r61523_read_word() & 0xffu);
+			lcd_select(0xc3);
+			(void)r61523_read_word();
+			for(i = 0; i < 5; i++)
+				refresh_c3[i] = (uint8_t)(r61523_read_word() & 0xffu);
+			r61523_mcap_restore_all(mcap);
+			refresh_c1_ok = cp_r61523_c1_valid(refresh_c1);
+		}
+		refresh_saved = 1;
+	} else if(rate == refresh_rate) {
+		return;
+	}
+	old_rate = refresh_rate;
+	refresh_rate = rate;
+	refresh_write(rate);
+	/* Keep sync_lines[] and scan_hz roughly scaled to the new rate so VSync
+	 * stays accurate immediately without stalling the UI for a 250 ms probe. */
+	old_hz = old_rate ? cp_refresh_hz(old_rate) : 58u;
+	new_hz = rate ? cp_refresh_hz(rate) : 58u;
+	for(k = 0; k < SYNC_KINDS; k++) {
+		if(sync_lines[k])
+			sync_lines[k] = (sync_lines[k] * new_hz + old_hz / 2u) / old_hz;
+	}
+	if(scan_state == SCAN_USABLE && scan_hz)
+		scan_hz = (scan_hz * new_hz + old_hz / 2u) / old_hz;
+#else
+	(void)rate;
+#endif
 }
 
 void fxcg100_lcd_sync_calibrate(uint32_t on)
@@ -1795,6 +2007,15 @@ int fxcg100_lcd_sync_info(uint32_t *rows, uint32_t *hz)
 	*rows = 0;
 	*hz = 0;
 	return 0;
+#endif
+}
+
+int fxcg100_lcd_sync_fits(void)
+{
+#ifndef CGBA_HOST_TEST
+	return sync_last_fit;
+#else
+	return 1;
 #endif
 }
 

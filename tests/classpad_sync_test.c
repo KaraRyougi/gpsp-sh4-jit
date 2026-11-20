@@ -584,6 +584,81 @@ int main(void)
 			"out-of-range pwm rate");
 	}
 
+	/* Sparse strip tracking, line-count smoothing, and wait-loop backoff. */
+	{
+		cp_sync_track sparse;
+		uint32_t est, cur = 0, b;
+
+		cp_sync_track_begin(&sparse, TOTAL);
+		cp_sync_track_strip(&sparse, 100u, 0u);
+		cp_sync_track_strip(&sparse, 210u, 240u);
+		cp_sync_track_strip(&sparse, 320u, 480u);
+		est = cp_sync_track_lines_n(&sparse, 33u);
+		/* span = 220 across 32 strip intervals -> 220 * 33 / 32 = 226. */
+		CHECK(est == 226u, "sparse lines: got %u", (unsigned)est);
+
+		cur = cp_sync_smooth_lines(cur, 200u, TOTAL);
+		CHECK(cur == 200u, "smooth init: %u", (unsigned)cur);
+		cur = cp_sync_smooth_lines(cur, 280u, TOTAL);
+		CHECK(cur == 240u, "smooth fast rise: %u", (unsigned)cur);
+		cur = cp_sync_smooth_lines(cur, 200u, TOTAL);
+		CHECK(cur == 235u, "smooth slow decay: %u", (unsigned)cur);
+		cur = cp_sync_smooth_lines(cur, TOTAL * 4u, TOTAL);
+		CHECK(cur == 235u, "smooth ignores spike: %u", (unsigned)cur);
+
+		/* Close to window start -> 0 backoff (tight poll). */
+		CHECK(cp_sync_wait_backoff_us(90u, 100u, TOTAL, 60u) == 0u,
+			"near window must not back off");
+		CHECK(cp_sync_wait_backoff_us(75u, 100u, TOTAL, 100u) == 0u,
+			"within 28 rows at 100 Hz must not back off");
+		/* Far from window start -> positive bounded backoff (<= 2 ms) that
+		 * stays below half the remaining distance even at 100 Hz. */
+		b = cp_sync_wait_backoff_us(0u, 200u, TOTAL, 60u);
+		CHECK(b > 1000u && b <= 2000u, "far backoff out of range: %u us",
+			(unsigned)b);
+		b = cp_sync_wait_backoff_us(0u, 100u, TOTAL, 100u);
+		CHECK(b > 200u && b < 800u, "100 Hz backoff out of range: %u us",
+			(unsigned)b);
+	}
+
+	/* Refresh rate presets (0x16/0x52 and R61523) and C1h validator. */
+	{
+		static const uint32_t expect_hz[CP_REFRESH_COUNT] = {
+			0, 60, 66, 72, 78, 85, 90, 95, 100
+		};
+		static const uint8_t c1_ok[5] = { 0x00, 0x00, 0x1f, 0x00, 0x00 };
+		static const uint8_t c1_lo[5] = { 0x00, 0x00, 17u, 0x00, 0x00 };
+		static const uint8_t c1_hi[5] = { 0x00, 0x00, 64u, 0x00, 0x00 };
+
+		for(i = 0; i < CP_REFRESH_COUNT; i++) {
+			uint8_t rn = cp_refresh_rtn_new(i);
+			uint8_t ro = cp_refresh_rtn_r61523(i);
+
+			CHECK(cp_refresh_hz(i) == expect_hz[i],
+				"refresh %u: got %u Hz", (unsigned)i,
+				(unsigned)cp_refresh_hz(i));
+			CHECK(rn >= 50u && rn <= 253u,
+				"refresh %u new RTN %u out of OS range", (unsigned)i,
+				(unsigned)rn);
+			CHECK(ro >= 18u && ro <= 63u,
+				"refresh %u R61523 RTN %u out of OS range", (unsigned)i,
+				(unsigned)ro);
+			if(i > 0) {
+				CHECK(rn < cp_refresh_rtn_new(i - 1u),
+					"refresh %u new RTN not strictly decreasing", (unsigned)i);
+				CHECK(ro < cp_refresh_rtn_r61523(i - 1u),
+					"refresh %u R61523 RTN not strictly decreasing", (unsigned)i);
+			}
+		}
+		CHECK(cp_refresh_hz(CP_REFRESH_COUNT) == 0u &&
+			cp_refresh_rtn_new(CP_REFRESH_COUNT) == 0x9du &&
+			cp_refresh_rtn_r61523(CP_REFRESH_COUNT) == 31u,
+			"out-of-range refresh preset fallback");
+		CHECK(cp_r61523_c1_valid(c1_ok), "accepted valid R61523 C1h");
+		CHECK(!cp_r61523_c1_valid(c1_lo) && !cp_r61523_c1_valid(c1_hi),
+			"rejected out-of-range R61523 C1h RTN");
+	}
+
 	if(failures)
 		return 1;
 	printf("classpad_sync_test: all checks passed\n");

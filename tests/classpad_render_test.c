@@ -1539,18 +1539,27 @@ static void test_ui(const char *dir)
 	ui.scroll[SCREEN_SETTINGS] += r ? r->y - 200 : -200;
 	ui.redraw = 1;
 	ui_settle(ui_frame());
+	{
+		const cp_rect *hr = ui_find("Refresh rate", 0);
+
+		CHECK(hr != NULL, "no Refresh rate slider");
+		if (hr) {
+			cp_rect hs = *hr;
+			int hcy = hs.y + hs.h / 2;
+
+			ui_tap(hs.x + hs.w - 4, hcy);
+			CHECK(ui_state.lcd_refresh == 8, "refresh max tap gave %u",
+				(unsigned)ui_state.lcd_refresh);
+			ui_tap(hs.x + 4, hcy);
+			CHECK(ui_state.lcd_refresh == 0, "refresh min tap gave %u",
+				(unsigned)ui_state.lcd_refresh);
+		}
+	}
 	if (!ui_state.lcd_sync)
 		ui_tap_on("VSync", 0);
 	CHECK(ui_state.lcd_sync == 1, "refresh wait did not turn on");
 	ui_tap_on("Refresh position", 0);
-	CHECK(ui.sync_warn && ui.screen == SCREEN_SETTINGS,
-		"no warning before the flashing page");
-	ui_shot(dir, "ui-sync-warning");
-	ui_tap_on("Cancel", 0);
-	CHECK(!ui.sync_warn && ui.screen == SCREEN_SETTINGS, "Cancel went on");
-	ui_tap_on("Refresh position", 0);
-	ui_tap_on("Continue", 0);
-	CHECK(ui.screen == SCREEN_SYNC, "Continue did not open the page");
+	CHECK(ui.screen == SCREEN_SYNC, "Refresh position did not open the page");
 	{
 		uint32_t before = ui.sync_frame;
 		const cp_rect *p;
@@ -1558,7 +1567,7 @@ static void test_ui(const char *dir)
 		ui_frame();
 		ui_frame();
 		CHECK(ui.sync_frame == before + 2 && ui.redraw,
-			"the page does not draw a new colour every frame");
+			"the page does not advance the moving bar every frame");
 		p = ui_find("Position", 0);
 		CHECK(p != NULL, "no Position slider on the page");
 		if (p) {

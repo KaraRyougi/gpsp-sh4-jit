@@ -74,6 +74,23 @@ int main(void)
   config.lcd_extra = (1u << 27);
   assert(!config_valid(&config));
 
+  /* ClassPad II refresh rate preset (bits 20..23, 0..8) round-trips in
+   * lcd_extra without changing file size or version. */
+  for (uint32_t r = 0; r <= 8; r++) {
+    memset(&state, 0, sizeof(state));
+    state.frame_limit = 1;
+    state.dark_mode = 1;
+    state.lcd_refresh = r;
+    config_from_state(&config, &state);
+    assert(config_valid(&config));
+    assert(((config.lcd_extra >> 20) & 15u) == r);
+    memset(&state, 0, sizeof(state));
+    state_from_config(&state, &config);
+    assert(state.lcd_refresh == r);
+  }
+  config.lcd_extra = (9u << 20);
+  assert(!config_valid(&config));
+
   puts("fx-CG config frame-limit migration passed");
   return 0;
 }

@@ -117,9 +117,10 @@ typedef struct fxcg100_config_file {
   uint32_t lcd_sync;
   /* The last free word, shared: bits 0-3 the refresh position, bits 8-12
    * the backlight level (0 leaves the system's), bits 16-19 the backlight
-   * PWM rate (0 leaves the system's), bits 24-25 the library sort mode
-   * (FXCG100_GAME_SORT_*, 0 = Name), bit 26 light mode (stored inverted from
-   * dark_mode so that zero keeps dark mode on). */
+   * PWM rate (0 leaves the system's), bits 20-23 the panel refresh rate
+   * preset (0 leaves the system's, 1..8 = 60..100 Hz), bits 24-25 the
+   * library sort mode (FXCG100_GAME_SORT_*, 0 = Name), bit 26 light mode
+   * (stored inverted from dark_mode so that zero keeps dark mode on). */
   uint32_t lcd_extra;
 } fxcg100_config_file;
 
@@ -218,9 +219,10 @@ static int config_options_valid(const fxcg100_config_file *config)
     config->touch_keys_hidden < 2 &&
     config->lcd_cpu < 2 &&
     config->lcd_sync < 2 &&
-    (config->lcd_extra & ~0x070f1f0fu) == 0 &&
+    (config->lcd_extra & ~0x07ff1f0fu) == 0 &&
     ((config->lcd_extra >> 8) & 31u) <= 16u &&
     ((config->lcd_extra >> 16) & 15u) <= 9u &&
+    ((config->lcd_extra >> 20) & 15u) <= 8u &&
     ((config->lcd_extra >> 24) & 3u) < FXCG100_GAME_SORT_COUNT &&
     config->theme < 16 &&
     config->animations_off < 2 &&
@@ -266,6 +268,7 @@ static void config_from_state(fxcg100_config_file *config,
   config->lcd_sync = state->lcd_sync;
   config->lcd_extra = (state->lcd_sync_offset & 15u) |
     ((state->backlight & 31u) << 8) | ((state->backlight_pwm & 15u) << 16) |
+    ((state->lcd_refresh & 15u) << 20) |
     ((state->game_sort & 3u) << 24) | ((state->dark_mode ? 0u : 1u) << 26);
   config->theme = state->theme;
   config->animations_off = state->animations ? 0 : 1;
@@ -292,6 +295,7 @@ static void state_from_config(fxcg100_menu_state *state,
   state->lcd_sync_offset = config->lcd_extra & 15u;
   state->backlight = (config->lcd_extra >> 8) & 31u;
   state->backlight_pwm = (config->lcd_extra >> 16) & 15u;
+  state->lcd_refresh = (config->lcd_extra >> 20) & 15u;
   state->game_sort = (config->lcd_extra >> 24) & 3u;
   state->dark_mode = (config->lcd_extra & (1u << 26)) ? 0u : 1u;
   state->theme = config->theme;

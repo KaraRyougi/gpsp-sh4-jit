@@ -151,29 +151,28 @@ one frame goes out (measured on the frame before), the two do not meet.
   `((mode >> 7) ^ (mode >> 4)) & 1`, falling back to top-down if two reads
   disagree. Every view orders its strips to follow the panel's refresh
   direction.
-- The row count includes blanking rows: 548 a refresh at 56 Hz on an
+- The row count includes blanking rows: 548 a refresh at ~57 Hz on a
   ClassPad II with panel ID 0x16, so 20 rows of blanking for 528 of picture.
   Where in the count the picture lies is not known. `Refresh position`
   (0..15, sixteenths of a refresh, 34 rows a step at 548)
   is set by eye on a page of its own (Settings → Refresh position, shown
-  when the waiting is on): the whole screen changes colour with every
-  frame (strong colours, each unlike the one before), with only a round
-  back button and the rows and refresh rate the counter was found to have
-  at the top and a pill for the slider at the bottom, all leaving the
-  colour showing beside them, so a line can be seen on any row of the
-  panel. While the page is open frames wait with a 24th of a refresh to
-  spare (~23 rows at 555, slightly above half a step so a start midway
-  between two stops still survives polling jitter, while well below a full
-  step so one step out tears), and sweep across the whole `[lo, hi)` window
-  in 16 narrow slots in low-discrepancy order (`cp_sync_window_probe`:
-  early end, late end, middle, quarters, ...). Testing only the early end
-  left positions too high clean (0..6 on a 0x16 unit where 0 is right);
-  testing only the two ends left an opposite-side false-clean band whenever
-  the forbidden zone was narrower than half a refresh (positions 4..12 on a
-  555-row R61523), because both ends cleared the forbidden zone while the
-  middle of the window straddled it. Sweeping all 16 slots eliminates that
-  false-clean band on both panel families. The page is behind a
-  photosensitive-epilepsy warning.
+  when VSync is on): two high-contrast bars glide smoothly across a calm
+  surface spanning every panel row (vertical bars in portrait, horizontal in
+  landscape), with only a round back button and the rows/refresh rate badge
+  at the top and a pill for the slider at the bottom, so a tear shows as a
+  broken bar edge on any row without full-screen flashing. While the page is
+  open frames wait with a 24th of a refresh to spare (~23 rows at 555,
+  slightly above half a step so a start midway between two stops still
+  survives polling jitter, while well below a full step so one step out
+  tears), tight-polling each narrow slot across the whole `[lo, hi)` window
+  in 16 low-discrepancy steps (`cp_sync_window_probe`: early end, late end,
+  middle, quarters, ...). Testing only the early end left positions too high
+  clean (0..6 on a 0x16 unit where 0 is right); testing only the two ends
+  left an opposite-side false-clean band whenever the forbidden zone was
+  narrower than half a refresh (positions 4..12 on a 555-row R61523), because
+  both ends cleared the forbidden zone while the middle of the window
+  straddled it. Sweeping all 16 slots eliminates that false-clean band on
+  both panel families.
 - On a bottom-up panel the strips go the way of the refresh, but each one is
   filled from its top row down, against it: its top row is written as it
   starts and its bottom row, the one the refresh comes to first, a strip's
@@ -210,6 +209,17 @@ one frame goes out (measured on the frame before), the two do not meet.
   in the blanking the picture starts.
 - `VSync` (Settings, off by default) turns the waiting on.
   It can cost up to one refresh per frame drawn.
+- `Refresh rate` (Settings, `System` by default, or `60 Hz` .. `100 Hz` across
+  8 presets) adjusts the panel's line-cycle register (`RTN`), following Casio
+  OS 02.01.7003 (`0x8003887e` / `[FRAME Freq SET]`): `0xB2` (6 bytes) + `0xDF`
+  (first 12 bytes) on the `0x16`/`0x52` family (`0x8C..0x32`, stock `0x9D`),
+  and `0xC1`/`0xC3` byte 3 behind MCAP `0xB0 = 0x00` on the R61523 (`30..18`,
+  stock `31`). This keeps `scan_total` unchanged, updates in VBlank when the
+  row counter is active, rescales VSync's measured write-time estimate, and
+  restores the OS default when gpSP exits. Setting `60 Hz` brings a ~56 Hz
+  `0x16` panel just above GBA's 59.73 Hz so `VSync` + `Limit to 60 fps` runs
+  1:1 without slowdown or automatic-frameskip drops; higher stops (`66..100 Hz`)
+  enable tear-free high-refresh play and UI scrolling.
 - A frame that takes much longer than one refresh to write (landscape 2x)
   cannot be placed and is sent as before.
 

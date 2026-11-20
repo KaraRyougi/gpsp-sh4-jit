@@ -31,3 +31,5 @@ ports/fxcg100/gint-gpsp/build-cp*/
 ports/fxcg100/gint-gpsp/*.hh3
 ports/fxcg100/classpad-lcdbench/build-cp*/
 ports/fxcg100/classpad-lcdbench/*.hh3
+ports/fxcg100/classpad-hzprobe/build-*/
+ports/fxcg100/classpad-hzprobe/*.hh3

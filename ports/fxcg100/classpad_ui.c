@@ -80,7 +80,7 @@ enum {
 enum { CONFIRM_NONE = 0, CONFIRM_RESTART, CONFIRM_EXIT, CONFIRM_SAVE };
 
 enum {
-	MODAL_NONE = 0, MODAL_CONFIRM, MODAL_CAPTURE, MODAL_CLOCK, MODAL_FLASHING,
+	MODAL_NONE = 0, MODAL_CONFIRM, MODAL_CAPTURE, MODAL_CLOCK,
 	MODAL_SORT, MODAL_TXT_BOOKMARKS
 };
 
@@ -190,8 +190,7 @@ typedef struct cp_ui {
 	int clock_test_failed;
 	int clock_loaded, clock_pending;
 	uint32_t clock_deadline, clock_at_startup;
-	int sync_warn;             /* asking before the flashing page opens */
-	uint32_t sync_frame;       /* frames of it drawn: picks the colour */
+	uint32_t sync_frame;       /* frames of the tear-test page drawn */
 	int txt_browser_from;
 	int txt_direct;
 	int txt_hotkey_armed;
@@ -1993,14 +1992,25 @@ static fxcg100_menu_result screen_settings(cp_ui *ui)
 	changed |= row_switch(ui, &y, "VSync",
 		"Less tearing; can cost speed", &st->lcd_sync);
 	if(st->lcd_sync && row_nav(ui, &y, "Refresh position",
-			"Set it against a flashing picture")) {
-		ui->sync_warn = 1;
+			"Align with moving tear-test bars")) {
+		ui->sync_frame = 0;
 		ui->focus_shown = 0;
+		ui_goto(ui, SCREEN_SYNC);
 		changed = 1;
 	}
 	/* At once: the interface is sent the same way, so the setting can be
 	 * judged here, on a scrolling page. */
 	fxcg100_lcd_set_sync(st->lcd_sync, st->lcd_sync_offset);
+	{
+		static const char *const hz_labels[CP_REFRESH_COUNT] = {
+			"System", "60 Hz", "66 Hz", "72 Hz", "78 Hz",
+			"85 Hz", "90 Hz", "95 Hz", "100 Hz",
+		};
+
+		changed |= row_slider_range(ui, &y, "Refresh rate", &st->lcd_refresh,
+			0, CP_REFRESH_COUNT - 1u, NULL, hz_labels);
+		fxcg100_lcd_set_refresh(st->lcd_refresh);
+	}
 	/* 0 is the system's own setting; its brightest is about 6 of 16.
 	 * High PWM rates need a wider minimum duty so the LED boost driver
 	 * still fires (cp_backlight_min_level). */
@@ -2639,56 +2649,44 @@ static fxcg100_menu_result screen_clock(cp_ui *ui)
 
 /* ---- refresh position ----------------------------------------------------- */
 
-/* Before the page below opens. */
-static fxcg100_menu_result modal_flashing(cp_ui *ui)
+/* Draw a full-span moving bar along the panel's refresh axis (vertical bars
+ * sweeping horizontally in portrait; horizontal bars sweeping vertically in
+ * landscape) with clean wrap-around across the viewport edge. */
+static void sync_draw_bar(cp_surface *s, int pos, int thick, int vertical,
+	uint16_t colour, uint16_t accent)
 {
-	static const char *const more[] = {
-		"many times a second. That can",
-		"trigger seizures in people with",
-		"photosensitive epilepsy.",
-	};
-	cp_rect box = dialog_box(ui, 262), cancel, ok;
-	int i;
+	int span = vertical ? s->w : s->h;
+	int a = pos % span;
 
-	dialog_text(ui, box, "Flashing colours", "The next screen changes colour");
-	for(i = 0; i < 3; i++)
-		cp_text_fit(&ui->s, &cp_font_small, box.x + 24, box.y + 82 + 22 * i,
-			box.w - 48, more[i], ui->t.on_surface_variant);
-	cp_text_fit(&ui->s, &cp_font_small, box.x + 24, box.y + 158, box.w - 48,
-		"Do not go on if that may be you.", ui->t.on_surface);
-	dialog_buttons(box, "Cancel", "Continue", &cancel, &ok);
-	if(ui_button(ui, cancel, "Cancel", BTN_TEXT) ||
-			(ui->key_edge & FXCG100_APPKEY_BACK)) {
-		ui->sync_warn = 0;
-		ui->focus_shown = 0;
-		ui->redraw = 1;
-	} else if(ui_button(ui, ok, "Continue", BTN_FILLED)) {
-		ui->sync_warn = 0;
-		ui->focus_shown = 0;
-		ui->sync_frame = 0;
-		ui_goto(ui, SCREEN_SYNC);
+	if(a < 0)
+		a += span;
+	for(int pass = 0; pass < 2; pass++) {
+		int p = pass ? a - span : a;
+		int q = p + thick;
+
+		if(q <= 0 || p >= span)
+			continue;
+		if(vertical) {
+			cp_fill(s, p, 0, thick, s->h, colour);
+			if(accent != colour)
+				cp_fill(s, p + thick / 2 - 2, 0, 4, s->h, accent);
+		} else {
+			cp_fill(s, 0, p, s->w, thick, colour);
+			if(accent != colour)
+				cp_fill(s, 0, p + thick / 2 - 2, s->w, 4, accent);
+		}
 	}
-	return FXCG100_MENU_CONTINUE;
 }
 
-/* Setting the refresh position by eye: the whole screen changes colour with
- * every frame, so that a frame the panel's refresh overtook shows as a line
- * across it, wherever on the panel that happened. The colours are strong
- * and each differs sharply from the one before, as in the test ROM this
- * page replaces. All that is drawn over them is a round button for the way
- * back at the top and a pill with the slider at the bottom; both leave the
- * colour showing beside them, so no row of the panel is hidden. While the
- * page is open frames wait with almost no room to spare
- * (fxcg100_lcd_sync_calibrate), so only the right position, or the one
- * beside it, gives a clean screen. */
+/* Setting the refresh position by eye: two smooth high-contrast bars glide
+ * across a calm surface spanning every panel row, so average luminance never
+ * flashes while any tear shows immediately as a broken edge along the bar.
+ * Only the back button, a row/Hz badge at the top, and the position slider
+ * pill at the bottom sit over them, leaving every panel row visible beside
+ * them. While the page is open, frames probe narrow slots across the full
+ * sync window (fxcg100_lcd_sync_calibrate), so any wrong offset tears. */
 static fxcg100_menu_result screen_sync(cp_ui *ui)
 {
-	static const uint16_t colours[] = {
-		CP_RGB(255, 255, 255), CP_RGB(255, 0, 0), CP_RGB(0, 255, 0),
-		CP_RGB(0, 0, 255), CP_RGB(255, 255, 0), CP_RGB(255, 0, 255),
-		CP_RGB(0, 255, 255), CP_RGB(255, 132, 0), CP_RGB(99, 0, 197),
-		CP_RGB(132, 132, 132), CP_RGB(0, 0, 0),
-	};
 	fxcg100_menu_state *st = ui->state;
 	uint32_t old = st->lcd_sync_offset;
 	cp_rect back = { MARGIN, MARGIN, 48, 48 };
@@ -2696,11 +2694,24 @@ static fxcg100_menu_result screen_sync(cp_ui *ui)
 		(int16_t)(ui->w - 2 * MARGIN), 48 };
 	cp_rect slider = { (int16_t)(pill.x + 20), (int16_t)(pill.y + 8),
 		(int16_t)(pill.w - 40 - 32), 32 };
+	int vertical = ui->w <= ui->h;
+	int span = vertical ? ui->w : ui->h;
+	int step = vertical ? 6 : 5;
+	int pos = (int)((ui->sync_frame++ * (uint32_t)step) % (uint32_t)span);
 	char text[12];
 	int flags, id, leave;
 
-	cp_fill(&ui->s, 0, 0, ui->w, ui->h,
-		colours[ui->sync_frame++ % (sizeof(colours) / sizeof(colours[0]))]);
+	/* Subtle static reference lines make horizontal/vertical tear shear
+	 * stand out against the moving bars without adding luminance flicker. */
+	for(int g = 40; g < span; g += 40) {
+		if(vertical)
+			cp_fill(&ui->s, g, 0, 1, ui->h, ui->t.container);
+		else
+			cp_fill(&ui->s, 0, g, ui->w, 1, ui->t.container);
+	}
+	sync_draw_bar(&ui->s, pos, 28, vertical, ui->t.primary, ui->t.on_surface);
+	sync_draw_bar(&ui->s, pos + span / 2, 18, vertical, ui->t.on_surface,
+		ui->t.on_surface);
 
 	/* The way back, and nothing else. */
 	cp_disc(&ui->s, back.x + 24, back.y + 24, 24, ui->t.container);
@@ -2720,13 +2731,21 @@ static fxcg100_menu_result screen_sync(cp_ui *ui)
 	{
 		uint32_t rows, hz;
 		int found = fxcg100_lcd_sync_info(&rows, &hz);
+		int fits = fxcg100_lcd_sync_fits();
 		char info[48];
 		int w, h = 32;
+		uint16_t ink = ui->t.on_surface;
 
-		if(found > 0)
-			snprintf(info, sizeof(info), "%u rows, %u Hz", (unsigned)rows,
-				(unsigned)hz);
-		else if(found < 0)
+		if(found > 0) {
+			if(fits)
+				snprintf(info, sizeof(info), "%u rows, %u Hz", (unsigned)rows,
+					(unsigned)hz);
+			else {
+				snprintf(info, sizeof(info), "%u rows, %u Hz (slow)",
+					(unsigned)rows, (unsigned)hz);
+				ink = ui->t.error;
+			}
+		} else if(found < 0)
 			fxcg100_lcd_sync_diag(info, sizeof(info));
 		else
 			snprintf(info, sizeof(info), "Counting rows");
@@ -2734,8 +2753,7 @@ static fxcg100_menu_result screen_sync(cp_ui *ui)
 		cp_round_rect(&ui->s, ui->w - MARGIN - w, back.y + (back.h - h) / 2,
 			w, h, h / 2, ui->t.container);
 		cp_text(&ui->s, &cp_font_small, ui->w - MARGIN - w + 16,
-			back.y + (back.h - cp_font_small.height) / 2, info,
-			ui->t.on_surface);
+			back.y + (back.h - cp_font_small.height) / 2, info, ink);
 	}
 
 	/* The slider, with its value at the end. */
@@ -2754,7 +2772,7 @@ static fxcg100_menu_result screen_sync(cp_ui *ui)
 		ui_goto(ui, SCREEN_SETTINGS);
 		return FXCG100_MENU_CONTINUE;
 	}
-	/* A new colour with every frame, input or not. */
+	/* A fresh bar position every frame, input or not. */
 	ui->redraw = 1;
 	return FXCG100_MENU_CONTINUE;
 }
@@ -3410,8 +3428,6 @@ static int ui_modal(const cp_ui *ui)
 		return MODAL_CAPTURE;
 	if(ui->screen == SCREEN_CLOCK && ui->clock_pending)
 		return MODAL_CLOCK;
-	if(ui->screen == SCREEN_SETTINGS && ui->sync_warn)
-		return MODAL_FLASHING;
 	if(ui->screen == SCREEN_TXT_READER && ui->txt_bm_open)
 		return MODAL_TXT_BOOKMARKS;
 	return MODAL_NONE;
@@ -3610,7 +3626,6 @@ fxcg100_menu_result cp_ui_step(cp_ui *ui)
 		switch(modal) {
 		case MODAL_CONFIRM:       result = modal_confirm(ui); break;
 		case MODAL_CAPTURE:       result = modal_capture(ui); break;
-		case MODAL_FLASHING:      result = modal_flashing(ui); break;
 		case MODAL_SORT:          result = modal_sort(ui); break;
 		case MODAL_TXT_BOOKMARKS: result = modal_txt_bookmarks(ui); break;
 		default:                  result = modal_clock(ui); break;
