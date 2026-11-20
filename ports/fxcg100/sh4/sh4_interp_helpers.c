@@ -1648,24 +1648,39 @@ static int __attribute__((noinline)) cgba_sh4_arm_mixer_run_whole(
 
   left_ptr = (u16 *)(void *)(iwram + 0x8000u + left_off);
   right_ptr = (u16 *)(void *)(iwram + 0x8000u + right_off);
-  phase = s->r4;
-  for (i = 0; i < samples; i++) {
-    u32 sample_address = s->r0 + (phase >> 8);
-    s16 left;
-    s16 right;
+#if defined(CGBA_SH4_M4A_MIX_SKIP) && CGBA_SH4_M4A_MIX_SKIP
+  /* When the sound backend is a no-op (CGBA_SH4_M4A_MIX_SKIP) and the PCM
+   * source is in ROM (cannot alias the IWRAM stereo output buffer), the
+   * mixed PCM samples written to left_ptr/right_ptr are discarded by audio
+   * DMA. Advance registers and cycle accounting in O(1). */
+  if (!CGBA_SH4_DIFF_ACTIVE() && source_region >= 8u) {
+    u32 last_addr = s->r0 + (last_phase >> 8);
+    s16 last_right = (s16)eswap16(right_ptr[samples - 1u]);
+    sample32 = (u32)(s32)(s8)address8(source_page, last_addr & 0x7FFFu);
+    mixed = s->r7 * sample32 + (u32)(s32)last_right;
+    phase = last_phase + s->r5;
+  } else
+#endif
+  {
+    phase = s->r4;
+    for (i = 0; i < samples; i++) {
+      u32 sample_address = s->r0 + (phase >> 8);
+      s16 left;
+      s16 right;
 
-    sample32 = (u32)(s32)(s8)address8(source_page,
-                                      sample_address & 0x7FFFu);
-    left = (s16)eswap16(*left_ptr);
-    mixed = s->r6 * sample32 + (u32)(s32)left;
-    *left_ptr++ = eswap16((u16)mixed);
+      sample32 = (u32)(s32)(s8)address8(source_page,
+                                        sample_address & 0x7FFFu);
+      left = (s16)eswap16(*left_ptr);
+      mixed = s->r6 * sample32 + (u32)(s32)left;
+      *left_ptr++ = eswap16((u16)mixed);
 
-    /* Preserve load-left/store-left/load-right/store-right for aliasing
-     * stereo buffers and for an IWRAM source page feeding back from them. */
-    right = (s16)eswap16(*right_ptr);
-    mixed = s->r7 * sample32 + (u32)(s32)right;
-    *right_ptr++ = eswap16((u16)mixed);
-    phase += s->r5;
+      /* Preserve load-left/store-left/load-right/store-right for aliasing
+       * stereo buffers and for an IWRAM source page feeding back from them. */
+      right = (s16)eswap16(*right_ptr);
+      mixed = s->r7 * sample32 + (u32)(s32)right;
+      *right_ptr++ = eswap16((u16)mixed);
+      phase += s->r5;
+    }
   }
 
   s->r1 += bytes;
@@ -2911,6 +2926,71 @@ static int cgba_swi_bulk_video_copy(u32 dst, const u8 *sh, u32 bytes)
   return 0;
 }
 
+static int cgba_swi_bulk_video_fill(u32 dst, const u8 *vp, u32 width, u32 bytes)
+{
+  u32 region = dst >> 24;
+  u8 b[4];
+  if (region != 7u && region != 5u)
+    return 0;
+  {
+    u32 off = dst & 0x3FFu;
+    if (off + bytes > 0x400u)
+      return 0;
+    b[0] = vp[0]; b[1] = vp[1];
+    if (width == 4u) { b[2] = vp[2]; b[3] = vp[3]; }
+    if (region == 7u) {
+      u8 *od = (u8 *)(void *)oam_ram + off;
+      u32 i;
+      int changed = 0;
+      for (i = 0; i < bytes; i += width) {
+        if (memcmp(od + i, b, width) != 0) {
+          changed = 1;
+          break;
+        }
+      }
+      if (changed) {
+        cgba_video_flush_before_write();
+        for (i = 0; i < bytes; i += width)
+          memcpy(od + i, b, width);
+        reg[OAM_UPDATED] = 1;
+      }
+      return 1;
+    } else {
+      u8 *pd = (u8 *)(void *)palette_ram + off;
+      u32 i;
+      int changed = 0;
+      for (i = 0; i < bytes; i += width) {
+        if (memcmp(pd + i, b, width) != 0) {
+          changed = 1;
+          break;
+        }
+      }
+      if (changed) {
+        u16 *pc = (u16 *)(void *)((u8 *)(void *)palette_ram_converted + off);
+        u16 c0 = convert_palette((u16)((u32)b[0] | ((u32)b[1] << 8)));
+        u32 n16 = bytes >> 1;
+        cgba_video_flush_before_write();
+        for (i = 0; i < bytes; i += width)
+          memcpy(pd + i, b, width);
+        if (width == 2u) {
+          for (i = 0; i < n16; i++)
+            pc[i] = c0;
+        } else {
+          u16 c1 = convert_palette((u16)((u32)b[2] | ((u32)b[3] << 8)));
+          for (i = 0; i < n16; i += 2u) {
+            pc[i] = c0;
+            pc[i + 1u] = c1;
+          }
+        }
+#ifdef CGBA_PALETTE_DIRTY_ACTIVE
+        palette_ram_dirty = CGBA_PALETTE_DIRTY_ACTIVE;
+#endif
+      }
+      return 1;
+    }
+  }
+}
+
 static u32 cgba_swi_cpuset_engine(s32 remaining)
 {
   u32 loop_pc = reg[REG_PC];
@@ -4130,40 +4210,55 @@ static int cgba_swi_apply_faithful(u32 src, u32 dst, u32 cnt, int fastset,
   if (n) {
     u8 *d = cgba_bulk_ram_host(eff_dst, len, &tags);
     const u8 *sp = NULL;
-    if (!d)
-      return 0;
-    if (!fill) {
-      sp = cgba_bulk_src_host(eff_src, len);
-      if (!sp)
-        return 0;
-      if (cgba_bulk_ranges_overlap(sp, d, len)) {
-#if CGBA_SH4_SWI_FORWARD_OVERLAP
-        if (!cgba_sh4_swi_is_forward_overlap(d, sp, len))
-          return 0;                            /* equal/backward: interpreter */
-        cgba_sh4_swi_copy_forward(d, sp, len, width);
-#else
-        return 0;                              /* overlap: interpreter semantics */
-#endif
+    if (!d) {
+      if (!fill) {
+        sp = cgba_bulk_src_host(eff_src, len);
+        if (!sp || !cgba_swi_bulk_video_copy(eff_dst, sp, len))
+          return 0;
+        if (pred->r0_from_last_word)
+          reg[0] = cgba_le32_read(sp + len - 4);
+        else
+          reg[0] = pred->r0;
       } else {
-        memmove(d, sp, len);
+        const u8 *vp = cgba_bulk_src_host(eff_src, width);
+        if (!vp || !cgba_swi_bulk_video_fill(eff_dst, vp, width, len))
+          return 0;
+        reg[0] = pred->r0;
       }
     } else {
-      const u8 *vp = cgba_bulk_src_host(eff_src, width);
-      u32 i;
-      u8 b[4];
-      if (!vp)
-        return 0;
-      b[0] = vp[0]; b[1] = vp[1];
-      if (word) { b[2] = vp[2]; b[3] = vp[3]; }
-      for (i = 0; i < len; i += width)
-        memcpy(d + i, b, width);
+      if (!fill) {
+        sp = cgba_bulk_src_host(eff_src, len);
+        if (!sp)
+          return 0;
+        if (cgba_bulk_ranges_overlap(sp, d, len)) {
+#if CGBA_SH4_SWI_FORWARD_OVERLAP
+          if (!cgba_sh4_swi_is_forward_overlap(d, sp, len))
+            return 0;                            /* equal/backward: interpreter */
+          cgba_sh4_swi_copy_forward(d, sp, len, width);
+#else
+          return 0;                              /* overlap: interpreter semantics */
+#endif
+        } else {
+          memmove(d, sp, len);
+        }
+      } else {
+        const u8 *vp = cgba_bulk_src_host(eff_src, width);
+        u32 i;
+        u8 b[4];
+        if (!vp)
+          return 0;
+        b[0] = vp[0]; b[1] = vp[1];
+        if (word) { b[2] = vp[2]; b[3] = vp[3]; }
+        for (i = 0; i < len; i += width)
+          memcpy(d + i, b, width);
+      }
+      if (cgba_bulk_tags_smc(tags, len))
+        cgba_store_alert |= CPU_ALERT_SMC;
+      if (pred->r0_from_last_word)
+        reg[0] = cgba_le32_read(d + len - 4);
+      else
+        reg[0] = pred->r0;
     }
-    if (cgba_bulk_tags_smc(tags, len))
-      cgba_store_alert |= CPU_ALERT_SMC;
-    if (pred->r0_from_last_word)
-      reg[0] = cgba_le32_read(d + len - 4);
-    else
-      reg[0] = pred->r0;
   } else {
     reg[0] = pred->r0;
   }

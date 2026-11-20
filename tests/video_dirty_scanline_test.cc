@@ -471,6 +471,69 @@ static bool run_tests(void)
   video_invalidate_scanline_cache(0, 160);
   CHECK(verify_frame("mode0-direct-blend-after-invalidate"));
 
+  /* Saturating alpha blend (eva + evb > 16, as in Zelda ALttP rain/lightning):
+   * verify exact pixel parity across normal + saturating coefficients. */
+  write_ioreg(REG_BLDCNT, 0x3E41u);
+  write_ioreg(REG_BLDALPHA, 0x0A0Au); /* eva=10, evb=10 -> 20 > 16 */
+  CHECK(verify_frame("mode0-direct-blend-saturating-10-10"));
+  CHECK(cgba_m0.blend_bg_layer == 0u);
+  write_ioreg(REG_BLDALPHA, 0x1010u); /* eva=16, evb=16 -> 32 > 16 */
+  CHECK(verify_frame("mode0-direct-blend-saturating-16-16"));
+
+  /* Mode 0 brightness darken/brighten plan detection & full-frame + single-window
+   * effect-only cutout parity (Zelda ALttP prologue WIN0 shape and variants). */
+  write_ioreg(REG_DISPCNT, 0x1F00u); /* BG0..3 + OBJ, no windows */
+  write_ioreg(REG_BLDCNT, 0x00FFu);  /* COL_EFFECT_DARK, all 1st targets */
+  write_ioreg(REG_BLDY, 5u);
+  CHECK(verify_frame("mode0-bright-dark-fullscreen"));
+  CHECK(cgba_m0.bright_effect == 3u);
+  CHECK(cgba_m0.bright_evy == 5u);
+  CHECK(cgba_m0.bright_tgt1_mask == 0x3Fu);
+  CHECK(cgba_m0.bright_win_active == 0u);
+
+  write_ioreg(REG_BLDCNT, 0x00BFu);  /* COL_EFFECT_BRIGHT, all 1st targets */
+  write_ioreg(REG_BLDY, 7u);
+  CHECK(verify_frame("mode0-bright-light-fullscreen"));
+  CHECK(cgba_m0.bright_effect == 2u);
+  CHECK(cgba_m0.bright_evy == 7u);
+
+  /* WIN0 effect-only cutout: eff_in=0 (effect outside WIN0, as in LEGEND0). */
+  write_ioreg(REG_DISPCNT, 0x3F00u); /* WIN0 enabled */
+  write_ioreg(REG_WININ, 0x1F1Fu);   /* bit 5 = 0 inside WIN0 */
+  write_ioreg(REG_WINOUT, 0x3F3Fu);  /* bit 5 = 1 outside WIN0 */
+  write_ioreg(REG_WIN0H, (30u << 8) | 210u);
+  write_ioreg(REG_WIN0V, (20u << 8) | 140u);
+  write_ioreg(REG_BLDCNT, 0x00FFu);
+  write_ioreg(REG_BLDY, 5u);
+  CHECK(verify_frame("mode0-bright-dark-win0-eff-out"));
+  CHECK(cgba_m0.bright_effect == 3u);
+  CHECK(cgba_m0.bright_win_active == 1u);
+  CHECK(cgba_m0.bright_win_eff_in == 0u);
+  CHECK(cgba_m0.bright_win_x0 == 30u && cgba_m0.bright_win_x1 == 210u);
+  CHECK(cgba_m0.bright_win_y0 == 20u && cgba_m0.bright_win_y1 == 140u);
+
+  /* WIN0 effect-only cutout: eff_in=1 (effect inside WIN0) with partial target1. */
+  write_ioreg(REG_WININ, 0x3F3Fu);
+  write_ioreg(REG_WINOUT, 0x1F1Fu);
+  write_ioreg(REG_BLDCNT, 0x00AAu);  /* BRIGHT on BG1|BG3|BD only */
+  write_ioreg(REG_BLDY, 9u);
+  CHECK(verify_frame("mode0-bright-light-win0-eff-in-partial"));
+  CHECK(cgba_m0.bright_effect == 2u);
+  CHECK(cgba_m0.bright_win_active == 1u);
+  CHECK(cgba_m0.bright_win_eff_in == 1u);
+  CHECK(cgba_m0.bright_tgt1_mask == 0x2Au);
+
+  /* WIN0 with differing layer enables inside vs outside MUST disqualify bright fold. */
+  write_ioreg(REG_WININ, 0x3E3Eu);   /* BG0 disabled inside WIN0 */
+  write_ioreg(REG_WINOUT, 0x1F1Fu);
+  CHECK(verify_frame("mode0-bright-win0-layer-mismatch-disqualify"));
+  CHECK(cgba_m0.bright_effect == 0u);
+
+  /* Clean up window registers. */
+  write_ioreg(REG_DISPCNT, 0x1F00u);
+  write_ioreg(REG_BLDCNT, 0u);
+  write_ioreg(REG_BLDY, 0u);
+
   return true;
 }
 

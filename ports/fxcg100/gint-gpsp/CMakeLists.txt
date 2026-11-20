@@ -110,13 +110,13 @@ option(CGBA_DEBUG_MENU
 option(CGBA_SH4_SWI_HLE_VERIFY
   "Diag: predict faithful SWI HLE results, run the interpreted BIOS, compare" OFF)
 option(CGBA_SH4_SWI_FORWARD_OVERLAP
-  "Experimental faithful HLE for increasing-address overlapping CpuSet/FastSet" OFF)
+  "Faithful HLE for increasing-address overlapping CpuSet/FastSet" ON)
 option(CGBA_SH4_SWI_OAM_BULK
-  "Experimental faithful bulk path for CpuSet halfword copies into OAM" OFF)
+  "Faithful bulk path for CpuSet halfword copies into OAM" ON)
 option(CGBA_SH4_THUMB_UDIV_FASTPATH
-  "Experimental exact fast path for the Zelda/libgcc Thumb unsigned divide suffix" OFF)
+  "Exact fast path for the Zelda/libgcc Thumb unsigned divide suffix" ON)
 option(CGBA_SH4_ARM_MIXER_FASTPATH
-  "Experimental exact fast path for the Zelda/m4a ARM four-sample mixer loop" OFF)
+  "Exact fast path for the Zelda/m4a ARM four-sample mixer loop" ON)
 option(CGBA_SH4_M4A_MIX_SKIP
   "Skip discarded PCM arithmetic and buffer access in the signature-matched m4a mixer (only valid with the no-op sound backend)" ON)
 option(CGBA_SH4_M4A_LOOP_FOLD
@@ -175,12 +175,12 @@ set(CGBA_GPSP_ROM_BRANCH_HASH_BITS "${_CGBA_DEFAULT_ROM_HASH_BITS}" CACHE STRING
   "SH4 dynarec ROM branch-hash = 2^N u32 entries (12 = 16 KiB, 13 = 32 KiB)")
 if(CGBA_CLASSPAD)
   # The ClassPad II arena is in the OS heap and not under the fx-CG ceiling
-  # above, so the ROM cache is 2.125 MiB (2176 KiB) there: Pokemon Emerald was
-  # seen to fill the 1 MiB one 11 times in a session, while leaving ~100 KiB
+  # above, so the ROM cache is 2.0625 MiB (2112 KiB) there: Pokemon Emerald was
+  # seen to fill the 1 MiB one 11 times in a session, while leaving ~58 KiB
   # headroom in the 5.5 MiB arena for .cgba.core and .cgba.bss. The hash table
   # is doubled to keep its chains about the same length. See classpad_gpsp.ld
   # for the room.
-  set(CGBA_GPSP_ROM_TRANSLATION_CACHE_SIZE 2228224)
+  set(CGBA_GPSP_ROM_TRANSLATION_CACHE_SIZE 2162688)
   set(CGBA_GPSP_ROM_BRANCH_HASH_BITS 13)
 endif()
 if(CGBA_DYNAREC)
@@ -496,7 +496,7 @@ endif()
 # Game-specific idle-loop metadata is isolated behind an option so the timing
 # shortcut can be parity-checked before becoming part of the normal database.
 option(CGBA_GBA_OVER_AZLE_IDLE
-  "Enable Zelda: A Link to the Past/Four Swords (AZLE) idle-loop hint (experimental A/B)" OFF)
+  "Enable Zelda: A Link to the Past/Four Swords (AZLE) signature-checked idle-loop hint" ON)
 if(CGBA_GBA_OVER_AZLE_IDLE)
   target_compile_definitions(cgba-gint-gpsp PRIVATE
     CGBA_GBA_OVER_AZLE_IDLE=1)
