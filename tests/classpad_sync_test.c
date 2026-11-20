@@ -174,7 +174,7 @@ int main(void)
 		}
 	}
 
-	/* Strips filled against the refresh, on an fx-CP400's 548-row refresh:
+	/* Strips filled against the refresh, on a ClassPad II's 548-row refresh:
 	 * the calibration page (528 rows in 16-row bands) and game pictures.
 	 * The clearance is there for an offset that is out (up to half a step
 	 * while it is being set), so the strips must not use it up: with no

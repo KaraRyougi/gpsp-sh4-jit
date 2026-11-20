@@ -1,6 +1,6 @@
 /* Rasterises TrueType / OpenType fonts into the 4-bit-per-pixel glyph
  * tables of the calculator interfaces: ports/fxcg100/classpad_font.h
- * (fx-CP400) and ports/fxcg100/cg_font.h (fx-CG50 / fx-CG100).
+ * (ClassPad II) and ports/fxcg100/cg_font.h (fx-CG50 / fx-CG100).
  *
  *   cc classpad_font_gen.c $(pkg-config --cflags --libs freetype2) -o gen
  *   ./gen [-p PREFIX] NAME SIZE FONT[,FACE[,WGHT]] ... > header.h

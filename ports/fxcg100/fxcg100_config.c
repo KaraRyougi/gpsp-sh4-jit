@@ -58,7 +58,7 @@ int fxcg100_storage_write_blob(const uint16_t *path, const void *src, unsigned s
 #define CGBA_BFILE_READ_WRITE 0x03
 
 #if defined(CGBA_CLASSPAD)
-/* fx-CP400: the OS file API behind Fugue-style adapters. */
+/* ClassPad II: the OS file API behind Fugue-style adapters. */
 #include "classpad_bfile.h"
 #define CGBA_BFILE_OPEN   cp_bfile_open
 #define CGBA_BFILE_SIZE   cp_bfile_size
@@ -111,18 +111,18 @@ typedef struct fxcg100_config_file {
   uint32_t reserved_backup_update;
   uint32_t show_fps;
   uint32_t frame_limit;
-  /* fx-CP400 display options, carved out of the reserved words so the file
+  /* ClassPad II display options, carved out of the reserved words so the file
    * size and version stay unchanged. Both are zero in files written by the
    * fx-CG builds; the touch-key flag is stored inverted so that zero keeps
    * the keys on. */
   uint32_t rotation;
   uint32_t touch_keys_hidden;
   uint32_t lcd_cpu;
-  /* fx-CP400 interface: colour scheme, and animations (stored inverted so
+  /* ClassPad II interface: colour scheme, and animations (stored inverted so
    * that zero keeps them on). */
   uint32_t theme;
   uint32_t animations_off;
-  /* fx-CP400: wait for the panel's refresh before each frame. */
+  /* ClassPad II: wait for the panel's refresh before each frame. */
   uint32_t lcd_sync;
   /* The last free word, shared: bits 0-3 the refresh position, bits 8-12
    * the backlight level (0 leaves the system's), bits 16-19 the backlight

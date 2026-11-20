@@ -4,14 +4,14 @@
 game library, the pause menu, settings and the key-mapping page. It replaces
 `fxcg100_menu.c` in the gint builds (the bare-metal `ports/fxcg100/Makefile`
 build still uses the old menu) and keeps its contract, so `main()` is shared
-with the fx-CP400:
+with the ClassPad II:
 
 - `fxcg100_menu_init()` sets defaults and loads `CGBA.CFG`;
 - `fxcg100_menu_run()` blocks until the player picks something `main()` must
   act on (resume, load a game, restart, save or load a state, exit);
 - `fxcg100_menu_should_blit()` is the manual frame skip.
 
-It uses the fx-CP400 interface's colour schemes (`classpad_theme.h`) and
+It uses the ClassPad II interface's colour schemes (`classpad_theme.h`) and
 drawing code (`classpad_gfx.h`), but not its components: the ClassPad UI is
 Material 3 for a touch screen, which on a 384×216 keypad screen spends room
 on touch margins and cards and makes the selection hard to see. This one is
@@ -57,7 +57,7 @@ layout occupies, at 1:1.
 - **Sizes**: 22 + 8 × 22 + 18 = 216. Lists scroll a row at a time, keep a row
   of context above and below the selection, and stop on row tops so no sliver
   of a row shows under the header.
-- **Text** is Source Sans one weight heavier than on the fx-CP400: titles
+- **Text** is Source Sans one weight heavier than on the ClassPad II: titles
   16 px Bold, rows 16 px Medium, labels 14 px Semibold, keycaps 11 px Bold
   (`cg_font.h`). At 16 px a Regular stem is about 1.5 px and looks faint on
   the dark schemes; Medium is 1.8 px. Baselines come from each font's
@@ -152,7 +152,7 @@ build records: `pack` (snapshot and compression), `write` (the file, with its
 size) and `remap` (asking Fugue for the flash address of every 4 KiB block
 of the ROM again, which any change to storage requires). On the fx-CG it is
 the footer message, held for 12 s; after a shortcut save, and on the
-fx-CP400, it is the second line of the status box.
+ClassPad II, it is the second line of the status box.
 
 ## Tests
 

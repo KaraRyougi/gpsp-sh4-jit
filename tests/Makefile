@@ -92,7 +92,7 @@ scale: $(ROOT)/tests/scale_test.c $(ROOT)/ports/fxcg100/fxcg100_scale.h
 	  $(ROOT)/tests/scale_test.c -o $(BIN)-scale
 	$(BIN)-scale
 
-# fx-CP400 / ClassPad II: the real presenter against a simulated R61523 and
+# ClassPad II: the real presenter against a simulated R61523 and
 # stub gint (layouts, rotation, scaler taps, touch keys and their highlight,
 # and the touch interface: library, pause menu, settings, key mapping),
 # plus the lookup that finds the RAM-resident core inside the .hh3, and the

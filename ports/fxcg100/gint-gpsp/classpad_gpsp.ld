@@ -1,5 +1,5 @@
 /*
-	Linker script for gpSP on the fx-CP400 (ClassPad II) under HollyHock-3.
+	Linker script for gpSP on the ClassPad II under HollyHock-3.
 
 	The image is split in two because of how little RAM is known to be free:
 
@@ -226,7 +226,7 @@ SECTIONS
 		*(.xram .yram .xyram .xyram.fastmem .xyram.fastmem.*)
 	} > xyram :NONE
 	ASSERT(SIZEOF(.xyram) == 0,
-		"X/Y RAM sections are not supported by the fx-CP400 image")
+		"X/Y RAM sections are not supported by the ClassPad II image")
 
 	/DISCARD/ : {
 		*(.gint.rodata.sh3 .gint.data.sh3 .gint.bss.sh3)

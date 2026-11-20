@@ -16,7 +16,7 @@
 #define CGBA_SH4_P2_END  ((uintptr_t)0xc0000000u)
 
 #if defined(CGBA_CLASSPAD)
-/* fx-CP400: \fls0 is the same Fugue file system as on the fx-CG (4 KiB
+/* ClassPad II: \fls0 is the same Fugue file system as on the fx-CG (4 KiB
  * clusters laid out on 4 KiB flash units), and the OS has the same
  * "address of the block at this file offset" call. HollyHock-3's symbol
  * table names it File_GetAddr; gint does not bind it. In OS 02.01.7002 and
@@ -767,7 +767,7 @@ int cgba_nor_rom_read(cgba_nor_rom *rom, void *dst, uint32_t offset, uint32_t le
 			memcpy(out, src + intra, chunk);
 		} else if(block < cgba_block_total && rom && rom->fd >= 0) {
 			/* Block exists but has no durable direct pointer (rejected
-			 * non-P1/P2 address, or on the fx-CP400 without the OS call,
+			 * non-P1/P2 address, or on the ClassPad II without the OS call,
 			 * everything past the RAM pool): a world-switched BFile read
 			 * is always safe, if slow. Take the blocks that follow in the
 			 * same state along, so a 32 KiB page costs one OS visit rather

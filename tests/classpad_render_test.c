@@ -1,4 +1,4 @@
-/* Host end-to-end test for the fx-CP400 presenter.
+/* Host end-to-end test for the ClassPad II presenter.
  *
  * Compiles gint-gpsp/src/classpad_platform.c against stub gint headers and a
  * simulated R61523 (window + sequential pixel writes), then checks what ends
@@ -1811,7 +1811,7 @@ static void test_key_colours(void)
 
 /* ---- clock ---------------------------------------------------------------- */
 
-/* The stock state the benchmark reported on an fx-CP400: 118 / 59 / 29.5 MHz,
+/* The stock state the benchmark reported on a ClassPad II: 118 / 59 / 29.5 MHz,
  * here as FLL 900, PLL x16, CPU /4, SuperHyway and bus /8, peripherals /16. */
 static cp_clock stock_clock(void)
 {
@@ -2343,9 +2343,9 @@ int main(int argc, char **argv)
 		fxcg100_keymap_defaults(keymap);
 		fxcg100_hotkey_defaults(hotkeys);
 		CHECK(fxcg100_input_maps_valid(keymap, hotkeys),
-			"default fx-CP400 key map is not valid");
+			"default ClassPad II key map is not valid");
 		CHECK(fxcg100_key_bindable(FXCG100_PHYSKEY_ON),
-			"Clear must be bindable on the fx-CP400");
+			"Clear must be bindable on the ClassPad II");
 	}
 
 	fxcg100_lcd_init();

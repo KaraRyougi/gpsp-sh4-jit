@@ -11,7 +11,7 @@ typedef struct fxcg100_key_choice {
 #if defined(CGBA_CLASSPAD)
 #include <gint/keycodes.h>
 
-/* fx-CP400 / ClassPad II: bindable keys are gint KEY_* codes. Clear (which
+/* ClassPad II: bindable keys are gint KEY_* codes. Clear (which
  * doubles as the power key) opens the emulator menu until it is given to
  * something here; the Menu and Settings icons under the screen always do.
  * The arrows are
@@ -40,9 +40,9 @@ static const fxcg100_key_choice bindable_keys[] = {
 };
 
 _Static_assert(sizeof(bindable_keys) / sizeof(bindable_keys[0]) == 34,
-               "fx-CP400 must expose every physical key");
+               "ClassPad II must expose every physical key");
 
-/* GBA button -> fx-CP400 key, in enum order:
+/* GBA button -> ClassPad II key, in enum order:
  *   A=EXE B=+ SELECT== START=X
  *   RIGHT LEFT UP DOWN L=SHIFT R=BKSP  (Clear opens the emulator menu)
  * Every GBA button is also available as a touch key. */
@@ -239,7 +239,7 @@ int fxcg100_keymap_valid(const uint16_t *keymap)
     return 0;
   for (i = 0; i < FXCG100_GBA_KEY_COUNT; i++) {
 #ifdef CGBA_CLASSPAD
-    /* On the fx-CP400 a GBA button may have no key: it is still on the
+    /* On the ClassPad II a GBA button may have no key: it is still on the
      * touch screen, and giving its key to something else leaves it so. */
     if (keymap[i] == 0)
       continue;

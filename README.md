@@ -107,9 +107,9 @@ If a game feels slow, try **Frame skipping: Auto** first. **Manual** gives you a
 
 The **Limit to 60 fps** option is enabled by default. It keeps games from running faster than the GBA’s native rate. This limit is global regardless of the frameskip setting. It only caps games that would otherwise run too quickly. It cannot speed up a game running below 60 FPS. The **Fast forward** shortcut temporarily bypasses the limit. Turn the option off if you want unrestricted speed or are benchmarking performance.
 
-## fx-CP400 / ClassPad II
+## ClassPad II
 
-There is also a build for the **fx-CP400 / fx-CG500 (ClassPad II)** running
+There is also a build for the **ClassPad II (fx-CP400 / fx-CG500)** running
 [HollyHock-3](https://github.com/ClasspadDev/hollyhock-3).
 
 Copy `gpSP.hh3` (keep that name) and your `.gba` files to the root of the
@@ -242,7 +242,7 @@ fxsdk build-cg
 
 The resulting add-in is `ports/fxcg100/gint-gpsp/gpSP.g3a`.
 
-For an fx-CP400 / ClassPad II build (gint must be installed for the `cp`
+For a ClassPad II build (gint must be installed for the `cp`
 target):
 
 ```sh

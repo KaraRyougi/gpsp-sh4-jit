@@ -1,5 +1,5 @@
 /*
- * fx-CP400 interface: the game library, the pause menu, settings, the
+ * ClassPad II interface: the game library, the pause menu, settings, the
  * key-mapping page and the clock page. This replaces fxcg100_menu.c on the
  * ClassPad and keeps its contract (fxcg100_menu_init / fxcg100_menu_run /
  * ..._should_blit), so main() is shared with the fx-CG models.
@@ -3666,7 +3666,7 @@ void fxcg100_menu_init(fxcg100_menu_state *state)
 	state->frameskip_type = 1;
 	state->frameskip_value = 1;
 	state->frame_limit = 1;
-	/* Where the picture lies in the panel's count of rows: on an fx-CP400
+	/* Where the picture lies in the panel's count of rows: on a ClassPad II
 	 * with panel ID 0x16 (548 rows a refresh, 20 of them blanking) only 0
 	 * gave a clean calibration page. */
 	state->lcd_sync_offset = 0;

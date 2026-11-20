@@ -1,7 +1,7 @@
 #ifndef CGBA_CLASSPAD_THEME_H
 #define CGBA_CLASSPAD_THEME_H
 
-/* Colour schemes for the fx-CP400 / fx-CG interface and touch keys.
+/* Colour schemes for the ClassPad II / fx-CG interface and touch keys.
  *
  * Each scheme is a set of Material 3 colour roles in both dark and light
  * variants, built around one primary colour: the surfaces and the text are

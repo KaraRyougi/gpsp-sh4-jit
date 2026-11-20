@@ -5,12 +5,12 @@
  * fxcg100_menu_should_blit), so main() is shared with the other models.
  *
  * It is made for a keypad and a small screen, so it is a calculator list
- * rather than the fx-CP400's Material 3 cards: one list a page, a
+ * rather than the ClassPad II's Material 3 cards: one list a page, a
  * full-width bar in the primary colour on the selected row, values at the
  * end of their row (the cursor keys change them, with ‹ › on the selected
  * row), section titles with a hairline, and a footer that names the keys
  * the selected row takes and shows results for two seconds. Colours are the
- * fx-CP400 schemes (classpad_theme.h); text is Source Sans one weight
+ * ClassPad II schemes (classpad_theme.h); text is Source Sans one weight
  * heavier than there (cg_font.h). See docs/fxcg-ui.md.
  *
  * Both models have the same 396x224 panel. The layout is 384x216 at (6, 4)

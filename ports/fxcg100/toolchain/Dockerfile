@@ -19,7 +19,7 @@ RUN cd /root/.local/share/giteapc/Lephenixnoir/gint \
     && fxsdk build-cg \
     && fxsdk build-cg install
 
-# The fx-CP400 (ClassPad II, HollyHock-3) build links the same gint revision
+# The ClassPad II (HollyHock-3) build links the same gint revision
 # configured for that model.
 RUN cd /root/.local/share/giteapc/Lephenixnoir/gint \
     && fxsdk build-cp -c \

@@ -3,7 +3,7 @@
 
 /* Locate one section of a big-endian ELF32 file by its link address.
  *
- * The fx-CP400 build keeps its RAM-resident emulator core in a section that
+ * The ClassPad II build keeps its RAM-resident emulator core in a section that
  * belongs to no program header, so the HollyHock loader leaves it in the file.
  * At startup gpSP finds that section in its own .hh3 and reads it into the
  * memory it has reserved (gint-gpsp/src/classpad_loader.c). This header is the

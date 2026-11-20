@@ -1,5 +1,5 @@
 /*
- * fx-CP400 LCD transfer benchmark.
+ * ClassPad II LCD transfer benchmark.
  *
  * Measures how fast pixels reach the panel by CPU writes and by DMA, in the
  * configurations gpSP could use, and how much CPU is left while a DMA
@@ -627,7 +627,7 @@ int main(void)
 	if(guard_timer >= 0)
 		timer_start(guard_timer);
 
-	add_line("fx-CP400 LCD bench");
+	add_line("ClassPad II LCD bench");
 	add_line("panel ID da=%04x %04x  first col %d", panel_id_first, panel_id,
 		first_column);
 	add_line("I %d B %d P %d kHz", freq->Iphi_f / 1000, freq->Bphi_f / 1000,

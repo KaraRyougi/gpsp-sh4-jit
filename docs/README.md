@@ -22,7 +22,7 @@ As-built (current):
 - [fxcg-ui.md](fxcg-ui.md) — the fx-CG50 / fx-CG100 keypad interface:
   layout, keys, pages, partial refresh, screen geometry and its host test.
 
-- [classpad-port.md](classpad-port.md) — the fx-CP400 (ClassPad II) port:
+- [classpad-port.md](classpad-port.md) — the ClassPad II port:
   screen-scale choices, landscape, touch keys, the heap-backed memory layout,
   and what is still unverified on hardware.
 

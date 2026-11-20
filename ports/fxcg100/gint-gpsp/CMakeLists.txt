@@ -14,12 +14,12 @@ set(GPSP "${CGBA_ROOT}/vendor/gpsp")
 # the JIT; they differ in keyboard codes, storage backing, and the ROM source
 # (CG100 memory-maps NOR; CG50 streams the .gba via BFile).
 option(CGBA_FXCG50 "Build for fx-CG50 / Graph 90+E instead of fx-CG100" OFF)
-# fx-CP400 / ClassPad II under HollyHock-3 (configure with the FXCP toolchain).
+# ClassPad II under HollyHock-3 (configure with the FXCP toolchain).
 # Same SH7305, but 16 MiB of RAM that belongs to the OS heap, a 320x528
 # touchscreen, and a POSIX-like file API. The core is configured
 # like the fx-CG50 one (gint key codes, RAM-resident hot code), so this option
 # implies the CGBA_FXCG50 define and overrides the platform layer.
-option(CGBA_CLASSPAD "Build for fx-CP400 / ClassPad II (HollyHock-3 .hh3)" OFF)
+option(CGBA_CLASSPAD "Build for ClassPad II (HollyHock-3 .hh3)" OFF)
 if(CGBA_CLASSPAD)
   if(NOT "${FXSDK_PLATFORM_LONG}" STREQUAL "fxCP")
     message(FATAL_ERROR "CGBA_CLASSPAD requires the fxSDK FXCP toolchain file")
@@ -177,7 +177,7 @@ set(CGBA_GPSP_RAM_TRANSLATION_CACHE_SIZE "524288" CACHE STRING
 set(CGBA_GPSP_ROM_BRANCH_HASH_BITS "12" CACHE STRING
   "SH4 dynarec ROM branch-hash = 2^N u32 entries; 12 is 16 KiB, which is friendlier to the SH7305 cache than the upstream 16 / 256 KiB table")
 if(CGBA_CLASSPAD)
-  # The fx-CP400 arena is in the OS heap and not under the fx-CG ceiling
+  # The ClassPad II arena is in the OS heap and not under the fx-CG ceiling
   # above, so the ROM cache is 2.125 MiB (2176 KiB) there: Pokemon Emerald was
   # seen to fill the 1 MiB one 11 times in a session, while leaving ~100 KiB
   # headroom in the 5.5 MiB arena for .cgba.core and .cgba.bss. The hash table
@@ -274,7 +274,7 @@ if(CGBA_FXCG100_STORAGE)
   target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_FXCG100_STORAGE=1)
 endif()
 # The Ptune profile is tuned for the fx-CG bus and SDRAM; it is not applied on
-# the fx-CP400, whose memory timings have not been characterised.
+# the ClassPad II, whose memory timings have not been characterised.
 if(CGBA_DEFAULT_OVERCLOCK AND NOT CGBA_CLASSPAD)
   target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_DEFAULT_OVERCLOCK=1)
 endif()

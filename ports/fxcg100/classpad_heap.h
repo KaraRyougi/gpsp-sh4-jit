@@ -1,7 +1,7 @@
 #ifndef CGBA_CLASSPAD_HEAP_H
 #define CGBA_CLASSPAD_HEAP_H
 
-/* Getting one block of the fx-CP400 OS heap that contains a fixed address
+/* Getting one block of the ClassPad II OS heap that contains a fixed address
  * range, without ever making a request the heap cannot meet.
  *
  * It has to be done this way because of two things the OS does. A request
@@ -37,7 +37,7 @@
 #define CP_HEAP_BLOCKERS 16u
 
 /* Where the allocator keeps its state differs between builds of the OS (two
- * fx-CP400 with the same code were seen to differ in the break's address
+ * ClassPad II with the same code were seen to differ in the break's address
  * and in the rounding unit), so these are read out of the code's own
  * literals rather than assumed: see os_heap_find in classpad_loader.c. */
 typedef struct cp_heap_os {

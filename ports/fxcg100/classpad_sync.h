@@ -1,7 +1,7 @@
 #ifndef CGBA_CLASSPAD_SYNC_H
 #define CGBA_CLASSPAD_SYNC_H
 
-/* Keeping the picture from tearing on the fx-CP400.
+/* Keeping the picture from tearing on the ClassPad II.
  *
  * The panel shows its own memory, one row after the other, about sixty times
  * a second, whatever is being written to it. A frame is written row by row
@@ -36,7 +36,7 @@
 /* The rows in a refresh are the highest row seen plus one, so one wrong
  * read above the real last row is enough to get it wrong, and with it
  * where every offset falls: it sets the sixteenths the offset counts in and
- * the length positions are taken modulo. (An fx-CP400 with panel ID 0x16
+ * the length positions are taken modulo. (A ClassPad II with panel ID 0x16
  * has 548 rows a refresh, 528 of picture and 20 of blanking, at 56 Hz;
  * when every read counted it showed 856 rows at 112 Hz at one start and
  * 924 at 92 Hz at another, and the right offset moved with them.) So
@@ -114,7 +114,7 @@ static inline int cp_scan_agree(uint32_t first, uint32_t second,
  * `lines` is a frame old, so a clearance is kept at both ends of the frame.
  * An eighth of a refresh where there is room, a third of what room there is
  * otherwise. More than that only makes more frames wait, and longer: with
- * a quarter, nine interface frames in ten waited on an fx-CP400, and the
+ * a quarter, nine interface frames in ten waited on a ClassPad II, and the
  * motion became uneven.
  *
  * `part` is that share of a refresh: 8 for an eighth. The game's picture is

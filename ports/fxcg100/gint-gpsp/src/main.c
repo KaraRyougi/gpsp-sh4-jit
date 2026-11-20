@@ -195,7 +195,7 @@ static int gpsp_highbss_range_ok(void)
 {
 	uintptr_t start = (uintptr_t)cgba_highbss_start;
 	#if defined(CGBA_CLASSPAD)
-	/* fx-CP400: the arena is a heap block that classpad_loader.c verified
+	/* ClassPad II: the arena is a heap block that classpad_loader.c verified
 	 * to contain the linked range, so the link-time bounds are the proof. */
 	uintptr_t end = (uintptr_t)cgba_highbss_end;
 

@@ -1,7 +1,7 @@
 #ifndef CGBA_CLASSPAD_CLOCK_H
 #define CGBA_CLASSPAD_CLOCK_H
 
-/* The SH7305 clock chain as the fx-CP400 clock page works on it.
+/* The SH7305 clock chain as the ClassPad II clock page works on it.
  *
  * The method and the tables are Ptune4's (Xtune/CPtune4 by CalcLoverHK and
  * Sentaro21), by way of the Windows CE port's cetune: the player sets the
@@ -67,7 +67,7 @@ typedef struct cp_chain {
 	uint32_t fll, selxm, pll, div[4];
 } cp_chain;
 
-/* Xtune's limits for the fx-CP400, by CP_CLK_* index (the FLL has none).
+/* Xtune's limits for the ClassPad II, by CP_CLK_* index (the FLL has none).
  *
  * cp_clock_limit is what Xtune starts with: its default settings, the same
  * for every model except for the peripheral clock, and meant as a cautious
@@ -294,7 +294,7 @@ static inline int cp_chain_step(cp_chain *chain, int row, int dir, int big,
 /* ---- what follows the clocks ---------------------------------------------- */
 
 /* Wait fields for a bus clock: the lowest setting whose measured ceiling,
- * less a 5 % margin, still covers it (Xtune's fx-CP400 tables). */
+ * less a 5 % margin, still covers it (Xtune's ClassPad II tables). */
 static inline uint32_t cp_clock_best_flash_wait(uint32_t bus_hz)
 {
 	static const uint8_t mhz[10] = {
@@ -382,7 +382,7 @@ static inline cp_clock cp_clock_for_chain(const cp_clock *stock,
 /* CS3BCR with the idle-cycle fields (IWW, IWRWD, IWRWS, IWRRD, IWRRS, bits
  * 30:16) of the fx-CG Ptune F5 profile, 0x04904400: none between accesses of
  * one kind to the SDRAM, two around a change of direction or device. The
- * fx-CP400 ships with 0x76db4400: four between two reads, twelve after a
+ * ClassPad II ships with 0x76db4400: four between two reads, twelve after a
  * write. Everything else in the register stays as stock has it. */
 #define CP_CLK_IDLE_MASK 0x7fff0000u
 #define CP_CLK_IDLE_FAST 0x04900000u

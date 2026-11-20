@@ -1,7 +1,7 @@
 #ifndef CGBA_CLASSPAD_HHK_H
 #define CGBA_CLASSPAD_HHK_H
 
-/* fx-CP400: the HollyHock-3 symbol table, and the check that the OS routine
+/* ClassPad II: the HollyHock-3 symbol table, and the check that the OS routine
  * named File_GetAddr is the one nor_rom.c was written against.
  *
  * HollyHock-3 starts an add-in with envp holding HHK_SYMBOL_TABLE and

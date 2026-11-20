@@ -1,4 +1,4 @@
-# fx-CP400 (ClassPad II) port
+# ClassPad II port
 
 Status: **builds, host-tested, not yet run on a calculator.** Everything
 below that depends on hardware behaviour is listed under
@@ -9,7 +9,7 @@ and the SH-4 JIT are used unchanged. What differs is everything around them:
 the launcher (HollyHock-3), where RAM comes from, the screen, the input and
 the file API.
 
-| | fx-CG50 / CG100 | fx-CP400 |
+| | fx-CG50 / CG100 | ClassPad II |
 |---|---|---|
 | Add-in format | `.g3a` | `.hh3` (stripped ELF, HollyHock-3) |
 | RAM | 8 MiB, fixed regions known safe | 16 MiB, but all of it OS heap or OS data |
@@ -83,7 +83,7 @@ with the source masked to a physical address, destination 0x14000000 (the
 LCD data port, 0xb4000000), a count of bytes/32, and CHCR 0x00101400
 (32-byte units, auto request, source increment; 0x00100400 with a fixed
 source for fills), then poll TE. gint's R61523 driver pushes pixels with a
-CPU loop instead, but its generic DMA driver is present in the fx-CP400
+CPU loop instead, but its generic DMA driver is present in the ClassPad II
 library and supports the same transfer.
 
 `classpad_platform.c` builds the picture in strips of at most 4096 pixels in
@@ -102,7 +102,7 @@ Menus, the touch keys and the crash report always use CPU writes.
 
 #### Measured on hardware
 
-`ports/fxcg100/classpad-lcdbench` on an fx-CP400 with panel ID 0x16, stock
+`ports/fxcg100/classpad-lcdbench` on a ClassPad II with panel ID 0x16, stock
 clocks (Iφ 118 MHz, Bφ 59 MHz, Pφ 29.5 MHz), full 320×528 frame:
 
 | Method | Frame | ns/pixel |
@@ -152,7 +152,7 @@ one frame goes out (measured on the frame before), the two do not meet.
   disagree. Every view orders its strips to follow the panel's refresh
   direction.
 - The row count includes blanking rows: 548 a refresh at 56 Hz on an
-  fx-CP400 with panel ID 0x16, so 20 rows of blanking for 528 of picture.
+  ClassPad II with panel ID 0x16, so 20 rows of blanking for 528 of picture.
   Where in the count the picture lies is not known. `Refresh position`
   (0..15, sixteenths of a refresh, 34 rows a step at 548)
   is set by eye on a page of its own (Settings → Refresh position, shown
@@ -213,7 +213,7 @@ one frame goes out (measured on the frame before), the two do not meet.
 - A frame that takes much longer than one refresh to write (landscape 2x)
   cannot be placed and is sent as before.
 
-On an fx-CP400 with panel ID 0x16 the counter is there. The first two
+On a ClassPad II with panel ID 0x16 the counter is there. The first two
 versions assumed the refresh ran the same way as the strips, and tore as
 before while reporting no tears. The next one gave a clean calibration
 page at one position on that unit (4, with a wrong row count), which a
@@ -254,7 +254,7 @@ on hardware.
 
 ### Two panel families
 
-The fx-CP400 exists with two LCD families, told apart by ID register 0xda.
+The ClassPad II exists with two LCD families, told apart by ID register 0xda.
 The OS (LCD_SetDrawingBounds, 0x80038a10) reads it and adds 40 to the X
 window bounds unless the ID is 0x16 or 0x52; its power-on sequence also
 branches on the same test.
@@ -716,7 +716,7 @@ reads that had to be given up.
 
 ### Touch driver guard
 
-gint's fx-CP400 touch driver (as of 463f180, the current upstream head)
+gint's ClassPad II touch driver (as of 463f180, the current upstream head)
 reads the touch controller over I2C from its key-scan timer interrupt, 128
 times a second while the screen is touched. Compared with what the OS does
 for the same job (02.01.7003, 0x80089f28..0x8008a5b6), three things are
@@ -752,7 +752,7 @@ The proper fix is in gint itself; this has not been sent upstream.
 
 ## Not verified on hardware
 
-The port has not been run on an fx-CP400. casio-emu has an experimental
+The port has not been run on a ClassPad II. casio-emu has an experimental
 ClassPad backend, but running a HollyHock add-in in it was not attempted.
 The build links, the layout, scaler,
 rotation, touch mapping and highlight logic pass host tests against a
@@ -769,7 +769,7 @@ simulated panel, and the fx-CG50/CG100 builds are unaffected. Still open:
 - **Touch** coordinates and two-point behaviour from gint's driver, and in
   particular whether touches on the icon strip are reported with y above
   527. The benchmark app ends with a touch probe that records this.
-- **gpSP itself.** The LCD benchmark has run on an fx-CP400 (panel ID 0x16):
+- **gpSP itself.** The LCD benchmark has run on a ClassPad II (panel ID 0x16):
   the column-offset rule, DMA from on-chip RAM through gint, and the timings
   above are confirmed there. The emulator build has not been run yet, and
   the older panel family has not been tried at all.

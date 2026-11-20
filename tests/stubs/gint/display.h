@@ -1,7 +1,7 @@
 #ifndef CGBA_TEST_GINT_DISPLAY_H
 #define CGBA_TEST_GINT_DISPLAY_H
 
-/* Host-test stand-in for gint's fx-CP400 rendering API: a 320x528 RGB565
+/* Host-test stand-in for gint's ClassPad II rendering API: a 320x528 RGB565
  * VRAM and the few drawing calls the ClassPad presenter uses. The functions
  * are implemented by the test that includes this. */
 

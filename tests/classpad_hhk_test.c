@@ -2,7 +2,7 @@
  * HollyHock-3's symbol table, and the check of the code found there.
  *
  *   classpad_hhk_test              synthetic tables and OS images only
- *   classpad_hhk_test NOR.bin      also check a real fx-CP400 flash dump (OS
+ *   classpad_hhk_test NOR.bin      also check a real ClassPad II flash dump (OS
  *                                  image at offset 0 = 0x80000000) at the
  *                                  known File_GetAddr address */
 

@@ -1,4 +1,4 @@
-/* The arena reservation of classpad_heap.h against a model of the fx-CP400
+/* The arena reservation of classpad_heap.h against a model of the ClassPad II
  * OS allocator, written from the disassembly of malloc 0x800a8744, free
  * 0x800a86ac and sbrk 0x800cee9e (OS 02.01.7003).
  *

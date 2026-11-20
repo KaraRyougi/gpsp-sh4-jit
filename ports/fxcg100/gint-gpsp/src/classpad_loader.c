@@ -1,5 +1,5 @@
 /*
- * fx-CP400 memory bring-up.
+ * ClassPad II memory bring-up.
  *
  * The emulator needs about 4.7 MiB at fixed link addresses (JIT caches, GBA
  * memory, the hot emulator code), but under HollyHock-3 only the 330 KiB

@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.15)
 project(classpad_lcdbench C)
 
-# fx-CP400 LCD transfer benchmark (HollyHock-3 .hh3). Configure with the
+# ClassPad II LCD transfer benchmark (HollyHock-3 .hh3). Configure with the
 # fxSDK FXCP toolchain:  fxsdk build-cp
 find_package(Gint 2.9 REQUIRED)
 

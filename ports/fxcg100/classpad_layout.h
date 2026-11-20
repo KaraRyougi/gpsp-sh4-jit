@@ -1,7 +1,7 @@
 #ifndef CGBA_CLASSPAD_LAYOUT_H
 #define CGBA_CLASSPAD_LAYOUT_H
 
-/* fx-CP400 (ClassPad II) screen layout: where the GBA picture goes, where the
+/* ClassPad II screen layout: where the GBA picture goes, where the
  * touch keys go, and how a touch point becomes GBA buttons.
  *
  * Everything here is pure integer geometry with no gint dependency, so the

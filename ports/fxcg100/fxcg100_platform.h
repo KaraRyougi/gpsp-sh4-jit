@@ -31,7 +31,7 @@ void fxcg100_panic(const char *text);
 #define FXCG100_APPKEY_DIGITS   (0x3ffu << 16)
 
 #if defined(CGBA_CLASSPAD)
-#define FXCG100_PHYSKEY_ON 0x74u   /* fx-CP400 KEY_CLEAR (Clear / power) */
+#define FXCG100_PHYSKEY_ON 0x74u   /* ClassPad II KEY_CLEAR (Clear / power) */
 #elif defined(CGBA_FXCG50)
 #define FXCG100_PHYSKEY_ON 0x07u   /* fx-CG50 KEY_ACON (AC/ON) */
 #else
@@ -116,22 +116,22 @@ typedef struct fxcg100_menu_state {
   uint32_t quick_save_slot;
   uint32_t show_fps;
   uint32_t frame_limit;
-  /* fx-CP400 only: landscape direction (CP_ROTATION_*) and whether the
+  /* ClassPad II only: landscape direction (CP_ROTATION_*) and whether the
    * on-screen touch keys are shown. Unused on the fx-CG models. */
   uint32_t rotation;
   uint32_t touch_keys;
-  /* fx-CP400 only: 0 sends the picture by DMA, 1 by CPU writes. */
+  /* ClassPad II only: 0 sends the picture by DMA, 1 by CPU writes. */
   uint32_t lcd_cpu;
-  /* fx-CP400 only: wait for the panel's refresh before each frame. */
+  /* ClassPad II only: wait for the panel's refresh before each frame. */
   uint32_t lcd_sync;
   /* ... and where the picture is in the panel's row count, 0..15. */
   uint32_t lcd_sync_offset;
-  /* fx-CP400 only: backlight level 1..16 and PWM rate 1..9; 0 leaves what
+  /* ClassPad II only: backlight level 1..16 and PWM rate 1..9; 0 leaves what
    * the system set. */
   uint32_t backlight;
   uint32_t backlight_pwm;
   /* Interface appearance: colour scheme (CP_THEME_*), dark mode (1 = dark,
-   * 0 = light), and whether the fx-CP400 interface animates. */
+   * 0 = light), and whether the ClassPad II interface animates. */
   uint32_t theme;
   uint32_t dark_mode;
   uint32_t animations;
@@ -230,7 +230,7 @@ void fxcg100_lcd_set_scale(uint32_t mode);
  * 0 = SMOOTH, 1 = SHARP, 2 = CRISP (nearest). */
 void fxcg100_lcd_set_filter(uint32_t filter);
 #ifdef CGBA_CLASSPAD
-/* fx-CP400: on that model fxcg100_lcd_set_scale() takes a CP_VIEW_* layout
+/* ClassPad II: on that model fxcg100_lcd_set_scale() takes a CP_VIEW_* layout
  * (classpad_layout.h) instead of the fx-CG scale modes above. */
 void fxcg100_lcd_set_rotation(uint32_t rotation);
 void fxcg100_lcd_set_touch_keys(uint32_t enabled);
@@ -243,7 +243,7 @@ void fxcg100_lcd_set_menu_key(uint32_t clear_opens_menu);
 /* Colour scheme of the touch keys (CP_THEME_*, classpad_theme.h). */
 void fxcg100_lcd_set_theme(uint32_t theme);
 void fxcg100_lcd_set_transfer(uint32_t cpu_writes);
-/* fx-CP400: start each frame where the panel's refresh will not meet it
+/* ClassPad II: start each frame where the panel's refresh will not meet it
  * (classpad_sync.h), and what is known about that refresh. */
 void fxcg100_lcd_set_sync(uint32_t wait, uint32_t offset);
 /* While the page that sets the offset is open: every frame waits, with
@@ -257,7 +257,7 @@ int fxcg100_lcd_sync_info(uint32_t *rows, uint32_t *hz);
 /* Compact diagnostic text shown on the calibration page when scan_probe()
  * fails to recognise a row counter (panel ID, max row, Hz, believed/samples). */
 void fxcg100_lcd_sync_diag(char *buf, size_t size);
-/* fx-CP400: backlight level (1..16, 16 = full) and PWM rate (1..9, 9 the
+/* ClassPad II: backlight level (1..16, 16 = full) and PWM rate (1..9, 9 the
  * fastest); 0 for either leaves, or puts back, what the system had set. */
 void fxcg100_lcd_set_backlight(uint32_t level, uint32_t pwm);
 /* GBA buttons currently held on the touch keys (FXCG100_GBA_BUTTON_* bits),
@@ -276,7 +276,7 @@ uint32_t fxcg100_touch_strip_icons(void);
 /* First touch on the LCD in the coordinates the player sees; zero when the
  * screen is not being touched. Sampled by fxcg100_poll_app_keys(). */
 int fxcg100_touch_point(int *x, int *y);
-/* Push gint's VRAM to the panel unchanged (the fx-CP400 interface draws it
+/* Push gint's VRAM to the panel unchanged (the ClassPad II interface draws it
  * already turned for the current orientation). */
 void fxcg100_lcd_present_frame(void);
 /* Clock and bus settings (classpad_clock.h). Writing waits for any display
@@ -309,11 +309,11 @@ void cp_ui_apply_saved_clock(void);
 /* Tell the interface that a game is about to be shown: from then on it is
  * drawn the way round the game is, not upright as at start-up. */
 void cp_ui_game_starting(void);
-/* A full-screen message in the fx-CP400 interface's look (classpad_ui.c). */
+/* A full-screen message in the ClassPad II interface's look (classpad_ui.c). */
 void cp_ui_status(const fxcg100_menu_state *state, const char *line1,
                   const char *line2);
 #endif
-/* 128 Hz ticks. fx-CP400: from a timer, or from the RTC once it is seen to
+/* 128 Hz ticks. ClassPad II: from a timer, or from the RTC once it is seen to
  * run. fx-CG: the RTC. */
 uint32_t fxcg100_ticks(void);
 /* Wait until all physical keys are released (with debounce and safety timeout)

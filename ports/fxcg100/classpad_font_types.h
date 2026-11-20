@@ -2,7 +2,7 @@
 #define CGBA_CLASSPAD_FONT_TYPES_H
 
 /* The layout of the 4-bit glyph tables that tools/classpad_font_gen.c
- * generates: classpad_font.h (fx-CP400 interface) and cg_font.h (fx-CG
+ * generates: classpad_font.h (ClassPad II interface) and cg_font.h (fx-CG
  * interface). Kept apart from the tables so that classpad_gfx.h can draw
  * either set without pulling in the other's data.
  *

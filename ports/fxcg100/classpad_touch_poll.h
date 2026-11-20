@@ -1,7 +1,7 @@
 #ifndef CGBA_CLASSPAD_TOUCH_POLL_H
 #define CGBA_CLASSPAD_TOUCH_POLL_H
 
-/* Reads the fx-CP400 touch controller by polling, in the main program,
+/* Reads the ClassPad II touch controller by polling, in the main program,
  * instead of through gint's interrupt-driven I2C driver.
  *
  * Why: gint's driver runs each read inside its key-scan timer interrupt, on

@@ -1,7 +1,7 @@
 #ifndef CGBA_CLASSPAD_BFILE_H
 #define CGBA_CLASSPAD_BFILE_H
 
-/* fx-CP400 file access with the calling convention the storage code already
+/* ClassPad II file access with the calling convention the storage code already
  * uses on the fx-CG models.
  *
  * The ClassPad OS file API is POSIX-like (char paths, a file position, create

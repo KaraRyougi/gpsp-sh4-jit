@@ -1,5 +1,5 @@
 /* Host test for ports/fxcg100/classpad_elf.h: finding the RAM-resident core
- * section inside the fx-CP400 .hh3 by its link address.
+ * section inside the ClassPad II .hh3 by its link address.
  *
  *   classpad_elf_test                       synthetic images only
  *   classpad_elf_test gpSP.hh3 ADDR SIZE    also check a real build: the

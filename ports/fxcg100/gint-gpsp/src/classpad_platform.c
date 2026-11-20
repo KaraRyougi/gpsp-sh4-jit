@@ -1,5 +1,5 @@
 /*
- * fx-CP400 (ClassPad II) display, touch and key layer. This is the ClassPad
+ * ClassPad II display, touch and key layer. This is the ClassPad
  * counterpart of gint_platform.c and implements the same fxcg100_lcd_* and
  * key-polling interface, so the menu, the runner and main() stay shared.
  *
@@ -74,7 +74,7 @@ static int touch_polled;
 static cp_key_colors key_colors;
 static uint32_t cp_theme_index = ~0u;
 /* Gameplay strips go out by DMA (0) or by CPU writes (1). Measured on an
- * fx-CP400 (docs/classpad-port.md): CPU writes are faster pixel for pixel,
+ * ClassPad II (docs/classpad-port.md): CPU writes are faster pixel for pixel,
  * DMA leaves the CPU free but slows memory-bound work while it runs, so
  * which one gives more frames depends on the game. */
 static uint32_t cp_cpu_transfer;
@@ -202,7 +202,7 @@ static uint16_t r61523_read_word(void)
 	return value;
 }
 
-/* The fx-CP400 shipped with two panel families that are told apart by ID
+/* The ClassPad II shipped with two panel families that are told apart by ID
  * register 0xda. The original one is the R61523, whose 360-column memory
  * shows the picture from column 40. Later units answer 0x16 or 0x52 and
  * start at column 0. This mirrors the OS (LCD_SetDrawingBounds, 0x80038a10,

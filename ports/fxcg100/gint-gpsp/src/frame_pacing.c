@@ -4,7 +4,7 @@
 #include <gint/rtc.h>
 #include <gint/timer.h>
 
-/* The 128 Hz count the pacing is measured against. On the fx-CP400 it comes
+/* The 128 Hz count the pacing is measured against. On the ClassPad II it comes
  * from the platform, which does not depend on the RTC running. */
 #ifdef CGBA_CLASSPAD
 uint32_t fxcg100_ticks(void);

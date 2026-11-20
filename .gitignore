@@ -25,7 +25,7 @@ release/
 *.gba
 *.gbc
 
-# fx-CP400 / ClassPad II build outputs
+# ClassPad II build outputs
 ports/fxcg100/gint-gpsp/build-classpad*/
 ports/fxcg100/gint-gpsp/build-cp*/
 ports/fxcg100/gint-gpsp/*.hh3

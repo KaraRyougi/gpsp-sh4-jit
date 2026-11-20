@@ -1,7 +1,7 @@
 #ifndef CGBA_CLASSPAD_TOUCH_GUARD_H
 #define CGBA_CLASSPAD_TOUCH_GUARD_H
 
-/* Keeps gint's fx-CP400 touch driver from stopping the program.
+/* Keeps gint's ClassPad II touch driver from stopping the program.
  *
  * gint (src/touch, as of 463f180) reads the touch controller over I2C from
  * its key-scan timer interrupt, 128 times a second while the screen is

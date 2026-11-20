@@ -1,7 +1,7 @@
 #ifndef CGBA_CLASSPAD_GFX_H
 #define CGBA_CLASSPAD_GFX_H
 
-/* Drawing for the fx-CP400 touch keys and interface: filled and rounded
+/* Drawing for the ClassPad II touch keys and interface: filled and rounded
  * rectangles with anti-aliased corners, outlines, small anti-aliased lines
  * and triangles for icons, and proportional text from the 4-bit glyph tables
  * in classpad_font.h.

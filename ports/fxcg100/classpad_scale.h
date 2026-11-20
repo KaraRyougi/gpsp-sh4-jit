@@ -1,7 +1,7 @@
 #ifndef CGBA_CLASSPAD_SCALE_H
 #define CGBA_CLASSPAD_SCALE_H
 
-/* fx-CP400 scaling cores that the fx-CG presenter does not need. Pure RGB565
+/* ClassPad II scaling cores that the fx-CG presenter does not need. Pure RGB565
  * integer code shared with tests/classpad_scale_test.c.
  *
  * Portrait reuses the 3 -> 4 (240 -> 320) scalers in fxcg100_scale.h. The
