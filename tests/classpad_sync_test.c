@@ -743,6 +743,57 @@ int main(void)
 				"probe mHz: got %u (tot=%u)",
 				(unsigned)cp_scan_probe_mhz(&p2, 32u, tot2), (unsigned)tot2);
 		}
+
+		/* 1:1 panel-locked pacer (cp_pace_unwrap_rows / cp_pace_advance):
+		 * verify backward-read jitter immunity, early wait, wraparound, and
+		 * late-frame clamping matching cgba_frame_limiter_wait(). */
+		{
+			cp_pace_state ps = { 0 };
+			int late = -99;
+			uint32_t rem;
+
+			/* Minor backward scanline jitter near 0 elapsed clamps to 0. */
+			CHECK(cp_pace_unwrap_rows(100u, 99u, 0u, 548u) == 0u,
+				"backward jitter should clamp to 0");
+			CHECK(cp_pace_unwrap_rows(540u, 10u, 18u, 548u) == 18u,
+				"forward wrap across 0");
+			CHECK(cp_pace_unwrap_rows(100u, 110u, 558u, 548u) == 558u,
+				"full refresh + 10 rows");
+
+			/* Init anchors on first frame with zero wait and late=0. */
+			rem = cp_pace_advance(&ps, 1000u, 200u, 548u,
+				CGBA_SYNC_RATE_GBA_MHZ, 3, &late);
+			CHECK(rem == 0u && late == 0 && ps.valid,
+				"cp_pace init: rem=%u late=%d", rem, late);
+
+			/* Early frame (~300 rows = ~300 ETMU ticks at 59.73 Hz):
+			 * waits remaining 248 rows with late=0. */
+			rem = cp_pace_advance(&ps, 1000u - 300u, 500u, 548u,
+				CGBA_SYNC_RATE_GBA_MHZ, 3, &late);
+			CHECK(rem == 248u && late == 0,
+				"cp_pace early: rem=%u late=%d", rem, late);
+
+			/* Simulate finishing that wait at due_rows (row 200 after wrap). */
+			ps.now_rows += rem;
+			ps.last_row = (ps.last_row + rem) % 548u;
+			ps.last_etmu -= 249u;
+
+			/* Frame overruns by ~0.3 refreshes (~710 rows, ~710 ETMU ticks):
+			 * late == 0 (matches ETMU limiter semantics). */
+			rem = cp_pace_advance(&ps, ps.last_etmu - 710u,
+				(ps.last_row + 710u) % 548u, 548u,
+				CGBA_SYNC_RATE_GBA_MHZ, 3, &late);
+			CHECK(rem == 0u && late == 0,
+				"cp_pace 0.3 overrun: rem=%u late=%d", rem, late);
+
+			/* Huge stall (6 refreshes) clamps to max_late+1 (4). */
+			rem = cp_pace_advance(&ps, ps.last_etmu - 3300u,
+				(ps.last_row + 548u * 6u) % 548u, 548u,
+				CGBA_SYNC_RATE_GBA_MHZ, 3, &late);
+			CHECK(rem == 0u && late == 4 &&
+				ps.due_rows == ps.now_rows - 548u * 3u,
+				"cp_pace clamp: rem=%u late=%d", rem, late);
+		}
 	}
 
 	if(failures)

@@ -36,6 +36,7 @@
 
 #ifndef CGBA_HOST_TEST
 #include <gint/clock.h>
+#include <gint/mpu/tmu.h>
 #include <gint/rtc.h>
 #include <gint/timer.h>
 #endif
@@ -912,6 +913,7 @@ void fxcg100_lcd_shutdown(void)
 		backlight_write(0, 0);
 	}
 	/* Give the system its panel refresh rate back. */
+	fxcg100_lcd_sync_pace_reset();
 	refresh_restore();
 #endif
 	cp_game_screen = 0;
@@ -1724,6 +1726,7 @@ static void scan_probe(void)
 	memset(sync_lines, 0, sizeof(sync_lines));
 	memset(sync_lines_min, 0, sizeof(sync_lines_min));
 	memset(sync_strips, 0, sizeof(sync_strips));
+	fxcg100_lcd_sync_pace_reset();
 }
 
 /* Positions are counted in the panel's refresh order (from 527 downwards
@@ -1845,16 +1848,17 @@ static void sync_begin(int top, int rows, int kind)
 
 static void sync_end(void)
 {
-	uint32_t measured;
+	uint32_t span, measured;
 
 	if(!sync_tracking)
 		return;
 	sync_tracking = 0;
+	span = cp_sync_track_span(&sync_track);
 	measured = cp_sync_track_lines_n(&sync_track, sync_strip_count);
 	sync_lines[sync_kind] = cp_sync_smooth_lines(sync_lines[sync_kind],
 		measured, scan_total);
 	sync_lines_min[sync_kind] = cp_sync_smooth_lines_min(
-		sync_lines_min[sync_kind], measured, scan_total);
+		sync_lines_min[sync_kind], span, scan_total);
 	sync_strips[sync_kind] = sync_strip_count;
 }
 #endif
@@ -1866,6 +1870,7 @@ void fxcg100_lcd_set_sync(uint32_t wait, uint32_t offset)
 	cp_sync = wait;
 	cp_sync_offset = offset;
 #ifndef CGBA_HOST_TEST
+	fxcg100_lcd_sync_pace_reset();
 	/* In Auto mode, defer tuning until scan_probe() measures this unit's
 	 * stock oscillator; when turning VSync off, restore stock right away. */
 	if(!wait || scan_state != SCAN_UNKNOWN)
@@ -1992,26 +1997,35 @@ static void refresh_apply_effective(void)
 
 	old_mhz = refresh_applied_mhz ? refresh_applied_mhz
 		: (refresh_stock_mhz ? refresh_stock_mhz : CP_REFRESH_NEW_STOCK_MHZ);
-	refresh_applied_mhz = want_mhz;
-	refresh_write(want_mhz, &new_total);
-	new_mhz = want_mhz ? want_mhz
-		: (refresh_stock_mhz ? refresh_stock_mhz : CP_REFRESH_NEW_STOCK_MHZ);
+	{
+		uint32_t old_total = scan_total ? scan_total : 1u;
+		uint64_t old_rate, new_rate;
 
-	/* Keep sync_lines[], scan_total, and scan_hz consistent with the newly
-	 * programmed timing immediately without stalling the UI for 250 ms. */
-	for(k = 0; k < SYNC_KINDS; k++) {
-		if(sync_lines[k])
-			sync_lines[k] = (uint32_t)(((uint64_t)sync_lines[k] * new_mhz +
-				old_mhz / 2u) / old_mhz);
-		if(sync_lines_min[k])
-			sync_lines_min[k] = (uint32_t)(((uint64_t)sync_lines_min[k] *
-				new_mhz + old_mhz / 2u) / old_mhz);
+		refresh_applied_mhz = want_mhz;
+		refresh_write(want_mhz, &new_total);
+		new_mhz = want_mhz ? want_mhz
+			: (refresh_stock_mhz ? refresh_stock_mhz : CP_REFRESH_NEW_STOCK_MHZ);
+
+		/* Keep sync_lines[], scan_total, and scan_hz consistent with the newly
+		 * programmed timing immediately without stalling the UI for 250 ms.
+		 * Scanlines per frame time scale with both refresh rate and total rows. */
+		old_rate = (uint64_t)old_mhz * old_total;
+		new_rate = (uint64_t)new_mhz * (new_total ? new_total : old_total);
+		for(k = 0; k < SYNC_KINDS; k++) {
+			if(sync_lines[k])
+				sync_lines[k] = (uint32_t)(((uint64_t)sync_lines[k] *
+					new_rate + old_rate / 2u) / old_rate);
+			if(sync_lines_min[k])
+				sync_lines_min[k] = (uint32_t)(((uint64_t)sync_lines_min[k] *
+					new_rate + old_rate / 2u) / old_rate);
+		}
 	}
 	if(scan_state == SCAN_USABLE) {
 		if(new_total)
 			scan_total = new_total;
 		scan_hz = (new_mhz + 500u) / 1000u;
 	}
+	fxcg100_lcd_sync_pace_reset();
 }
 
 static void refresh_restore(void)
@@ -2039,15 +2053,144 @@ void fxcg100_lcd_set_refresh(uint32_t rate)
 #endif
 }
 
-int fxcg100_lcd_sync_is_paced(void) { return 0; }
+#ifndef CGBA_HOST_TEST
+static cp_pace_state cp_pace;
+static int cp_pace_timer = -1;
+
+static int cp_pace_etmu_cb(void)
+{
+	return TIMER_CONTINUE;
+}
+
+static uint32_t cp_pace_read_etmu(void)
+{
+	volatile uint32_t *tcnt = &SH7305_ETMU[cp_pace_timer - 3].TCNT;
+	uint32_t a = *tcnt, b = *tcnt;
+
+	if(a != b)
+		b = *tcnt;
+	return b;
+}
+
+static int cp_pace_ensure_timer(void)
+{
+	int id;
+
+	if(cp_pace_timer >= 3)
+		return 1;
+	for(id = 8; id >= 3; id--) {
+		cp_pace_timer = timer_configure(id, 0xffffffffu,
+			GINT_CALL(cp_pace_etmu_cb));
+		if(cp_pace_timer >= 3) {
+			timer_start(cp_pace_timer);
+			return 1;
+		}
+	}
+	cp_pace_timer = -1;
+	return 0;
+}
+#endif
+
+int fxcg100_lcd_sync_is_paced(void)
+{
+#ifndef CGBA_HOST_TEST
+	return cp_sync && !sync_calibrating &&
+		scan_state == SCAN_USABLE &&
+		scan_total != 0u &&
+		refresh_applied_mhz == CGBA_SYNC_RATE_GBA_MHZ;
+#else
+	return 0;
+#endif
+}
+
 int fxcg100_lcd_sync_pace_wait(int max_late, int *late_out)
 {
+#ifndef CGBA_HOST_TEST
+	uint32_t now_etmu, rem;
+
+	if(!fxcg100_lcd_sync_is_paced() || !cp_pace_ensure_timer()) {
+		fxcg100_lcd_sync_pace_reset();
+		if(late_out)
+			*late_out = -1;
+		return 0;
+	}
+	now_etmu = cp_pace_read_etmu();
+	/* When clearly behind, avoid stalling on wait_lcd_dma() via DCS 0x45 so
+	 * the final strip DMA keeps overlapping the next frame's emulation. */
+	if(cp_pace.valid) {
+		uint32_t approx = cp_pace_approx_rows(
+			(uint32_t)(cp_pace.last_etmu - now_etmu),
+			scan_total, CGBA_SYNC_RATE_GBA_MHZ);
+		uint32_t est_now = cp_pace.now_rows + approx;
+		uint32_t next_due = cp_pace.due_rows + scan_total;
+
+		if(approx < scan_total * 6u &&
+		   (int32_t)(est_now - next_due) >= (int32_t)(scan_total / 4u)) {
+			uint32_t behind = est_now - next_due;
+			uint32_t late = behind / scan_total;
+
+			cp_pace.due_rows = next_due;
+			if(max_late >= 0 && late > (uint32_t)max_late) {
+				cp_pace.due_rows = est_now - scan_total * (uint32_t)max_late;
+				late = (uint32_t)(max_late + 1);
+			}
+			if(late_out)
+				*late_out = (int)late;
+			return 1;
+		}
+	}
+
+	rem = cp_pace_advance(&cp_pace, now_etmu, scan_position(), scan_total,
+		CGBA_SYNC_RATE_GBA_MHZ, max_late, late_out);
+	if(rem > 0u) {
+		uint32_t wait_start = cp_pace.last_etmu;
+		uint32_t target_row = (cp_pace.last_row + rem) % scan_total;
+		uint32_t max_etmu = 1200u; /* ~36.6 ms (> 2 refreshes) safety cap */
+
+		while((int32_t)(cp_pace.due_rows - cp_pace.now_rows) > 0) {
+			uint32_t backoff_us = cp_sync_wait_backoff_us(cp_pace.last_row,
+				target_row, scan_total, scan_hz ? scan_hz : 60u);
+			uint32_t cur_etmu, cur_row, approx_step, step;
+
+			if(backoff_us)
+				lcd_delay_ns(backoff_us * 1000u);
+			cur_etmu = cp_pace_read_etmu();
+			if((uint32_t)(wait_start - cur_etmu) >= max_etmu) {
+				cp_pace.due_rows = cp_pace.now_rows;
+				break;
+			}
+			cur_row = scan_position();
+			approx_step = cp_pace_approx_rows(
+				(uint32_t)(cp_pace.last_etmu - cur_etmu),
+				scan_total, CGBA_SYNC_RATE_GBA_MHZ);
+			step = cp_pace_unwrap_rows(cp_pace.last_row, cur_row,
+				approx_step, scan_total);
+			if(step > 0u) {
+				cp_pace.now_rows += step;
+				cp_pace.last_row = cur_row;
+				cp_pace.last_etmu = cur_etmu;
+			}
+		}
+	}
+	return 1;
+#else
 	(void)max_late;
 	if(late_out)
 		*late_out = -1;
 	return 0;
+#endif
 }
-void fxcg100_lcd_sync_pace_reset(void) {}
+
+void fxcg100_lcd_sync_pace_reset(void)
+{
+#ifndef CGBA_HOST_TEST
+	cp_pace.valid = 0;
+	if(cp_pace_timer >= 0) {
+		timer_stop(cp_pace_timer);
+		cp_pace_timer = -1;
+	}
+#endif
+}
 
 void fxcg100_lcd_sync_calibrate(uint32_t on)
 {

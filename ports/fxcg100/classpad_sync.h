@@ -328,6 +328,15 @@ static inline void cp_sync_track_strip(cp_sync_track *t, uint32_t shown,
 	t->strips++;
 }
 
+/* Raw rows shown up to the start of the last strip (strict lower bound on
+ * actual frame completion, guarding the leading sync window edge). */
+static inline uint32_t cp_sync_track_span(const cp_sync_track *t)
+{
+	if(t->strips < 2u)
+		return 0u;
+	return t->wraps * t->total + t->last - t->first;
+}
+
 /* Rows shown while the frame was written: what was seen up to the start of
  * the last strip, scaled up by that strip. `total_strips` allows sparse
  * sampling (e.g. first, midpoint, and last strip only) without losing the
@@ -335,11 +344,10 @@ static inline void cp_sync_track_strip(cp_sync_track *t, uint32_t shown,
 static inline uint32_t cp_sync_track_lines_n(const cp_sync_track *t,
 	uint32_t total_strips)
 {
-	uint32_t span;
+	uint32_t span = cp_sync_track_span(t);
 
-	if(t->strips < 2u || total_strips < 2u)
-		return 0;
-	span = t->wraps * t->total + t->last - t->first;
+	if(!span || total_strips < 2u)
+		return 0u;
 	return cgba_sync_scale_strips(span, total_strips);
 }
 
@@ -610,6 +618,103 @@ static inline uint8_t cp_refresh_solve_r61523(uint32_t stock_mhz,
 static inline int cp_r61523_c1_valid(const uint8_t c1[5])
 {
 	return c1[2] >= 18u && c1[2] <= 63u;
+}
+
+/* ---- 1:1 panel-locked frame pacing (59.73 Hz (GBA) + VSync) --------------- */
+
+typedef struct cp_pace_state {
+	int      valid;
+	uint32_t last_etmu;   /* 32.768 kHz down-counter at last synced sample */
+	uint32_t last_row;    /* panel scanline [0, total) at last synced sample */
+	uint32_t now_rows;    /* unwrapped panel scanlines elapsed */
+	uint32_t due_rows;    /* unwrapped panel scanline deadline */
+} cp_pace_state;
+
+/* Estimate elapsed panel rows from a 32.768 kHz down-counter delta (`hz_mhz`
+ * in millihertz, e.g. 59728). Used only to disambiguate whole refreshes. */
+static inline uint32_t cp_pace_approx_rows(uint32_t etmu_dt, uint32_t total,
+	uint32_t hz_mhz)
+{
+	if(!total || !hz_mhz)
+		return 0u;
+	return (uint32_t)(((uint64_t)etmu_dt * total * hz_mhz + 16384000ull) /
+		32768000ull);
+}
+
+/* Unwrap a live panel row reading `now_row` relative to `prev_row` using
+ * `approx_rows` to disambiguate whole refreshes. */
+static inline uint32_t cp_pace_unwrap_rows(uint32_t prev_row, uint32_t now_row,
+	uint32_t approx_rows, uint32_t total)
+{
+	uint32_t mod_rows, wraps;
+
+	if(!total)
+		return 0u;
+	mod_rows = (now_row % total + total - prev_row % total) % total;
+	if(approx_rows + total / 2u < mod_rows)
+		return 0u; /* minor backward read jitter near 0 elapsed */
+	wraps = (approx_rows + total / 2u - mod_rows) / total;
+	return wraps * total + mod_rows;
+}
+
+/* Advance the 1:1 panel-locked frame deadline by one refresh (`total` rows)
+ * and update `s` with a fresh (etmu, row) sample. Returns remaining panel
+ * rows to wait (> 0 when early, *late_out = 0), or 0 when on time / behind
+ * (with *late_out in [0, max_late + 1], matching cgba_frame_limiter_wait()). */
+static inline uint32_t cp_pace_advance(cp_pace_state *s, uint32_t now_etmu,
+	uint32_t now_row, uint32_t total, uint32_t hz_mhz, int max_late,
+	int *late_out)
+{
+	uint32_t dt, approx, exact;
+	int32_t rem;
+
+	if(!total || !hz_mhz) {
+		if(late_out)
+			*late_out = -1;
+		return 0u;
+	}
+	if(!s->valid) {
+		s->last_etmu = now_etmu;
+		s->last_row = now_row % total;
+		s->now_rows = 0u;
+		s->due_rows = 0u;
+		s->valid = 1;
+		if(late_out)
+			*late_out = 0;
+		return 0u;
+	}
+	dt = (uint32_t)(s->last_etmu - now_etmu);
+	approx = cp_pace_approx_rows(dt, total, hz_mhz);
+	exact = cp_pace_unwrap_rows(s->last_row, now_row, approx, total);
+	s->now_rows += exact;
+	s->last_etmu = now_etmu;
+	s->last_row = now_row % total;
+	s->due_rows += total;
+
+	rem = (int32_t)(s->due_rows - s->now_rows);
+	if(rem > 0) {
+		if((uint32_t)rem > total * 2u) {
+			s->due_rows = s->now_rows;
+			if(late_out)
+				*late_out = 0;
+			return 0u;
+		}
+		if(late_out)
+			*late_out = 0;
+		return (uint32_t)rem;
+	}
+	{
+		uint32_t behind = (uint32_t)(-rem);
+		uint32_t late = behind / total;
+
+		if(max_late >= 0 && late > (uint32_t)max_late) {
+			s->due_rows = s->now_rows - total * (uint32_t)max_late;
+			late = (uint32_t)(max_late + 1);
+		}
+		if(late_out)
+			*late_out = (int)late;
+		return 0u;
+	}
 }
 
 #endif /* CGBA_CLASSPAD_SYNC_H */
