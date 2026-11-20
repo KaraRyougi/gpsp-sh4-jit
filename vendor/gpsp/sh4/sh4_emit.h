@@ -715,13 +715,22 @@ static inline int sh4g_registered_idle_signature_ok(const u8 *map,
 #endif
 
 #define SH4_REGISTERED_IDLE_BRANCH(new_pc)                                    \
-  ((u32)pc == idle_loop_target_pc ||                                          \
-   ((u32)(new_pc) == idle_loop_target_pc && (u32)(new_pc) < (u32)pc))
+  (((u32)pc == idle_loop_target_pc || (u32)(new_pc) == idle_loop_target_pc) &&\
+   (u32)(new_pc) < (u32)pc)
 
 #define SH4_IDLE_BRANCH(new_pc)                                               \
   ((u32)(new_pc) == (u32)pc ||                                                \
    (SH4_REGISTERED_IDLE_BRANCH(new_pc) &&                                     \
     SH4_REGISTERED_IDLE_SIGNATURE_OK(idle_loop_target_pc)))
+
+/* Only invoke cgba_idle_wait when the branch is a self-loop or the poll body
+ * executed in this block (block_start_pc < pc). If an IRQ or savestate enters
+ * directly at a backward idle branch (block_start_pc == pc), the condition
+ * flags may be stale from before the IRQ set the wake flag, so take a normal
+ * branch back to the loop head to re-poll memory before sleeping. */
+#define SH4_IDLE_BRANCH_CAN_ELIMINATE(new_pc)                                 \
+  (SH4_IDLE_BRANCH(new_pc) &&                                                 \
+   ((u32)(new_pc) == (u32)pc || (u32)block_start_pc < (u32)pc))
 
 #define generate_branch_idle_eliminate(writeback_location, new_pc)            \
   (writeback_location) = sh4g_branch_exit_idle(&translation_ptr,              \
@@ -755,7 +764,7 @@ static inline int sh4g_registered_idle_signature_ok(const u8 *map,
 #define generate_arm_branch()                                                 \
   do {                                                                        \
     u32 _b_target = block_exits[block_exit_position].branch_target;           \
-    if(SH4_IDLE_BRANCH(_b_target)) {                                          \
+    if(SH4_IDLE_BRANCH_CAN_ELIMINATE(_b_target)) {                            \
       /* the interpreter detects ARM B-to-self for any EXECUTED condition     \
        * (cpu.cc case 0xA0..0xAF runs post condition check), so both legs     \
        * idle-eliminate; cycle handling mirrors the non-idle legs below. */   \
@@ -1072,7 +1081,7 @@ static inline int sh4g_registered_idle_signature_ok(const u8 *map,
  * the normal path to match it. */
 #define thumb_b()                                                             \
   do { u32 _b_target = block_exits[block_exit_position].branch_target;        \
-       if(SH4_IDLE_BRANCH(_b_target)) {                                       \
+       if(SH4_IDLE_BRANCH_CAN_ELIMINATE(_b_target)) {                         \
          sh4g_cycle_debit(&translation_ptr, (int)cycle_count +                \
            (int)ws_cyc_nseq[(_b_target >> 24) & 0x0F][0]);                    \
          cycle_count = 0;                                                     \
@@ -1130,35 +1139,25 @@ static inline int sh4g_registered_idle_signature_ok(const u8 *map,
 
 /* Conditional Thumb branch. A registered idle loop is usually exactly this
  * shape — `ldrh/and/cmp; beq back` with idle_loop_target_pc AT the branch
- * (SMA2: 0x8000534 d0fb) — and the interpreter fast-forwards it at the loop
- * top, so the taken leg must idle-eliminate here too or the JIT spins the
- * poll at full speed (SMA2 burned 2.5x Zelda's instructions per frame). */
+ * (SMA2: 0x8000534 d0fb, Prince of Persia: 0x808ff3a d0fc) — so evaluate the
+ * condition first and only idle-eliminate the TAKEN back-edge to _cb_target.
+ * Unconditionally parking at pc with cgba_idle_wait=1 before testing the
+ * condition would sleep until the next IRQ even when the poll already
+ * succeeded (dropping a full frame and starving VBlank HBlank-DMA reloads). */
 #define thumb_conditional_branch(condition)                                   \
   do { u32 _cb_target = block_exits[block_exit_position].branch_target;       \
-       if((u32)pc == idle_loop_target_pc && (u32)block_start_pc < (u32)pc &&  \
-          SH4_REGISTERED_IDLE_SIGNATURE_OK(idle_loop_target_pc)) {            \
-         int _seq = (int)ws_cyc_seq[((u32)pc >> 24) & 0x0F][0];               \
-         int _debit = (int)cycle_count - _seq;                                \
-         if(_debit > 0)                                                       \
-           sh4g_cycle_debit(&translation_ptr, _debit);                        \
-         cycle_count = 0;                                                     \
-         block_exits[block_exit_position].branch_target = (u32)pc;            \
+       generate_condition_##condition();                                      \
+       if(SH4_IDLE_BRANCH_CAN_ELIMINATE(_cb_target)) {                        \
+         sh4g_cycle_debit(&translation_ptr, (int)cycle_count +                \
+           (int)ws_cyc_nseq[(_cb_target >> 24) & 0x0F][0]);                   \
          generate_branch_idle_eliminate(                                      \
-           block_exits[block_exit_position].branch_source, (u32)pc);          \
+           block_exits[block_exit_position].branch_source, _cb_target);       \
        } else {                                                               \
-         generate_condition_##condition();                                    \
-         if(SH4_IDLE_BRANCH(_cb_target)) {                                    \
-           sh4g_cycle_debit(&translation_ptr, (int)cycle_count +              \
-             (int)ws_cyc_nseq[(_cb_target >> 24) & 0x0F][0]);                 \
-           generate_branch_idle_eliminate(                                    \
-             block_exits[block_exit_position].branch_source, _cb_target);     \
-         } else {                                                             \
-           generate_branch_taken(0,                                           \
-             block_exits[block_exit_position].branch_source, _cb_target);     \
-         }                                                                    \
-         generate_branch_patch_conditional(backpatch_address, translation_ptr);\
-         cycle_count += ws_cyc_nseq[((u32)(pc + 2) >> 24) & 0x0F][0];        \
+         generate_branch_taken(0,                                             \
+           block_exits[block_exit_position].branch_source, _cb_target);       \
        }                                                                      \
+       generate_branch_patch_conditional(backpatch_address, translation_ptr); \
+       cycle_count += ws_cyc_nseq[((u32)(pc + 2) >> 24) & 0x0F][0];           \
        block_exit_position++; } while(0)
 
 #define thumb_swi()                                                           \

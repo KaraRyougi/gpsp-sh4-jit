@@ -22,6 +22,7 @@ u16 io_registers[512];
 u8 ewram[1024 * 256 * 2] = {0};
 u8 iwram[1024 * 32 * 2] = {0};
 dma_transfer_type dma[DMA_CHAN_CNT];
+u8 cgba_hblank_dma_mask;
 
 const u32 cpu_modes[16] = {0};
 const u32 cpsr_masks[4][2] = {{0}};
@@ -226,6 +227,33 @@ static void test_timing_alert_redispatch(void)
   write_alert = CPU_ALERT_NONE;
 }
 
+static void test_dma_disable_clears_hblank_mask(void)
+{
+  const char *name = "Thumb DMA0CNT_H disable clears cgba_hblank_dma_mask";
+  const u32 pc = 0x0807ab66u;
+  int result;
+
+  memset(reg, 0, sizeof(reg));
+  memset(dma, 0, sizeof(dma));
+  dma[0].start_type = DMA_START_HBLANK;
+  dma[0].direct_sound_channel = DMA_DIRECT_SOUND_A;
+  cgba_hblank_dma_mask = 0x05u; /* DMA0 + DMA2 active */
+  reg[1] = 0u;
+  reg[2] = 0x040000BAu;
+  write_calls = 0;
+
+  /* STRH r1, [r2, #0] (0x8011): fast-path disable of DMA0. */
+  result = cgba_sh4_thumb_ldst(0x00008011u, pc);
+
+  CHECK(name, result == 0, "helper returned %d (expected 0)", result);
+  CHECK(name, write_calls == 0, "fast path called generic write %u times",
+        write_calls);
+  CHECK(name, dma[0].start_type == DMA_INACTIVE,
+        "dma[0].start_type=%u (expected DMA_INACTIVE)", dma[0].start_type);
+  CHECK(name, cgba_hblank_dma_mask == 0x04u,
+        "cgba_hblank_dma_mask=0x%02X (expected 0x04)", cgba_hblank_dma_mask);
+}
+
 int main(void)
 {
   static const helper_case cases[] = {
@@ -247,6 +275,7 @@ int main(void)
     run_case(&cases[i], MEMORY_OPEN_BUS);
   }
   test_timing_alert_redispatch();
+  test_dma_disable_clears_hblank_mask();
 
   if (failures)
     return 1;

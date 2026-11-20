@@ -31,11 +31,18 @@ u32 translation_gate_target_pc[MAX_TRANSLATION_GATES];
 /* Defined by the production helper translation unit linked into this test. */
 extern int cgba_dynarec_single_block;
 extern int cgba_sh4_extra_cycles;
+u32 cgba_idle_wait;
 
 /* Their host addresses are embedded in emitted code but never called as host
- * functions: the oracle recognizes both ABI boundaries explicitly. */
+ * functions: the oracle recognizes all ABI boundaries explicitly. */
 void sh4_op2_tramp(void) {}
 void sh4_pc_redispatch(u32 pc) { (void)pc; }
+void sh4_block_exit(u32 pc) { (void)pc; }
+u32 sh4_update_gba(u32 pc) { return pc; }
+void sh4_lazy_link_rom_arm(u32 pc) { (void)pc; }
+void sh4_lazy_link_rom_thumb(u32 pc) { (void)pc; }
+void sh4_indirect_branch_arm(u32 pc) { (void)pc; }
+void sh4_indirect_branch_thumb(u32 pc) { (void)pc; }
 
 typedef enum oracle_window_kind {
   ORACLE_BYTES_BE,
@@ -53,10 +60,16 @@ typedef struct oracle_result {
   u32 cycles;
   u32 cpsr;
   u32 redispatch_pc;
+  u32 exit_pc;
+  u32 update_gba_pc;
+  u32 update_gba_cycles;
+  u32 update_gba_idle_wait;
   u32 helper_opcode;
   u32 helper_pc;
   unsigned helper_calls;
   unsigned redispatches;
+  unsigned block_exits;
+  unsigned update_gba_calls;
   int reached_fallback;
   char error[96];
 } oracle_result;
@@ -176,6 +189,7 @@ static oracle_result oracle_run(const u8 *code, size_t code_size,
   memset(&out, 0, sizeof(out));
   r[SH4_REG_CYCLES] = initial_cycles;
   r[SH4_REG_CPSR] = reg[REG_CPSR];
+  r[SH4_REG_BEXIT] = (u32)(uintptr_t)sh4_block_exit;
   r[SH4_REG_VEC] = (u32)(uintptr_t)vec;
 
   while (pc != end) {
@@ -200,16 +214,25 @@ static oracle_result oracle_run(const u8 *code, size_t code_size,
       /* NOP */
     } else if ((op & 0xF000u) == 0xE000u) {
       r[n] = (u32)(s32)(s8)(op & 0xFFu);             /* MOV #imm,Rn */
+    } else if ((op & 0xF000u) == 0x7000u) {
+      r[n] += (u32)(s32)(s8)(op & 0xFFu);            /* ADD #imm,Rn */
+    } else if ((op & 0xF00Fu) == 0x6003u) {
+      r[n] = r[m];                                   /* MOV Rm,Rn */
     } else if ((op & 0xF00Fu) == 0x600Cu) {
       r[n] = r[m] & 0xFFu;                           /* EXTU.B Rm,Rn */
     } else if ((op & 0xF00Fu) == 0x6007u) {
       r[n] = ~r[m];                                  /* NOT Rm,Rn */
+    } else if ((op & 0xF0FFu) == 0x4000u) {
+      t = (int)((r[n] >> 31) & 1u);
+      r[n] <<= 1;                                    /* SHLL Rn */
     } else if ((op & 0xF0FFu) == 0x4008u) {
       r[n] <<= 2;                                    /* SHLL2 Rn */
     } else if ((op & 0xF0FFu) == 0x4018u) {
       r[n] <<= 8;                                    /* SHLL8 Rn */
     } else if ((op & 0xF0FFu) == 0x4028u) {
       r[n] <<= 16;                                   /* SHLL16 Rn */
+    } else if ((op & 0xF0FFu) == 0x4015u) {
+      t = (s32)r[n] > 0;                             /* CMP/PL Rn */
     } else if ((op & 0xF000u) == 0xD000u) {
       u32 address = ((pc & ~3u) + 4u) + (u32)(op & 0xFFu) * 4u;
       r[n] = oracle_read(address, 4, &ok);            /* MOV.L @(d,PC),Rn */
@@ -242,6 +265,9 @@ static oracle_result oracle_run(const u8 *code, size_t code_size,
     } else if ((op & 0xFF00u) == 0x8900u) {
       if (t)
         next = pc + 4u + (u32)((s32)(s8)(op & 0xFFu) * 2);
+    } else if ((op & 0xFF00u) == 0x8B00u) {
+      if (!t)
+        next = pc + 4u + (u32)((s32)(s8)(op & 0xFFu) * 2);
     } else if ((op & 0xF000u) == 0xA000u) {
       s32 disp = (s32)(op & 0x0FFFu);
       u16 slot = (u16)oracle_read(pc + 2, 2, &ok);
@@ -255,15 +281,13 @@ static oracle_result oracle_run(const u8 *code, size_t code_size,
     } else if ((op & 0xF0FFu) == 0x400Bu) {
       u16 slot = (u16)oracle_read(pc + 2, 2, &ok);
       u32 pr = pc + 4u;
-      if (!ok || slot != 0x0009u ||
-          r[n] != (u32)(uintptr_t)sh4_op2_tramp) {
-        oracle_error(&out, "unexpected JSR", pc, op);
+      if (!ok || slot != 0x0009u) {
+        oracle_error(&out, "bad JSR delay slot", pc, op);
         break;
       }
-
-      /* sh4_op2_tramp uses PR as its literal cursor: +8 is fn, then opcode
-       * and guest PC. Flush/reload cached CPSR around the real C helper. */
-      {
+      if (r[n] == (u32)(uintptr_t)sh4_op2_tramp) {
+        /* sh4_op2_tramp uses PR as its literal cursor: +8 is fn, then opcode
+         * and guest PC. Flush/reload cached CPSR around the real C helper. */
         u32 fn = oracle_read(pr + 8u, 4, &ok);
         u32 opcode = oracle_read(pr + 12u, 4, &ok);
         u32 guest_pc = oracle_read(pr + 16u, 4, &ok);
@@ -277,19 +301,45 @@ static oracle_result oracle_run(const u8 *code, size_t code_size,
         reg[REG_CPSR] = r[SH4_REG_CPSR];
         r[SH4_REG_RET] = (u32)cgba_sh4_thumb_udiv_loop_try(opcode, guest_pc);
         r[SH4_REG_CPSR] = reg[REG_CPSR];
+        next = pr;                                    /* simulated RTS */
+      } else if (r[n] == (u32)(uintptr_t)sh4_update_gba) {
+        out.update_gba_calls++;
+        out.update_gba_pc = r[SH4_REG_ARG0];
+        out.update_gba_cycles = r[SH4_REG_CYCLES];
+        out.update_gba_idle_wait = cgba_idle_wait;
+        r[SH4_REG_ARG0] = 0xDEADBEEFu;                /* caller-saved clobber */
+        next = pr;
+      } else if (r[n] == (u32)(uintptr_t)sh4_block_exit ||
+                 r[n] == (u32)(uintptr_t)sh4_lazy_link_rom_thumb) {
+        out.block_exits++;
+        out.exit_pc = r[SH4_REG_ARG0];
+        pc = end;                                     /* terminal ABI seam */
+        continue;
+      } else {
+        oracle_error(&out, "unexpected JSR", pc, op);
+        break;
       }
-      next = pr;                                      /* simulated RTS */
     } else if ((op & 0xF0FFu) == 0x402Bu) {
       u16 slot = (u16)oracle_read(pc + 2, 2, &ok);
-      if (!ok || slot != 0x0009u ||
-          r[n] != (u32)(uintptr_t)sh4_pc_redispatch) {
+      if (!ok || slot != 0x0009u) {
+        oracle_error(&out, "bad JMP delay slot", pc, op);
+        break;
+      }
+      if (r[n] == (u32)(uintptr_t)sh4_pc_redispatch) {
+        out.redispatches++;
+        out.redispatch_pc = r[SH4_REG_ARG0];
+        pc = end;                                     /* terminal ABI seam */
+        continue;
+      } else if (r[n] == (u32)(uintptr_t)sh4_block_exit ||
+                 r[n] == (u32)(uintptr_t)sh4_lazy_link_rom_thumb) {
+        out.block_exits++;
+        out.exit_pc = r[SH4_REG_ARG0];
+        pc = end;
+        continue;
+      } else {
         oracle_error(&out, "unexpected JMP", pc, op);
         break;
       }
-      out.redispatches++;
-      out.redispatch_pc = r[SH4_REG_ARG0];
-      pc = end;                                       /* terminal ABI seam */
-      continue;
     } else {
       oracle_error(&out, "unmodeled instruction", pc, op);
       break;
@@ -297,7 +347,7 @@ static oracle_result oracle_run(const u8 *code, size_t code_size,
     pc = next;
   }
 
-  if (!out.error[0] && out.redispatches == 0)
+  if (!out.error[0] && out.redispatches == 0 && out.block_exits == 0)
     out.reached_fallback = 1;
   out.cycles = r[SH4_REG_CYCLES];
   out.cpsr = r[SH4_REG_CPSR];
@@ -499,6 +549,116 @@ static void check_budget_path(u32 initial_budget, int expect_hit)
     failf("successful helper published wrong dynamic debit");
 }
 
+typedef struct test_block_exit {
+  u8 *branch_source;
+  u32 branch_target;
+} test_block_exit;
+
+static oracle_result run_thumb_cond_eq(u32 block_start_pc, u32 pc,
+                                       u32 branch_target, u32 initial_cpsr)
+{
+  u8 *translation_ptr = code;
+  u8 *backpatch_address = NULL;
+  u32 block_end_pc = pc + 2u;
+  u32 cycle_count = 4u;
+  int ram_region = 0;
+  int sh4_block_is_thumb = 1;
+  u32 block_exit_position = 0u;
+  test_block_exit block_exits[2];
+  size_t code_size;
+
+  memset(code, 0xCC, sizeof(code));
+  memset(block_exits, 0, sizeof(block_exits));
+  block_exits[0].branch_target = branch_target;
+  memset(ws_cyc_nseq, 0, sizeof(ws_cyc_nseq));
+  ws_cyc_nseq[(branch_target >> 24) & 0xFu][0] = 3u;
+  ws_cyc_nseq[((pc + 2u) >> 24) & 0xFu][0] = 3u;
+  cgba_dynarec_single_block = 1;
+  cgba_idle_wait = 0u;
+  reg[REG_CPSR] = initial_cpsr;
+
+  thumb_conditional_branch(eq);
+  code_size = (size_t)(translation_ptr - code);
+
+  memset(vector_table, 0, sizeof(vector_table));
+  put_be32(vector_table + SH4G_VEC_update_gba * 4u,
+           (u32)(uintptr_t)sh4_update_gba);
+  oracle_reset_windows();
+  oracle_add_window(code, (u32)code_size, ORACLE_BYTES_BE);
+  oracle_add_window(vector_table, sizeof(vector_table), ORACLE_BYTES_BE);
+  oracle_add_window((void *)&cgba_idle_wait, 4, ORACLE_NATIVE_S32);
+  return oracle_run(code, code_size, vector_table, 100u);
+}
+
+static void check_idle_branch_elimination(void)
+{
+  const u32 poll_head = 0x0808FF36u;
+  const u32 poll_branch = 0x0808FF3Au; /* Prince of Persia (BPYE) idle PC */
+  u32 pc;
+  u32 block_start_pc;
+  oracle_result got;
+
+  reset_observers();
+  idle_loop_target_pc = poll_branch;
+
+  /* 1. Predicate matrix for SH4_IDLE_BRANCH_CAN_ELIMINATE(). */
+  pc = poll_branch;
+  block_start_pc = poll_head;
+  if (!SH4_IDLE_BRANCH_CAN_ELIMINATE(poll_head))
+    failf("backward idle branch after poll body should eliminate");
+  if (SH4_IDLE_BRANCH_CAN_ELIMINATE(poll_branch + 6u))
+    failf("forward branch at idle_loop_target_pc must not eliminate");
+  block_start_pc = poll_branch;
+  if (SH4_IDLE_BRANCH_CAN_ELIMINATE(poll_head))
+    failf("entry directly at idle branch (stale flags) must not eliminate");
+  if (!SH4_IDLE_BRANCH_CAN_ELIMINATE(poll_branch))
+    failf("self-loop must still eliminate when block_start_pc == pc");
+
+  pc = poll_branch + 8u;
+  block_start_pc = poll_branch;
+  if (!SH4_IDLE_BRANCH_CAN_ELIMINATE(poll_branch))
+    failf("backward branch into idle_loop_target_pc should eliminate");
+  block_start_pc = pc;
+  if (SH4_IDLE_BRANCH_CAN_ELIMINATE(poll_branch))
+    failf("entry directly at loop-head back-edge must not eliminate");
+
+  /* 2. Emitted Thumb BEQ at idle_loop_target_pc (Z=0: wake flag set).
+   *    Must test condition first and fall through without sleeping. */
+  got = run_thumb_cond_eq(poll_head, poll_branch, poll_head, 0x0000003Fu);
+  if (got.error[0]) {
+    fprintf(stderr, "FAIL: idle fallthrough oracle: %s\n", got.error);
+    failures++;
+  } else if (!got.reached_fallback || got.update_gba_calls != 0 ||
+             got.block_exits != 0 || cgba_idle_wait != 0u) {
+    failf("not-taken idle BEQ slept instead of falling through");
+  }
+
+  /* 3. Emitted Thumb BEQ at idle_loop_target_pc (Z=1: still waiting).
+   *    Must sleep with cgba_idle_wait=1 and resume at poll_head (not pc). */
+  got = run_thumb_cond_eq(poll_head, poll_branch, poll_head, 0x4000003Fu);
+  if (got.error[0]) {
+    fprintf(stderr, "FAIL: idle taken oracle: %s\n", got.error);
+    failures++;
+  } else if (got.reached_fallback || got.update_gba_calls != 1 ||
+             got.update_gba_pc != poll_head || got.update_gba_cycles != 0u ||
+             got.update_gba_idle_wait != 1u || got.block_exits != 1 ||
+             got.exit_pc != poll_head) {
+    failf("taken idle BEQ did not sleep/resume at loop head");
+  }
+
+  /* 4. Emitted Thumb BEQ when IRQ/savestate enters at pc (block_start_pc==pc)
+   *    with stale Z=1: must take a normal branch to poll_head, NOT sleep. */
+  got = run_thumb_cond_eq(poll_branch, poll_branch, poll_head, 0x4000003Fu);
+  if (got.error[0]) {
+    fprintf(stderr, "FAIL: idle stale-entry oracle: %s\n", got.error);
+    failures++;
+  } else if (got.reached_fallback || got.update_gba_calls != 0 ||
+             cgba_idle_wait != 0u || got.block_exits != 1 ||
+             got.exit_pc != poll_head) {
+    failf("entry directly at idle BEQ slept with stale flags");
+  }
+}
+
 int main(void)
 {
   cgba_sh4_thumb_udiv_loop_result model;
@@ -509,9 +669,10 @@ int main(void)
     0xDEADBEEFu, 0xA000003Fu, 3, 5);
   check_budget_path(model.cycles, 0);       /* strict boundary: decline */
   check_budget_path(model.cycles + 1u, 1);  /* one cycle remains: commit */
+  check_idle_branch_elimination();
 
   if (failures)
     return 1;
-  puts("sh4 udiv emitter: signature/observer/trampoline/budget/redispatch OK");
+  puts("sh4 udiv emitter: signature/observer/trampoline/budget/redispatch/idle OK");
   return 0;
 }

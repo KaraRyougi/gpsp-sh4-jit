@@ -4983,10 +4983,7 @@ cgba_thumb_try_peephole(
     u32 b_target = block_exits[block_exit_position].branch_target;
     u32 save_pc = pc;
     pc += 2;
-    int is_idle = ((u32)pc == idle_loop_target_pc &&
-                   (u32)block_start_pc < (u32)pc &&
-                   SH4_REGISTERED_IDLE_SIGNATURE_OK(idle_loop_target_pc)) ||
-                  SH4_IDLE_BRANCH(b_target);
+    int is_idle = SH4_IDLE_BRANCH_CAN_ELIMINATE(b_target);
     pc = save_pc;
     if (!is_idle) {
       int fkind = -1;
