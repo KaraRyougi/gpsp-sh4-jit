@@ -2149,7 +2149,14 @@ static fxcg100_menu_result input_pause(cg_ui *ui)
 	} else if (e & FXCG100_APPKEY_EXE) {
 		switch (id) {
 		case ID_RESUME:   return FXCG100_MENU_RETURN;
-		case ID_SAVE:     open_dialog(ui, DIALOG_SAVE); break;
+		case ID_SAVE:
+			fxcg100_wait_keys_released();
+			if (fxcg100_savestate_exists(ui->state->savestate_slot % 10u)) {
+				ui->keys = fxcg100_poll_app_keys();
+				open_dialog(ui, DIALOG_SAVE);
+				break;
+			}
+			return FXCG100_MENU_SAVE_STATE;
 		case ID_LOAD:     return FXCG100_MENU_LOAD_STATE;
 		case ID_READER:   open_txt_reader_page(ui); break;
 		case ID_SETTINGS: open_settings(ui); break;

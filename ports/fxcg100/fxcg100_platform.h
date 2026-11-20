@@ -200,6 +200,9 @@ const char *fxcg100_rom_source_label(uint32_t index);
  * 0 = never played) and monotonic added-order counter (higher = added later). */
 uint32_t fxcg100_rom_source_last_played(uint32_t index);
 uint32_t fxcg100_rom_source_added_order(uint32_t index);
+/* Nonzero when a savestate file already exists for the running game in
+ * `slot` (0..9), so saving to that slot would overwrite it. */
+int fxcg100_savestate_exists(uint32_t slot);
 
 void fxcg100_lcd_init(void);
 void fxcg100_lcd_shutdown(void);

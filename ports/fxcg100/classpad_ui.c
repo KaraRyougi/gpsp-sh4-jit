@@ -1834,9 +1834,14 @@ static fxcg100_menu_result pause_state_card(cp_ui *ui, int x, int y, int w)
 	if(ui_slot_chips(ui, x + 12, y + 40, w - 24, &ui->state->savestate_slot))
 		ui->redraw = 1;
 	if(ui_button(ui, save, "Save state", BTN_TONAL)) {
-		ui->confirm = CONFIRM_SAVE;
-		ui->focus_shown = 0;
-		ui->redraw = 1;
+		fxcg100_wait_keys_released();
+		if(fxcg100_savestate_exists(ui->state->savestate_slot % 10u)) {
+			ui->confirm = CONFIRM_SAVE;
+			ui->focus_shown = 0;
+			ui->redraw = 1;
+		} else {
+			return FXCG100_MENU_SAVE_STATE;
+		}
 	}
 	if(ui_button(ui, load, "Load state", BTN_TONAL))
 		return FXCG100_MENU_LOAD_STATE;

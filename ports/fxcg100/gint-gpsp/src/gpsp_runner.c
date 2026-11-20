@@ -1153,6 +1153,14 @@ void cgba_save_timing_text(char *dst, size_t size)
 		(unsigned)((t->bytes + 1023u) / 1024u), remap);
 }
 
+int fxcg100_savestate_exists(uint32_t slot)
+{
+	uint16_t path[24];
+
+	cgba_state_path(path, slot);
+	return fxcg100_storage_blob_size(path) >= 0;
+}
+
 int cgba_gpsp_state_save(unsigned slot)
 {
 	u8 *buf = cgba_state_buffer();

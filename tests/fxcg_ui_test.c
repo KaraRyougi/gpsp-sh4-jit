@@ -110,6 +110,7 @@ static const uint32_t game_added_order[12] = {
 	3, 1, 5, 2, 4, 8, 11, 6, 7, 9, 10, 12,
 };
 static uint32_t game_count = 12;
+static uint32_t fake_savestate_mask;
 
 uint32_t fxcg100_rom_source_count(void)
 {
@@ -129,6 +130,11 @@ uint32_t fxcg100_rom_source_last_played(uint32_t index)
 uint32_t fxcg100_rom_source_added_order(uint32_t index)
 {
 	return index < 12 ? game_added_order[index] : 0;
+}
+
+int fxcg100_savestate_exists(uint32_t slot)
+{
+	return (fake_savestate_mask & (1u << (slot % 10u))) != 0;
 }
 
 int fxcg100_config_load(fxcg100_menu_state *state)
@@ -500,6 +506,7 @@ static void test_pause(void)
 	begin(1);
 	CHECK(press(FXCG100_APPKEY_ON) == FXCG100_MENU_RETURN, "AC/ON resumes");
 
+	fake_savestate_mask = 0;
 	begin(1);
 	press(FXCG100_APPKEY_DIGIT(5));
 	CHECK(st.savestate_slot == 5, "digit picks the slot");
@@ -507,14 +514,10 @@ static void test_pause(void)
 	press(FXCG100_APPKEY_LEFT);
 	press(FXCG100_APPKEY_LEFT);
 	CHECK(st.savestate_slot == 3, "left lowers the slot");
-	CHECK(press(FXCG100_APPKEY_EXE) == FXCG100_MENU_CONTINUE &&
-		ui_main.dialog == DIALOG_SAVE, "Save state asks first");
-	press(FXCG100_APPKEY_EXE);    /* Cancel is selected by default */
-	CHECK(ui_main.dialog == DIALOG_NONE, "Save state Cancel");
-	press(FXCG100_APPKEY_EXE);
-	CHECK(ui_main.dialog == DIALOG_SAVE, "Save state asks again");
-	press(FXCG100_APPKEY_DOWN);
-	CHECK(press(FXCG100_APPKEY_EXE) == FXCG100_MENU_SAVE_STATE, "Save state");
+	/* Empty slot saves immediately without an overwrite prompt. */
+	CHECK(press(FXCG100_APPKEY_EXE) == FXCG100_MENU_SAVE_STATE &&
+		ui_main.dialog == DIALOG_NONE, "empty slot saves without asking");
+	fake_savestate_mask |= (1u << 3);
 
 	/* main() saves and comes back with the result in the footer. */
 	cg_ui_show_progress("Saving state to slot 3...");
@@ -527,6 +530,24 @@ static void test_pause(void)
 	step();
 	CHECK(!ui_main.message[0], "the message stayed past two seconds");
 
+	/* Occupied slot asks before overwriting; an empty slot (0) does not. */
+	CHECK(press(FXCG100_APPKEY_EXE) == FXCG100_MENU_CONTINUE &&
+		ui_main.dialog == DIALOG_SAVE, "Save state asks when slot exists");
+	press(FXCG100_APPKEY_EXE);    /* Cancel is selected by default */
+	CHECK(ui_main.dialog == DIALOG_NONE, "Save state Cancel");
+	press(FXCG100_APPKEY_EXE);
+	CHECK(ui_main.dialog == DIALOG_SAVE, "Save state asks again");
+	press(FXCG100_APPKEY_DOWN);
+	CHECK(press(FXCG100_APPKEY_EXE) == FXCG100_MENU_SAVE_STATE, "Save state");
+	begin(1);
+	press(FXCG100_APPKEY_DIGIT(0));
+	press(FXCG100_APPKEY_DOWN);
+	CHECK(press(FXCG100_APPKEY_EXE) == FXCG100_MENU_SAVE_STATE &&
+		ui_main.dialog == DIALOG_NONE, "empty slot 0 saves without asking");
+	fake_savestate_mask = 0;
+
+	begin(1);
+	press(FXCG100_APPKEY_DOWN);
 	press(FXCG100_APPKEY_DOWN);
 	CHECK(press(FXCG100_APPKEY_EXE) == FXCG100_MENU_LOAD_STATE, "Load state");
 

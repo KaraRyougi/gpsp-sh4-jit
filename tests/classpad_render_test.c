@@ -174,12 +174,17 @@ static const uint32_t fake_added_order[12] = {
 	3, 1, 5, 2, 4, 8, 11, 6, 7, 9, 10, 12,
 };
 static uint32_t fake_game_count = 12;
+static uint32_t fake_savestate_mask;
 static int config_saves;
 
 uint32_t fxcg100_rom_source_count(void) { return fake_game_count; }
 const char *fxcg100_rom_source_label(uint32_t i) { return fake_games[i % 12]; }
 uint32_t fxcg100_rom_source_last_played(uint32_t i) { return fake_last_played[i % 12]; }
 uint32_t fxcg100_rom_source_added_order(uint32_t i) { return fake_added_order[i % 12]; }
+int fxcg100_savestate_exists(uint32_t slot)
+{
+	return (fake_savestate_mask & (1u << (slot % 10u))) != 0;
+}
 /* What a saved configuration would put in the view, if not negative. */
 static int fake_saved_view = -1;
 static uint32_t fake_saved_rotation = CP_ROTATION_KEYS_RIGHT;
@@ -1240,14 +1245,22 @@ static void test_ui(const char *dir)
 	CHECK(ui.screen == SCREEN_PAUSE, "in a game: should open the pause menu");
 	ui_shot(dir, "ui-pause-portrait");
 	CHECK(ui_tap_on("Resume", 0) == FXCG100_MENU_RETURN, "Resume");
+	/* Empty slot 0 saves immediately without asking to overwrite. */
+	fake_savestate_mask = 0;
+	ui_open(1, CP_VIEW_PORTRAIT_43);
+	CHECK(ui_tap_on("Save state", 0) == FXCG100_MENU_SAVE_STATE &&
+		ui.confirm == CONFIRM_NONE, "empty slot should save without asking");
+	/* Once slot 0 has a file, Save state asks before overwriting. */
+	fake_savestate_mask = 1u << 0;
 	ui_open(1, CP_VIEW_PORTRAIT_43);
 	CHECK(ui_tap_on("Save state", 0) == FXCG100_MENU_CONTINUE &&
-		ui.confirm == CONFIRM_SAVE, "Save state should ask first");
+		ui.confirm == CONFIRM_SAVE, "Save state should ask when slot exists");
 	CHECK(ui_tap_on("Cancel", 0) == FXCG100_MENU_CONTINUE &&
 		ui.confirm == CONFIRM_NONE, "Save state Cancel");
 	CHECK(ui_tap_on("Save state", 0) == FXCG100_MENU_CONTINUE &&
 		ui.confirm == CONFIRM_SAVE, "Save state asks again");
 	CHECK(ui_tap_on("Save", 0) == FXCG100_MENU_SAVE_STATE, "Save state confirm");
+	fake_savestate_mask = 0;
 	ui_open(1, CP_VIEW_PORTRAIT_43);
 	CHECK(ui_tap_on("Load state", 0) == FXCG100_MENU_LOAD_STATE, "Load state");
 	/* Slot chips. */
