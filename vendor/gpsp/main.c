@@ -492,7 +492,16 @@ u32 function_cc update_gba(int remaining_cycles)
   unsigned timer_extra = 0;
   if (__builtin_expect(idle_pass != 0u, 0)) {
     cgba_idle_wait = 0;
-    idle_if_entry = read_ioreg(REG_IF);
+    /* Registered gba_over.h poll loops (idle_pass == 2) may poll VCOUNT or
+     * DISPSTAT directly with IRQs disabled; only batch across event slices
+     * when an enabled IRQ can actually wake the loop. Self-loops (1) can only
+     * exit via an IRQ and always batch. */
+    if (idle_pass == 2u &&
+        (!read_ioreg(REG_IME) || (reg[REG_CPSR] & 0x80u) ||
+         !read_ioreg(REG_IE)))
+      idle_pass = 0u;
+    else
+      idle_if_entry = read_ioreg(REG_IF);
   }
   trace_update_gba(remaining_cycles);
   cgba_trace_update_gba(remaining_cycles);

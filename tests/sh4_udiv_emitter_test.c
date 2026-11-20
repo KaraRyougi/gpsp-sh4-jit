@@ -608,6 +608,9 @@ static void check_idle_branch_elimination(void)
     failf("backward idle branch after poll body should eliminate");
   if (SH4_IDLE_BRANCH_CAN_ELIMINATE(poll_branch + 6u))
     failf("forward branch at idle_loop_target_pc must not eliminate");
+  block_start_pc = poll_head + 2u; /* mid-loop (at CMP after LDRB) */
+  if (SH4_IDLE_BRANCH_CAN_ELIMINATE(poll_head))
+    failf("mid-loop entry after IRQ (stale reg) must not eliminate");
   block_start_pc = poll_branch;
   if (SH4_IDLE_BRANCH_CAN_ELIMINATE(poll_head))
     failf("entry directly at idle branch (stale flags) must not eliminate");
@@ -618,6 +621,9 @@ static void check_idle_branch_elimination(void)
   block_start_pc = poll_branch;
   if (!SH4_IDLE_BRANCH_CAN_ELIMINATE(poll_branch))
     failf("backward branch into idle_loop_target_pc should eliminate");
+  block_start_pc = poll_branch + 2u;
+  if (SH4_IDLE_BRANCH_CAN_ELIMINATE(poll_branch))
+    failf("mid-loop entry into loop-head back-edge must not eliminate");
   block_start_pc = pc;
   if (SH4_IDLE_BRANCH_CAN_ELIMINATE(poll_branch))
     failf("entry directly at loop-head back-edge must not eliminate");
@@ -634,20 +640,31 @@ static void check_idle_branch_elimination(void)
   }
 
   /* 3. Emitted Thumb BEQ at idle_loop_target_pc (Z=1: still waiting).
-   *    Must sleep with cgba_idle_wait=1 and resume at poll_head (not pc). */
+   *    Registered poll back-edge must sleep with cgba_idle_wait=2 and resume
+   *    at poll_head (not pc). */
   got = run_thumb_cond_eq(poll_head, poll_branch, poll_head, 0x4000003Fu);
   if (got.error[0]) {
     fprintf(stderr, "FAIL: idle taken oracle: %s\n", got.error);
     failures++;
   } else if (got.reached_fallback || got.update_gba_calls != 1 ||
              got.update_gba_pc != poll_head || got.update_gba_cycles != 0u ||
-             got.update_gba_idle_wait != 1u || got.block_exits != 1 ||
+             got.update_gba_idle_wait != 2u || got.block_exits != 1 ||
              got.exit_pc != poll_head) {
-    failf("taken idle BEQ did not sleep/resume at loop head");
+    failf("taken idle BEQ did not sleep(mode=2)/resume at loop head");
   }
 
-  /* 4. Emitted Thumb BEQ when IRQ/savestate enters at pc (block_start_pc==pc)
-   *    with stale Z=1: must take a normal branch to poll_head, NOT sleep. */
+  /* 4. Emitted Thumb BEQ when IRQ/savestate resumes mid-loop (at CMP, after
+   *    LDRB) or directly at pc with stale Z=1: must take a normal branch to
+   *    poll_head without sleeping. */
+  got = run_thumb_cond_eq(poll_head + 2u, poll_branch, poll_head, 0x4000003Fu);
+  if (got.error[0]) {
+    fprintf(stderr, "FAIL: idle mid-loop oracle: %s\n", got.error);
+    failures++;
+  } else if (got.reached_fallback || got.update_gba_calls != 0 ||
+             cgba_idle_wait != 0u || got.block_exits != 1 ||
+             got.exit_pc != poll_head) {
+    failf("mid-loop entry at idle BEQ slept with stale register value");
+  }
   got = run_thumb_cond_eq(poll_branch, poll_branch, poll_head, 0x4000003Fu);
   if (got.error[0]) {
     fprintf(stderr, "FAIL: idle stale-entry oracle: %s\n", got.error);
@@ -656,6 +673,68 @@ static void check_idle_branch_elimination(void)
              cgba_idle_wait != 0u || got.block_exits != 1 ||
              got.exit_pc != poll_head) {
     failf("entry directly at idle BEQ slept with stale flags");
+  }
+
+  /* 5. Self-loop (target == pc): must emit cgba_idle_wait=1 even when
+   *    block_start_pc == pc. */
+  got = run_thumb_cond_eq(poll_branch, poll_branch, poll_branch, 0x4000003Fu);
+  if (got.error[0]) {
+    fprintf(stderr, "FAIL: idle self-loop oracle: %s\n", got.error);
+    failures++;
+  } else if (got.reached_fallback || got.update_gba_calls != 1 ||
+             got.update_gba_pc != poll_branch || got.update_gba_cycles != 0u ||
+             got.update_gba_idle_wait != 1u || got.block_exits != 1 ||
+             got.exit_pc != poll_branch) {
+    failf("self-loop BEQ did not sleep(mode=1)/resume at self");
+  }
+
+  /* 6. Segmented literal-pool pressure right before thumb_conditional_branch:
+   *    sh4g_litseg_reserve() must flush before BF disp8 so the pool never
+   *    flushes inside the conditional skip span and wraps disp8. */
+  {
+    u8 *translation_ptr = code;
+    u8 *backpatch_address = NULL;
+    u8 *branch_start;
+    u32 block_end_pc = poll_branch + 2u;
+    u32 cycle_count = 4u;
+    int ram_region = 0;
+    int sh4_block_is_thumb = 1;
+    u32 block_exit_position = 0u;
+    test_block_exit block_exits[2];
+    unsigned k;
+
+    pc = poll_branch;
+    block_start_pc = poll_head;
+    memset(code, 0xCC, sizeof(code));
+    memset(block_exits, 0, sizeof(block_exits));
+    block_exits[0].branch_target = poll_head;
+    cgba_dynarec_single_block = 1;
+    sh4g_litseg_begin();
+    for (k = 0; k < 46u; k++)
+      sh4g_const(&translation_ptr, 0x12345601u + k * 0x101u, SH4_REG_T0);
+    branch_start = translation_ptr;
+    thumb_conditional_branch(eq);
+    sh4g_litseg_end(&translation_ptr);
+
+    /* Skip span inside BF must remain tiny (far below +254 B disp8 limit). */
+    if ((size_t)(translation_ptr - branch_start) == 0 ||
+        (backpatch_address &&
+         (size_t)(translation_ptr - backpatch_address) > 200u))
+      failf("thumb_conditional_branch let literal pool flush inside BF span");
+
+    /* Also execute the full sequence with Z=0 to confirm valid fallthrough. */
+    cgba_idle_wait = 0u;
+    reg[REG_CPSR] = 0x0000003Fu;
+    memset(vector_table, 0, sizeof(vector_table));
+    put_be32(vector_table + SH4G_VEC_update_gba * 4u,
+             (u32)(uintptr_t)sh4_update_gba);
+    oracle_reset_windows();
+    oracle_add_window(code, (u32)(translation_ptr - code), ORACLE_BYTES_BE);
+    oracle_add_window(vector_table, sizeof(vector_table), ORACLE_BYTES_BE);
+    oracle_add_window((void *)&cgba_idle_wait, 4, ORACLE_NATIVE_S32);
+    got = oracle_run(code, (size_t)(translation_ptr - code), vector_table, 100u);
+    if (got.error[0] || !got.reached_fallback || got.update_gba_calls != 0)
+      failf("thumb_conditional_branch failed under litseg pool pressure");
   }
 }
 

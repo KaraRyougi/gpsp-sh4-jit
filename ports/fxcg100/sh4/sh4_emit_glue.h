@@ -1194,20 +1194,24 @@ static inline u8 *sh4g_branch_exit_internal(u8 **tp, uint32_t new_pc)
  * the REST of the cycle budget (R13 = 0, only when it is still positive, like
  * the interpreter's `cycles_remaining > 0` guard) and CALLS sh4_update_gba,
  * which commits R4 to reg[REG_PC] and fast-forwards hardware to the next event.
- * When the frame completes or an IRQ redirects the PC the call never returns;
- * otherwise it comes back with a fresh budget and falls through to the normal
- * patchable chain jump, so exactly one loop iteration runs per event slice
- * instead of thousands of spins. Returns the patch site. */
+ * `idle_mode` selects how update_gba batches slices:
+ *   1 = branch-to-self (only an IRQ can exit; always safe to batch until IRQ
+ *       or frame end),
+ *   2 = registered gba_over.h backward poll loop (batch only when IRQs can
+ *       wake it; when IME/IE/CPSR.I mask IRQs, run a single event slice so
+ *       VCOUNT/DISPSTAT polls never skip past their target scanline).
+ * Returns the patch site. */
 extern u32 cgba_idle_wait;   /* main.c: one-shot idle event batching */
 
 static inline u8 *sh4g_branch_exit_idle(u8 **tp, uint32_t new_pc,
-                                        const void *block_exit_fn)
+                                        const void *block_exit_fn,
+                                        int idle_mode)
 {
   u8 *site;
   sh4g_const(tp, new_pc, SH4_REG_ARG0);              /* R4 = target PC */
   sh4g_const(tp, (u32)(uintptr_t)&cgba_idle_wait, SH4_REG_T1);
   { sh4_codegen cg = sh4g_open(tp);
-    sh4_emit_mov_imm(&cg, 1, SH4_REG_T2);
+    sh4_emit_mov_imm(&cg, idle_mode, SH4_REG_T2);
     sh4_emit_mov_l_store(&cg, SH4_REG_T2, SH4_REG_T1);
     sh4g_close(tp, &cg); }
   { sh4_codegen cg = sh4g_open(tp);

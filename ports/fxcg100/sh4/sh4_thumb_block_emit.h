@@ -305,8 +305,19 @@ static inline int sh4g_thumb_block_native(u8 **tp, u32 opcode, u32 pc,
       sh4_emit_mov_imm(&cg, 6, SH4_REG_ARG0);
       sh4_emit_cmpeq(&cg, SH4_REG_ARG0, SH4_REG_T1);    /* T = VRAM */
       sh4g_close(tp, &cg); }
-#ifdef CGBA_VRAM_DIRTY_ACTIVE
+#if defined(CGBA_VIDEO_DEFERRED_ACTIVE) || defined(CGBA_VRAM_DIRTY_ACTIVE)
+    sh4g_litseg_reserve(tp, 4);
     { u8 *not_vram = sh4g_emit_bf_placeholder(tp);
+#ifdef CGBA_VIDEO_DEFERRED_ACTIVE
+      /* Flush pending deferred scanlines via C fallback before mutating VRAM. */
+      sh4g_const(tp, (u32)(uintptr_t)&cgba_pending_sl_count, SH4_REG_ARG0);
+      { sh4_codegen cg = sh4g_open(tp);
+        sh4_emit_mov_l_load(&cg, SH4_REG_ARG0, SH4_REG_ARG0);
+        sh4_emit_tst(&cg, SH4_REG_ARG0, SH4_REG_ARG0);  /* T = none pending */
+        sh4g_close(tp, &cg); }
+      guards[ng++] = sh4g_thumb_block_guard(tp, 0);     /* pending -> slow */
+#endif
+#ifdef CGBA_VRAM_DIRTY_ACTIVE
       sh4g_vec_load(tp, SH4G_VEC_vram_dirty, SH4_REG_T1);
       { sh4_codegen cg = sh4g_open(tp);
         sh4_emit_mov_imm(&cg, CGBA_VRAM_DIRTY_ALL, SH4_REG_ARG0);
@@ -318,6 +329,7 @@ static inline int sh4g_thumb_block_native(u8 **tp, u32 opcode, u32 pc,
         sh4_emit_mov_imm(&cg, -1, SH4_REG_ARG0);
         sh4_emit_mov_l_store(&cg, SH4_REG_ARG0, SH4_REG_T1);
         sh4g_close(tp, &cg); }
+#endif
 #endif
       vram_skip = sh4g_emit_bra_placeholder(tp);
       sh4g_patch_cond(not_vram, *tp); }

@@ -723,18 +723,20 @@ static inline int sh4g_registered_idle_signature_ok(const u8 *map,
    (SH4_REGISTERED_IDLE_BRANCH(new_pc) &&                                     \
     SH4_REGISTERED_IDLE_SIGNATURE_OK(idle_loop_target_pc)))
 
-/* Only invoke cgba_idle_wait when the branch is a self-loop or the poll body
- * executed in this block (block_start_pc < pc). If an IRQ or savestate enters
- * directly at a backward idle branch (block_start_pc == pc), the condition
- * flags may be stale from before the IRQ set the wake flag, so take a normal
- * branch back to the loop head to re-poll memory before sleeping. */
+/* Only invoke cgba_idle_wait when the branch is a self-loop or the entire poll
+ * body [new_pc .. pc] executed in this block (block_start_pc <= new_pc). If an
+ * IRQ or savestate resumes mid-loop or directly at the branch
+ * (block_start_pc > new_pc), either the loaded value or condition flags may be
+ * stale from before the IRQ set the wake flag, so take a normal branch back to
+ * the loop head to re-poll memory before sleeping. */
 #define SH4_IDLE_BRANCH_CAN_ELIMINATE(new_pc)                                 \
   (SH4_IDLE_BRANCH(new_pc) &&                                                 \
-   ((u32)(new_pc) == (u32)pc || (u32)block_start_pc < (u32)pc))
+   ((u32)(new_pc) == (u32)pc || (u32)block_start_pc <= (u32)(new_pc)))
 
 #define generate_branch_idle_eliminate(writeback_location, new_pc)            \
   (writeback_location) = sh4g_branch_exit_idle(&translation_ptr,              \
-      (u32)(new_pc), SH4_DEFAULT_BRANCH_EXIT(new_pc))
+      (u32)(new_pc), SH4_DEFAULT_BRANCH_EXIT(new_pc),                         \
+      ((u32)(new_pc) == (u32)pc) ? 1 : 2)
 
 #define generate_branch_current_update(writeback_location, new_pc)            \
   do { sh4g_cycle_debit(&translation_ptr, (int)cycle_count);                  \
@@ -1146,6 +1148,7 @@ static inline int sh4g_registered_idle_signature_ok(const u8 *map,
  * succeeded (dropping a full frame and starving VBlank HBlank-DMA reloads). */
 #define thumb_conditional_branch(condition)                                   \
   do { u32 _cb_target = block_exits[block_exit_position].branch_target;       \
+       sh4g_litseg_reserve(&translation_ptr, 6);                              \
        generate_condition_##condition();                                      \
        if(SH4_IDLE_BRANCH_CAN_ELIMINATE(_cb_target)) {                        \
          sh4g_cycle_debit(&translation_ptr, (int)cycle_count +                \

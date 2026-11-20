@@ -254,6 +254,51 @@ static void test_dma_disable_clears_hblank_mask(void)
         "cgba_hblank_dma_mask=0x%02X (expected 0x04)", cgba_hblank_dma_mask);
 }
 
+static void test_io_fast_store_ignores_above_0x400(void)
+{
+  const char *name = "Thumb STRH to 0x04000400+ must not mirror IO fast path";
+  const u32 pc = 0x0807ab70u;
+  int result;
+
+  /* 1. 0x04000800 aliases 0x000 (DISPCNT) under & 0x3FEu; must fall back to
+   *    generic write_memory16() instead of overwriting DISPCNT. */
+  memset(reg, 0, sizeof(reg));
+  memset(io_registers, 0, sizeof(io_registers));
+  address16(io_registers, 0x000u) = eswap16(0x0403u);
+  reg[1] = 0x0080u;
+  reg[2] = 0x04000800u;
+  write_calls = 0;
+
+  result = cgba_sh4_thumb_ldst(0x00008011u, pc);
+  CHECK(name, result == 0, "helper returned %d for 0x04000800 (expected 0)",
+        result);
+  CHECK(name, write_calls == 1, "0x04000800 write_calls=%u (expected 1)",
+        write_calls);
+  CHECK(name, address16(io_registers, 0x000u) == eswap16(0x0403u),
+        "DISPCNT overwritten by 0x04000800 store (got 0x%04X)",
+        (unsigned)eswap16(address16(io_registers, 0x000u)));
+
+  /* 2. 0x040004BA aliases 0x0BA (DMA0CNT_H) under & 0x3FEu; must not disable
+   *    active HBlank DMA0. */
+  memset(dma, 0, sizeof(dma));
+  dma[0].start_type = DMA_START_HBLANK;
+  cgba_hblank_dma_mask = 0x01u;
+  reg[1] = 0u;
+  reg[2] = 0x040004BAu;
+  write_calls = 0;
+
+  result = cgba_sh4_thumb_ldst(0x00008011u, pc);
+  CHECK(name, result == 0, "helper returned %d for 0x040004BA (expected 0)",
+        result);
+  CHECK(name, write_calls == 1, "0x040004BA write_calls=%u (expected 1)",
+        write_calls);
+  CHECK(name, dma[0].start_type == DMA_START_HBLANK,
+        "dma[0].start_type=%u changed by 0x040004BA store", dma[0].start_type);
+  CHECK(name, cgba_hblank_dma_mask == 0x01u,
+        "cgba_hblank_dma_mask=0x%02X changed by 0x040004BA store",
+        cgba_hblank_dma_mask);
+}
+
 int main(void)
 {
   static const helper_case cases[] = {
@@ -276,6 +321,7 @@ int main(void)
   }
   test_timing_alert_redispatch();
   test_dma_disable_clears_hblank_mask();
+  test_io_fast_store_ignores_above_0x400();
 
   if (failures)
     return 1;

@@ -435,7 +435,7 @@ static u32 cgba_sh4_align_store_address(u32 address, unsigned bytes)
 
 static int cgba_sh4_store_u16_io_fast(u32 address, u32 source)
 {
-  if ((address >> 24) != 0x04)
+  if ((address & 0xFFFFFC00u) != 0x04000000u)
     return 0;
 
   switch (address & 0x3FEu) {
@@ -3498,7 +3498,6 @@ static inline void cgba_lz_mark_vram_dirty(u32 off, u32 len)
 {
   if (len == 0u)
     return;
-  cgba_video_flush_before_write();
 #ifdef CGBA_VRAM_DIRTY_ACTIVE
   if (off < 0x10000u) {
     cgba_vram_dirty |= CGBA_VRAM_DIRTY_BG;
@@ -3514,6 +3513,8 @@ static inline void cgba_lz_mark_vram_dirty(u32 off, u32 len)
   }
   if (off + len > 0x10000u)
     cgba_vram_dirty |= CGBA_VRAM_DIRTY_OBJ;
+#else
+  (void)off;
 #endif
 }
 
@@ -3674,6 +3675,10 @@ static u32 cgba_swi_lz77_engine(s32 remaining)
   Ndst = CGBA_WS_N(dst_r, 0);
   slice_dst_start = dst_off;
 
+  /* Flush any deferred scanlines BEFORE decompressing into VRAM. */
+  if (dst_r == 6u)
+    cgba_video_flush_before_write();
+
   while (1) {
     if (len == 0u) {
       /* Flush dirty/SMC for the final slice before epilogue. */
@@ -3775,6 +3780,10 @@ static u32 cgba_swi_lz77_engine(s32 remaining)
           return cgba_parked_swi_irq_exit(remaining, S0, N0);
         }
         remaining -= carry;
+        /* update_gba() may have queued new deferred scanlines before we write
+         * the next VRAM slice. */
+        if (dst_r == 6u)
+          cgba_video_flush_before_write();
       }
       continue;
     }
