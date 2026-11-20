@@ -911,6 +911,37 @@ const u32 spsr_masks[4] = { 0x00000000, 0x000000EF, 0xF0000000, 0xF00000EF };
   }                                                                           \
 }                                                                             \
 
+#if defined(CGBA_DYNAREC)
+extern "C" {
+extern int cgba_diff_stop_on_bios_exit;
+extern int cgba_diff_stop_on_budget;
+}
+/* When the interpreter runs on behalf of the dynarec (cold-code chunks,
+ * VRAM execution, or BIOS fallback), CPU stores to IWRAM/EWRAM bypass the
+ * JIT's execute_store_* SMC hooks. Check the translated-code tag mirror and
+ * flush ram_translation_cache if a previously translated RAM instruction is
+ * overwritten (e.g. Classic NES unpacking code into IWRAM from VRAM). */
+static inline void cgba_interp_smc_check(u32 address, unsigned bytes)
+{
+  const u8 *tag;
+  u32 hit = 0;
+
+  if (!(cgba_diff_stop_on_budget | cgba_diff_stop_on_bios_exit))
+    return;
+  switch (address >> 24) {
+  case 0x03: tag = iwram + (address & 0x7FFF); break;
+  case 0x02: tag = ewram + (address & 0x3FFFF) + 0x40000; break;
+  default:   return;
+  }
+  for (unsigned k = 0; k < bytes; k++)
+    hit |= tag[k];
+  if (hit)
+    flush_translation_cache_ram();
+}
+#else
+#define cgba_interp_smc_check(address, bytes) ((void)0)
+#endif
+
 #define fast_write_memory(size, type, address, value)                         \
 {                                                                             \
   u32 _address = (address) & ~(aligned_address_mask##size & 0x03);            \
@@ -922,6 +953,7 @@ const u32 spsr_masks[4] = { 0x00000000, 0x000000EF, 0xF0000000, 0xF00000EF };
   }                                                                           \
                                                                               \
   cpu_alert |= write_memory##size(_address, value);                           \
+  cgba_interp_smc_check(_address, (size) / 8);                                \
 }                                                                             \
 
 #define load_aligned32(address, dest)                                         \
@@ -959,6 +991,7 @@ const u32 spsr_masks[4] = { 0x00000000, 0x000000EF, 0xF0000000, 0xF00000EF };
     STATS_MEMORY_ACCESS(write, u32, region);                                  \
   }                                                                           \
   cpu_alert |= write_memory32(_address, value);                               \
+  cgba_interp_smc_check(_address, 4);                                         \
 }                                                                             \
 
 #define load_memory_u8(address, dest)                                         \

@@ -69,6 +69,7 @@ void sh4_lazy_link_rom_arm(u32 address);
 void sh4_lazy_link_rom_thumb(u32 address);
 #endif
 void sh4_bios_fallback_entry(void);
+void sh4_cold_interp_entry(void);
 /* Port-provided trap for an executed wild guest branch (untranslatable PC):
  * panics with the guest target on-screen instead of jumping to garbage. */
 void cgba_sh4_wild_jump(u32 pc) __attribute__((noreturn));

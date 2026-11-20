@@ -3205,6 +3205,11 @@ u8 function_cc *block_lookup_address_arm(u32 pc)
   }
   if(pc < 0x00004000u)
     return (u8 *)sh4_bios_fallback_entry;
+  /* Classic NES / Famicom Mini titles copy executable stubs into VRAM
+   * (e.g. 0x06000080) and branch there. Interpret VRAM execution instead of
+   * trapping as a wild jump; avoids allocating a VRAM tag table or SMC hooks. */
+  if((pc >> 24) == 0x06u)
+    return (u8 *)sh4_cold_interp_entry;
 #endif
   cgba_wj_note(pc);
 #ifdef SH4_ARCH
@@ -3252,6 +3257,11 @@ u8 function_cc *block_lookup_address_thumb(u32 pc)
   reg[REG_PC] = pc;   /* see block_lookup_address_arm: commit PC for indirect/BX */
   if(pc < 0x00004000u)
     return (u8 *)sh4_bios_fallback_entry;
+  /* Classic NES / Famicom Mini titles copy executable stubs into VRAM
+   * (e.g. 0x06000080) and branch there. Interpret VRAM execution instead of
+   * trapping as a wild jump; avoids allocating a VRAM tag table or SMC hooks. */
+  if((pc >> 24) == 0x06u)
+    return (u8 *)sh4_cold_interp_entry;
 #endif
   cgba_wj_note(pc);
 #ifdef SH4_ARCH
