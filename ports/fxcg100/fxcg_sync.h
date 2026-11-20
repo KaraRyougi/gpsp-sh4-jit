@@ -94,13 +94,18 @@ typedef struct cg_sync_state {
 /* Himax-family fx-CG100 OS 2.10 panel (ID 0x32/0x52, 0xB9: FF 52 98):
  * 224 visible + 76 VBP (0x4C) + 75 VFP (0x4B) = 375 rows, OS RTN range
  * 15..255 (0x0F..0xFF, stock 0xFF). Allow raising VFP up to +24 rows (0x63)
- * for fine-grained 59.73 Hz / 119.46 Hz locking. */
+ * for fine-grained 59.73 Hz / 119.46 Hz locking.
+ *
+ * OS 2.10 configures MIPI DCS TEON (0x35) = 0x00 (Mode 0, V-Blanking only)
+ * with STE (0x44) = 0x0000: TE rises at the start of V-Blank (start of VFP,
+ * after row 223) and stays high across VFP + VBP before active row 0. */
 #define CG_HIMAX_VBP             76u
 #define CG_HIMAX_STOCK_VFP       75u
 #define CG_HIMAX_MAX_TUNE_VFP    99u
 #define CG_HIMAX_MIN_TUNE_RTN    15u
 #define CG_HIMAX_MAX_TUNE_RTN    255u
 #define CG_HIMAX_STOCK_TOTAL     (CG_SYNC_VISIBLE_ROWS + CG_HIMAX_VBP + CG_HIMAX_STOCK_VFP)
+#define CG_HIMAX_TE_BLANK(vfp)   (CG_HIMAX_VBP + (uint32_t)(vfp))
 
 /* Target refresh rates in millihertz (aliases of lcd_sync_common.h). */
 #define CG_SYNC_RATE_GBA_MHZ     CGBA_SYNC_RATE_GBA_MHZ
@@ -192,6 +197,36 @@ static inline void cg_sync_solve_himax(uint32_t orig_period_ticks,
 	*vfp_out = (uint8_t)best_fp;
 	*rtn_out = (uint8_t)best_rtn;
 	*total_out = best_total;
+}
+
+/* Predict the new PR.5 period in ticks after changing (total, rtn) relative
+ * to a measured stock baseline (orig_total, orig_rtn, orig_period_ticks). */
+static inline uint32_t cg_sync_expected_period(uint32_t orig_period_ticks,
+	uint32_t orig_total, uint32_t orig_rtn, uint32_t new_total,
+	uint32_t new_rtn, uint32_t rtn_bias)
+{
+	uint64_t orig_clocks = (uint64_t)orig_total * (orig_rtn + rtn_bias);
+	uint64_t new_clocks = (uint64_t)new_total * (new_rtn + rtn_bias);
+
+	if(!orig_period_ticks || !orig_clocks || !new_clocks)
+		return 0u;
+	return (uint32_t)(((uint64_t)orig_period_ticks * new_clocks +
+		orig_clocks / 2u) / orig_clocks);
+}
+
+/* True if a measured PR.5 period after live timing adjustment agrees with
+ * the solver's expected period within +/-1.0 % (catches silently ignored
+ * controller writes such as locked 0xB9 on Himax or read-only R008/R010). */
+static inline int cg_sync_period_matches(uint32_t measured, uint32_t expected)
+{
+	uint64_t err;
+
+	if(!measured || !expected)
+		return 0;
+	err = (measured >= expected)
+		? (uint64_t)(measured - expected)
+		: (uint64_t)(expected - measured);
+	return err * 100u <= (uint64_t)expected;
 }
 
 /* Effective target refresh rate in millihertz for a (refresh_mode, vsync_on)

@@ -208,6 +208,11 @@ static void cg_himax_write_timing(uint8_t vfp, uint8_t rtn)
 
 	cgba_himax_build_b2(cgba_himax_fxcg100(), vfp, rtn, b2);
 	cgba_himax_build_df(cgba_himax_fxcg100(), vfp, rtn, df);
+	/* Ensure extended commands are unlocked (OS 2.10 @ 0x80073d9c). */
+	cg_dcs_select(0xb9u);
+	cg_dcs_param(0xffu);
+	cg_dcs_param(0x52u);
+	cg_dcs_param(0x98u);
 	cg_dcs_select(0xb2u);
 	for(i = 0; i < 6; i++)
 		cg_dcs_param(b2[i]);
@@ -269,7 +274,7 @@ static int cg_sync_measure_period(uint32_t timeout_ticks, uint32_t min_per,
 static void cg_sync_apply_rate(uint32_t want_mhz)
 {
 	uint32_t new_bp = cg_sync_orig_bp, new_total = cg_sync_orig_total;
-	uint32_t target_ticks;
+	uint32_t target_ticks, expected_per = 0;
 	uint32_t timeout_ticks, min_per, max_per, dummy = 0;
 	uint32_t measured_per = 0, measured_edge = 0;
 
@@ -286,10 +291,19 @@ static void cg_sync_apply_rate(uint32_t want_mhz)
 	wait_lcd_dma();
 	if(cg_sync_panel == CG_PANEL_R61524) {
 		uint16_t new8, new10;
+		uint32_t orig_rtn = (uint32_t)cg_sync_orig_r010 & 0x3fu;
+		uint32_t new_rtn;
 
+		if(!orig_rtn)
+			orig_rtn = 64u;
 		cg_sync_solve_timing(cg_sync_orig_r008, cg_sync_orig_r010,
 			cg_sync_orig_period, target_ticks,
 			&new8, &new10, &new_bp, &new_total);
+		new_rtn = (uint32_t)new10 & 0x3fu;
+		if(!new_rtn)
+			new_rtn = 64u;
+		expected_per = cg_sync_expected_period(cg_sync_orig_period,
+			cg_sync_orig_total, orig_rtn, new_total, new_rtn, 0u);
 		r61524_set(0x008, new8);
 		r61524_set(0x010, new10);
 		if(r61524_get(0x008) != new8 || r61524_get(0x010) != new10) {
@@ -302,13 +316,17 @@ static void cg_sync_apply_rate(uint32_t want_mhz)
 
 		cg_sync_solve_himax(cg_sync_orig_period, target_ticks,
 			&vfp, &rtn, &new_total);
-		new_bp = CG_HIMAX_VBP;
+		new_bp = CG_HIMAX_TE_BLANK(vfp);
+		expected_per = cg_sync_expected_period(cg_sync_orig_period,
+			CG_HIMAX_STOCK_TOTAL, 0xffu, new_total, rtn,
+			CGBA_HIMAX_RTN_BIAS);
 		cg_himax_write_timing(vfp, rtn);
 	} else {
 		return;
 	}
 
-	/* Accept 40..220 Hz on the tuned PR.5 check (covers 59.7..150 Hz). */
+	/* Accept 40..220 Hz on the tuned PR.5 check (covers 59.7..150 Hz) and
+	 * confirm the measured period actually matches the solved target. */
 	timeout_ticks = cg_sync_pphi_hz / 100u;
 	min_per = cg_sync_pphi_hz / 880u;
 	max_per = cg_sync_pphi_hz / 160u;
@@ -316,7 +334,8 @@ static void cg_sync_apply_rate(uint32_t want_mhz)
 	if(cg_sync_tcnt &&
 	   cg_sync_wait_rising(timeout_ticks, &dummy) &&
 	   cg_sync_measure_period(timeout_ticks, min_per, max_per,
-			&measured_per, &measured_edge)) {
+			&measured_per, &measured_edge) &&
+	   cg_sync_period_matches(measured_per, expected_per)) {
 		cg_sync.bp_rows = new_bp;
 		cg_sync.total_rows = new_total;
 		cg_sync.period_ticks = measured_per;
@@ -363,7 +382,7 @@ static void cg_sync_probe_hw(void)
 			return;
 		}
 		cg_sync_panel = CG_PANEL_HIMAX;
-		cg_sync_orig_bp = CG_HIMAX_VBP;
+		cg_sync_orig_bp = CG_HIMAX_TE_BLANK(CG_HIMAX_STOCK_VFP);
 		cg_sync_orig_total = CG_HIMAX_STOCK_TOTAL;
 	}
 	cg_sync_regs_saved = 1;

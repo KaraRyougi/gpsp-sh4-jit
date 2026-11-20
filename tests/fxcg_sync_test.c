@@ -151,6 +151,34 @@ static void test_timing_solver(void)
 		CHECK(df[0] == 0x08u && df[4] == 0x2au && df[9] == 0x4cu &&
 			df[10] == 0x4bu && df[11] == 0xffu,
 			"fx-CG100 DF payload mismatch");
+
+		/* Expected-period check catches silently ignored Himax 0xB2/0xDF writes
+		 * (stock 60.43 Hz = 16547 us vs solved 59.73 Hz = 16743 us -> 1.18% gap)
+		 * while accepting real +/-1.0% oscillator tolerance. */
+		{
+			uint32_t exp_gba;
+			uint32_t lo = 0, len = 0;
+
+			cg_sync_solve_himax(16547u, 16743u, &vfp, &rtn, &htotal);
+			exp_gba = cg_sync_expected_period(16547u, CG_HIMAX_STOCK_TOTAL,
+				0xffu, htotal, rtn, CGBA_HIMAX_RTN_BIAS);
+			CHECK(cg_sync_period_matches(exp_gba, exp_gba),
+				"exact expected period matches");
+			CHECK(cg_sync_period_matches(exp_gba + exp_gba / 200u, exp_gba),
+				"+0.5%% tolerance accepted");
+			CHECK(!cg_sync_period_matches(16547u, exp_gba),
+				"untuned stock 60.43 Hz must be rejected vs 59.73 Hz (exp=%u)",
+				exp_gba);
+
+			/* MIPI DCS Mode 0 TE blanking = VBP + VFP leaves a clean safe window
+			 * including phase 0 (TE rising edge at start of V-Blank). */
+			CHECK(CG_HIMAX_TE_BLANK(vfp) + 4u + 216u <= htotal,
+				"Himax TE blank fits total_rows");
+			CHECK(cg_sync_safe_window(123400u, htotal, CG_HIMAX_TE_BLANK(vfp),
+					4u, 216u, 123400u * 8u / 17u, &lo, &len) == 1 &&
+				cg_sync_wait_needed(0u, 123400u, lo, len) == 0u,
+				"Himax TE phase 0 inside safe window");
+		}
 	}
 }
 
