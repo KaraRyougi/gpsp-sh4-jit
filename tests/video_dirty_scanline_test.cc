@@ -388,6 +388,73 @@ static bool run_tests(void)
   CHECK(verify_frame("mode0-win1-bldcnt-brighten-disabled-bg0"));
   CHECK(cgba_mode0_fast_fullframe == true);
 
+  /* 15. Direct-to-RGB565 single-1st-target BG alpha-blend fast path! */
+  init_scene_mode0();
+  write_ioreg(REG_DISPCNT, 0x5F00u); /* Mode 0, BG0/1/2/3+OBJ+WIN1 */
+  write_ioreg(REG_WIN1H, 0x00F0u);
+  write_ioreg(REG_WIN1V, 0x00A0u);
+  write_ioreg(REG_WININ, 0x3F00u);
+  write_ioreg(REG_WINOUT, 0x0020u);
+  write_ioreg(REG_BG0CNT, 0x4800u); /* prio 0, 512x256, sb 8, 4bpp */
+  write_ioreg(REG_BG1CNT, 0x0901u); /* prio 1, sb 9 */
+  write_ioreg(REG_BG2CNT, 0x0A02u); /* prio 2, sb 10 */
+  write_ioreg(REG_BG3CNT, 0x0B03u); /* prio 3, sb 11 */
+  write_ioreg(REG_BLDCNT, 0x3E41u); /* 1st=BG0, 2nd=BG1|BG2|BG3|OBJ|BD */
+  /* Non-saturating across all 8 sub-tile horizontal offsets (0..7) */
+  write_ioreg(REG_BLDALPHA, 0x0907u); /* eva=7, evb=9 */
+  for (u32 h = 0; h < 8u; h++) {
+    write_ioreg(REG_BG0HOFS, (u16)(248u + h));
+    write_ioreg(REG_BG0VOFS, (u16)(h * 3u));
+    CHECK(verify_frame("mode0-direct-blend-thoff"));
+    CHECK(cgba_m0.blend_bg_layer == 0u);
+    CHECK(cgba_m0.blend_forbid_omask == 0u);
+  }
+  /* Saturating blend (eva + evb > 16) */
+  write_ioreg(REG_BLDALPHA, 0x0C0Cu); /* eva=12, evb=12 */
+  write_ioreg(REG_BG0HOFS, 3u);
+  CHECK(verify_frame("mode0-direct-blend-sat"));
+  CHECK(cgba_m0.blend_bg_layer == 0u);
+  /* Invisible overlay (eva=0, evb=16) and opaque overlay (eva=16, evb=0) */
+  write_ioreg(REG_BLDALPHA, 0x1000u);
+  CHECK(verify_frame("mode0-direct-blend-eva0-evb16"));
+  CHECK(cgba_m0.blend_bg_layer == 0u);
+  write_ioreg(REG_BLDALPHA, 0x0010u);
+  CHECK(verify_frame("mode0-direct-blend-eva16-evb0"));
+  CHECK(cgba_mode0_fast_fullframe == true);
+  /* Blended BG as bottommost layer (prio 3, blending over Backdrop) */
+  write_ioreg(REG_BLDALPHA, 0x0808u);
+  write_ioreg(REG_BG0CNT, 0x4803u); /* prio 3 */
+  write_ioreg(REG_BG1CNT, 0x0902u);
+  write_ioreg(REG_BG2CNT, 0x0A01u);
+  write_ioreg(REG_BG3CNT, 0x0B00u);
+  write_ioreg(REG_BLDCNT, 0x2041u); /* 1st=BG0, 2nd=BD only (no lower BGs!) */
+  CHECK(verify_frame("mode0-direct-blend-bottommost-over-bd"));
+  CHECK(cgba_m0.blend_bg_layer == 0u);
+  /* Lower BG NOT in 2nd target -> MUST disqualify direct-blend & match ref */
+  write_ioreg(REG_BG0CNT, 0x4800u); /* prio 0 */
+  write_ioreg(REG_BG1CNT, 0x0901u);
+  write_ioreg(REG_BG2CNT, 0x0A02u);
+  write_ioreg(REG_BG3CNT, 0x0B03u);
+  write_ioreg(REG_BLDCNT, 0x3A41u); /* BG2 (bit 10) missing from 2nd target! */
+  CHECK(verify_frame("mode0-direct-blend-disqualify-lower-bg"));
+  CHECK(cgba_m0.blend_bg_layer == 0xFFu);
+  /* OBJ missing from 2nd target -> forbid lower OBJ prios (1,2,3 = 0x0E) */
+  write_ioreg(REG_BLDCNT, 0x2E41u); /* 2nd=BG1|BG2|BG3|BD, OBJ excluded */
+  CHECK(verify_frame("mode0-direct-blend-obj-not-tgt2"));
+  CHECK(cgba_m0.blend_bg_layer == 0u);
+  CHECK(cgba_m0.blend_forbid_omask == 0x0Eu);
+  /* OBJ also in 1st target -> forbid all OBJ prios (0x0F) */
+  write_ioreg(REG_BLDCNT, 0x3E51u); /* 1st=BG0|OBJ, 2nd=BG1..3|OBJ|BD */
+  CHECK(verify_frame("mode0-direct-blend-obj-also-tgt1"));
+  CHECK(cgba_m0.blend_bg_layer == 0u);
+  CHECK(cgba_m0.blend_forbid_omask == 0x0Fu);
+  /* Semi-transparent OBJ present on some rows -> exact parity */
+  write_ioreg(REG_BLDCNT, 0x3E41u);
+  oam_ram[0] = eswap16(54u | 0x0400u); /* semi-transparent mode */
+  reg[OAM_UPDATED] = 1;
+  CHECK(verify_frame("mode0-direct-blend-with-st-obj"));
+  CHECK(cgba_m0.blend_bg_layer == 0u);
+
   return true;
 }
 
