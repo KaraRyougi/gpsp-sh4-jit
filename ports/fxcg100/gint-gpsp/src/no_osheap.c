@@ -63,73 +63,9 @@ void __free(void *ptr)
 	(void)ptr;
 }
 
-/* fx-CG100 links no OS filesystem, so BFile_* are stubbed and storage goes
- * through hardcoded firmware addresses instead. fx-CG50 uses gint's real
- * BFile_* (Fugue), so the stubs must NOT shadow them there. */
-#ifndef CGBA_FXCG50
-int BFile_Remove(const uint16_t *path) { (void)path; return -1; }
-int BFile_Rename(const uint16_t *oldpath, const uint16_t *newpath)
-{
-	(void)oldpath;
-	(void)newpath;
-	return -1;
-}
-int BFile_Create(const uint16_t *path, int type, int *size)
-{
-	(void)path;
-	(void)type;
-	(void)size;
-	return -1;
-}
-int BFile_Open(const uint16_t *path, int mode)
-{
-	(void)path;
-	(void)mode;
-	return -1;
-}
-int BFile_Close(int fd) { (void)fd; return -1; }
-int BFile_Size(int fd) { (void)fd; return -1; }
-int BFile_Seek(int fd, int offset)
-{
-	(void)fd;
-	(void)offset;
-	return -1;
-}
-int BFile_GetPos(int fd) { (void)fd; return -1; }
-int BFile_Write(int fd, const void *data, int size)
-{
-	(void)fd;
-	(void)data;
-	(void)size;
-	return -1;
-}
-int BFile_Read(int fd, void *data, int size, int whence)
-{
-	(void)fd;
-	(void)data;
-	(void)size;
-	(void)whence;
-	return -1;
-}
-int BFile_FindFirst(const uint16_t *pattern, int *shandle,
-	uint16_t *foundfile, struct BFile_FileInfo *fileinfo)
-{
-	(void)pattern;
-	(void)shandle;
-	(void)foundfile;
-	(void)fileinfo;
-	return -1;
-}
-int BFile_FindNext(int shandle, uint16_t *foundfile,
-	struct BFile_FileInfo *fileinfo)
-{
-	(void)shandle;
-	(void)foundfile;
-	(void)fileinfo;
-	return -1;
-}
-int BFile_FindClose(int shandle) { (void)shandle; return -1; }
-#endif /* !CGBA_FXCG50 */
+/* Both fx-CG50 and fx-CG100 link gint's real BFile_* implementations from
+ * libgint's syscalls.S (which dispatches by OS version on fx-CG100 and via the
+ * syscall table on fx-CG50), so BFile_* must not be stubbed here. */
 
 int __Timer_Install(int id, void (*handler)(void), int delay)
 {

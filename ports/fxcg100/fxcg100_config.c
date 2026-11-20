@@ -68,10 +68,11 @@ int fxcg100_storage_write_blob(const uint16_t *path, const void *src, unsigned s
 #define CGBA_BFILE_WRITE  cp_bfile_write
 #define CGBA_BFILE_CLOSE  cp_bfile_close
 #define CGBA_BFILE_SEEK   cp_bfile_seek
-#elif defined(CGBA_FXCG50)
-/* fx-CG50 uses gint's portable BFile entry points. Both models run all
- * calls inside the same OS-world transaction below. */
+#elif CGBA_FXCG100_STORAGE
+/* Both fx-CG50 and fx-CG100 use gint's portable BFile entry points inside the
+ * OS-world transaction below (dispatched dynamically by OS version in gint). */
 #include <gint/bfile.h>
+#ifndef CGBA_BFILE_OPEN
 #define CGBA_BFILE_OPEN   BFile_Open
 #define CGBA_BFILE_SIZE   BFile_Size
 #define CGBA_BFILE_CREATE BFile_Create
@@ -80,16 +81,6 @@ int fxcg100_storage_write_blob(const uint16_t *path, const void *src, unsigned s
 #define CGBA_BFILE_WRITE  BFile_Write
 #define CGBA_BFILE_CLOSE  BFile_Close
 #define CGBA_BFILE_SEEK   BFile_Seek
-#else
-#ifndef CGBA_BFILE_OPEN
-#define CGBA_BFILE_OPEN   ((uintptr_t)0x803338d0u)
-#define CGBA_BFILE_SIZE   ((uintptr_t)0x80333b04u)
-#define CGBA_BFILE_CREATE ((uintptr_t)0x80333ef0u)
-#define CGBA_BFILE_REMOVE ((uintptr_t)0x80334212u)
-#define CGBA_BFILE_READ   ((uintptr_t)0x80333dc2u)
-#define CGBA_BFILE_WRITE  ((uintptr_t)0x80333f9eu)
-#define CGBA_BFILE_CLOSE  ((uintptr_t)0x80333a4eu)
-#define CGBA_BFILE_SEEK   ((uintptr_t)0x80333c6cu)
 #endif
 #endif
 

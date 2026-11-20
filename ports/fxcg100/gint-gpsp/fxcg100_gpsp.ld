@@ -15,20 +15,20 @@ MEMORY
 	/*
 		The fx-CG100 has an 8 MiB RAM window at 0x8c000000..0x8c7fffff.
 		0x8c800000 is already past the end on real hardware and causes a
-		cold boot when touched. Local CG100/MPM tooling uses 0x8c200000 as
-		a scratch/upload window, so keep gpSP's temporary high arena there
-		until the core is moved to explicit heap/NOR-backed allocation.
+		cold boot when touched. MPM 1.1+ relocates itself to 0x8c7f0000,
+		places URAM in OS AppMemory at 0x8c160000..0x8c1dffff, loads the
+		add-in ROM right below 0x8c7f0000 (~0x8c740000 for this binary),
+		and reports [0x8c200000, romAddress) to gint via loadinfo (_ld1).
 
-		HARD upper bound: 0x8c700000. mpm.bin — the resident MPM loader
-		that launches this add-in — lives at 0x8c700000..0x8c703214
-		(mpm-installer notes), with further OS state above it. A build
-		whose arena reached 0x8c715300 overwrote it and HARD-RESET the
-		calculator on the spot; an arena end of 0x8c655300 is proven fine.
-		Production is pinned to the only hardware-proven end, 0x8c655300.
-		An explicit emulator-only differential-harness build can override
-		cgba_highram_limit at link time; never install that build on hardware.
+		Production links cap .cgba.highbss at 0x8c720000 (128 KiB below
+		MPM 1.1's current ~0x8c740000 load address for future .g3a growth),
+		and main.c also verifies the exact _ld1 upper bound at runtime
+		(falling back to the legacy-MPM 0x8c655300 ceiling if _ld1 is
+		absent). An explicit emulator-only headless/differential-harness
+		build can override cgba_highram_limit up to 0x8c780000 at link
+		time; never install that build on hardware.
 	*/
-	highram (rw):   o = 0x8c200000, l = 0x4F0000
+	highram (rw):   o = 0x8c200000, l = 0x580000
 	ilram   (rwx):  o = 0xe5200000, l = 4k
 	xyram   (rwx):  o = 0xe500e000, l = 16k
 }
@@ -167,9 +167,9 @@ SECTIONS
 		_cgba_highbss_end = . ;
 	} > highram :NONE
 
-	PROVIDE(cgba_highram_limit = 0x8c655300);
+	PROVIDE(cgba_highram_limit = 0x8c720000);
 	ASSERT(_cgba_highbss_end <= cgba_highram_limit,
-		"fx-CG100 gpSP high RAM arena exceeds the hardware-proven 0x8c655300 ceiling (hard-reset risk)")
+		"fx-CG100 gpSP high RAM arena exceeds the MPM 1.1+ 0x8c720000 ceiling")
 
 	/DISCARD/ : {
 		*(.gint.rodata.sh3 .gint.data.sh3 .gint.bss.sh3)

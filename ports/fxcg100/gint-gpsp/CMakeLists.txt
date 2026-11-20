@@ -153,29 +153,26 @@ option(CGBA_FXCG100_STORAGE
   "Enable gint_world_switch-backed fx-CG100 BFile storage for ROM/config files" ON)
 option(CGBA_DEFAULT_OVERCLOCK
   "Apply the Ptune 4 F5 profile while gpSP is running" ON)
-# The .cgba.highbss arena must end at or below 0x8c655300, the ONLY layout
-# proven safe on real hardware. Growing the arena hard-reset the calculator
-# twice: a 1.5 MB ROM cache (arena end 0x8c715300) overwrote the resident MPM
-# loader at 0x8c700000, and even 1152 KB (end 0x8c6b5300) reset because live OS
-# state sits below it. Do not raise the arena end without an on-device probe.
-#
-# The hybrid cartridge map keeps contiguous 32 KiB pages on the existing direct
-# path and resolves fragmented pages through sanitized 4 KiB NOR pointers. Only
-# unsafe blocks need the aligned gather fallback, so one 1 MiB / 32-page cache is
-# sufficient. The 256 KiB embedded mini-ROM staging area is separate from that
-# cache and from its 864 KiB savestate scratch use. Compared with the former
-# 2 MiB shared cache, this layout recovers 768 KiB: 256 KiB grows the RAM JIT to
-# the conservative 1024/512 profile and 512 KiB remains below the hardware-proven
-# arena ceiling.
-# The 8-dispatch cold gate plus 4-count flush leak is the July 2026 Yoshi
-# A/LEFT cache-sim default: it trims repeated cold fallback after cache flushes
-# while keeping leaky decay to avoid the threshold-0 translate-everything cliff.
-set(CGBA_GPSP_ROM_TRANSLATION_CACHE_SIZE "1048576" CACHE STRING
+# MPM 1.1+ on fx-CG100 relocates to 0x8c7f0000 and places URAM in OS AppMemory
+# (0x8c160000), loading gpSP's ROM near 0x8c740000 and reporting [0x8c200000,
+# romAddress) via loadinfo (_ld1). That opens ~5.25 MiB of contiguous high RAM,
+# allowing a 2.25 MiB (2304 KiB) ROM translation cache and 13-bit (32 KiB)
+# branch hash (~0x8c6dd700 arena end, ~394 KiB below romAddress) while main.c
+# checks the exact _ld1 ceiling at runtime. fx-CG50 keeps its 1 MiB ROM cache
+# so its RAM-resident hottext stays within the conservative 0x8c6f0000 cap.
+if(CGBA_FXCG50 AND NOT CGBA_CLASSPAD)
+  set(_CGBA_DEFAULT_ROM_CACHE "1048576")
+  set(_CGBA_DEFAULT_ROM_HASH_BITS "12")
+else()
+  set(_CGBA_DEFAULT_ROM_CACHE "2359296")
+  set(_CGBA_DEFAULT_ROM_HASH_BITS "13")
+endif()
+set(CGBA_GPSP_ROM_TRANSLATION_CACHE_SIZE "${_CGBA_DEFAULT_ROM_CACHE}" CACHE STRING
   "SH4 dynarec ROM translation cache size in bytes")
 set(CGBA_GPSP_RAM_TRANSLATION_CACHE_SIZE "524288" CACHE STRING
   "SH4 dynarec RAM translation cache size in bytes")
-set(CGBA_GPSP_ROM_BRANCH_HASH_BITS "12" CACHE STRING
-  "SH4 dynarec ROM branch-hash = 2^N u32 entries; 12 is 16 KiB, which is friendlier to the SH7305 cache than the upstream 16 / 256 KiB table")
+set(CGBA_GPSP_ROM_BRANCH_HASH_BITS "${_CGBA_DEFAULT_ROM_HASH_BITS}" CACHE STRING
+  "SH4 dynarec ROM branch-hash = 2^N u32 entries (12 = 16 KiB, 13 = 32 KiB)")
 if(CGBA_CLASSPAD)
   # The ClassPad II arena is in the OS heap and not under the fx-CG ceiling
   # above, so the ROM cache is 2.125 MiB (2176 KiB) there: Pokemon Emerald was
@@ -724,10 +721,10 @@ target_link_options(cgba-gint-gpsp PRIVATE
 
 # Headless profiling retains extra counters, and the differential harness adds
 # a full-state snapshot plus oracle copies. Both modes are emulator-only;
-# production links use the hardware-proven 0x8c655300 ceiling.
+# production links use the MPM 1.1+ 0x8c720000 ceiling.
 if(CGBA_GPSP_HEADLESS_TEST OR CGBA_SH4_DIFF_HARNESS)
   target_link_options(cgba-gint-gpsp PRIVATE
-    -Wl,--defsym=cgba_highram_limit=0x8c6F0000)
+    -Wl,--defsym=cgba_highram_limit=0x8c780000)
 endif()
 
 if(CGBA_CLASSPAD)

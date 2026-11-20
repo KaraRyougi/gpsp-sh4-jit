@@ -1,4 +1,8 @@
 #include <gint/display.h>
+#ifndef CGBA_CLASSPAD
+#include <gint/bfile.h>
+#include <gint/kmalloc.h>
+#endif
 
 #include <stdint.h>
 #include <stdio.h>
@@ -149,9 +153,12 @@ extern uint32_t cgba_sh4_arm_mixer_first_reg[10];
 #define CGBA_HIGHRAM_SAFE_START ((uintptr_t)0x8c200000u)
 #if defined(CGBA_FXCG100) && !defined(CGBA_GPSP_HEADLESS_TEST) && \
 	!defined(CGBA_SH4_DIFF_HARNESS)
-/* This is the only end address proven safe on physical fx-CG100 hardware.
- * A 0x8c6b5300 arena already caused an OS reset while loading a ROM. */
+/* Legacy-MPM fallback ceiling when the loader does not report loadinfo (_ld1).
+ * MPM 1.1+ relocates to 0x8c7f0000 and passes [0x8c200000, romAddress) via
+ * loadinfo, which cgba_claim_loader_arena() captures before highbss is used. */
 #define CGBA_HIGHRAM_SAFE_END   ((uintptr_t)0x8c655300u)
+#elif defined(CGBA_FXCG100)
+#define CGBA_HIGHRAM_SAFE_END   ((uintptr_t)0x8c780000u)
 #else
 #define CGBA_HIGHRAM_SAFE_END   ((uintptr_t)0x8c6f0000u)
 #endif
@@ -163,6 +170,39 @@ extern char cgba_arena_start[];
 extern char cgba_arena_end[];
 #elif defined(CGBA_FXCG50)
 extern char ecgba_hottext[];
+#elif defined(CGBA_FXCG100)
+/* Bounds of the loader-provided RAM window reported by MPM 1.1+ via gint's
+ * "_ld1" kmalloc arena. Zero if launched by an older loader or HLE emulator. */
+static uintptr_t cgba_loader_ram_start;
+static uintptr_t cgba_loader_ram_end;
+static int cgba_loader_arena_busy;
+
+/* Detach gint's "_ld1" arena before gpSP claims .cgba.highbss at 0x8c200000.
+ * Otherwise clearing highbss wipes _ld1's heap metadata and any later kmalloc
+ * fallback into _ld1 would corrupt live emulator memory.
+ *
+ * NOTE: gint's kinit() allocates the "_ld1" kmalloc_arena_t via kmalloc()
+ * without zeroing arena->stats, so ld1->stats.live_blocks holds uninitialized
+ * RAM garbage! Use kmalloc_get_gint_stats(ld1)->used_memory instead, which
+ * kmalloc_init_arena(arena, true) explicitly zeroes. */
+static void cgba_claim_loader_arena(void)
+{
+	kmalloc_arena_t *ld1 = kmalloc_get_arena("_ld1");
+	kmalloc_gint_stats_t *gstats;
+
+	if(!ld1)
+		return;
+	cgba_loader_ram_start = (uintptr_t)ld1->start;
+	cgba_loader_ram_end = (uintptr_t)ld1->end;
+	gstats = kmalloc_get_gint_stats(ld1);
+	if(gstats && gstats->used_memory == 0) {
+		kmalloc_remove_arena(ld1);
+		kfree(ld1);
+	} else {
+		ld1->is_default = 0;
+		cgba_loader_arena_busy = 1;
+	}
+}
 #endif
 
 /* 4-byte aligned: the scaled presenters read rows as packed u32 pairs. */
@@ -203,13 +243,22 @@ static int gpsp_highbss_range_ok(void)
 		end <= (uintptr_t)cgba_arena_end;
 	#elif defined(CGBA_FXCG50)
 	uintptr_t end = (uintptr_t)ecgba_hottext;
-	#else
-	uintptr_t end = (uintptr_t)cgba_highbss_end;
-	#endif
 
 	return start >= CGBA_HIGHRAM_SAFE_START &&
 		end > start &&
 		end <= CGBA_HIGHRAM_SAFE_END;
+	#else
+	uintptr_t end = (uintptr_t)cgba_highbss_end;
+
+	if(cgba_loader_arena_busy)
+		return 0;
+	if(cgba_loader_ram_end > cgba_loader_ram_start)
+		return start >= cgba_loader_ram_start && end > start &&
+			end <= cgba_loader_ram_end;
+	return start >= CGBA_HIGHRAM_SAFE_START &&
+		end > start &&
+		end <= CGBA_HIGHRAM_SAFE_END;
+	#endif
 }
 
 static void clear_gpsp_highbss(void)
@@ -376,7 +425,21 @@ static int start_gpsp(uint16_t *framebuffer, unsigned rom_id)
 	draw_status("clearing gpSP memory", NULL);
 
 	if(!gpsp_highbss_range_ok()) {
+#if defined(CGBA_FXCG100)
+		char detail[48];
+		if(cgba_loader_arena_busy)
+			snprintf(detail, sizeof(detail), "_ld1 busy (%08lx)",
+				(unsigned long)cgba_loader_ram_end);
+		else if(cgba_loader_ram_end)
+			snprintf(detail, sizeof(detail), "%08lx > %08lx",
+				(unsigned long)(uintptr_t)cgba_highbss_end,
+				(unsigned long)cgba_loader_ram_end);
+		else
+			snprintf(detail, sizeof(detail), "update mpm.bin (1.1+)");
+		draw_status("unsafe gpSP RAM map", detail);
+#else
 		draw_status("unsafe gpSP RAM map", "not starting");
+#endif
 		wait_briefly();
 		return -1;
 	}
@@ -782,27 +845,9 @@ static int headless_last_frame(unsigned frame)
 }
 
 #ifdef CGBA_DYNAREC
-#define CGBA_HEADLESS_BFILE_FILE 1
-#define CGBA_HEADLESS_BFILE_READ_ONLY 0x01
-#define CGBA_HEADLESS_BFILE_WRITE_ONLY 0x02
-
-#define CGBA_HEADLESS_BFILE_OPEN   ((uintptr_t)0x803338d0u)
-#define CGBA_HEADLESS_BFILE_SIZE   ((uintptr_t)0x80333b04u)
-#define CGBA_HEADLESS_BFILE_CREATE ((uintptr_t)0x80333ef0u)
-#define CGBA_HEADLESS_BFILE_REMOVE ((uintptr_t)0x80334212u)
-#define CGBA_HEADLESS_BFILE_READ   ((uintptr_t)0x80333dc2u)
-#define CGBA_HEADLESS_BFILE_WRITE  ((uintptr_t)0x80333f9eu)
-#define CGBA_HEADLESS_BFILE_CLOSE  ((uintptr_t)0x80333a4eu)
-
-typedef int (*cgba_headless_bfile_open_t)(const uint16_t *path, int mode);
-typedef int (*cgba_headless_bfile_size_t)(int fd);
-typedef int (*cgba_headless_bfile_create_t)(const uint16_t *path, int type,
-	int *size);
-typedef int (*cgba_headless_bfile_remove_t)(const uint16_t *path);
-typedef int (*cgba_headless_bfile_read_t)(int fd, void *dst, int size,
-	int offset);
-typedef int (*cgba_headless_bfile_write_t)(int fd, const void *src, int size);
-typedef int (*cgba_headless_bfile_close_t)(int fd);
+#define CGBA_HEADLESS_BFILE_FILE BFile_File
+#define CGBA_HEADLESS_BFILE_READ_ONLY BFile_ReadOnly
+#define CGBA_HEADLESS_BFILE_WRITE_ONLY BFile_WriteOnly
 
 static const uint16_t headless_checkpoint_path[] = {
 	'\\', '\\', 'f', 'l', 's', '0', '\\',
@@ -811,37 +856,27 @@ static const uint16_t headless_checkpoint_path[] = {
 
 static int headless_bfile_open(const uint16_t *path, int mode)
 {
-	cgba_headless_bfile_open_t fn =
-		(cgba_headless_bfile_open_t)CGBA_HEADLESS_BFILE_OPEN;
-	return fn(path, mode);
+	return BFile_Open(path, mode);
 }
 
 static int headless_bfile_size(int fd)
 {
-	cgba_headless_bfile_size_t fn =
-		(cgba_headless_bfile_size_t)CGBA_HEADLESS_BFILE_SIZE;
-	return fn(fd);
+	return BFile_Size(fd);
 }
 
 static int headless_bfile_create(const uint16_t *path, int type, int *size)
 {
-	cgba_headless_bfile_create_t fn =
-		(cgba_headless_bfile_create_t)CGBA_HEADLESS_BFILE_CREATE;
-	return fn(path, type, size);
+	return BFile_Create(path, type, size);
 }
 
 static void headless_bfile_remove(const uint16_t *path)
 {
-	cgba_headless_bfile_remove_t fn =
-		(cgba_headless_bfile_remove_t)CGBA_HEADLESS_BFILE_REMOVE;
-	fn(path);
+	(void)BFile_Remove(path);
 }
 
 static int headless_bfile_read(int fd, void *dst, int size, int offset)
 {
-	cgba_headless_bfile_read_t fn =
-		(cgba_headless_bfile_read_t)CGBA_HEADLESS_BFILE_READ;
-	return fn(fd, dst, size, offset);
+	return BFile_Read(fd, dst, size, offset);
 }
 
 static int headless_bfile_read_exact_ok(int result, int size)
@@ -851,16 +886,12 @@ static int headless_bfile_read_exact_ok(int result, int size)
 
 static int headless_bfile_write(int fd, const void *src, int size)
 {
-	cgba_headless_bfile_write_t fn =
-		(cgba_headless_bfile_write_t)CGBA_HEADLESS_BFILE_WRITE;
-	return fn(fd, src, size);
+	return BFile_Write(fd, src, size);
 }
 
 static void headless_bfile_close(int fd)
 {
-	cgba_headless_bfile_close_t fn =
-		(cgba_headless_bfile_close_t)CGBA_HEADLESS_BFILE_CLOSE;
-	fn(fd);
+	(void)BFile_Close(fd);
 }
 
 static int headless_storage_blob_size(const uint16_t *path)
@@ -2636,6 +2667,9 @@ int main(void)
 	cgba_classpad_arena_release();
 	return code;
 #else
+#if defined(CGBA_FXCG100)
+	cgba_claim_loader_arena();
+#endif
 	return gpsp_main();
 #endif
 }

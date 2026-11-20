@@ -47,32 +47,51 @@
 #define CGBA_BFILE_FIND_FIRST        cp_bfile_find_first
 #define CGBA_BFILE_FIND_NEXT         cp_bfile_find_next
 #define CGBA_BFILE_FIND_CLOSE        cp_bfile_find_close
-#elif defined(CGBA_FXCG50)
-/* fx-CG50: use gint's portable BFile_* for the ordinary calls, and OS syscall
- * 0x1DAA (via the cg50_syscall.S trampoline) for Bfile_GetBlockAddress, which
- * gint does not wrap. The wrappers below and the NOR block-gather / P2->P1
- * mapping are model-independent. */
+#else
+/* Both fx-CG50 and fx-CG100 use gint's portable BFile_* for the ordinary
+ * calls (gint dispatches dynamically by OS version on fx-CG100 and through the
+ * syscall table on fx-CG50). gint does not wrap Bfile_GetBlockAddress: fx-CG50
+ * invokes syscall 0x1DAA via cg50_syscall.S, and fx-CG100 resolves the OS entry
+ * point from the ROM version string at 0x80020020. */
+#if defined(CGBA_FXCG50)
 extern int cgba_cg50_bfile_get_block_address(int fd, int offset, void **addr);
+#elif !defined(CGBA_BFILE_GET_BLOCK_ADDRESS)
+static int cgba_cg100_bfile_get_block_address(int fd, int offset, void **addr)
+{
+	typedef int (*get_block_address_fn)(int, int, void **);
+	const char *version = (const char *)0x80020020u;
+	uintptr_t entry = 0;
+
+	if(memcmp(version, "01.00", 5) == 0)
+		entry = 0x8023ffb2u;
+	else if(memcmp(version, "02.00", 5) == 0)
+		entry = 0x80333cf2u;
+	else if(memcmp(version, "02.10", 5) == 0)
+		entry = 0x8039675au;
+
+	if(!entry) {
+		if(addr)
+			*addr = NULL;
+		return -1;
+	}
+	return ((get_block_address_fn)entry)(fd, offset, addr);
+}
+#endif
 #ifndef CGBA_BFILE_OPEN
 #define CGBA_BFILE_OPEN              BFile_Open
 #define CGBA_BFILE_SIZE              BFile_Size
-#define CGBA_BFILE_READ             BFile_Read
-#define CGBA_BFILE_CLOSE            BFile_Close
-#define CGBA_BFILE_GET_BLOCK_ADDRESS cgba_cg50_bfile_get_block_address
-#define CGBA_BFILE_FIND_FIRST       BFile_FindFirst
-#define CGBA_BFILE_FIND_NEXT        BFile_FindNext
-#define CGBA_BFILE_FIND_CLOSE       BFile_FindClose
+#define CGBA_BFILE_READ              BFile_Read
+#define CGBA_BFILE_CLOSE             BFile_Close
+#define CGBA_BFILE_FIND_FIRST        BFile_FindFirst
+#define CGBA_BFILE_FIND_NEXT         BFile_FindNext
+#define CGBA_BFILE_FIND_CLOSE        BFile_FindClose
 #endif
+#ifndef CGBA_BFILE_GET_BLOCK_ADDRESS
+#if defined(CGBA_FXCG50)
+#define CGBA_BFILE_GET_BLOCK_ADDRESS cgba_cg50_bfile_get_block_address
 #else
-#ifndef CGBA_BFILE_OPEN
-#define CGBA_BFILE_OPEN              ((uintptr_t)0x803338d0u)
-#define CGBA_BFILE_SIZE              ((uintptr_t)0x80333b04u)
-#define CGBA_BFILE_READ              ((uintptr_t)0x80333dc2u)
-#define CGBA_BFILE_CLOSE             ((uintptr_t)0x80333a4eu)
-#define CGBA_BFILE_GET_BLOCK_ADDRESS ((uintptr_t)0x80333cf2u)
-#define CGBA_BFILE_FIND_FIRST        ((uintptr_t)0x803345c8u)
-#define CGBA_BFILE_FIND_NEXT         ((uintptr_t)0x80334846u)
-#define CGBA_BFILE_FIND_CLOSE        ((uintptr_t)0x80334950u)
+#define CGBA_BFILE_GET_BLOCK_ADDRESS cgba_cg100_bfile_get_block_address
+#endif
 #endif
 #endif
 
