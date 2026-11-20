@@ -122,15 +122,20 @@ typedef struct fxcg100_menu_state {
   uint32_t touch_keys;
   /* ClassPad II only: 0 sends the picture by DMA, 1 by CPU writes. */
   uint32_t lcd_cpu;
-  /* ClassPad II only: wait for the panel's refresh before each frame. */
+  /* Wait for the panel's refresh before each frame (ClassPad II via DCS 0x45,
+   * fx-CG100/fx-CG50 R61524 via PR.5 FMARK). */
   uint32_t lcd_sync;
-  /* ... and where the picture is in the panel's row count, 0..15. */
+  /* ClassPad II: where the picture is in the panel's row count, 0..15. */
   uint32_t lcd_sync_offset;
   /* ClassPad II only: backlight level 1..16 and PWM rate 1..9; 0 leaves what
    * the system set. */
   uint32_t backlight;
   uint32_t backlight_pwm;
-  /* ClassPad II only: panel refresh rate preset (0 = System, 1..8 = 60..100 Hz). */
+  /* Panel refresh rate preset (shared 0..2 prefix):
+   *   0 = Auto (59.73 Hz (GBA) w/ VSync, System w/o), 1 = System,
+   *   2 = 59.73 Hz (GBA);
+   *   ClassPad II: 3..9 = 66, 72, 78, 85, 90, 95, 100 Hz
+   *   fx-CG100/50: 3..6 = 75, 90, 120 (2x GBA), 150 Hz */
   uint32_t lcd_refresh;
   /* Interface appearance: colour scheme (CP_THEME_*), dark mode (1 = dark,
    * 0 = light), and whether the ClassPad II interface animates. */
@@ -234,6 +239,11 @@ void fxcg100_lcd_set_scale(uint32_t mode);
 /* Scale filter (menu SCALE FILTER), applied to the scaled modes:
  * 0 = SMOOTH, 1 = SHARP, 2 = CRISP (nearest). */
 void fxcg100_lcd_set_filter(uint32_t filter);
+/* Start each frame where the panel's refresh will not meet it
+ * (classpad_sync.h on ClassPad II, fxcg_sync.h on fx-CG100/fx-CG50 R61524). */
+void fxcg100_lcd_set_sync(uint32_t wait, uint32_t offset);
+/* Panel refresh rate preset (see fxcg100_menu_state.lcd_refresh). */
+void fxcg100_lcd_set_refresh(uint32_t rate);
 #ifdef CGBA_CLASSPAD
 /* ClassPad II: on that model fxcg100_lcd_set_scale() takes a CP_VIEW_* layout
  * (classpad_layout.h) instead of the fx-CG scale modes above. */
@@ -248,11 +258,6 @@ void fxcg100_lcd_set_menu_key(uint32_t clear_opens_menu);
 /* Colour scheme of the touch keys (CP_THEME_*, classpad_theme.h). */
 void fxcg100_lcd_set_theme(uint32_t theme);
 void fxcg100_lcd_set_transfer(uint32_t cpu_writes);
-/* ClassPad II: start each frame where the panel's refresh will not meet it
- * (classpad_sync.h), and what is known about that refresh. */
-void fxcg100_lcd_set_sync(uint32_t wait, uint32_t offset);
-/* ClassPad II: panel refresh rate preset (0 = System, 1..8 = 60..100 Hz). */
-void fxcg100_lcd_set_refresh(uint32_t rate);
 /* While the page that sets the offset is open: every frame waits, with
  * almost no room to spare, so that a wrong offset shows. Opening it counts
  * the panel's rows again. */

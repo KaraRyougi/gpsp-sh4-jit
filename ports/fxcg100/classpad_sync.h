@@ -22,6 +22,8 @@
 
 #include <stdint.h>
 
+#include "lcd_sync_common.h"
+
 #define CP_SYNC_MARGIN 24u
 
 /* The counter is read as two bytes while it runs, and nothing says the
@@ -49,6 +51,7 @@ typedef struct cp_scan_probe {
 	uint32_t believed;   /* reads the one after agreed with */
 	uint32_t max;        /* the highest row believed */
 	uint32_t prev;       /* the read before, believed or not */
+	uint32_t first;      /* the first row believed */
 	uint32_t last;       /* the last row believed */
 	uint32_t wraps;      /* believed rows went back to the start: a refresh */
 	uint32_t backward;   /* a read fell back a little: not a counter */
@@ -58,7 +61,9 @@ static inline void cp_scan_probe_add(cp_scan_probe *p, uint32_t value)
 {
 	if(p->samples) {
 		if(value >= p->prev && value <= p->prev + CP_SCAN_STEP) {
-			if(p->believed && value + 64u < p->last)
+			if(!p->believed)
+				p->first = value;
+			else if(value + 64u < p->last)
 				p->wraps++;
 			if(value > p->max)
 				p->max = value;
@@ -70,6 +75,24 @@ static inline void cp_scan_probe_add(cp_scan_probe *p, uint32_t value)
 	}
 	p->prev = value;
 	p->samples++;
+}
+
+/* Fractional refresh rate in millihertz from a completed probe over `ticks`
+ * 128ths of a second and detected `total` rows per refresh. Includes the
+ * partial refresh (last - first) for ~0.05 Hz precision over a 250 ms probe. */
+static inline uint32_t cp_scan_probe_mhz(const cp_scan_probe *p,
+	uint32_t ticks, uint32_t total)
+{
+	int64_t rows;
+
+	if(!ticks || !total || !p->believed)
+		return 0u;
+	rows = (int64_t)p->wraps * (int64_t)total + (int64_t)p->last -
+		(int64_t)p->first;
+	if(rows <= 0)
+		return 0u;
+	return (uint32_t)(((uint64_t)rows * 128000ull +
+		((uint64_t)ticks * total) / 2u) / ((uint64_t)ticks * total));
 }
 
 /* After sampling for `ticks` 128ths of a second. Returns the rows in one
@@ -168,6 +191,30 @@ static inline int cp_sync_window_part(uint32_t total, uint32_t rows,
 			*hi -= late;
 		}
 	}
+	return *lo < *hi;
+}
+
+static inline int cp_sync_window_part_range(uint32_t total, uint32_t rows,
+	uint32_t lines_min, uint32_t lines_max, int descending, uint32_t part,
+	uint32_t strip, uint32_t *lo, uint32_t *hi)
+{
+	uint32_t lo1, hi1, lo2, hi2;
+
+	if(lines_max < lines_min)
+		lines_max = lines_min;
+	if(!cp_sync_window_part(total, rows, lines_min, descending, part, strip,
+			&lo1, &hi1))
+		return 0;
+	if(lines_max == lines_min) {
+		*lo = lo1;
+		*hi = hi1;
+		return 1;
+	}
+	if(!cp_sync_window_part(total, rows, lines_max, descending, part, strip,
+			&lo2, &hi2))
+		return 0;
+	*lo = lo1 > lo2 ? lo1 : lo2;
+	*hi = hi1 < hi2 ? hi1 : hi2;
 	return *lo < *hi;
 }
 
@@ -293,7 +340,7 @@ static inline uint32_t cp_sync_track_lines_n(const cp_sync_track *t,
 	if(t->strips < 2u || total_strips < 2u)
 		return 0;
 	span = t->wraps * t->total + t->last - t->first;
-	return span * total_strips / (total_strips - 1u);
+	return cgba_sync_scale_strips(span, total_strips);
 }
 
 static inline uint32_t cp_sync_track_lines(const cp_sync_track *t)
@@ -301,19 +348,18 @@ static inline uint32_t cp_sync_track_lines(const cp_sync_track *t)
 	return cp_sync_track_lines_n(t, t->strips);
 }
 
-/* Smooth per-kind frame write duration (in panel rows): follow increases
- * quickly so slower frames tighten the window right away, and decay
- * decreases slowly so an unusually fast frame cannot cause edge tearing. */
+/* Smooth per-kind frame write duration (in panel rows): delegates to the
+ * shared cgba_sync_smooth() asymmetric smoother. */
 static inline uint32_t cp_sync_smooth_lines(uint32_t cur, uint32_t measured,
 	uint32_t total)
 {
-	if(!measured || !total || measured > total * 3u)
-		return cur;
-	if(!cur)
-		return measured;
-	if(measured >= cur)
-		return (cur + measured + 1u) / 2u;
-	return (cur * 7u + measured + 4u) / 8u;
+	return cgba_sync_smooth(cur, measured, total * 3u);
+}
+
+static inline uint32_t cp_sync_smooth_lines_min(uint32_t cur,
+	uint32_t measured, uint32_t total)
+{
+	return cgba_sync_smooth_min(cur, measured, total * 3u);
 }
 
 /* Conservative backoff delay (in microseconds) while waiting for the panel
@@ -430,40 +476,133 @@ static inline uint32_t cp_backlight_min_level(uint32_t pwm)
 
 /* ---- panel refresh rate (OS 02.01.7003 @ 0x8003887e / [FRAME Freq SET]) --- */
 
-/* 0 = System (leave OS default untouched), 1..8 = 60..100 Hz presets drawn
- * directly from Casio OS's [FRAME Freq SET] RTN tables (0x80817c24 for
- * 0x16/0x52, 0x80817b04 for R61523). */
-#define CP_REFRESH_COUNT 9u
+/* Unified refresh-rate presets (aligned with fx-CG50 / fx-CG100):
+ *   0 = Auto           (59.73 Hz (GBA) when VSync is On, System when Off)
+ *   1 = System         (leave OS stock panel timing untouched)
+ *   2 = 59.73 Hz (GBA) (1x native GBA, 59.7275 Hz)
+ *   3..9 = 66, 72, 78, 85, 90, 95, 100 Hz high-refresh presets. */
+#define CP_REFRESH_COUNT       10u
+#define CP_REFRESH_NEW_STOCK_MHZ 57320u /* measured 0x16 unit at RTN=0x9D */
+#define CP_REFRESH_NEW_VBP_ALL 12u      /* 548 - 528 - 8 VFP = 12 fixed rows */
+#define CP_REFRESH_NEW_VFP_STOCK 8u
+#define CP_REFRESH_NEW_VFP_MAX 24u      /* HZPROBE.TXT verified up to 32 */
+#define CP_REFRESH_NEW_RTN_MIN 50u
+#define CP_REFRESH_NEW_RTN_MAX 253u
 
+/* Effective target refresh rate in millihertz for a (refresh_mode, vsync_on)
+ * pair. Mode 0 (Auto) targets 59.728 Hz when VSync is on and leaves stock
+ * timing alone when VSync is off. Returns 0 for stock panel timing. */
+static inline uint32_t cp_refresh_target_mhz(uint32_t rate, uint32_t vsync_on)
+{
+	switch(rate) {
+	case 0u: return vsync_on ? CGBA_SYNC_RATE_GBA_MHZ : 0u; /* Auto */
+	case 1u: return 0u;                                     /* System */
+	case 2u: return CGBA_SYNC_RATE_GBA_MHZ;                 /* 59.73 Hz (GBA) */
+	case 3u: return CGBA_SYNC_RATE_66_MHZ;
+	case 4u: return CGBA_SYNC_RATE_72_MHZ;
+	case 5u: return CGBA_SYNC_RATE_78_MHZ;
+	case 6u: return CGBA_SYNC_RATE_85_MHZ;
+	case 7u: return CGBA_SYNC_RATE_90_MHZ;
+	case 8u: return CGBA_SYNC_RATE_95_MHZ;
+	case 9u: return CGBA_SYNC_RATE_100_MHZ;
+	default: return 0u;
+	}
+}
+
+/* Nominal integer Hz for display / scaling fallbacks (0 for Auto / System). */
 static inline uint32_t cp_refresh_hz(uint32_t rate)
 {
 	static const uint8_t hz[CP_REFRESH_COUNT] = {
-		0, 60, 66, 72, 78, 85, 90, 95, 100
+		0, 0, 60, 66, 72, 78, 85, 90, 95, 100
 	};
 
 	return rate < CP_REFRESH_COUNT ? (uint32_t)hz[rate] : 0u;
 }
 
-/* RTN byte for 0x16/0x52 (0xB2 byte 6 and 0xDF byte 12; OS range 50..253,
- * default 0x9D = 157, nominal 58 Hz / ~56-57 Hz real). Stop 1 (0x8C) sits
- * just above 60 Hz even on units with a -3% internal RC oscillator. */
+/* Nominal RTN byte for 0x16/0x52 (0xB2 byte 6 and 0xDF byte 12; OS range
+ * 50..253, default 0x9D = 157, ~57.3 Hz real). Used as fallback table when
+ * no measured stock frequency is available yet. */
 static inline uint8_t cp_refresh_rtn_new(uint32_t rate)
 {
 	static const uint8_t rtn[CP_REFRESH_COUNT] = {
-		0x9du, 0x8cu, 0x7au, 0x6bu, 0x5cu, 0x4au, 0x42u, 0x3au, 0x32u
+		0x9du, 0x9du, 0x92u, 0x7au, 0x6bu, 0x5cu, 0x4au, 0x42u, 0x3au, 0x32u
 	};
 
 	return rate < CP_REFRESH_COUNT ? rtn[rate] : 0x9du;
 }
 
-/* RTN byte for R61523 (0xC1/0xC3 byte 3; OS range 18..63, default 0x1F = 31). */
+/* Nominal RTN byte for R61523 (0xC1/0xC3 byte 3; OS range 18..63, default 31). */
 static inline uint8_t cp_refresh_rtn_r61523(uint32_t rate)
 {
 	static const uint8_t rtn[CP_REFRESH_COUNT] = {
-		31u, 30u, 27u, 25u, 23u, 21u, 20u, 19u, 18u
+		31u, 31u, 31u, 27u, 25u, 23u, 21u, 20u, 19u, 18u
 	};
 
 	return rate < CP_REFRESH_COUNT ? rtn[rate] : 31u;
+}
+
+/* Jointly solve (VFP, RTN) for ClassPad II 0x16/0x52 to hit `target_mhz`
+ * from measured `stock_mhz` (falls back to 57320 mHz if 0). Allows VFP in
+ * [8..24] for 59.73 Hz (GBA) precision (~0.01 Hz error) and keeps VFP = 8
+ * (548 rows) for high-refresh stops >= 66 Hz to maximize the VSync window. */
+static inline void cp_refresh_solve_new(uint32_t stock_mhz,
+	uint32_t target_mhz, uint8_t *vfp_out, uint8_t *rtn_out,
+	uint32_t *total_out)
+{
+	cgba_timing_spec spec;
+	uint32_t fp, rtn, total;
+
+	if(!target_mhz) {
+		*vfp_out = (uint8_t)CP_REFRESH_NEW_VFP_STOCK;
+		*rtn_out = 0x9du;
+		*total_out = 528u + CP_REFRESH_NEW_VBP_ALL + CP_REFRESH_NEW_VFP_STOCK;
+		return;
+	}
+	if(!stock_mhz)
+		stock_mhz = CP_REFRESH_NEW_STOCK_MHZ;
+	spec.visible_rows = 528u;
+	spec.bp_rows = CP_REFRESH_NEW_VBP_ALL;
+	spec.orig_fp = CP_REFRESH_NEW_VFP_STOCK;
+	spec.orig_rtn = 0x9du;
+	spec.rtn_bias = CGBA_HIMAX_RTN_BIAS;
+	spec.min_fp = CP_REFRESH_NEW_VFP_STOCK;
+	spec.max_fp = (target_mhz <= 62000u)
+		? CP_REFRESH_NEW_VFP_MAX : CP_REFRESH_NEW_VFP_STOCK;
+	spec.min_rtn = CP_REFRESH_NEW_RTN_MIN;
+	spec.max_rtn = CP_REFRESH_NEW_RTN_MAX;
+
+	cgba_sync_solve_vfp_rtn_mhz(&spec, stock_mhz, target_mhz,
+		&fp, &rtn, &total);
+	*vfp_out = (uint8_t)fp;
+	*rtn_out = (uint8_t)rtn;
+	*total_out = total;
+}
+
+/* Solve RTN (18..63) for ClassPad II R61523 (0xC1/0xC3 byte 3) to hit
+ * `target_mhz` from measured `stock_mhz` and saved `orig_rtn`. */
+static inline uint8_t cp_refresh_solve_r61523(uint32_t stock_mhz,
+	uint32_t target_mhz, uint8_t orig_rtn)
+{
+	cgba_timing_spec spec;
+	uint32_t fp, rtn, total;
+
+	if(!target_mhz || orig_rtn < 18u || orig_rtn > 63u)
+		return orig_rtn;
+	if(!stock_mhz)
+		stock_mhz = 60000u;
+	spec.visible_rows = 528u;
+	spec.bp_rows = 27u;
+	spec.orig_fp = 0u;
+	spec.orig_rtn = orig_rtn;
+	spec.rtn_bias = 0u;
+	spec.min_fp = 0u;
+	spec.max_fp = 0u;
+	spec.min_rtn = 18u;
+	spec.max_rtn = 63u;
+
+	cgba_sync_solve_vfp_rtn_mhz(&spec, stock_mhz, target_mhz,
+		&fp, &rtn, &total);
+	return (uint8_t)rtn;
 }
 
 /* Sanity-check a 5-byte R61523 C1h (Display Timing Setting for Normal Mode)

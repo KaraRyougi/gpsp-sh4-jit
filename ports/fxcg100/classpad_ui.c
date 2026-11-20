@@ -2003,8 +2003,8 @@ static fxcg100_menu_result screen_settings(cp_ui *ui)
 	fxcg100_lcd_set_sync(st->lcd_sync, st->lcd_sync_offset);
 	{
 		static const char *const hz_labels[CP_REFRESH_COUNT] = {
-			"System", "60 Hz", "66 Hz", "72 Hz", "78 Hz",
-			"85 Hz", "90 Hz", "95 Hz", "100 Hz",
+			"Auto", "System", "59.73 Hz (GBA)", "66 Hz", "72 Hz",
+			"78 Hz", "85 Hz", "90 Hz", "95 Hz", "100 Hz",
 		};
 
 		changed |= row_slider_range(ui, &y, "Refresh rate", &st->lcd_refresh,

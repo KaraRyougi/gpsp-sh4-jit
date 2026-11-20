@@ -591,6 +591,25 @@ static void test_settings(void)
 	CHECK(st.screen_scale == 2, "picture size");
 	snap("settings");
 	press(FXCG100_APPKEY_DOWN);
+	CHECK(selected_row(&ui_main)->id == ID_FILTER, "filter row");
+	press(FXCG100_APPKEY_DOWN);
+	CHECK(selected_row(&ui_main)->id == ID_VSYNC, "vsync row: %d",
+		selected_row(&ui_main)->id);
+	CHECK(st.lcd_sync == 0, "vsync default off");
+	press(FXCG100_APPKEY_RIGHT);
+	CHECK(st.lcd_sync == 1, "vsync right toggles on");
+	press(FXCG100_APPKEY_EXE);
+	CHECK(st.lcd_sync == 0, "vsync EXE toggles back off");
+	press(FXCG100_APPKEY_DOWN);
+	CHECK(selected_row(&ui_main)->id == ID_REFRESH, "refresh row: %d",
+		selected_row(&ui_main)->id);
+	CHECK(st.lcd_refresh == 0, "refresh default auto");
+	press(FXCG100_APPKEY_RIGHT);
+	press(FXCG100_APPKEY_RIGHT);
+	CHECK(st.lcd_refresh == 2, "refresh cycles to 59.7 Hz");
+	press(FXCG100_APPKEY_LEFT);
+	press(FXCG100_APPKEY_LEFT);
+	CHECK(st.lcd_refresh == 0, "refresh back to auto");
 	press(FXCG100_APPKEY_DOWN);
 	press(FXCG100_APPKEY_RIGHT);
 	CHECK(st.theme == 1, "colour");
@@ -633,6 +652,8 @@ static void test_settings(void)
 	press(FXCG100_APPKEY_UP);
 	press(FXCG100_APPKEY_UP);
 	press(FXCG100_APPKEY_UP);
+	press(FXCG100_APPKEY_UP);
+	press(FXCG100_APPKEY_UP);
 	CHECK(selected_row(&ui_main)->id == ID_SIZE, "back at the top");
 	held_app = FXCG100_APPKEY_DOWN;
 	step();
@@ -642,10 +663,10 @@ static void test_settings(void)
 	CHECK(selected_row(&ui_main)->id == ID_FILTER, "repeated too soon");
 	now_ticks += 1;
 	step();
-	CHECK(selected_row(&ui_main)->id == ID_COLOUR, "no repeat after 400 ms");
+	CHECK(selected_row(&ui_main)->id == ID_VSYNC, "no repeat after 400 ms");
 	now_ticks += 10;
 	step();
-	CHECK(selected_row(&ui_main)->id == ID_DARK_MODE, "no repeat after 80 ms");
+	CHECK(selected_row(&ui_main)->id == ID_REFRESH, "no repeat after 80 ms");
 	/* Held to the end, it stops there rather than going round. */
 	for (i = 0; i < 20; i++) {
 		now_ticks += 10;
@@ -655,7 +676,7 @@ static void test_settings(void)
 		selected_row(&ui_main)->id);
 	held_app = 0;
 	step();
-	for (i = 0; i < 7; i++)
+	for (i = 0; i < 9; i++)
 		press(FXCG100_APPKEY_UP);
 	CHECK(selected_row(&ui_main)->id == ID_SIZE, "back up: %d",
 		selected_row(&ui_main)->id);
@@ -669,7 +690,7 @@ static void test_settings(void)
 	CHECK(!ui_main.message[0] && selected_row(&ui_main)->id == ID_SAVE,
 		"a key did not clear the message, or did not act");
 
-	/* Original is not scaled: no filter row. */
+	/* Original is not scaled: no filter row, VSync stays right after size. */
 	begin(1);
 	press(FXCG100_APPKEY_SETTINGS);
 	CHECK(st.screen_scale == 2 && row_index(&ui_main, ID_FILTER) >= 0,
@@ -678,7 +699,7 @@ static void test_settings(void)
 	CHECK(st.screen_scale == 0 && row_index(&ui_main, ID_FILTER) < 0,
 		"filter row shown for Original");
 	press(FXCG100_APPKEY_DOWN);
-	CHECK(selected_row(&ui_main)->id == ID_COLOUR, "row after size: %d",
+	CHECK(selected_row(&ui_main)->id == ID_VSYNC, "row after size: %d",
 		selected_row(&ui_main)->id);
 	press(FXCG100_APPKEY_UP);
 	press(FXCG100_APPKEY_LEFT);

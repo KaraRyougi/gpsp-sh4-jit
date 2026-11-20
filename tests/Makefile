@@ -17,11 +17,11 @@ comma   := ,
 DEAD_STRIP := $(if $(filter Darwin,$(shell uname -s)),\
 	-Wl$(comma)-dead_strip,-Wl$(comma)--gc-sections)
 
-.PHONY: all smoke audit core litpool thumb cond native-ldst input config-version storage lcd-cleanup scale classpad fxcg-ui txt-reader rtc backup-dirty nor-world-switch rom-library overclock cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc \
+.PHONY: all smoke audit core litpool thumb cond native-ldst input config-version storage lcd-cleanup scale classpad fxcg-ui fxcg-sync txt-reader rtc backup-dirty nor-world-switch rom-library overclock cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc \
 	swi-overlap swi-oam udiv udiv-emitter idle-signature video-opaque \
 	video-blend-cache video-backdrop-shadow video-sprite-decode video-tile-row-cache video-text-fastpaths video-dirty-scanline arm-mixer m4a-skip clean
 
-all: smoke core litpool thumb cond native-ldst rtc pacing backup-dirty nor-world-switch rom-library overclock input config-version storage lcd-cleanup scale classpad fxcg-ui txt-reader cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc swi-overlap swi-oam udiv \
+all: smoke core litpool thumb cond native-ldst rtc pacing backup-dirty nor-world-switch rom-library overclock input config-version storage lcd-cleanup scale classpad fxcg-ui fxcg-sync txt-reader cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc swi-overlap swi-oam udiv \
 	udiv-emitter idle-signature video-opaque video-blend-cache \
 	video-backdrop-shadow video-sprite-decode video-tile-row-cache video-text-fastpaths video-dirty-scanline arm-mixer m4a-skip audit
 
@@ -115,6 +115,7 @@ classpad: $(ROOT)/tests/classpad_render_test.c $(ROOT)/tests/classpad_elf_test.c
 	  $(ROOT)/ports/fxcg100/classpad_elf.h \
 	  $(ROOT)/ports/fxcg100/classpad_heap.h \
 	  $(ROOT)/tests/classpad_heap_test.c \
+	  $(ROOT)/ports/fxcg100/lcd_sync_common.h \
 	  $(ROOT)/ports/fxcg100/classpad_sync.h \
 	  $(ROOT)/tests/classpad_sync_test.c \
 	  $(ROOT)/ports/fxcg100/fxcg100_keys.c
@@ -160,6 +161,13 @@ fxcg-ui: $(ROOT)/tests/fxcg_ui_test.c $(ROOT)/ports/fxcg100/cg_ui.c \
 	  -I$(ROOT)/tests/stubs -I$(ROOT)/ports/fxcg100 -I$(ROOT) \
 	  $(ROOT)/tests/fxcg_ui_test.c -o $(BIN)-fxcg-ui-cg50
 	$(BIN)-fxcg-ui-cg50 $(FXCG_UI_DIR)
+
+# fx-CG100 / fx-CG50 PR.5 VSync window, solver, wraparound & drift tests.
+fxcg-sync: $(ROOT)/tests/fxcg_sync_test.c $(ROOT)/ports/fxcg100/fxcg_sync.h \
+	   $(ROOT)/ports/fxcg100/lcd_sync_common.h
+	$(CC) $(CFLAGS) -O2 -I$(ROOT) $(ROOT)/tests/fxcg_sync_test.c \
+	  -o $(BIN)-fxcg-sync
+	$(BIN)-fxcg-sync
 
 # Platform-independent in-game TXT reader engine (directory browsing, Direct
 # NOR + BFile fallback streaming, Wrap On/Off layout, 1-line overlap paging,

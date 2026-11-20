@@ -118,9 +118,10 @@ typedef struct fxcg100_config_file {
   /* The last free word, shared: bits 0-3 the refresh position, bits 8-12
    * the backlight level (0 leaves the system's), bits 16-19 the backlight
    * PWM rate (0 leaves the system's), bits 20-23 the panel refresh rate
-   * preset (0 leaves the system's, 1..8 = 60..100 Hz), bits 24-25 the
-   * library sort mode (FXCG100_GAME_SORT_*, 0 = Name), bit 26 light mode
-   * (stored inverted from dark_mode so that zero keeps dark mode on). */
+   * preset (0 = Auto 59.73 Hz w/ VSync, 1 = System, 2 = 59.73 Hz (GBA),
+   * 3..9 = platform high-refresh presets), bits 24-25 the library sort mode
+   * (FXCG100_GAME_SORT_*, 0 = Name), bit 26 light mode (stored inverted from
+   * dark_mode so that zero keeps dark mode on). */
   uint32_t lcd_extra;
 } fxcg100_config_file;
 
@@ -222,7 +223,7 @@ static int config_options_valid(const fxcg100_config_file *config)
     (config->lcd_extra & ~0x07ff1f0fu) == 0 &&
     ((config->lcd_extra >> 8) & 31u) <= 16u &&
     ((config->lcd_extra >> 16) & 15u) <= 9u &&
-    ((config->lcd_extra >> 20) & 15u) <= 8u &&
+    ((config->lcd_extra >> 20) & 15u) <= 9u &&
     ((config->lcd_extra >> 24) & 3u) < FXCG100_GAME_SORT_COUNT &&
     config->theme < 16 &&
     config->animations_off < 2 &&

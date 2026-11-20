@@ -120,7 +120,7 @@ enum {
 	ID_NONE = 0,
 	ID_RESUME, ID_SAVE, ID_LOAD, ID_READER, ID_SETTINGS, ID_GAMES, ID_RESTART,
 	ID_EXIT,
-	ID_SIZE, ID_FILTER, ID_COLOUR, ID_DARK_MODE, ID_FRAMESKIP, ID_SKIP_N,
+	ID_SIZE, ID_FILTER, ID_VSYNC, ID_REFRESH, ID_COLOUR, ID_DARK_MODE, ID_FRAMESKIP, ID_SKIP_N,
 	ID_SKIP_PATTERN,
 	ID_LIMIT, ID_SHOW_FPS, ID_KEYMAP, ID_DEBUG,
 	ID_RESET_KEYS,
@@ -670,6 +670,8 @@ static void rows_pause(cg_ui *ui)
 static const char *const size_names[] = { "Original", "Full Height",
 	"Full Screen" };
 static const char *const filter_names[] = { "Smooth", "Sharp", "Crisp" };
+static const char *const refresh_names[] = { "Auto", "System",
+	"59.73 Hz (GBA)", "75 Hz", "90 Hz", "120 Hz", "150 Hz" };
 static const char *const frameskip_names[] = { "Auto", "Manual", "Off" };
 static const char *const pattern_names[] = { "Uniform", "Random" };
 
@@ -692,6 +694,9 @@ static void rows_settings(cg_ui *ui)
 	if (st->screen_scale != 0)
 		add_value(ui, ID_FILTER, "Scaling filter", pick(filter_names, 3,
 			st->screen_filter));
+	add_value(ui, ID_VSYNC, "VSync", st->lcd_sync ? "On" : "Off");
+	add_value(ui, ID_REFRESH, "Refresh rate", pick(refresh_names, 7,
+		st->lcd_refresh));
 	add_row(ui, RK_SECTION, ID_NONE, "Appearance");
 	r = add_value(ui, ID_COLOUR, "Colour", cp_theme_names[st->theme <
 		CP_THEME_COUNT ? st->theme : 0]);
@@ -1697,6 +1702,12 @@ static void change_setting(cg_ui *ui, int id, int delta)
 	case ID_FILTER:
 		st->screen_filter = cycle(st->screen_filter, 3, delta);
 		break;
+	case ID_VSYNC:
+		st->lcd_sync = !st->lcd_sync;
+		break;
+	case ID_REFRESH:
+		st->lcd_refresh = cycle(st->lcd_refresh, 7, delta);
+		break;
 	case ID_COLOUR:
 		st->theme = cycle(st->theme, CP_THEME_COUNT, delta);
 		break;
@@ -2191,8 +2202,8 @@ static void input_settings(cg_ui *ui)
 			goto_page(ui, PAGE_KEYS);
 		else if (r->id == ID_DEBUG)
 			goto_page(ui, PAGE_DEBUG);
-		else if (r->id == ID_DARK_MODE || r->id == ID_LIMIT ||
-				r->id == ID_SHOW_FPS)
+		else if (r->id == ID_VSYNC || r->id == ID_DARK_MODE ||
+				r->id == ID_LIMIT || r->id == ID_SHOW_FPS)
 			change_setting(ui, r->id, 1);
 	}
 }

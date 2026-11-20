@@ -605,6 +605,21 @@ int main(void)
 		CHECK(cur == 235u, "smooth slow decay: %u", (unsigned)cur);
 		cur = cp_sync_smooth_lines(cur, TOTAL * 4u, TOTAL);
 		CHECK(cur == 235u, "smooth ignores spike: %u", (unsigned)cur);
+		{
+			uint32_t cmin = 0, rlo = 0, rhi = 0, lo1 = 0, hi1 = 0;
+
+			cmin = cp_sync_smooth_lines_min(cmin, 200u, TOTAL);
+			cmin = cp_sync_smooth_lines_min(cmin, 280u, TOTAL);
+			cmin = cp_sync_smooth_lines_min(cmin, 160u, TOTAL);
+			CHECK(cmin < 200u, "min smooth drops fast: %u", (unsigned)cmin);
+			CHECK(cp_sync_window_part_range(TOTAL, 212u, 120u, 260u, 0,
+					CP_SYNC_PART_GAME, 12u, &rlo, &rhi),
+				"dual-envelope classpad window exists");
+			CHECK(cp_sync_window_part(TOTAL, 212u, 120u, 0,
+					CP_SYNC_PART_GAME, 12u, &lo1, &hi1) &&
+				rlo >= lo1 && rhi <= hi1,
+				"dual window intersects min/max bounds");
+		}
 
 		/* Close to window start -> 0 backoff (tight poll). */
 		CHECK(cp_sync_wait_backoff_us(90u, 100u, TOTAL, 60u) == 0u,
@@ -621,14 +636,26 @@ int main(void)
 			(unsigned)b);
 	}
 
-	/* Refresh rate presets (0x16/0x52 and R61523) and C1h validator. */
+	/* Refresh rate presets (unified 0=Auto, 1=System, 2=59.73 Hz (GBA),
+	 * 3..9=66..100 Hz), joint (VFP, RTN) solver, and shared Himax builder. */
 	{
 		static const uint32_t expect_hz[CP_REFRESH_COUNT] = {
-			0, 60, 66, 72, 78, 85, 90, 95, 100
+			0, 0, 60, 66, 72, 78, 85, 90, 95, 100
 		};
 		static const uint8_t c1_ok[5] = { 0x00, 0x00, 0x1f, 0x00, 0x00 };
 		static const uint8_t c1_lo[5] = { 0x00, 0x00, 17u, 0x00, 0x00 };
 		static const uint8_t c1_hi[5] = { 0x00, 0x00, 64u, 0x00, 0x00 };
+		uint8_t vfp = 0, rtn = 0, b2[6], df[12];
+		uint32_t total = 0;
+
+		CHECK(cp_refresh_target_mhz(0u, 0u) == 0u,
+			"Auto + VSync Off -> stock");
+		CHECK(cp_refresh_target_mhz(0u, 1u) == CGBA_SYNC_RATE_GBA_MHZ,
+			"Auto + VSync On -> 59.73 Hz (GBA)");
+		CHECK(cp_refresh_target_mhz(1u, 1u) == 0u,
+			"System + VSync On -> stock");
+		CHECK(cp_refresh_target_mhz(2u, 0u) == CGBA_SYNC_RATE_GBA_MHZ,
+			"59.73 Hz (GBA) explicit");
 
 		for(i = 0; i < CP_REFRESH_COUNT; i++) {
 			uint8_t rn = cp_refresh_rtn_new(i);
@@ -643,7 +670,7 @@ int main(void)
 			CHECK(ro >= 18u && ro <= 63u,
 				"refresh %u R61523 RTN %u out of OS range", (unsigned)i,
 				(unsigned)ro);
-			if(i > 0) {
+			if(i >= 3u) {
 				CHECK(rn < cp_refresh_rtn_new(i - 1u),
 					"refresh %u new RTN not strictly decreasing", (unsigned)i);
 				CHECK(ro < cp_refresh_rtn_r61523(i - 1u),
@@ -657,6 +684,65 @@ int main(void)
 		CHECK(cp_r61523_c1_valid(c1_ok), "accepted valid R61523 C1h");
 		CHECK(!cp_r61523_c1_valid(c1_lo) && !cp_r61523_c1_valid(c1_hi),
 			"rejected out-of-range R61523 C1h RTN");
+
+		/* Measured 0x16 hardware baseline (57.32 Hz at VFP=8, RTN=0x9D):
+		 * solving for 59.728 Hz (GBA) uses VFP tuning to hit within 0.05 Hz. */
+		cp_refresh_solve_new(57320u, CGBA_SYNC_RATE_GBA_MHZ, &vfp, &rtn, &total);
+		CHECK(vfp >= 8u && vfp <= 24u && rtn >= 50u && rtn <= 253u,
+			"59.73 solve out of bounds: vfp=%u rtn=%u", vfp, rtn);
+		{
+			uint64_t stock_clk = 548ull * (0x9du + CGBA_HIMAX_RTN_BIAS);
+			uint64_t new_clk = (uint64_t)total * (rtn + CGBA_HIMAX_RTN_BIAS);
+			uint32_t got_mhz = (uint32_t)((57320ull * stock_clk +
+				new_clk / 2u) / new_clk);
+			uint32_t diff = got_mhz > CGBA_SYNC_RATE_GBA_MHZ
+				? got_mhz - CGBA_SYNC_RATE_GBA_MHZ
+				: CGBA_SYNC_RATE_GBA_MHZ - got_mhz;
+			CHECK(diff <= 50u,
+				"59.73 solve accuracy: got %u mHz (vfp=%u rtn=0x%02x total=%u)",
+				(unsigned)got_mhz, vfp, rtn, (unsigned)total);
+		}
+
+		/* High-refresh stops (>= 66 Hz) keep VFP=8 (548 rows constant). */
+		cp_refresh_solve_new(57320u, CGBA_SYNC_RATE_85_MHZ, &vfp, &rtn, &total);
+		CHECK(vfp == 8u && total == 548u && rtn >= 70u && rtn <= 78u,
+			"85 Hz solve: vfp=%u rtn=0x%02x total=%u", vfp, rtn, (unsigned)total);
+
+		/* Stock restore returns exact OS default (VFP=8, RTN=0x9D, 548 rows). */
+		cp_refresh_solve_new(57320u, 0u, &vfp, &rtn, &total);
+		CHECK(vfp == 8u && rtn == 0x9du && total == 548u,
+			"stock solve: vfp=%u rtn=0x%02x total=%u", vfp, rtn, (unsigned)total);
+
+		/* Shared Himax 0xB2 / 0xDF payload matches OS 02.01.7003 @ 0x8003887e. */
+		cgba_himax_build_b2(cgba_himax_classpad(), 0x0cu, 0x91u, b2);
+		cgba_himax_build_df(cgba_himax_classpad(), 0x0cu, 0x91u, df);
+		CHECK(b2[0] == 0x00u && b2[1] == 0x34u && b2[2] == 0x26u &&
+			b2[3] == 0x08u && b2[4] == 0x0cu && b2[5] == 0x91u,
+			"ClassPad B2 payload mismatch");
+		CHECK(df[0] == 0x08u && df[4] == 0x2au && df[9] == 0x08u &&
+			df[10] == 0x0cu && df[11] == 0x91u,
+			"ClassPad DF payload mismatch");
+
+		/* R61523 solver stays within OS bounds 18..63. */
+		CHECK(cp_refresh_solve_r61523(60000u, CGBA_SYNC_RATE_85_MHZ, 31u) == 22u,
+			"R61523 85 Hz solve: got %u",
+			(unsigned)cp_refresh_solve_r61523(60000u, CGBA_SYNC_RATE_85_MHZ, 31u));
+		CHECK(cp_refresh_solve_r61523(60000u, 0u, 31u) == 31u,
+			"R61523 stock restore");
+
+		/* Fractional probe mHz matches exact 60.000 Hz on synthetic 15-wrap run. */
+		{
+			cp_scan_probe p2 = { 0 };
+			uint32_t hz2 = 0, tot2;
+
+			for(i = 0; i < 15u * TOTAL * 4u + 4u; i++)
+				cp_scan_probe_add(&p2, (i / 4u) % TOTAL);
+			tot2 = cp_scan_probe_result(&p2, 32u, &hz2);
+			CHECK(tot2 == TOTAL &&
+				cp_scan_probe_mhz(&p2, 32u, tot2) == 60000u,
+				"probe mHz: got %u (tot=%u)",
+				(unsigned)cp_scan_probe_mhz(&p2, 32u, tot2), (unsigned)tot2);
+		}
 	}
 
 	if(failures)

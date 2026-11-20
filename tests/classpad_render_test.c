@@ -1548,8 +1548,8 @@ static void test_ui(const char *dir)
 			int hcy = hs.y + hs.h / 2;
 
 			ui_tap(hs.x + hs.w - 4, hcy);
-			CHECK(ui_state.lcd_refresh == 8, "refresh max tap gave %u",
-				(unsigned)ui_state.lcd_refresh);
+			CHECK(ui_state.lcd_refresh == CP_REFRESH_COUNT - 1u,
+				"refresh max tap gave %u", (unsigned)ui_state.lcd_refresh);
 			ui_tap(hs.x + 4, hcy);
 			CHECK(ui_state.lcd_refresh == 0, "refresh min tap gave %u",
 				(unsigned)ui_state.lcd_refresh);

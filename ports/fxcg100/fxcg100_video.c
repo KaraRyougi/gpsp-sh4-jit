@@ -201,6 +201,17 @@ void fxcg100_lcd_set_filter(uint32_t filter)
   (void)filter;                   /* PIO presenter: no scaling to filter */
 }
 
+void fxcg100_lcd_set_sync(uint32_t wait, uint32_t offset)
+{
+  (void)wait;
+  (void)offset;
+}
+
+void fxcg100_lcd_set_refresh(uint32_t rate)
+{
+  (void)rate;
+}
+
 void fxcg100_lcd_blit_gba(const uint16_t *pixels)
 {
   unsigned x = (LCD_VISIBLE_WIDTH - GBA_WIDTH) / 2;

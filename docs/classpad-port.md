@@ -209,17 +209,18 @@ one frame goes out (measured on the frame before), the two do not meet.
   in the blanking the picture starts.
 - `VSync` (Settings, off by default) turns the waiting on.
   It can cost up to one refresh per frame drawn.
-- `Refresh rate` (Settings, `System` by default, or `60 Hz` .. `100 Hz` across
-  8 presets) adjusts the panel's line-cycle register (`RTN`), following Casio
-  OS 02.01.7003 (`0x8003887e` / `[FRAME Freq SET]`): `0xB2` (6 bytes) + `0xDF`
-  (first 12 bytes) on the `0x16`/`0x52` family (`0x8C..0x32`, stock `0x9D`),
-  and `0xC1`/`0xC3` byte 3 behind MCAP `0xB0 = 0x00` on the R61523 (`30..18`,
-  stock `31`). This keeps `scan_total` unchanged, updates in VBlank when the
-  row counter is active, rescales VSync's measured write-time estimate, and
-  restores the OS default when gpSP exits. Setting `60 Hz` brings a ~56 Hz
-  `0x16` panel just above GBA's 59.73 Hz so `VSync` + `Limit to 60 fps` runs
-  1:1 without slowdown or automatic-frameskip drops; higher stops (`66..100 Hz`)
-  enable tear-free high-refresh play and UI scrolling.
+- `Refresh rate` (Settings, aligned with fx-CG50 / fx-CG100: `Auto` by default,
+  `System`, `59.73 Hz (GBA)`, or `66 Hz` .. `100 Hz`) adjusts the panel's
+  timing via the shared `lcd_sync_common.h` solver and Himax-family
+  `0xB2`/`0xDF` builder (matching Casio OS 02.01.7003 `0x8003887e` on ClassPad
+  `0x16`/`0x52` and OS 02.10 `0x80074ab8` on fx-CG100 `0x32`/`0x52`), or
+  `0xC1`/`0xC3` byte 3 behind MCAP `0xB0 = 0x00` on the R61523. In `Auto`
+  mode, turning `VSync` on automatically locks the panel to `59.73 Hz (GBA)`
+  by jointly solving `(VFP, RTN)` against the unit's measured stock oscillator
+  (within ~0.02 Hz of 59.7275 Hz), while turning `VSync` off leaves the OS
+  stock rate untouched. High-refresh stops (`66..100 Hz`) keep `VFP = 8` (548
+  rows) to maximize the tear-free window. All updates wait for VBlank when the
+  row counter is active and restore stock timing when gpSP exits.
 - A frame that takes much longer than one refresh to write (landscape 2x)
   cannot be placed and is sent as before.
 

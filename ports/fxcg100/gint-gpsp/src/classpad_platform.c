@@ -1612,8 +1612,9 @@ static cp_sync_track sync_track;
 static int sync_tracking;
 static int sync_frame_top, sync_frame_bot;
 static uint32_t sync_strip_count;
-static uint32_t sync_lines[SYNC_KINDS];   /* rows shown during the last frame */
-static uint32_t sync_strips[SYNC_KINDS];  /* strips it was sent in */
+static uint32_t sync_lines[SYNC_KINDS];     /* upper envelope of frame rows */
+static uint32_t sync_lines_min[SYNC_KINDS]; /* lower envelope of frame rows */
+static uint32_t sync_strips[SYNC_KINDS];    /* strips it was sent in */
 static int sync_kind;
 static int sync_last_fit = 1;
 
@@ -1649,24 +1650,36 @@ static uint32_t lcd_scanline(void)
 }
 
 static uint32_t scan_probe_run(int timed, cp_scan_probe *probe,
-	uint32_t *out_ticks, uint32_t *out_hz)
+	uint32_t *out_ticks, uint32_t *out_hz, uint32_t *out_mhz)
 {
-	uint32_t start, ticks = 0, n;
+	uint32_t start, ticks = 0, n, total;
 
 	memset(probe, 0, sizeof(*probe));
 	/* Pixels have just been written: the first reads are the least to be
 	 * trusted. The probe does not believe a lone wrong read anyway. */
 	for(n = 0; n < 8u; n++)
 		(void)lcd_scanline_mode(timed);
+	/* Align start to a 128 Hz tick boundary (<= 7.8 ms) so 32 ticks is an
+	 * accurate 250 ms window for millihertz oscillator measurement. */
+	start = fxcg100_ticks();
+	for(n = 0; n < 200000u && fxcg100_ticks() == start; n++)
+		;
 	start = fxcg100_ticks();
 	for(n = 0; n < 4000000u && ticks < 32u; n++) {
 		cp_scan_probe_add(probe, lcd_scanline_mode(timed));
-		if((n & 63u) == 0)
+		if((n & 15u) == 0)
 			ticks = fxcg100_ticks() - start;
 	}
 	*out_ticks = ticks;
-	return cp_scan_probe_result(probe, ticks, out_hz);
+	total = cp_scan_probe_result(probe, ticks, out_hz);
+	if(out_mhz)
+		*out_mhz = total ? cp_scan_probe_mhz(probe, ticks, total) : 0u;
+	return total;
 }
+
+static uint32_t refresh_stock_mhz;
+static uint32_t refresh_applied_mhz;
+static void refresh_apply_effective(void);
 
 /* A quarter of a second of reading it, once a start and again whenever the
  * page that sets the offset opens: is it a row counter, how many rows are
@@ -1676,27 +1689,31 @@ static uint32_t scan_probe_run(int timed, cp_scan_probe *probe,
 static void scan_probe(void)
 {
 	cp_scan_probe probe;
-	uint32_t ticks = 0, hz = 0, total;
+	uint32_t ticks = 0, hz = 0, mhz = 0, total;
 	int primary = lcd_is_r61523();
 
 	scan_timed = primary;
-	total = scan_probe_run(primary, &probe, &ticks, &hz);
+	total = scan_probe_run(primary, &probe, &ticks, &hz, &mhz);
 	if(!total) {
 		cp_scan_probe alt_probe;
-		uint32_t alt_ticks = 0, alt_hz = 0, alt_total;
+		uint32_t alt_ticks = 0, alt_hz = 0, alt_mhz = 0, alt_total;
 
-		alt_total = scan_probe_run(!primary, &alt_probe, &alt_ticks, &alt_hz);
+		alt_total = scan_probe_run(!primary, &alt_probe, &alt_ticks, &alt_hz,
+			&alt_mhz);
 		if(alt_total) {
 			scan_timed = !primary;
 			probe = alt_probe;
 			ticks = alt_ticks;
 			hz = alt_hz;
+			mhz = alt_mhz;
 			total = alt_total;
 		}
 	}
-	scan_hz = hz;
+	scan_hz = mhz ? (mhz + 500u) / 1000u : hz;
 	scan_total = total;
 	scan_state = scan_total ? SCAN_USABLE : SCAN_NONE;
+	if(scan_state == SCAN_USABLE && !refresh_applied_mhz && mhz)
+		refresh_stock_mhz = mhz;
 	scan_diag_samples = probe.samples;
 	scan_diag_believed = probe.believed;
 	scan_diag_max = probe.max;
@@ -1705,6 +1722,7 @@ static void scan_probe(void)
 		scan_total = probe.max ? probe.max : 1u;
 	/* Measured against the count before, which may not be this one. */
 	memset(sync_lines, 0, sizeof(sync_lines));
+	memset(sync_lines_min, 0, sizeof(sync_lines_min));
 	memset(sync_strips, 0, sizeof(sync_strips));
 }
 
@@ -1754,7 +1772,7 @@ static void sync_strip(int r0, int rows)
  * in the panel's refresh order. */
 static void sync_begin(int top, int rows, int kind)
 {
-	uint32_t lo, hi, strip, est_lines;
+	uint32_t lo, hi, strip, est_min, est_max;
 	int bottom_up;
 	uint32_t first;
 
@@ -1762,8 +1780,11 @@ static void sync_begin(int top, int rows, int kind)
 	 * 250 ms scan_probe() and all per-frame 0x45 bus reads. */
 	if(!cp_sync && !sync_calibrating)
 		return;
-	if(scan_state == SCAN_UNKNOWN)
+	if(scan_state == SCAN_UNKNOWN) {
 		scan_probe();
+		if(scan_state == SCAN_USABLE)
+			refresh_apply_effective();
+	}
 	if(scan_state != SCAN_USABLE)
 		return;
 
@@ -1775,15 +1796,16 @@ static void sync_begin(int top, int rows, int kind)
 	sync_frame_top = top;
 	sync_frame_bot = top + rows;
 	sync_strip_count = 0;
-	est_lines = sync_lines[kind] ? sync_lines[kind] : (uint32_t)(rows / 2);
+	est_max = sync_lines[kind] ? sync_lines[kind] : (uint32_t)(rows / 2);
+	est_min = sync_lines_min[kind] ? sync_lines_min[kind] : est_max;
 	/* When the refresh is bottom-up, each strip's window is still filled
 	 * top-to-bottom (against the refresh), so the window keeps one strip's
 	 * height and time clear (classpad_sync.h). Top-down fills with the
 	 * refresh and needs no intra-strip penalty. */
 	strip = bottom_up && sync_strips[kind]
 		? ((uint32_t)rows + sync_strips[kind] - 1u) / sync_strips[kind] : 0;
-	if(cp_sync_window_part(scan_total, (uint32_t)rows, est_lines, 0,
-			sync_calibrating ? CP_SYNC_PART_CALIBRATE
+	if(cp_sync_window_part_range(scan_total, (uint32_t)rows, est_min, est_max,
+			0, sync_calibrating ? CP_SYNC_PART_CALIBRATE
 			: kind == SYNC_GAME ? CP_SYNC_PART_GAME : CP_SYNC_PART,
 			strip, &lo, &hi)) {
 		uint32_t start = fxcg100_ticks(), n;
@@ -1831,6 +1853,8 @@ static void sync_end(void)
 	measured = cp_sync_track_lines_n(&sync_track, sync_strip_count);
 	sync_lines[sync_kind] = cp_sync_smooth_lines(sync_lines[sync_kind],
 		measured, scan_total);
+	sync_lines_min[sync_kind] = cp_sync_smooth_lines_min(
+		sync_lines_min[sync_kind], measured, scan_total);
 	sync_strips[sync_kind] = sync_strip_count;
 }
 #endif
@@ -1841,21 +1865,29 @@ void fxcg100_lcd_set_sync(uint32_t wait, uint32_t offset)
 	offset &= 15u;
 	cp_sync = wait;
 	cp_sync_offset = offset;
+#ifndef CGBA_HOST_TEST
+	/* In Auto mode, defer tuning until scan_probe() measures this unit's
+	 * stock oscillator; when turning VSync off, restore stock right away. */
+	if(!wait || scan_state != SCAN_UNKNOWN)
+		refresh_apply_effective();
+#endif
 }
 
 /* ---- panel refresh rate (OS 02.01.7003 @ 0x8003887e) ----------------------
- * Both panel families allow live RTN adjustment without turning the display
- * off, keeping the total scanline count unchanged:
- *   0x16/0x52  0xB2 (6 B: 00 34 26 08 08 <rtn>) + 0xDF (12 B, byte 12 = <rtn>)
+ * Both panel families allow live timing adjustment without turning the display
+ * off:
+ *   0x16/0x52  0xB2 (6 B) + 0xDF (12 B) via shared cgba_himax_build_*(),
+ *              jointly solving (VFP, RTN) for 59.73 Hz (GBA) and keeping
+ *              VFP=8 (548 rows) for high-refresh stops (66..100 Hz).
  *   R61523     0xC1 and 0xC3 byte 3 = <rtn> behind MCAP 0xB0 = 0x00 unlock.
  * Updates wait briefly for VBlank when the row counter is usable so a change
- * never glitches mid-scan, and stock RTN is restored in fxcg100_lcd_shutdown(). */
+ * never glitches mid-scan, and stock timing is restored on shutdown. */
 #ifndef CGBA_HOST_TEST
 static int refresh_saved;
 static int refresh_c1_ok;
 static uint8_t refresh_c1[5];
 static uint8_t refresh_c3[5];
-static uint32_t refresh_rate;
+static uint32_t refresh_mode;
 
 static void refresh_wait_vblank(void)
 {
@@ -1874,36 +1906,35 @@ static void refresh_wait_vblank(void)
 	}
 }
 
-static void refresh_write(uint32_t rate)
+static void refresh_write(uint32_t target_mhz, uint32_t *new_total_out)
 {
 	wait_lcd_dma();
 	if(!lcd_is_r61523()) {
-		uint8_t rtn = cp_refresh_rtn_new(rate);
+		uint8_t vfp, rtn;
+		uint32_t total = 0;
+		uint8_t b2[6], df[12];
+		int i;
+
+		cp_refresh_solve_new(refresh_stock_mhz, target_mhz, &vfp, &rtn, &total);
+		cgba_himax_build_b2(cgba_himax_classpad(), vfp, rtn, b2);
+		cgba_himax_build_df(cgba_himax_classpad(), vfp, rtn, df);
 
 		refresh_wait_vblank();
 		lcd_select(0xb2);
-		lcd_param(0x00);
-		lcd_param(0x34);
-		lcd_param(0x26);
-		lcd_param(0x08);
-		lcd_param(0x08);
-		lcd_param(rtn);
+		for(i = 0; i < 6; i++)
+			lcd_param(b2[i]);
 
 		lcd_select(0xdf);
-		lcd_param(0x08);
-		lcd_param(0x00);
-		lcd_param(0x73);
-		lcd_param(0x33);
-		lcd_param(0x2a);
-		lcd_param(0x77);
-		lcd_param(0x73);
-		lcd_param(0x77);
-		lcd_param(0x73);
-		lcd_param(0x08);
-		lcd_param(0x08);
-		lcd_param(rtn);
+		for(i = 0; i < 12; i++)
+			lcd_param(df[i]);
+
+		if(new_total_out)
+			*new_total_out = total;
 	} else if(refresh_c1_ok) {
-		uint8_t rtn = rate ? cp_refresh_rtn_r61523(rate) : refresh_c1[2];
+		uint8_t rtn = target_mhz
+			? cp_refresh_solve_r61523(refresh_stock_mhz, target_mhz,
+				refresh_c1[2])
+			: refresh_c1[2];
 		uint8_t mcap;
 
 		refresh_wait_vblank();
@@ -1922,29 +1953,21 @@ static void refresh_write(uint32_t rate)
 		lcd_param(refresh_c3[3]);
 		lcd_param(refresh_c3[4]);
 		r61523_mcap_restore_all(mcap);
+
+		if(new_total_out)
+			*new_total_out = scan_total;
 	}
 }
 
-static void refresh_restore(void)
+static void refresh_apply_effective(void)
 {
-	if(refresh_saved && refresh_rate) {
-		refresh_rate = 0;
-		refresh_write(0);
-	}
-}
-#endif
-
-void fxcg100_lcd_set_refresh(uint32_t rate)
-{
-#ifndef CGBA_HOST_TEST
-	uint32_t old_rate, old_hz, new_hz;
+	uint32_t want_mhz = cp_refresh_target_mhz(refresh_mode, cp_sync);
+	uint32_t old_mhz, new_mhz, new_total = scan_total;
 	int k;
 
-	if(rate >= CP_REFRESH_COUNT)
-		rate = 0;
 	if(!refresh_saved) {
-		if(rate == 0)
-			return;                  /* nothing asked for: touch nothing */
+		if(want_mhz == 0u)
+			return;                  /* stock requested: touch nothing */
 		if(lcd_is_r61523()) {
 			uint8_t mcap;
 			int i;
@@ -1963,22 +1986,54 @@ void fxcg100_lcd_set_refresh(uint32_t rate)
 			refresh_c1_ok = cp_r61523_c1_valid(refresh_c1);
 		}
 		refresh_saved = 1;
-	} else if(rate == refresh_rate) {
+	} else if(want_mhz == refresh_applied_mhz) {
 		return;
 	}
-	old_rate = refresh_rate;
-	refresh_rate = rate;
-	refresh_write(rate);
-	/* Keep sync_lines[] and scan_hz roughly scaled to the new rate so VSync
-	 * stays accurate immediately without stalling the UI for a 250 ms probe. */
-	old_hz = old_rate ? cp_refresh_hz(old_rate) : 58u;
-	new_hz = rate ? cp_refresh_hz(rate) : 58u;
+
+	old_mhz = refresh_applied_mhz ? refresh_applied_mhz
+		: (refresh_stock_mhz ? refresh_stock_mhz : CP_REFRESH_NEW_STOCK_MHZ);
+	refresh_applied_mhz = want_mhz;
+	refresh_write(want_mhz, &new_total);
+	new_mhz = want_mhz ? want_mhz
+		: (refresh_stock_mhz ? refresh_stock_mhz : CP_REFRESH_NEW_STOCK_MHZ);
+
+	/* Keep sync_lines[], scan_total, and scan_hz consistent with the newly
+	 * programmed timing immediately without stalling the UI for 250 ms. */
 	for(k = 0; k < SYNC_KINDS; k++) {
 		if(sync_lines[k])
-			sync_lines[k] = (sync_lines[k] * new_hz + old_hz / 2u) / old_hz;
+			sync_lines[k] = (uint32_t)(((uint64_t)sync_lines[k] * new_mhz +
+				old_mhz / 2u) / old_mhz);
+		if(sync_lines_min[k])
+			sync_lines_min[k] = (uint32_t)(((uint64_t)sync_lines_min[k] *
+				new_mhz + old_mhz / 2u) / old_mhz);
 	}
-	if(scan_state == SCAN_USABLE && scan_hz)
-		scan_hz = (scan_hz * new_hz + old_hz / 2u) / old_hz;
+	if(scan_state == SCAN_USABLE) {
+		if(new_total)
+			scan_total = new_total;
+		scan_hz = (new_mhz + 500u) / 1000u;
+	}
+}
+
+static void refresh_restore(void)
+{
+	if(refresh_saved && refresh_applied_mhz) {
+		refresh_applied_mhz = 0u;
+		refresh_write(0u, NULL);
+	}
+}
+#endif
+
+void fxcg100_lcd_set_refresh(uint32_t rate)
+{
+#ifndef CGBA_HOST_TEST
+	if(rate >= CP_REFRESH_COUNT)
+		rate = CGBA_REFRESH_AUTO;
+	refresh_mode = rate;
+	/* In Auto mode with VSync on and no stock probe yet, wait for
+	 * sync_begin() to measure this unit's stock oscillator first. */
+	if(rate == CGBA_REFRESH_AUTO && cp_sync && scan_state == SCAN_UNKNOWN)
+		return;
+	refresh_apply_effective();
 #else
 	(void)rate;
 #endif
