@@ -8,6 +8,9 @@ enum {
 };
 
 struct BFile_FileInfo {
+	uint16_t index;
+	uint16_t type;
+	uint32_t file_size;
 	uint32_t size;
 };
 

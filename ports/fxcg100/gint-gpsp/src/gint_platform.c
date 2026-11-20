@@ -202,6 +202,10 @@ uint32_t fxcg100_poll_app_keys(void)
 		keys |= FXCG100_APPKEY_DEL;
 	if(fxcg100_key_down(37))
 		keys |= FXCG100_APPKEY_SORT;
+	if(fxcg100_key_down(29))
+		keys |= FXCG100_APPKEY_PGUP;
+	if(fxcg100_key_down(28))
+		keys |= FXCG100_APPKEY_PGDN;
 	{
 		/* Skin positions of 0..9 (see fxcg100_keys.c). */
 		static const uint8_t digits[10] = { 71, 72, 62, 52, 73, 63, 53, 74,

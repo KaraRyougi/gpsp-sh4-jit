@@ -205,6 +205,40 @@ static int hw_clock_writes;
 static uint32_t fake_ticks;
 static unsigned char fake_blob[256];
 static unsigned fake_blob_size;
+static unsigned char fake_txt_blob[4096];
+static unsigned fake_txt_blob_size;
+static uint32_t fake_txt_gen = 1;
+
+static const char cp_fake_txt_doc[] =
+	"CLASSPAD TXT READER WALKTHROUGH\n"
+	"===============================\n"
+	"Line 1: Welcome to Hoenn.\n"
+	"Line 2: Check the clock in Littleroot.\n"
+	"Line 3: Visit Prof. Birch on Route 101.\n"
+	"Line 4: Heal in Oldale Town.\n"
+	"Line 5: Head west to Petalburg City.\n"
+	"Line 6: Help Wally catch Ralts.\n"
+	"Line 7: Enter Petalburg Woods.\n"
+	"Line 8: Reach Rustboro City Gym.\n"
+	"Line 9: Defeat Roxanne for Stone Badge.\n"
+	"Line 10: Sail to Dewford Town.\n"
+	"Line 11: Explore Granite Cave.\n"
+	"Line 12: Deliver letter to Steven.\n";
+
+static int is_txt_meta_path(const uint16_t *path)
+{
+	char buf[64];
+	size_t i = 0;
+
+	while (path && path[i] && i + 1 < sizeof(buf)) {
+		buf[i] = (char)(path[i] & 0x7fu);
+		i++;
+	}
+	buf[i] = 0;
+	return strstr(buf, "CGBATXT.DAT") != NULL;
+}
+
+uint32_t fxcg100_storage_mutation_generation(void) { return fake_txt_gen; }
 
 void fxcg100_clock_read(struct cp_clock *clock) { *clock = hw_clock; }
 void fxcg100_clock_write(const struct cp_clock *clock)
@@ -225,7 +259,12 @@ uint32_t fxcg100_stress_signature(void) { return 0x5678u; }
 uint32_t fxcg100_core_checksum(void) { return 0x1234u; }
 int fxcg100_storage_read_blob(const uint16_t *path, void *dst, unsigned size)
 {
-	(void)path;
+	if (is_txt_meta_path(path)) {
+		if (size != fake_txt_blob_size)
+			return 0;
+		memcpy(dst, fake_txt_blob, size);
+		return 1;
+	}
 	if (size != fake_blob_size)
 		return 0;
 	memcpy(dst, fake_blob, size);
@@ -234,12 +273,106 @@ int fxcg100_storage_read_blob(const uint16_t *path, void *dst, unsigned size)
 int fxcg100_storage_write_blob(const uint16_t *path, const void *src,
 	unsigned size)
 {
-	(void)path;
+	if (is_txt_meta_path(path)) {
+		if (size > sizeof(fake_txt_blob))
+			return 0;
+		memcpy(fake_txt_blob, src, size);
+		fake_txt_blob_size = size;
+		fake_txt_gen++;
+		return 1;
+	}
 	memcpy(fake_blob, src, size);
 	fake_blob_size = size;
+	fake_txt_gen++;
 	return 1;
 }
 
+static void cp_fc_to_ascii(const uint16_t *src, char *dst, size_t max)
+{
+	size_t i = 0;
+	while (src && src[i] && i + 1 < max) {
+		dst[i] = (char)(src[i] & 0x7fu);
+		i++;
+	}
+	dst[i] = 0;
+}
+
+static void cp_ascii_to_fc(const char *src, uint16_t *dst, size_t max)
+{
+	size_t i = 0;
+	while (src && src[i] && i + 1 < max) {
+		dst[i] = (uint16_t)(unsigned char)src[i];
+		i++;
+	}
+	dst[i] = 0;
+}
+
+int fxcg100_fs_list_dir(const uint16_t *pattern, fxcg100_fs_dir_cb cb,
+	void *ctx)
+{
+	char pat[160];
+	uint16_t name[64];
+
+	cp_fc_to_ascii(pattern, pat, sizeof(pat));
+	if (strcmp(pat, "\\\\fls0\\*") == 0) {
+		cp_ascii_to_fc("GUIDES", name, 64);
+		cb(name, 1, 0, ctx);
+		cp_ascii_to_fc("README.TXT", name, 64);
+		cb(name, 0, (uint32_t)strlen(cp_fake_txt_doc), ctx);
+		return 1;
+	}
+	if (strcmp(pat, "\\\\fls0\\GUIDES\\*") == 0) {
+		cp_ascii_to_fc("HOENN.TXT", name, 64);
+		cb(name, 0, (uint32_t)strlen(cp_fake_txt_doc), ctx);
+		return 1;
+	}
+	return 1;
+}
+
+int fxcg100_fs_open_map(const uint16_t *path, uint32_t *out_size,
+	const uint8_t **nor_blocks, unsigned max_blocks,
+	unsigned *out_mapped_blocks, uint8_t *tail_buf,
+	uint32_t *out_tail_block_idx, uint32_t *out_tail_len)
+{
+	char p[160];
+	uint32_t sz = (uint32_t)strlen(cp_fake_txt_doc);
+
+	(void)nor_blocks;
+	(void)max_blocks;
+	cp_fc_to_ascii(path, p, sizeof(p));
+	if (strcmp(p, "\\\\fls0\\README.TXT") != 0 &&
+			strcmp(p, "\\\\fls0\\GUIDES\\HOENN.TXT") != 0)
+		return 0;
+	if (out_size)
+		*out_size = sz;
+	if (out_mapped_blocks)
+		*out_mapped_blocks = 0;
+	if (tail_buf && out_tail_block_idx && out_tail_len) {
+		memcpy(tail_buf, cp_fake_txt_doc, sz);
+		*out_tail_block_idx = 0;
+		*out_tail_len = sz;
+	}
+	return 1;
+}
+
+int fxcg100_fs_read_range(const uint16_t *path, uint32_t offset,
+	void *dst, uint32_t len)
+{
+	char p[160];
+	uint32_t sz = (uint32_t)strlen(cp_fake_txt_doc);
+
+	cp_fc_to_ascii(path, p, sizeof(p));
+	if ((strcmp(p, "\\\\fls0\\README.TXT") != 0 &&
+			strcmp(p, "\\\\fls0\\GUIDES\\HOENN.TXT") != 0) ||
+			offset >= sz)
+		return 0;
+	if (len > sz - offset)
+		len = sz - offset;
+	memcpy(dst, cp_fake_txt_doc + offset, len);
+	return (int)len;
+}
+
+#include "ports/fxcg100/txt_reader.c"
 #include "ports/fxcg100/classpad_ui.c"
 
 /* ---- helpers -------------------------------------------------------------- */
@@ -2118,6 +2251,83 @@ static void test_refresh_direction(void)
 	cp_host_refresh_bottom_up = 1;
 }
 
+static void test_txt_reader_ui(const char *dir)
+{
+	txt_reader *r;
+	const cp_rect *btn;
+
+	fake_txt_blob_size = 0;
+
+	/* Portrait pause menu: TXT Reader, Settings, Games, Restart, Exit fit cleanly. */
+	ui_open(1, CP_VIEW_PORTRAIT_43);
+	CHECK(ui.screen == SCREEN_PAUSE, "pause screen");
+	btn = ui_find("TXT Reader", 0);
+	CHECK(btn != NULL && btn->y + btn->h <= 528, "portrait TXT Reader button fits");
+	btn = ui_find("Exit gpSP", 0);
+	CHECK(btn != NULL && btn->y + btn->h <= 528, "portrait Exit gpSP fits");
+
+	/* Tap TXT Reader -> opens file browser -> tap GUIDES/ -> tap HOENN.TXT. */
+	ui_tap_on("TXT Reader", 0);
+	CHECK(ui.screen == SCREEN_TXT_BROWSER, "opened TXT browser");
+	ui_shot(dir, "ui-txt-browser-portrait");
+	ui_tap_on("GUIDES/", 0);
+	r = txt_reader_global();
+	CHECK(r->dir_depth == 1, "entered GUIDES/");
+	ui_tap_on("HOENN.TXT", 0);
+	CHECK(ui.screen == SCREEN_TXT_READER && r->has_doc, "opened HOENN.TXT");
+	CHECK(r->show_hints == 1, "bottom hint bar shown on entry");
+	ui_shot(dir, "ui-txt-reader-portrait");
+
+	/* Tap right side pages down (or hides hints on scroll/page). */
+	ui_tap(ui.w - 20, ui.h / 2);
+	CHECK(r->show_hints == 0, "tap-page auto-hid bottom hint bar");
+
+	/* Tap center opens floating overlay; toggle font, wrap, add bookmark, close. */
+	ui_tap(ui.w / 2, ui.h / 2);
+	CHECK(ui.txt_overlay == 1, "center tap opened reader overlay");
+	ui_shot(dir, "ui-txt-overlay-portrait");
+	ui_tap_on("8x14", 0);
+	CHECK(r->font_idx == TXT_FONT_8X14, "switched to 8x14");
+	ui_tap_on("No wrap", 0);
+	CHECK(r->wrap == 0, "switched to No wrap");
+	ui_tap_on("+ Mark", 0);
+	CHECK(txt_reader_bookmark_count(r) == 1, "added bookmark from overlay");
+	ui_tap_on("Bookmarks (1)", 0);
+	CHECK(ui.txt_bm_open == 1, "opened dynamic bookmarks modal");
+	ui_tap_on("Close", 0);
+	CHECK(ui.txt_bm_open == 0, "closed bookmarks modal");
+	ui_tap_on("Close", 0);
+	CHECK(ui.txt_overlay == 0, "closed overlay");
+
+	/* Landscape pause menu & reader fit inside 528x320. */
+	ui_open(1, CP_VIEW_LANDSCAPE_2X);
+	btn = ui_find("TXT Reader", 0);
+	CHECK(btn != NULL && btn->y + btn->h <= 320, "landscape TXT Reader fits");
+	btn = ui_find("Exit gpSP", 0);
+	CHECK(btn != NULL && btn->y + btn->h <= 320, "landscape Exit gpSP fits");
+
+	/* Direct hotkey open: with no doc yet -> browser; once a doc is open -> reader. */
+	ui_state.hotkey_map[FXCG100_HOTKEY_TXT_READER] = KEY_EQUALS;
+	fxcg100_menu_open_reader();
+	cp_ui_begin(&ui, &ui_state, 1);
+	ui_settle(cp_ui_step(&ui));
+	CHECK(ui.screen == SCREEN_TXT_BROWSER && ui.txt_direct == 1,
+		"direct hotkey with no doc opened browser");
+	ui_tap_on("README.TXT", 0);
+	CHECK(ui.screen == SCREEN_TXT_READER && txt_reader_global()->has_doc,
+		"opened README.TXT in landscape");
+	ui_shot(dir, "ui-txt-reader-landscape");
+
+	fxcg100_menu_open_reader();
+	cp_ui_begin(&ui, &ui_state, 1);
+	ui_settle(cp_ui_step(&ui));
+	CHECK(ui.screen == SCREEN_TXT_READER && ui.txt_direct == 1,
+		"direct hotkey opened reader");
+	key_held[KEY_EQUALS] = 1;
+	CHECK(ui_frame() == FXCG100_MENU_RETURN, "hotkey toggled back to game");
+	key_held[KEY_EQUALS] = 0;
+}
+
 int main(int argc, char **argv)
 {
 	const char *dir = argc > 1 ? argv[1] : NULL;
@@ -2157,6 +2367,7 @@ int main(int argc, char **argv)
 	test_key_colours();
 	hw_clock = stock_clock();
 	test_ui(dir);
+	test_txt_reader_ui(dir);
 	test_clock_model();
 	test_clock_page(dir);
 	test_canvas(CP_ROTATION_KEYS_RIGHT, dir, "menu-canvas-keys-right");

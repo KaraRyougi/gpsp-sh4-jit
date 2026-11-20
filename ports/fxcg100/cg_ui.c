@@ -31,6 +31,7 @@
 #include "cg_font.h"
 #include "classpad_gfx.h"
 #include "classpad_theme.h"
+#include "txt_reader.h"
 
 #include <gint/display.h>
 #include <gint/rtc.h>
@@ -98,13 +99,17 @@
 #endif
 
 #define CURSOR_KEYS (FXCG100_APPKEY_UP | FXCG100_APPKEY_DOWN | \
-	FXCG100_APPKEY_LEFT | FXCG100_APPKEY_RIGHT)
+	FXCG100_APPKEY_LEFT | FXCG100_APPKEY_RIGHT | \
+	FXCG100_APPKEY_PGUP | FXCG100_APPKEY_PGDN)
+
+#define TXT_HEAD 18            /* compact reader header band */
+#define TXT_BM_VIS_ROWS 6      /* visible rows in the bookmarks dialog */
 
 enum { PAGE_LIBRARY = 0, PAGE_PAUSE, PAGE_SETTINGS, PAGE_KEYS, PAGE_DEBUG,
-	PAGE_COUNT };
+	PAGE_TXT_BROWSER, PAGE_TXT_READER, PAGE_COUNT };
 
 enum { DIALOG_NONE = 0, DIALOG_EXIT, DIALOG_RESTART, DIALOG_SWITCH,
-	DIALOG_SAVE, DIALOG_CAPTURE };
+	DIALOG_SAVE, DIALOG_CAPTURE, DIALOG_TXT_OPTIONS, DIALOG_TXT_BOOKMARKS };
 
 enum { REDRAW_NONE = 0, REDRAW_FOOTER, REDRAW_SELECTION, REDRAW_FULL };
 
@@ -113,7 +118,8 @@ enum { RK_SECTION = 0, RK_PLAIN, RK_SUB, RK_VALUE, RK_KEY, RK_COLOUR };
 
 enum {
 	ID_NONE = 0,
-	ID_RESUME, ID_SAVE, ID_LOAD, ID_SETTINGS, ID_GAMES, ID_RESTART, ID_EXIT,
+	ID_RESUME, ID_SAVE, ID_LOAD, ID_READER, ID_SETTINGS, ID_GAMES, ID_RESTART,
+	ID_EXIT,
 	ID_SIZE, ID_FILTER, ID_COLOUR, ID_DARK_MODE, ID_FRAMESKIP, ID_SKIP_N,
 	ID_SKIP_PATTERN,
 	ID_LIMIT, ID_SHOW_FPS, ID_KEYMAP, ID_DEBUG,
@@ -143,6 +149,10 @@ typedef struct cg_ui {
 	uint8_t sel[PAGE_COUNT];   /* selected row id of each list page */
 	int16_t scroll[PAGE_COUNT];/* first list pixel shown */
 	uint32_t game_sel, game_first;
+	int txt_browser_sel, txt_browser_first, txt_browser_from;
+	int txt_direct, txt_hotkey_armed;
+	int txt_opt_jump;
+	int txt_bm_sel, txt_bm_first;
 	int dialog, dialog_sel;
 	int capture, capture_armed;
 	uint32_t switch_rom;
@@ -167,6 +177,7 @@ typedef struct cg_ui {
 } cg_ui;
 
 static cg_ui ui_main;
+static int open_reader_direct;
 
 /* ---- time ----------------------------------------------------------------- */
 
@@ -644,10 +655,11 @@ static void rows_pause(cg_ui *ui)
 
 	snprintf(slot, sizeof(slot), "Slot %u",
 		(unsigned)ui->state->savestate_slot % 10u);
-	ui->list_h = 2;
+	ui->list_h = 0;
 	add_row(ui, RK_PLAIN, ID_RESUME, "Resume");
 	add_value(ui, ID_SAVE, "Save state", slot);
 	add_value(ui, ID_LOAD, "Load state", slot)->rule = 1;
+	add_row(ui, RK_SUB, ID_READER, "TXT Reader");
 	add_row(ui, RK_SUB, ID_SETTINGS, "Settings");
 	add_row(ui, RK_SUB, ID_GAMES, "Games")->rule = 1;
 	add_row(ui, RK_PLAIN, ID_RESTART, "Restart");
@@ -706,7 +718,7 @@ static void rows_settings(cg_ui *ui)
 
 /* The functions a key can be given, in the order of the key-mapping page:
  * the GBA buttons, which must all have a key, then the shortcuts. */
-#define BINDING_COUNT 14
+#define BINDING_COUNT 15
 #define GBA_BINDINGS 10
 
 static const struct {
@@ -724,6 +736,7 @@ static const struct {
 	{ "Save state", 1, FXCG100_HOTKEY_SAVE_STATE },
 	{ "Load state", 1, FXCG100_HOTKEY_LOAD_STATE },
 	{ "Show frame rate", 1, FXCG100_HOTKEY_DISPLAY_FPS },
+	{ "TXT Reader", 1, FXCG100_HOTKEY_TXT_READER },
 };
 
 static uint16_t *binding_slot(cg_ui *ui, int i)
@@ -931,6 +944,165 @@ static void draw_library(cg_ui *ui)
 	scrollbar(ui, (int)ui->game_first, LIB_ROWS, (int)count);
 }
 
+static int txt_browser_total(const txt_reader *r)
+{
+	return (int)r->dir_count + (r->dir_depth > 0 ? 1 : 0);
+}
+
+static void txt_browser_reveal(cg_ui *ui, const txt_reader *r)
+{
+	int count = txt_browser_total(r), max;
+
+	max = count > LIB_ROWS ? count - LIB_ROWS : 0;
+	if (ui->txt_browser_sel >= count)
+		ui->txt_browser_sel = count > 0 ? count - 1 : 0;
+	if (ui->txt_browser_sel < 0)
+		ui->txt_browser_sel = 0;
+	if (ui->txt_browser_sel < ui->txt_browser_first + 1)
+		ui->txt_browser_first = ui->txt_browser_sel > 0
+			? ui->txt_browser_sel - 1 : 0;
+	if (ui->txt_browser_sel + 2 > ui->txt_browser_first + LIB_ROWS)
+		ui->txt_browser_first = ui->txt_browser_sel + 2 - LIB_ROWS;
+	if (ui->txt_browser_first > max)
+		ui->txt_browser_first = max;
+	if (ui->txt_browser_first < 0)
+		ui->txt_browser_first = 0;
+}
+
+static void draw_txt_browser(cg_ui *ui)
+{
+	txt_reader *r = txt_reader_global();
+	int total = txt_browser_total(r), i;
+	char dir_label[48], row_name[TXT_NAME_MAX + 2];
+
+	cp_fill(&ui->s, -SCR_X, -SCR_Y, DWIDTH, DHEIGHT, ui->t.surface);
+	txt_reader_display_dir(r, dir_label, sizeof(dir_label));
+	header(ui, "TXT Files", dir_label);
+	if (total == 0) {
+		text_mid(ui, F_TITLE, (W - text_w(F_TITLE, "No .TXT files")) / 2, 96,
+			"No .TXT files", ui->t.on_surface);
+		text_mid(ui, F_SMALL, (W - text_w(F_SMALL,
+			"Copy .txt files to the calculator's storage.")) / 2, 120,
+			"Copy .txt files to the calculator's storage.",
+			ui->t.on_surface_variant);
+		return;
+	}
+	txt_browser_reveal(ui, r);
+	for (i = 0; i < LIB_ROWS && ui->txt_browser_first + i < total; i++) {
+		int pos = ui->txt_browser_first + i;
+		ui_row row;
+
+		memset(&row, 0, sizeof(row));
+		if (r->dir_depth > 0 && pos == 0) {
+			row.kind = RK_PLAIN;
+			row.label = "..";
+			snprintf(row.value, sizeof(row.value), "Up");
+		} else {
+			int idx = pos - (r->dir_depth > 0 ? 1 : 0);
+			const txt_dir_entry *e = &r->dir_entries[idx];
+
+			if (e->is_dir) {
+				row.kind = RK_SUB;
+				snprintf(row_name, sizeof(row_name), "%s/", e->name);
+				row.label = row_name;
+			} else {
+				row.kind = RK_VALUE;
+				row.label = e->name;
+				txt_format_size(e->size, row.value, sizeof(row.value));
+			}
+		}
+		draw_row(ui, HEAD + i * ROW, &row,
+			!ui->dialog && pos == ui->txt_browser_sel);
+	}
+	scrollbar(ui, ui->txt_browser_first, LIB_ROWS, total);
+}
+
+static int txt_reader_footer_visible(const cg_ui *ui, const txt_reader *r)
+{
+	return ui->progress != NULL || ui->message[0] != 0 || r->show_hints != 0;
+}
+
+static void draw_txt_reader(cg_ui *ui)
+{
+	txt_reader *r = txt_reader_global();
+	const txt_bitmap_font *hf = &txt_font_terminus_6x12;
+	const txt_bitmap_font *bf;
+	int footer_vis = txt_reader_footer_visible(ui, r);
+	int body_top = TXT_HEAD + 2;
+	int body_bot = footer_vis ? FY : (H - 2);
+	int body_h = body_bot - body_top;
+	int line_h, vis_lines, cols, i;
+	int has_bm, pct, right_len, max_name_cols, rx;
+	char status[24];
+
+	txt_reader_sync_storage(r);
+	bf = txt_reader_font(r);
+	line_h = (int)bf->h + 1;
+	vis_lines = body_h / line_h;
+	if (vis_lines < 1)
+		vis_lines = 1;
+	cols = (W - 14) / (int)bf->w;
+	if (cols < 1)
+		cols = 1;
+	txt_reader_layout(r, cols, vis_lines);
+
+	cp_fill(&ui->s, -SCR_X, -SCR_Y, DWIDTH, DHEIGHT, ui->t.surface);
+	band(ui, -SCR_Y, TXT_HEAD + SCR_Y, ui->t.container);
+
+	has_bm = txt_reader_has_visible_bookmark(r);
+	pct = txt_reader_percent(r);
+	if (!r->wrap)
+		snprintf(status, sizeof(status), "NOWRAP %d%%", pct);
+	else
+		snprintf(status, sizeof(status), "%d%%", pct);
+	right_len = (int)strlen(status) + (has_bm ? 2 : 0);
+	rx = W - 6 - right_len * (int)hf->w;
+	if (has_bm) {
+		txt_draw_text(&ui->s, hf, rx, 3, "*", ui->t.primary);
+		txt_draw_text(&ui->s, hf, rx + 2 * (int)hf->w, 3, status,
+			ui->t.on_surface_variant);
+	} else {
+		txt_draw_text(&ui->s, hf, rx, 3, status, ui->t.on_surface_variant);
+	}
+	max_name_cols = rx - 12;
+	if (max_name_cols > 0)
+		txt_draw_text_fit(&ui->s, hf, 6, 3, max_name_cols, r->doc_name,
+			ui->t.on_surface);
+
+	if (r->doc_size == 0 || r->line_count == 0) {
+		const char *empty = "(Empty file)";
+		int ew = (int)strlen(empty) * (int)bf->w;
+
+		txt_draw_text(&ui->s, bf, (W - ew) / 2, body_top + body_h / 2 - 6,
+			empty, ui->t.on_surface_variant);
+	} else {
+		for (i = 0; i < r->line_count; i++)
+			txt_draw_text(&ui->s, bf, 6, body_top + i * line_h,
+				r->lines[i].text, ui->t.on_surface);
+	}
+
+	if (r->doc_size > 0 && (r->top_offset > 0 || r->end_offset < r->doc_size)) {
+		int track_h = body_bot - body_top - 4;
+		uint32_t vis_bytes = r->end_offset > r->top_offset
+			? r->end_offset - r->top_offset : 1u;
+		int thumb_h = (int)(((uint64_t)track_h * vis_bytes) / r->doc_size);
+		int thumb_y;
+
+		if (thumb_h < 10)
+			thumb_h = 10;
+		if (thumb_h > track_h)
+			thumb_h = track_h;
+		if (r->top_offset >= r->doc_size)
+			thumb_y = body_top + 2 + track_h - thumb_h;
+		else
+			thumb_y = body_top + 2 +
+				(int)(((uint64_t)(track_h - thumb_h) * r->top_offset) /
+					r->doc_size);
+		rect(ui, W - 4, thumb_y, 2, thumb_h, 1,
+			mix(ui->t.outline, ui->t.surface, 77));
+	}
+}
+
 /* The page, without its footer. */
 static void draw_page(cg_ui *ui)
 {
@@ -951,6 +1123,12 @@ static void draw_page(cg_ui *ui)
 	case PAGE_DEBUG:
 		draw_list(ui, "Debug info", NULL);
 		break;
+	case PAGE_TXT_BROWSER:
+		draw_txt_browser(ui);
+		break;
+	case PAGE_TXT_READER:
+		draw_txt_reader(ui);
+		break;
 	default:
 		draw_library(ui);
 		break;
@@ -961,7 +1139,9 @@ static void draw_page(cg_ui *ui)
 
 static void page_hints(cg_ui *ui)
 {
-	const ui_row *r = ui->page == PAGE_LIBRARY ? NULL : selected_row(ui);
+	const ui_row *r = (ui->page == PAGE_LIBRARY ||
+		ui->page == PAGE_TXT_BROWSER || ui->page == PAGE_TXT_READER)
+		? NULL : selected_row(ui);
 	int id = r ? r->id : ID_NONE;
 
 	switch (ui->page) {
@@ -979,6 +1159,34 @@ static void page_hints(cg_ui *ui)
 			hint_bar(ui, HINTS(l), HINTS(in));
 		else
 			hint_bar(ui, HINTS(l), HINTS(start));
+		break;
+	}
+	case PAGE_TXT_BROWSER: {
+		txt_reader *tr = txt_reader_global();
+		static const hint l[] = { { TK_UD, 1, "Choose" }, { TK_OK, 0, "Open" },
+			{ TK_LR, 1, "Page" } };
+		static const hint up[] = { { TK_BACK, 0, "Up" } };
+		static const hint back[] = { { TK_BACK, 0, HINT_BACK_LABEL } };
+
+		if (txt_browser_total(tr) == 0)
+			hint_bar(ui, NULL, 0, HINTS(back));
+		else if (tr->dir_depth > 0)
+			hint_bar(ui, HINTS(l), HINTS(up));
+		else
+			hint_bar(ui, HINTS(l), HINTS(back));
+		break;
+	}
+	case PAGE_TXT_READER: {
+		txt_reader *tr = txt_reader_global();
+		static const hint wrap_l[] = { { TK_UD, 0, "Scroll" },
+			{ TK_LR, 0, "Page" }, { TK_OK, 0, "Options" },
+			{ TK_SORT, 1, "Mark" } };
+		static const hint pan_l[] = { { TK_UD, 0, "Scroll" },
+			{ TK_LR, 0, "Pan" }, { TK_OK, 0, "Options" },
+			{ TK_SORT, 1, "Mark" } };
+		static const hint right[] = { { TK_BACK, 0, HINT_BACK_LABEL } };
+
+		hint_bar(ui, tr->wrap ? wrap_l : pan_l, 4, HINTS(right));
 		break;
 	}
 	case PAGE_PAUSE: {
@@ -1123,6 +1331,148 @@ static void draw_capture(cg_ui *ui)
 	hint_bar(ui, HINTS(l), HINTS(r));
 }
 
+static void draw_txt_options(cg_ui *ui)
+{
+	txt_reader *r = txt_reader_global();
+	static const char *const labels[5] = {
+		"Jump to", "Bookmarks", "Font", "Wrap", "Files"
+	};
+	static const hint jump_l[] = { { TK_UD, 0, "Move" },
+		{ TK_LR, 0, "-5/+5%" }, { TK_OK, 0, "Jump" } };
+	static const hint toggle_l[] = { { TK_UD, 0, "Move" },
+		{ TK_LR, 0, "Change" } };
+	static const hint open_l[] = { { TK_UD, 0, "Move" },
+		{ TK_OK, 0, "Open" } };
+	static const hint right[] = { { TK_BACK, 0, "Close" } };
+	char vals[5][16];
+	int w = 264, h = 148, x = (W - w) / 2, y = (FY - h) / 2, i;
+
+	snprintf(vals[0], sizeof(vals[0]), "%d%%", ui->txt_opt_jump);
+	snprintf(vals[1], sizeof(vals[1]), "%u", txt_reader_bookmark_count(r));
+	snprintf(vals[2], sizeof(vals[2]), "%s",
+		r->font_idx == TXT_FONT_8X14 ? "8x14" : "6x12");
+	snprintf(vals[3], sizeof(vals[3]), "%s", r->wrap ? "On" : "Off");
+	vals[4][0] = 0;
+
+	rect(ui, x, y, w, h, 8, ui->t.container_high);
+	text_mid(ui, F_TITLE, x + 12, y + 15, "Reader options", ui->t.on_surface);
+	for (i = 0; i < 5; i++) {
+		int ry = y + 30 + i * ROW;
+		int cy = ry + ROW / 2;
+		int base = row_base(F_BODY, ry, ROW);
+		int sel = ui->dialog_sel == i;
+		uint16_t fg = sel ? ui->t.on_primary : ui->t.on_surface;
+		uint16_t vfg = sel ? ui->t.on_primary : ui->t.on_surface_variant;
+		int vr = x + w - 22;
+
+		if (sel)
+			cp_fill(&ui->s, x, ry, w, ROW, ui->t.primary);
+		text(ui, F_BODY, x + 12, base, labels[i], fg);
+		if (i == 1 || i == 4) {
+			icon_chevron(ui, x + w - 14, cy, vfg);
+			if (vals[i][0])
+				text_end(ui, F_BODY, x + w - 24, base, vals[i], vfg);
+		} else {
+			int vw = text_w(F_BODY, vals[i]);
+
+			text_end(ui, F_BODY, vr, base, vals[i], vfg);
+			if (sel) {
+				triangle(ui, vr + 9, cy, DIR_RIGHT, 1, ui->t.on_primary);
+				triangle(ui, vr - vw - 9, cy, DIR_LEFT, 1, ui->t.on_primary);
+			}
+		}
+	}
+	if (ui->dialog_sel == 0)
+		hint_bar(ui, HINTS(jump_l), HINTS(right));
+	else if (ui->dialog_sel == 2 || ui->dialog_sel == 3)
+		hint_bar(ui, HINTS(toggle_l), HINTS(right));
+	else
+		hint_bar(ui, HINTS(open_l), HINTS(right));
+}
+
+static void txt_bm_reveal(cg_ui *ui, int total)
+{
+	int max = total > TXT_BM_VIS_ROWS ? total - TXT_BM_VIS_ROWS : 0;
+
+	if (ui->txt_bm_sel >= total)
+		ui->txt_bm_sel = total > 0 ? total - 1 : 0;
+	if (ui->txt_bm_sel < 0)
+		ui->txt_bm_sel = 0;
+	if (ui->txt_bm_sel < ui->txt_bm_first)
+		ui->txt_bm_first = ui->txt_bm_sel;
+	if (ui->txt_bm_sel >= ui->txt_bm_first + TXT_BM_VIS_ROWS)
+		ui->txt_bm_first = ui->txt_bm_sel - TXT_BM_VIS_ROWS + 1;
+	if (ui->txt_bm_first > max)
+		ui->txt_bm_first = max;
+	if (ui->txt_bm_first < 0)
+		ui->txt_bm_first = 0;
+}
+
+static void draw_txt_bookmarks(cg_ui *ui)
+{
+	txt_reader *r = txt_reader_global();
+	uint32_t marks[TXT_MAX_BOOKMARKS];
+	int count = (int)txt_reader_get_bookmarks(r, marks, TXT_MAX_BOOKMARKS);
+	int can_add = count < (int)TXT_MAX_BOOKMARKS;
+	int total = count + (can_add ? 1 : 0);
+	static const hint bm_l[] = { { TK_OK, 0, "Jump" }, { TK_DEL, 0, "Delete" },
+		{ TK_UD, 1, "Move" } };
+	static const hint add_l[] = { { TK_OK, 0, "Add" }, { TK_UD, 0, "Move" } };
+	static const hint right[] = { { TK_BACK, 0, HINT_BACK_LABEL } };
+	char meta[16], preview[48], row_text[64];
+	int w = 316, h = 166, x = (W - w) / 2, y = 16, i;
+
+	txt_bm_reveal(ui, total);
+	rect(ui, x, y, w, h, 8, ui->t.container_high);
+	text_mid(ui, F_TITLE, x + 12, y + 14, "Bookmarks", ui->t.on_surface);
+	snprintf(meta, sizeof(meta), "%d / %u", count, (unsigned)TXT_MAX_BOOKMARKS);
+	text_end(ui, F_SMALL, x + w - 12, mid_base(F_SMALL, y + 14), meta,
+		ui->t.on_surface_variant);
+
+	for (i = 0; i < TXT_BM_VIS_ROWS && ui->txt_bm_first + i < total; i++) {
+		int idx = ui->txt_bm_first + i;
+		int ry = y + 28 + i * ROW;
+		int base = row_base(F_BODY, ry, ROW);
+		int sel = ui->txt_bm_sel == idx;
+
+		if (sel)
+			cp_fill(&ui->s, x, ry, w, ROW, ui->t.primary);
+		if (idx < count) {
+			int pct = r->doc_size > 0
+				? (int)(((uint64_t)marks[idx] * 100u) / r->doc_size) : 0;
+
+			if (pct > 100)
+				pct = 100;
+			txt_reader_preview_at(r, marks[idx], preview, sizeof(preview));
+			if (preview[0])
+				snprintf(row_text, sizeof(row_text), "%d%%  %s", pct, preview);
+			else
+				snprintf(row_text, sizeof(row_text), "%d%%", pct);
+			text_fit(ui, F_BODY, x + 12, base, w - 26, row_text,
+				sel ? ui->t.on_primary : ui->t.on_surface);
+		} else {
+			text_fit(ui, F_BODY, x + 12, base, w - 26, "+ Add bookmark here",
+				sel ? ui->t.on_primary : ui->t.primary);
+		}
+	}
+	if (total > TXT_BM_VIS_ROWS) {
+		int track_h = TXT_BM_VIS_ROWS * ROW - 4;
+		int thumb_h = track_h * TXT_BM_VIS_ROWS / total;
+		int thumb_y;
+
+		if (thumb_h < 10)
+			thumb_h = 10;
+		thumb_y = y + 30 + (track_h - thumb_h) * ui->txt_bm_first /
+			(total - TXT_BM_VIS_ROWS);
+		rect(ui, x + w - 5, thumb_y, 2, thumb_h, 1,
+			mix(ui->t.outline, ui->t.container_high, 77));
+	}
+	if (ui->txt_bm_sel < count)
+		hint_bar(ui, HINTS(bm_l), HINTS(right));
+	else
+		hint_bar(ui, HINTS(add_l), HINTS(right));
+}
+
 /* ---- drawing and sending to the panel ------------------------------------- */
 
 static void draw(cg_ui *ui)
@@ -1142,6 +1492,10 @@ static void draw(cg_ui *ui)
 		ui->t = shown;
 		if (ui->dialog == DIALOG_CAPTURE)
 			draw_capture(ui);
+		else if (ui->dialog == DIALOG_TXT_OPTIONS)
+			draw_txt_options(ui);
+		else if (ui->dialog == DIALOG_TXT_BOOKMARKS)
+			draw_txt_bookmarks(ui);
 		else
 			draw_confirm(ui);
 		return;
@@ -1152,14 +1506,19 @@ static void draw(cg_ui *ui)
 	else if (ui->message[0])
 		footer_message(ui, ui->message, ui->message_error ? NOTE_ERROR
 			: NOTE_DONE);
-	else
+	else if (ui->page != PAGE_TXT_READER || txt_reader_global()->show_hints)
 		page_hints(ui);
 }
 
 static int page_scroll(const cg_ui *ui)
 {
-	return ui->page == PAGE_LIBRARY ? (int)ui->game_first
-		: ui->scroll[ui->page];
+	if (ui->page == PAGE_LIBRARY)
+		return (int)ui->game_first;
+	if (ui->page == PAGE_TXT_BROWSER)
+		return ui->txt_browser_first;
+	if (ui->page == PAGE_TXT_READER)
+		return (int)txt_reader_global()->top_offset;
+	return ui->scroll[ui->page];
 }
 
 static void push_band(int y, int h)
@@ -1437,6 +1796,334 @@ static fxcg100_menu_result input_library(cg_ui *ui)
 	return FXCG100_MENU_CONTINUE;
 }
 
+static void open_txt_browser(cg_ui *ui, int from_page)
+{
+	txt_reader *r = txt_reader_global();
+
+	fxcg100_wait_keys_released();
+	txt_reader_scan_dir(r);
+	ui->txt_browser_sel = 0;
+	ui->txt_browser_first = 0;
+	ui->txt_browser_from = from_page;
+	goto_page(ui, PAGE_TXT_BROWSER);
+}
+
+static void open_txt_reader_page(cg_ui *ui)
+{
+	txt_reader *r = txt_reader_global();
+
+	if (r->has_doc) {
+		txt_reader_sync_storage(r);
+		txt_reader_on_enter(r);
+		goto_page(ui, PAGE_TXT_READER);
+	} else {
+		open_txt_browser(ui, ui->txt_direct ? -1 : PAGE_PAUSE);
+	}
+}
+
+static fxcg100_menu_result input_txt_browser(cg_ui *ui)
+{
+	txt_reader *r = txt_reader_global();
+	uint32_t e = ui->edge;
+	int total = txt_browser_total(r);
+
+	if (e & FXCG100_APPKEY_BACK) {
+		if (r->dir_depth > 0) {
+			fxcg100_wait_keys_released();
+			txt_reader_up_dir(r);
+			ui->txt_browser_sel = 0;
+			ui->txt_browser_first = 0;
+			want(ui, REDRAW_FULL);
+			return FXCG100_MENU_CONTINUE;
+		}
+		if (ui->txt_browser_from == PAGE_TXT_READER && r->has_doc) {
+			txt_reader_on_enter(r);
+			goto_page(ui, PAGE_TXT_READER);
+			return FXCG100_MENU_CONTINUE;
+		}
+		if (ui->txt_direct)
+			return FXCG100_MENU_RETURN;
+		goto_page(ui, PAGE_PAUSE);
+		return FXCG100_MENU_CONTINUE;
+	}
+	if (total == 0)
+		return FXCG100_MENU_CONTINUE;
+	if (e & FXCG100_APPKEY_UP) {
+		if (ui->txt_browser_sel > 0)
+			ui->txt_browser_sel--;
+		else if (!ui->repeat)
+			ui->txt_browser_sel = total - 1;
+		want(ui, REDRAW_SELECTION);
+	} else if (e & FXCG100_APPKEY_DOWN) {
+		if (ui->txt_browser_sel + 1 < total)
+			ui->txt_browser_sel++;
+		else if (!ui->repeat)
+			ui->txt_browser_sel = 0;
+		want(ui, REDRAW_SELECTION);
+	} else if (e & (FXCG100_APPKEY_LEFT | FXCG100_APPKEY_PGUP)) {
+		ui->txt_browser_sel = ui->txt_browser_sel > LIB_ROWS
+			? ui->txt_browser_sel - LIB_ROWS : 0;
+		ui->txt_browser_first = ui->txt_browser_first > LIB_ROWS
+			? ui->txt_browser_first - LIB_ROWS : 0;
+		want(ui, REDRAW_SELECTION);
+	} else if (e & (FXCG100_APPKEY_RIGHT | FXCG100_APPKEY_PGDN)) {
+		int max = total > LIB_ROWS ? total - LIB_ROWS : 0;
+
+		ui->txt_browser_sel = ui->txt_browser_sel + LIB_ROWS < total
+			? ui->txt_browser_sel + LIB_ROWS : total - 1;
+		ui->txt_browser_first = ui->txt_browser_first + LIB_ROWS < max
+			? ui->txt_browser_first + LIB_ROWS : max;
+		want(ui, REDRAW_SELECTION);
+	} else if (e & FXCG100_APPKEY_EXE) {
+		if (r->dir_depth > 0 && ui->txt_browser_sel == 0) {
+			fxcg100_wait_keys_released();
+			txt_reader_up_dir(r);
+			ui->txt_browser_sel = 0;
+			ui->txt_browser_first = 0;
+			want(ui, REDRAW_FULL);
+			return FXCG100_MENU_CONTINUE;
+		}
+		int idx = ui->txt_browser_sel - (r->dir_depth > 0 ? 1 : 0);
+		if (idx >= 0 && idx < (int)r->dir_count) {
+			const txt_dir_entry *ent = &r->dir_entries[idx];
+
+			if (ent->is_dir) {
+				fxcg100_wait_keys_released();
+				if (txt_reader_enter_dir(r, ent->name)) {
+					ui->txt_browser_sel = 0;
+					ui->txt_browser_first = 0;
+					want(ui, REDRAW_FULL);
+				} else {
+					message(ui, 1, "Folder too deep", NULL, NULL);
+				}
+			} else {
+				char rel[TXT_PATH_MAX];
+
+				if (r->dir_path[0])
+					snprintf(rel, sizeof(rel), "%s\\%s", r->dir_path, ent->name);
+				else
+					snprintf(rel, sizeof(rel), "%s", ent->name);
+				fxcg100_wait_keys_released();
+				if (txt_reader_open(r, rel)) {
+					goto_page(ui, PAGE_TXT_READER);
+				} else {
+					message(ui, 1, "Could not open file", NULL, NULL);
+				}
+			}
+		}
+		return FXCG100_MENU_CONTINUE;
+	}
+	txt_browser_reveal(ui, r);
+	return FXCG100_MENU_CONTINUE;
+}
+
+static fxcg100_menu_result input_txt_reader(cg_ui *ui)
+{
+	txt_reader *r = txt_reader_global();
+	uint32_t e = ui->edge;
+	int d;
+
+	if (e & FXCG100_APPKEY_BACK) {
+		txt_reader_flush(r);
+		if (ui->txt_direct)
+			return FXCG100_MENU_RETURN;
+		goto_page(ui, PAGE_PAUSE);
+		return FXCG100_MENU_CONTINUE;
+	}
+	for (d = 0; d < 10; d++) {
+		if (e & FXCG100_APPKEY_DIGIT(d)) {
+			char pct_str[8];
+
+			txt_reader_jump_percent(r, d * 10);
+			snprintf(pct_str, sizeof(pct_str), "%d%%", d * 10);
+			message(ui, 0, "Jumped to %s (DEL to undo)", pct_str, NULL);
+			want(ui, REDRAW_FULL);
+			return FXCG100_MENU_CONTINUE;
+		}
+	}
+	if (e & FXCG100_APPKEY_UP) {
+		txt_reader_scroll_lines(r, -1);
+		want(ui, REDRAW_FULL);
+	} else if (e & FXCG100_APPKEY_DOWN) {
+		txt_reader_scroll_lines(r, 1);
+		want(ui, REDRAW_FULL);
+	} else if (e & FXCG100_APPKEY_PGUP) {
+		txt_reader_page_up(r);
+		want(ui, REDRAW_FULL);
+	} else if (e & FXCG100_APPKEY_PGDN) {
+		txt_reader_page_down(r);
+		want(ui, REDRAW_FULL);
+	} else if (e & FXCG100_APPKEY_LEFT) {
+		if (r->wrap)
+			txt_reader_page_up(r);
+		else
+			txt_reader_pan(r, -8);
+		want(ui, REDRAW_FULL);
+	} else if (e & FXCG100_APPKEY_RIGHT) {
+		if (r->wrap)
+			txt_reader_page_down(r);
+		else
+			txt_reader_pan(r, 8);
+		want(ui, REDRAW_FULL);
+	} else if (e & FXCG100_APPKEY_DEL) {
+		if (txt_reader_undo_jump(r)) {
+			message(ui, 0, "Jump undone", NULL, NULL);
+			want(ui, REDRAW_FULL);
+		}
+	} else if (e & FXCG100_APPKEY_SORT) {
+		int rc = txt_reader_add_bookmark(r);
+
+		if (rc == TXT_BM_ADDED)
+			message(ui, 0, "Bookmark added", NULL, NULL);
+		else if (rc == TXT_BM_EXISTS)
+			message(ui, 0, "Already bookmarked", NULL, NULL);
+		else if (rc == TXT_BM_FULL)
+			message(ui, 1, "Bookmarks full (32 max)", NULL, NULL);
+		want(ui, REDRAW_FULL);
+	} else if (e & FXCG100_APPKEY_EXE) {
+		ui->txt_opt_jump = txt_reader_percent(r);
+		open_dialog(ui, DIALOG_TXT_OPTIONS);
+	}
+	return FXCG100_MENU_CONTINUE;
+}
+
+static fxcg100_menu_result input_txt_options(cg_ui *ui)
+{
+	txt_reader *r = txt_reader_global();
+	uint32_t e = ui->edge;
+	int d;
+
+	if (e & FXCG100_APPKEY_BACK) {
+		ui->dialog = DIALOG_NONE;
+		want(ui, REDRAW_FULL);
+		return FXCG100_MENU_CONTINUE;
+	}
+	if (e & FXCG100_APPKEY_UP) {
+		ui->dialog_sel = (ui->dialog_sel + 4) % 5;
+		want(ui, REDRAW_FULL);
+		return FXCG100_MENU_CONTINUE;
+	}
+	if (e & FXCG100_APPKEY_DOWN) {
+		ui->dialog_sel = (ui->dialog_sel + 1) % 5;
+		want(ui, REDRAW_FULL);
+		return FXCG100_MENU_CONTINUE;
+	}
+	if (ui->dialog_sel == 0) {
+		for (d = 0; d < 10; d++) {
+			if (e & FXCG100_APPKEY_DIGIT(d)) {
+				ui->txt_opt_jump = d * 10;
+				want(ui, REDRAW_FULL);
+			}
+		}
+		if (e & FXCG100_APPKEY_LEFT) {
+			ui->txt_opt_jump = ui->txt_opt_jump > 5 ? ui->txt_opt_jump - 5 : 0;
+			want(ui, REDRAW_FULL);
+		} else if (e & FXCG100_APPKEY_RIGHT) {
+			ui->txt_opt_jump = ui->txt_opt_jump < 95 ? ui->txt_opt_jump + 5 : 100;
+			want(ui, REDRAW_FULL);
+		} else if (e & FXCG100_APPKEY_EXE) {
+			char pct_str[8];
+
+			txt_reader_jump_percent(r, ui->txt_opt_jump);
+			ui->dialog = DIALOG_NONE;
+			snprintf(pct_str, sizeof(pct_str), "%d%%", ui->txt_opt_jump);
+			message(ui, 0, "Jumped to %s (DEL to undo)", pct_str, NULL);
+			want(ui, REDRAW_FULL);
+		}
+	} else if (ui->dialog_sel == 1) {
+		if (e & FXCG100_APPKEY_EXE) {
+			ui->txt_bm_sel = 0;
+			ui->txt_bm_first = 0;
+			ui->dialog = DIALOG_TXT_BOOKMARKS;
+			want(ui, REDRAW_FULL);
+		}
+	} else if (ui->dialog_sel == 2) {
+		if (e & (FXCG100_APPKEY_LEFT | FXCG100_APPKEY_RIGHT | FXCG100_APPKEY_EXE)) {
+			txt_reader_set_font(r, r->font_idx == TXT_FONT_6X12
+				? TXT_FONT_8X14 : TXT_FONT_6X12);
+			want(ui, REDRAW_FULL);
+		}
+	} else if (ui->dialog_sel == 3) {
+		if (e & (FXCG100_APPKEY_LEFT | FXCG100_APPKEY_RIGHT | FXCG100_APPKEY_EXE)) {
+			txt_reader_set_wrap(r, !r->wrap);
+			want(ui, REDRAW_FULL);
+		}
+	} else if (ui->dialog_sel == 4) {
+		if (e & FXCG100_APPKEY_EXE) {
+			ui->dialog = DIALOG_NONE;
+			open_txt_browser(ui, PAGE_TXT_READER);
+		}
+	}
+	return FXCG100_MENU_CONTINUE;
+}
+
+static fxcg100_menu_result input_txt_bookmarks(cg_ui *ui)
+{
+	txt_reader *r = txt_reader_global();
+	uint32_t marks[TXT_MAX_BOOKMARKS];
+	int count = (int)txt_reader_get_bookmarks(r, marks, TXT_MAX_BOOKMARKS);
+	int can_add = count < (int)TXT_MAX_BOOKMARKS;
+	int total = count + (can_add ? 1 : 0);
+	uint32_t e = ui->edge;
+
+	if (e & FXCG100_APPKEY_BACK) {
+		ui->dialog = DIALOG_TXT_OPTIONS;
+		ui->dialog_sel = 1;
+		want(ui, REDRAW_FULL);
+		return FXCG100_MENU_CONTINUE;
+	}
+	if (total == 0)
+		return FXCG100_MENU_CONTINUE;
+	if (e & FXCG100_APPKEY_UP) {
+		if (ui->txt_bm_sel > 0)
+			ui->txt_bm_sel--;
+		else if (!ui->repeat)
+			ui->txt_bm_sel = total - 1;
+		txt_bm_reveal(ui, total);
+		want(ui, REDRAW_FULL);
+	} else if (e & FXCG100_APPKEY_DOWN) {
+		if (ui->txt_bm_sel + 1 < total)
+			ui->txt_bm_sel++;
+		else if (!ui->repeat)
+			ui->txt_bm_sel = 0;
+		txt_bm_reveal(ui, total);
+		want(ui, REDRAW_FULL);
+	} else if ((e & FXCG100_APPKEY_DEL) && ui->txt_bm_sel < count) {
+		txt_reader_remove_bookmark(r, (unsigned)ui->txt_bm_sel);
+		count--;
+		total = count + (count < (int)TXT_MAX_BOOKMARKS ? 1 : 0);
+		txt_bm_reveal(ui, total);
+		want(ui, REDRAW_FULL);
+	} else if (e & FXCG100_APPKEY_EXE) {
+		if (ui->txt_bm_sel < count) {
+			uint32_t target = marks[ui->txt_bm_sel];
+			int pct = r->doc_size > 0
+				? (int)(((uint64_t)target * 100u) / r->doc_size) : 0;
+			char pct_str[8];
+
+			if (pct > 100)
+				pct = 100;
+			txt_reader_jump_offset(r, target, 1);
+			ui->dialog = DIALOG_NONE;
+			snprintf(pct_str, sizeof(pct_str), "%d%%", pct);
+			message(ui, 0, "Jumped to %s (DEL to undo)", pct_str, NULL);
+			want(ui, REDRAW_FULL);
+		} else {
+			int rc = txt_reader_add_bookmark(r);
+
+			ui->dialog = DIALOG_NONE;
+			if (rc == TXT_BM_ADDED)
+				message(ui, 0, "Bookmark added", NULL, NULL);
+			else if (rc == TXT_BM_EXISTS)
+				message(ui, 0, "Already bookmarked", NULL, NULL);
+			else if (rc == TXT_BM_FULL)
+				message(ui, 1, "Bookmarks full (32 max)", NULL, NULL);
+			want(ui, REDRAW_FULL);
+		}
+	}
+	return FXCG100_MENU_CONTINUE;
+}
+
 static fxcg100_menu_result input_pause(cg_ui *ui)
 {
 	uint32_t e = ui->edge;
@@ -1464,6 +2151,7 @@ static fxcg100_menu_result input_pause(cg_ui *ui)
 		case ID_RESUME:   return FXCG100_MENU_RETURN;
 		case ID_SAVE:     open_dialog(ui, DIALOG_SAVE); break;
 		case ID_LOAD:     return FXCG100_MENU_LOAD_STATE;
+		case ID_READER:   open_txt_reader_page(ui); break;
 		case ID_SETTINGS: open_settings(ui); break;
 		case ID_GAMES:    goto_page(ui, PAGE_LIBRARY); break;
 		case ID_RESTART:  open_dialog(ui, DIALOG_RESTART); break;
@@ -1598,6 +2286,10 @@ static fxcg100_menu_result input_dialog(cg_ui *ui)
 {
 	uint32_t e = ui->edge;
 
+	if (ui->dialog == DIALOG_TXT_OPTIONS)
+		return input_txt_options(ui);
+	if (ui->dialog == DIALOG_TXT_BOOKMARKS)
+		return input_txt_bookmarks(ui);
 	if (ui->dialog == DIALOG_EXIT && (e & FXCG100_APPKEY_HOME))
 		return FXCG100_MENU_QUIT;
 	if (e & FXCG100_APPKEY_BACK) {
@@ -1646,10 +2338,12 @@ static fxcg100_menu_result input(cg_ui *ui)
 		return FXCG100_MENU_CONTINUE;
 	}
 	switch (ui->page) {
-	case PAGE_LIBRARY:  return input_library(ui);
-	case PAGE_PAUSE:    return input_pause(ui);
-	case PAGE_SETTINGS: input_settings(ui); break;
-	case PAGE_KEYS:     input_keys(ui); break;
+	case PAGE_LIBRARY:     return input_library(ui);
+	case PAGE_PAUSE:       return input_pause(ui);
+	case PAGE_SETTINGS:    input_settings(ui); break;
+	case PAGE_KEYS:        input_keys(ui); break;
+	case PAGE_TXT_BROWSER: return input_txt_browser(ui);
+	case PAGE_TXT_READER:  return input_txt_reader(ui);
 	default:
 		if (e & FXCG100_APPKEY_BACK)
 			goto_page(ui, PAGE_SETTINGS);
@@ -1667,8 +2361,10 @@ static fxcg100_menu_result input(cg_ui *ui)
 static void cg_ui_begin(cg_ui *ui, fxcg100_menu_state *state, int in_game,
 	const fxcg100_debug_info *debug)
 {
-	int resume = ui->resume && in_game && ui->state == state;
+	int direct = open_reader_direct;
+	int resume = !direct && ui->resume && in_game && ui->state == state;
 
+	open_reader_direct = 0;
 	ui->state = state;
 	ui->debug = debug;
 	ui->in_game = in_game;
@@ -1676,6 +2372,8 @@ static void cg_ui_begin(cg_ui *ui, fxcg100_menu_state *state, int in_game,
 	ui->settings_dirty = 0;
 	ui->progress = NULL;
 	ui->resume = 0;
+	ui->txt_direct = direct && in_game;
+	ui->txt_hotkey_armed = 0;
 	if (state->game_sort >= FXCG100_GAME_SORT_COUNT)
 		state->game_sort = FXCG100_GAME_SORT_NAME;
 	if (resume) {
@@ -1695,6 +2393,8 @@ static void cg_ui_begin(cg_ui *ui, fxcg100_menu_state *state, int in_game,
 		state->theme = 0;
 	if (state->game_sort >= FXCG100_GAME_SORT_COUNT)
 		state->game_sort = FXCG100_GAME_SORT_NAME;
+	if (ui->txt_direct)
+		open_txt_reader_page(ui);
 	/* Whatever opened the menu is still held: do not let it act here. */
 	ui->keys = fxcg100_poll_app_keys();
 	ui->edge = 0;
@@ -1713,17 +2413,36 @@ static fxcg100_menu_result cg_ui_step(cg_ui *ui)
 	read_keys(ui);
 	if (ui->dialog == DIALOG_CAPTURE) {
 		input_capture(ui);
-	} else if (ui->edge) {
-		/* A result in the footer goes at the next key, which then acts as
-		 * usual; one this key itself produces stays. */
-		if (ui->message[0] && !ui->dialog) {
-			ui->message[0] = 0;
-			want(ui, REDRAW_FOOTER);
+	} else {
+		if (ui->in_game && ui->dialog == DIALOG_NONE &&
+				(ui->page == PAGE_TXT_READER || ui->page == PAGE_TXT_BROWSER)) {
+			uint16_t hk = ui->state->hotkey_map[FXCG100_HOTKEY_TXT_READER];
+
+			if (hk) {
+				uint16_t phys = fxcg100_poll_physical_key();
+
+				if (!ui->txt_hotkey_armed) {
+					if (phys != hk)
+						ui->txt_hotkey_armed = 1;
+				} else if (phys == hk) {
+					result = FXCG100_MENU_RETURN;
+				}
+			}
 		}
-		build_rows(ui);
-		result = input(ui);
+		if (result == FXCG100_MENU_CONTINUE && ui->edge) {
+			/* A result in the footer goes at the next key, which then acts as
+			 * usual; one this key itself produces stays. */
+			if (ui->message[0] && !ui->dialog) {
+				ui->message[0] = 0;
+				want(ui, ui->page == PAGE_TXT_READER
+					? REDRAW_FULL : REDRAW_FOOTER);
+			}
+			build_rows(ui);
+			result = input(ui);
+		}
 	}
 	if (result != FXCG100_MENU_CONTINUE) {
+		txt_reader_flush(txt_reader_global());
 		if (ui->settings_dirty) {
 			fxcg100_wait_keys_released();
 			fxcg100_config_save(ui->state);
@@ -1761,7 +2480,7 @@ static fxcg100_menu_result cg_ui_step(cg_ui *ui)
 	if (ui->message[0] && !ui->dialog &&
 			ticks_since(ui->message_t0, rtc_ticks()) >= T_MESSAGE) {
 		ui->message[0] = 0;
-		want(ui, REDRAW_FOOTER);
+		want(ui, ui->page == PAGE_TXT_READER ? REDRAW_FULL : REDRAW_FOOTER);
 	}
 	if (ui->redraw)
 		render(ui);
@@ -1850,6 +2569,11 @@ void cg_ui_status(const fxcg100_menu_state *state, const char *line1,
 
 /* ---- the fxcg100_menu contract -------------------------------------------- */
 
+void fxcg100_menu_open_reader(void)
+{
+	open_reader_direct = 1;
+}
+
 void fxcg100_menu_init(fxcg100_menu_state *state)
 {
 	memset(state, 0, sizeof(*state));
@@ -1869,9 +2593,9 @@ void fxcg100_menu_init(fxcg100_menu_state *state)
 		state->theme = 0;
 	if (state->game_sort >= FXCG100_GAME_SORT_COUNT)
 		state->game_sort = FXCG100_GAME_SORT_NAME;
-	/* Save+Exit was never implemented and is no longer offered. */
-	state->hotkey_map[FXCG100_HOTKEY_SAVE_EXIT] = 0;
 	memset(&ui_main, 0, sizeof(ui_main));
+	open_reader_direct = 0;
+	txt_reader_init(txt_reader_global());
 }
 
 /* main() calls this with frame 0 before any game is loaded, and with the

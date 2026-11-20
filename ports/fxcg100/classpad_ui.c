@@ -40,6 +40,7 @@
 #include "classpad_gfx.h"
 #include "classpad_sync.h"
 #include "classpad_theme.h"
+#include "txt_reader.h"
 
 #include <gint/display.h>
 
@@ -71,6 +72,8 @@ enum {
 	SCREEN_CONTROLS,
 	SCREEN_CLOCK,
 	SCREEN_SYNC,
+	SCREEN_TXT_BROWSER,
+	SCREEN_TXT_READER,
 	SCREEN_COUNT
 };
 
@@ -78,7 +81,7 @@ enum { CONFIRM_NONE = 0, CONFIRM_RESTART, CONFIRM_EXIT, CONFIRM_SAVE };
 
 enum {
 	MODAL_NONE = 0, MODAL_CONFIRM, MODAL_CAPTURE, MODAL_CLOCK, MODAL_FLASHING,
-	MODAL_SORT
+	MODAL_SORT, MODAL_TXT_BOOKMARKS
 };
 
 enum { BTN_FILLED = 0, BTN_TONAL, BTN_OUTLINED, BTN_TEXT, BTN_DANGER };
@@ -128,7 +131,7 @@ typedef struct cp_ui {
 	int dragging;              /* it has moved too far to be a tap */
 	int tap, tap_x, tap_y;     /* lifted this step without dragging */
 	int touch_began;           /* the finger came down at this step */
-	int drag_dy;
+	int drag_dx, drag_dy;
 
 	/* Keypad focus: index among the widgets in drawing order. */
 	int focus, focus_shown, widgets, widgets_last;
@@ -189,8 +192,18 @@ typedef struct cp_ui {
 	uint32_t clock_deadline, clock_at_startup;
 	int sync_warn;             /* asking before the flashing page opens */
 	uint32_t sync_frame;       /* frames of it drawn: picks the colour */
+	int txt_browser_from;
+	int txt_direct;
+	int txt_hotkey_armed;
+	int txt_overlay;
+	int txt_bm_open;
+	int txt_bm_scroll;
+	int txt_drag_accum_x, txt_drag_accum_y;
+	char txt_snack[64];
 	int redraw;
 } cp_ui;
+
+static int cp_open_reader_direct;
 
 static void row_info(cp_ui *ui, int *y, const char *label, const char *value);
 
@@ -419,6 +432,7 @@ static int ui_input(cp_ui *ui)
 	changed = ui->key_edge != 0 || ui->strip_edge != 0;
 
 	ui->tap = 0;
+	ui->drag_dx = 0;
 	ui->drag_dy = 0;
 	ui->touch_began = touching && !ui->touching;
 	if(touching) {
@@ -443,8 +457,10 @@ static int ui_input(cp_ui *ui)
 						(dy < 0 ? -dy : dy) ? SLIDER_DRAG : SLIDER_NONE;
 				ui->dragging = 1;
 			}
-			if(ui->dragging)
+			if(ui->dragging) {
+				ui->drag_dx = x - ui->tx;
 				ui->drag_dy = y - ui->ty;
+			}
 			if(x != ui->tx || y != ui->ty)
 				changed = 1;
 		}
@@ -461,6 +477,8 @@ static int ui_input(cp_ui *ui)
 	ui->activate = 0;
 	ui->adjust = 0;
 	ui->edit_delta = 0;
+	if(ui->screen == SCREEN_TXT_READER && !ui->txt_overlay && !ui->txt_bm_open)
+		return changed;
 	if(ui->edit) {
 		/* A stepper was tapped: the cursor keys change its value, by one
 		 * left and right and by ten up and down, until EXE or back. */
@@ -535,7 +553,7 @@ static void ui_unmute(cp_ui *ui, const ui_muted *saved)
  * right, a shallower one from the left. */
 static void ui_goto(cp_ui *ui, int screen)
 {
-	static const int8_t depth[SCREEN_COUNT] = { 0, 0, 1, 2, 2, 2 };
+	static const int8_t depth[SCREEN_COUNT] = { 0, 0, 1, 2, 2, 2, 1, 2 };
 	int d = depth[screen] - depth[ui->screen];
 
 	ui->enter_dir = d > 0 ? 1 : d < 0 ? -1 : 0;
@@ -556,6 +574,10 @@ static void ui_goto(cp_ui *ui, int screen)
 	ui->sort_open = 0;
 	ui->capture = -1;
 	ui->clock_loaded = 0;
+	ui->txt_overlay = 0;
+	ui->txt_bm_open = 0;
+	ui->txt_drag_accum_x = 0;
+	ui->txt_drag_accum_y = 0;
 	ui->redraw = 1;
 }
 
@@ -1793,20 +1815,23 @@ static fxcg100_menu_result modal_confirm(cp_ui *ui)
 	return FXCG100_MENU_CONTINUE;
 }
 
-#define STATE_CARD_H 204
-#define NAV_CARD_H 168
+#define STATE_CARD_H 200
+#define NAV_CARD_H 182
+
+static void cp_open_txt_browser(cp_ui *ui, int from_screen);
+static void cp_open_txt_reader(cp_ui *ui);
 
 /* Which of the ten state slots Save and Load use, and the two actions. */
 static fxcg100_menu_result pause_state_card(cp_ui *ui, int x, int y, int w)
 {
 	int bw = (w - 24 - 8) / 2;
-	cp_rect save = { (int16_t)(x + 12), (int16_t)(y + 134), (int16_t)bw, 56 };
-	cp_rect load = { (int16_t)(x + 12 + bw + 8), save.y, (int16_t)bw, 56 };
+	cp_rect save = { (int16_t)(x + 12), (int16_t)(y + 132), (int16_t)bw, 54 };
+	cp_rect load = { (int16_t)(x + 12 + bw + 8), save.y, (int16_t)bw, 54 };
 
 	cp_round_rect(&ui->s, x, y, w, STATE_CARD_H, CARD_RADIUS, ui->t.container);
 	cp_text(&ui->s, &cp_font_small, x + PAD, y + 12, "State slot",
 		ui->t.on_surface_variant);
-	if(ui_slot_chips(ui, x + 12, y + 42, w - 24, &ui->state->savestate_slot))
+	if(ui_slot_chips(ui, x + 12, y + 40, w - 24, &ui->state->savestate_slot))
 		ui->redraw = 1;
 	if(ui_button(ui, save, "Save state", BTN_TONAL)) {
 		ui->confirm = CONFIRM_SAVE;
@@ -1821,12 +1846,15 @@ static fxcg100_menu_result pause_state_card(cp_ui *ui, int x, int y, int w)
 static void pause_nav_card(cp_ui *ui, int x, int y, int w)
 {
 	int bw = (w - 24 - 8) / 2;
-	cp_rect settings = { (int16_t)x, (int16_t)y, (int16_t)w, 56 };
-	cp_rect games = { (int16_t)x, (int16_t)(y + 56), (int16_t)w, 56 };
-	cp_rect restart = { (int16_t)(x + 12), (int16_t)(y + 118), (int16_t)bw, 40 };
+	cp_rect reader = { (int16_t)x, (int16_t)y, (int16_t)w, 44 };
+	cp_rect settings = { (int16_t)x, (int16_t)(y + 44), (int16_t)w, 44 };
+	cp_rect games = { (int16_t)x, (int16_t)(y + 88), (int16_t)w, 44 };
+	cp_rect restart = { (int16_t)(x + 12), (int16_t)(y + 136), (int16_t)bw, 40 };
 	cp_rect quit = { (int16_t)(x + 12 + bw + 8), restart.y, (int16_t)bw, 40 };
 
 	cp_round_rect(&ui->s, x, y, w, NAV_CARD_H, CARD_RADIUS, ui->t.container);
+	if(nav_item(ui, reader, "TXT Reader", NULL))
+		cp_open_txt_reader(ui);
 	if(nav_item(ui, settings, "Settings", NULL))
 		ui_goto(ui, SCREEN_SETTINGS);
 	if(nav_item(ui, games, "Games", NULL))
@@ -1864,15 +1892,15 @@ static fxcg100_menu_result screen_pause(cp_ui *ui)
 		w = (ui->w - 2 * MARGIN - 12) / 2;
 		y += 4;
 	}
-	resume = (cp_rect){ (int16_t)(x + 4), (int16_t)y, (int16_t)(w - 8), 56 };
+	resume = (cp_rect){ (int16_t)(x + 4), (int16_t)y, (int16_t)(w - 8), 52 };
 	if(ui_button_icon(ui, resume, "Resume", BTN_FILLED, ICON_PLAY))
 		return FXCG100_MENU_RETURN;
 	if(ui->wide) {
 		result = pause_state_card(ui, x + w + 12, y, w);
-		pause_nav_card(ui, x, y + 56 + 14, w);
+		pause_nav_card(ui, x, y + 52 + 10, w);
 	} else {
-		result = pause_state_card(ui, x, y + 56 + 14, w);
-		pause_nav_card(ui, x, y + 56 + 14 + STATE_CARD_H + 12, w);
+		result = pause_state_card(ui, x, y + 52 + 10, w);
+		pause_nav_card(ui, x, y + 52 + 10 + STATE_CARD_H + 10, w);
 	}
 	return result;
 }
@@ -2050,7 +2078,7 @@ static fxcg100_menu_result screen_settings(cp_ui *ui)
 
 /* ---- key mapping ---------------------------------------------------------- */
 
-#define BINDING_COUNT 14
+#define BINDING_COUNT 15
 
 static const struct {
 	const char *name;
@@ -2067,6 +2095,7 @@ static const struct {
 	{ "Save state", 1, FXCG100_HOTKEY_SAVE_STATE },
 	{ "Load state", 1, FXCG100_HOTKEY_LOAD_STATE },
 	{ "Show frame rate", 1, FXCG100_HOTKEY_DISPLAY_FPS },
+	{ "TXT Reader", 1, FXCG100_HOTKEY_TXT_READER },
 };
 
 static uint16_t *binding_slot(cp_ui *ui, int i)
@@ -2725,6 +2754,615 @@ static fxcg100_menu_result screen_sync(cp_ui *ui)
 	return FXCG100_MENU_CONTINUE;
 }
 
+/* ---- TXT reader ----------------------------------------------------------- */
+
+#define TXT_CP_HEAD   20
+#define TXT_CP_HINT_H 24
+
+static void cp_open_txt_browser(cp_ui *ui, int from_screen)
+{
+	txt_reader *r = txt_reader_global();
+
+	fxcg100_wait_keys_released();
+	txt_reader_scan_dir(r);
+	ui->txt_browser_from = from_screen;
+	ui->scroll[SCREEN_TXT_BROWSER] = 0;
+	ui_goto(ui, SCREEN_TXT_BROWSER);
+}
+
+static void cp_open_txt_reader(cp_ui *ui)
+{
+	txt_reader *r = txt_reader_global();
+
+	if(r->has_doc) {
+		txt_reader_sync_storage(r);
+		txt_reader_on_enter(r);
+		ui_goto(ui, SCREEN_TXT_READER);
+	} else {
+		cp_open_txt_browser(ui, ui->txt_direct ? -1 : SCREEN_PAUSE);
+	}
+}
+
+static fxcg100_menu_result screen_txt_browser(cp_ui *ui)
+{
+	txt_reader *r = txt_reader_global();
+	int total = (int)r->dir_count + (r->dir_depth > 0 ? 1 : 0);
+	char dir_label[48], folder_name[TXT_NAME_MAX + 2], size_text[20];
+	int y, top, i;
+
+	if(ui_bar(ui, "TXT Files", ICON_BACK, ICON_NONE) == BAR_BACK ||
+			(ui->key_edge & FXCG100_APPKEY_BACK)) {
+		if(r->dir_depth > 0) {
+			fxcg100_wait_keys_released();
+			txt_reader_up_dir(r);
+			ui->scroll[SCREEN_TXT_BROWSER] = 0;
+			ui->redraw = 1;
+			return FXCG100_MENU_CONTINUE;
+		}
+		if(ui->txt_browser_from == SCREEN_TXT_READER && r->has_doc) {
+			txt_reader_on_enter(r);
+			ui_goto(ui, SCREEN_TXT_READER);
+			return FXCG100_MENU_CONTINUE;
+		}
+		if(ui->txt_direct)
+			return FXCG100_MENU_RETURN;
+		ui_goto(ui, SCREEN_PAUSE);
+		return FXCG100_MENU_CONTINUE;
+	}
+	if((ui->key_edge & FXCG100_APPKEY_ON) && ui->in_game)
+		return FXCG100_MENU_RETURN;
+
+	top = ui->bar_h - ui_scroll_begin(ui);
+	y = top;
+	txt_reader_display_dir(r, dir_label, sizeof(dir_label));
+	section_label(ui, &y, dir_label);
+
+	if(total == 0) {
+		int cy = ui->bar_h + (ui->h - ui->bar_h) / 2;
+
+		cp_text_centered(&ui->s, &cp_font_title, 24, cy - 28, ui->w - 48, 28,
+			"No .TXT files", ui->t.on_surface);
+		cp_text_centered(&ui->s, &cp_font_small, 24, cy + 4, ui->w - 48, 24,
+			"Copy .txt files to storage.", ui->t.on_surface_variant);
+		ui_scroll_end(ui, 0);
+		return FXCG100_MENU_CONTINUE;
+	}
+
+	card_begin(ui, y);
+	if(r->dir_depth > 0) {
+		cp_rect row = row_begin(ui, &y, 52);
+		int flags = ui_widget(ui, row), id = ui->last_id;
+
+		row_text(ui, row, row.w - 2 * PAD - 40, "..", NULL);
+		cp_text(&ui->s, &cp_font_small,
+			row.x + row.w - PAD - cp_text_width(&cp_font_small, "Up"),
+			row.y + (row.h - cp_font_small.height) / 2, "Up",
+			ui->t.on_surface_variant);
+		row_feedback(ui, row, flags, id);
+		ui_mark("..", row);
+		if(flags & HIT_CLICK) {
+			fxcg100_wait_keys_released();
+			txt_reader_up_dir(r);
+			ui->scroll[SCREEN_TXT_BROWSER] = 0;
+			ui->redraw = 1;
+		}
+	}
+	for(i = 0; i < (int)r->dir_count; i++) {
+		const txt_dir_entry *ent = &r->dir_entries[i];
+
+		if(ent->is_dir) {
+			snprintf(folder_name, sizeof(folder_name), "%s/", ent->name);
+			if(nav_item(ui, row_begin(ui, &y, 52), folder_name, NULL)) {
+				fxcg100_wait_keys_released();
+				if(txt_reader_enter_dir(r, ent->name)) {
+					ui->scroll[SCREEN_TXT_BROWSER] = 0;
+					ui->redraw = 1;
+				} else {
+					ui_snack(ui, "Folder too deep");
+				}
+			}
+		} else {
+			cp_rect row = row_begin(ui, &y, 52);
+			int flags = ui_widget(ui, row), id = ui->last_id;
+			int sw;
+
+			txt_format_size(ent->size, size_text, sizeof(size_text));
+			sw = cp_text_width(&cp_font_small, size_text);
+			row_text(ui, row, row.w - 2 * PAD - sw - 12, ent->name, NULL);
+			cp_text(&ui->s, &cp_font_small, row.x + row.w - PAD - sw,
+				row.y + (row.h - cp_font_small.height) / 2, size_text,
+				ui->t.on_surface_variant);
+			row_feedback(ui, row, flags, id);
+			ui_mark(ent->name, row);
+			if(flags & HIT_CLICK) {
+				char rel[TXT_PATH_MAX];
+
+				if(r->dir_path[0])
+					snprintf(rel, sizeof(rel), "%s\\%s", r->dir_path, ent->name);
+				else
+					snprintf(rel, sizeof(rel), "%s", ent->name);
+				fxcg100_wait_keys_released();
+				if(txt_reader_open(r, rel))
+					ui_goto(ui, SCREEN_TXT_READER);
+				else
+					ui_snack(ui, "Could not open file");
+			}
+		}
+	}
+	card_end(ui, &y);
+	ui_scroll_end(ui, y + 8 - top);
+	return FXCG100_MENU_CONTINUE;
+}
+
+static fxcg100_menu_result modal_txt_bookmarks(cp_ui *ui)
+{
+	txt_reader *r = txt_reader_global();
+	uint32_t marks[TXT_MAX_BOOKMARKS];
+	int count = (int)txt_reader_get_bookmarks(r, marks, TXT_MAX_BOOKMARKS);
+	int box_h = ui->wide ? 276 : 360;
+	int vis_rows = ui->wide ? 3 : 5;
+	int max_scroll = count > vis_rows ? count - vis_rows : 0;
+	cp_rect box = dialog_box(ui, box_h);
+	char meta[16], preview[48], line[64];
+	int i, list_y = box.y + 56, row_h = 44;
+	cp_rect add_r, close_r;
+
+	if(ui->txt_bm_scroll > max_scroll)
+		ui->txt_bm_scroll = max_scroll;
+	if(ui->txt_bm_scroll < 0)
+		ui->txt_bm_scroll = 0;
+
+	if(ui->touching && ui->dragging &&
+			point_in(box, ui->press_x, ui->press_y) && max_scroll > 0) {
+		ui->txt_drag_accum_y += ui->drag_dy;
+		while(ui->txt_drag_accum_y <= -row_h && ui->txt_bm_scroll < max_scroll) {
+			ui->txt_bm_scroll++;
+			ui->txt_drag_accum_y += row_h;
+			ui->redraw = 1;
+		}
+		while(ui->txt_drag_accum_y >= row_h && ui->txt_bm_scroll > 0) {
+			ui->txt_bm_scroll--;
+			ui->txt_drag_accum_y -= row_h;
+			ui->redraw = 1;
+		}
+	} else if(!ui->touching) {
+		ui->txt_drag_accum_y = 0;
+	}
+
+	cp_text_fit(&ui->s, &cp_font_title, box.x + 20, box.y + 18, box.w - 96,
+		"Bookmarks", ui->t.on_surface);
+	snprintf(meta, sizeof(meta), "%d / %u", count, (unsigned)TXT_MAX_BOOKMARKS);
+	cp_text(&ui->s, &cp_font_small,
+		box.x + box.w - 20 - cp_text_width(&cp_font_small, meta),
+		box.y + 24, meta, ui->t.on_surface_variant);
+
+	if(count == 0) {
+		cp_text_centered(&ui->s, &cp_font_small, box.x + 20, list_y + 24,
+			box.w - 40, 24, "No bookmarks yet.", ui->t.on_surface_variant);
+	} else {
+		for(i = 0; i < vis_rows && ui->txt_bm_scroll + i < count; i++) {
+			int idx = ui->txt_bm_scroll + i;
+			int ry = list_y + i * row_h;
+			cp_rect jump_r = { (int16_t)(box.x + 12), (int16_t)ry,
+				(int16_t)(box.w - 24 - 56), (int16_t)(row_h - 4) };
+			cp_rect del_r = { (int16_t)(jump_r.x + jump_r.w + 4),
+				(int16_t)ry, 52, (int16_t)(row_h - 4) };
+			int pct = r->doc_size > 0
+				? (int)(((uint64_t)marks[idx] * 100u) / r->doc_size) : 0;
+			int flags = ui_widget(ui, jump_r), id = ui->last_id;
+
+			if(pct > 100)
+				pct = 100;
+			txt_reader_preview_at(r, marks[idx], preview, sizeof(preview));
+			if(preview[0])
+				snprintf(line, sizeof(line), "%d%% %s", pct, preview);
+			else
+				snprintf(line, sizeof(line), "%d%%", pct);
+			cp_round_rect(&ui->s, jump_r.x, jump_r.y, jump_r.w, jump_r.h, 10,
+				ui->t.container);
+			cp_text_fit(&ui->s, &cp_font_small, jump_r.x + 10,
+				jump_r.y + (jump_r.h - cp_font_small.height) / 2,
+				jump_r.w - 20, line, ui->t.on_surface);
+			ui_layer(ui, id, jump_r, 10, flags, ui->t.on_surface);
+			if(flags & HIT_FOCUS)
+				ui_focus_ring(ui, jump_r, 10);
+			if(flags & HIT_CLICK) {
+				txt_reader_jump_offset(r, marks[idx], 1);
+				ui->txt_bm_open = 0;
+				ui->txt_overlay = 0;
+				snprintf(ui->txt_snack, sizeof(ui->txt_snack),
+					"Jumped to %d%%", pct);
+				ui_snack(ui, ui->txt_snack);
+				ui->redraw = 1;
+				return FXCG100_MENU_CONTINUE;
+			}
+			if(ui_button(ui, del_r, "Del", BTN_TEXT)) {
+				txt_reader_remove_bookmark(r, (unsigned)idx);
+				ui->redraw = 1;
+				return FXCG100_MENU_CONTINUE;
+			}
+		}
+		if(max_scroll > 0) {
+			int track_h = vis_rows * row_h - 8;
+			int thumb_h = track_h * vis_rows / count;
+			int thumb_y;
+
+			if(thumb_h < 14)
+				thumb_h = 14;
+			thumb_y = list_y + 2 + (track_h - thumb_h) * ui->txt_bm_scroll /
+				max_scroll;
+			cp_round_rect(&ui->s, box.x + box.w - 8, thumb_y, 3, thumb_h, 1,
+				ui->faint);
+		}
+	}
+
+	if(count < (int)TXT_MAX_BOOKMARKS) {
+		dialog_buttons(box, "+ Add here", "Close", &add_r, &close_r);
+		if(ui_button(ui, add_r, "+ Add here", BTN_TONAL)) {
+			int rc = txt_reader_add_bookmark(r);
+
+			if(rc == TXT_BM_ADDED)
+				ui_snack(ui, "Bookmark added");
+			else if(rc == TXT_BM_EXISTS)
+				ui_snack(ui, "Already bookmarked");
+			else if(rc == TXT_BM_FULL)
+				ui_snack(ui, "Bookmarks full (32 max)");
+			ui->redraw = 1;
+		}
+	} else {
+		dialog_buttons(box, NULL, "Close", &add_r, &close_r);
+	}
+	if(ui_button(ui, close_r, "Close", BTN_TEXT) ||
+			(ui->key_edge & FXCG100_APPKEY_BACK)) {
+		ui->txt_bm_open = 0;
+		ui->focus_shown = 0;
+		ui->redraw = 1;
+	}
+	return FXCG100_MENU_CONTINUE;
+}
+
+static fxcg100_menu_result screen_txt_reader(cp_ui *ui)
+{
+	txt_reader *r = txt_reader_global();
+	const txt_bitmap_font *hf = &txt_font_terminus_6x12;
+	const txt_bitmap_font *bf;
+	int show_hint_bar = r->show_hints && !ui->txt_overlay;
+	int body_top = TXT_CP_HEAD + 4;
+	int body_bot = show_hint_bar ? (ui->h - TXT_CP_HINT_H) : (ui->h - 4);
+	int body_h = body_bot - body_top;
+	int line_h, vis_lines, cols, i;
+	int has_bm, pct, right_len, rx, max_name_cols;
+	char status[24];
+
+	txt_reader_sync_storage(r);
+	bf = txt_reader_font(r);
+	line_h = (int)bf->h + 2;
+	vis_lines = body_h / line_h;
+	if(vis_lines < 1)
+		vis_lines = 1;
+	cols = (ui->w - 18) / (int)bf->w;
+	if(cols < 1)
+		cols = 1;
+	txt_reader_layout(r, cols, vis_lines);
+
+	/* Compact top status bar (hidden underneath floating bar when overlay is open). */
+	if(!ui->txt_overlay) {
+		cp_fill(&ui->s, 0, 0, ui->w, TXT_CP_HEAD, ui->t.container);
+		has_bm = txt_reader_has_visible_bookmark(r);
+		pct = txt_reader_percent(r);
+		if(!r->wrap)
+			snprintf(status, sizeof(status), "NOWRAP %d%%", pct);
+		else
+			snprintf(status, sizeof(status), "%d%%", pct);
+		right_len = (int)strlen(status) + (has_bm ? 2 : 0);
+		rx = ui->w - 10 - right_len * (int)hf->w;
+		if(has_bm) {
+			txt_draw_text(&ui->s, hf, rx, 4, "*", ui->t.primary);
+			txt_draw_text(&ui->s, hf, rx + 2 * (int)hf->w, 4, status,
+				ui->t.on_surface_variant);
+		} else {
+			txt_draw_text(&ui->s, hf, rx, 4, status, ui->t.on_surface_variant);
+		}
+		max_name_cols = rx - 16;
+		if(max_name_cols > 0)
+			txt_draw_text_fit(&ui->s, hf, 10, 4, max_name_cols, r->doc_name,
+				ui->t.on_surface);
+	}
+
+	/* Body text rendered with crisp 1-bit Terminus bitmap font. */
+	if(r->doc_size == 0 || r->line_count == 0) {
+		const char *empty = "(Empty file)";
+		int ew = (int)strlen(empty) * (int)bf->w;
+
+		txt_draw_text(&ui->s, bf, (ui->w - ew) / 2,
+			body_top + body_h / 2 - (int)bf->h / 2, empty,
+			ui->t.on_surface_variant);
+	} else {
+		for(i = 0; i < r->line_count; i++)
+			txt_draw_text(&ui->s, bf, 10, body_top + i * line_h,
+				r->lines[i].text, ui->t.on_surface);
+	}
+
+	/* Right 3 px scroll indicator. */
+	if(r->doc_size > 0 && (r->top_offset > 0 || r->end_offset < r->doc_size)) {
+		int track_h = body_bot - body_top - 4;
+		uint32_t vis_bytes = r->end_offset > r->top_offset
+			? r->end_offset - r->top_offset : 1u;
+		int thumb_h = (int)(((uint64_t)track_h * vis_bytes) / r->doc_size);
+		int thumb_y;
+
+		if(thumb_h < 14)
+			thumb_h = 14;
+		if(thumb_h > track_h)
+			thumb_h = track_h;
+		if(r->top_offset >= r->doc_size)
+			thumb_y = body_top + 2 + track_h - thumb_h;
+		else
+			thumb_y = body_top + 2 +
+				(int)(((uint64_t)(track_h - thumb_h) * r->top_offset) /
+					r->doc_size);
+		cp_round_rect(&ui->s, ui->w - 5, thumb_y, 3, thumb_h, 1, ui->faint);
+	}
+
+	/* Auto-hiding bottom hint bar (only shown on entry until first scroll/page). */
+	if(show_hint_bar) {
+		const char *hint_str = "Tap L/R: Page  Center: Menu  Drag: Scroll";
+		int hw = (int)strlen(hint_str) * (int)hf->w;
+		int hy = ui->h - TXT_CP_HINT_H;
+
+		cp_fill(&ui->s, 0, hy, ui->w, TXT_CP_HINT_H, ui->t.container);
+		txt_draw_text(&ui->s, hf, (ui->w - hw) / 2,
+			hy + (TXT_CP_HINT_H - (int)hf->h) / 2, hint_str,
+			ui->t.on_surface_variant);
+	}
+
+	if(!ui->txt_overlay) {
+		int d;
+
+		if(ui->key_edge & FXCG100_APPKEY_ON) {
+			txt_reader_flush(r);
+			return FXCG100_MENU_RETURN;
+		}
+		if(ui->key_edge & FXCG100_APPKEY_BACK) {
+			txt_reader_flush(r);
+			if(ui->txt_direct)
+				return FXCG100_MENU_RETURN;
+			ui_goto(ui, SCREEN_PAUSE);
+			return FXCG100_MENU_CONTINUE;
+		}
+		for(d = 0; d < 10; d++) {
+			if(ui->key_edge & FXCG100_APPKEY_DIGIT(d)) {
+				txt_reader_jump_percent(r, d * 10);
+				snprintf(ui->txt_snack, sizeof(ui->txt_snack),
+					"Jumped to %d%%", d * 10);
+				ui_snack(ui, ui->txt_snack);
+				ui->redraw = 1;
+				return FXCG100_MENU_CONTINUE;
+			}
+		}
+		if(ui->key_edge & FXCG100_APPKEY_UP) {
+			txt_reader_scroll_lines(r, -1);
+			ui->redraw = 1;
+		} else if(ui->key_edge & FXCG100_APPKEY_DOWN) {
+			txt_reader_scroll_lines(r, 1);
+			ui->redraw = 1;
+		} else if(ui->key_edge & FXCG100_APPKEY_LEFT) {
+			if(r->wrap)
+				txt_reader_page_up(r);
+			else
+				txt_reader_pan(r, -8);
+			ui->redraw = 1;
+		} else if(ui->key_edge & FXCG100_APPKEY_RIGHT) {
+			if(r->wrap)
+				txt_reader_page_down(r);
+			else
+				txt_reader_pan(r, 8);
+			ui->redraw = 1;
+		} else if(ui->key_edge & FXCG100_APPKEY_DEL) {
+			if(txt_reader_undo_jump(r)) {
+				ui_snack(ui, "Jump undone");
+				ui->redraw = 1;
+			}
+		} else if(ui->key_edge & FXCG100_APPKEY_EXE) {
+			ui->txt_overlay = 1;
+			ui->focus_shown = 0;
+			ui->redraw = 1;
+		}
+
+		if(ui->touching && ui->dragging) {
+			ui->txt_drag_accum_y += ui->drag_dy;
+			while(ui->txt_drag_accum_y <= -line_h) {
+				txt_reader_scroll_lines(r, 1);
+				ui->txt_drag_accum_y += line_h;
+				ui->redraw = 1;
+			}
+			while(ui->txt_drag_accum_y >= line_h) {
+				txt_reader_scroll_lines(r, -1);
+				ui->txt_drag_accum_y -= line_h;
+				ui->redraw = 1;
+			}
+			if(!r->wrap) {
+				int step_px = (int)bf->w * 4;
+
+				ui->txt_drag_accum_x += ui->drag_dx;
+				while(ui->txt_drag_accum_x <= -step_px) {
+					txt_reader_pan(r, 4);
+					ui->txt_drag_accum_x += step_px;
+					ui->redraw = 1;
+				}
+				while(ui->txt_drag_accum_x >= step_px) {
+					txt_reader_pan(r, -4);
+					ui->txt_drag_accum_x -= step_px;
+					ui->redraw = 1;
+				}
+			}
+		} else if(!ui->touching) {
+			ui->txt_drag_accum_x = 0;
+			ui->txt_drag_accum_y = 0;
+		}
+
+		if(ui->tap) {
+			int q = ui->w / 4;
+
+			if(ui->tap_x < q) {
+				txt_reader_page_up(r);
+				ui->redraw = 1;
+			} else if(ui->tap_x >= ui->w - q) {
+				txt_reader_page_down(r);
+				ui->redraw = 1;
+			} else {
+				ui->txt_overlay = 1;
+				ui->focus_shown = 0;
+				ui->redraw = 1;
+			}
+		}
+		return FXCG100_MENU_CONTINUE;
+	}
+
+	/* Floating overlay: top bar + bottom Material 3 sheet. */
+	if(ui_bar(ui, r->doc_name, ICON_BACK, ICON_NONE) == BAR_BACK) {
+		txt_reader_flush(r);
+		if(ui->txt_direct)
+			return FXCG100_MENU_RETURN;
+		ui_goto(ui, SCREEN_PAUSE);
+		return FXCG100_MENU_CONTINUE;
+	}
+	if(ui->key_edge & FXCG100_APPKEY_BACK) {
+		ui->txt_overlay = 0;
+		ui->focus_shown = 0;
+		ui->redraw = 1;
+		return FXCG100_MENU_CONTINUE;
+	}
+	if(ui->key_edge & FXCG100_APPKEY_ON) {
+		txt_reader_flush(r);
+		return FXCG100_MENU_RETURN;
+	}
+
+	{
+		static const char *const font_labels[2] = { "6x12", "8x14" };
+		static const char *const wrap_labels[2] = { "Wrap", "No wrap" };
+		int sheet_h = ui->wide ? 168 : 212;
+		int sy = ui->h - sheet_h;
+		uint32_t pct_u = (uint32_t)txt_reader_percent(r);
+		uint32_t font_u = (uint32_t)(r->font_idx ? 1u : 0u);
+		uint32_t wrap_u = (uint32_t)(r->wrap ? 0u : 1u);
+		char pct_buf[8], bm_label[24];
+		cp_rect slider_r = { MARGIN, (int16_t)(sy + 8),
+			(int16_t)(ui->w - 2 * MARGIN - 48), SLIDER_H };
+
+		/* Tapping the reading area between top bar and sheet dismisses overlay. */
+		if(ui->tap && ui->tap_y >= ui->bar_h && ui->tap_y < sy) {
+			ui->txt_overlay = 0;
+			ui->focus_shown = 0;
+			ui->redraw = 1;
+			return FXCG100_MENU_CONTINUE;
+		}
+
+		cp_round_rect(&ui->s, 0, sy, ui->w, sheet_h + 20, 20,
+			ui->t.container_high);
+		if(ui_slider(ui, slider_r, "Progress", &pct_u, 100, NULL)) {
+			txt_reader_jump_percent(r, (int)pct_u);
+			ui->redraw = 1;
+		}
+		snprintf(pct_buf, sizeof(pct_buf), "%u%%", (unsigned)pct_u);
+		cp_text(&ui->s, &cp_font_small,
+			ui->w - MARGIN - cp_text_width(&cp_font_small, pct_buf),
+			sy + 8 + (SLIDER_H - cp_font_small.height) / 2, pct_buf,
+			ui->t.on_surface);
+
+		{
+			int seg_w = (ui->w - 2 * MARGIN - 8) / 2;
+			cp_rect fseg = { MARGIN, (int16_t)(sy + 58), (int16_t)seg_w, 40 };
+			cp_rect wseg = { (int16_t)(MARGIN + seg_w + 8), (int16_t)(sy + 58),
+				(int16_t)(ui->w - 2 * MARGIN - seg_w - 8), 40 };
+
+			if(ui_segments(ui, fseg, "Font", font_labels, 2, &font_u)) {
+				txt_reader_set_font(r, (int)font_u);
+				ui->redraw = 1;
+			}
+			if(ui_segments(ui, wseg, "Wrap", wrap_labels, 2, &wrap_u)) {
+				txt_reader_set_wrap(r, wrap_u == 0u ? 1 : 0);
+				ui->redraw = 1;
+			}
+		}
+
+		snprintf(bm_label, sizeof(bm_label), "Bookmarks (%u)",
+			txt_reader_bookmark_count(r));
+		if(ui->wide) {
+			int gap = 8;
+			int bw = (ui->w - 2 * MARGIN - 3 * gap) / 4;
+			cp_rect b0 = { MARGIN, (int16_t)(sy + 108), (int16_t)bw, 48 };
+			cp_rect b1 = { (int16_t)(MARGIN + (bw + gap)), b0.y, (int16_t)bw, 48 };
+			cp_rect b2 = { (int16_t)(MARGIN + 2 * (bw + gap)), b0.y, (int16_t)bw, 48 };
+			cp_rect b3 = { (int16_t)(MARGIN + 3 * (bw + gap)), b0.y,
+				(int16_t)(ui->w - MARGIN - (MARGIN + 3 * (bw + gap))), 48 };
+
+			if(ui_button(ui, b0, bm_label, BTN_TONAL)) {
+				ui->txt_bm_open = 1;
+				ui->txt_bm_scroll = 0;
+				ui->focus_shown = 0;
+				ui->redraw = 1;
+			}
+			if(ui_button(ui, b1, "+ Mark", BTN_OUTLINED)) {
+				int rc = txt_reader_add_bookmark(r);
+
+				if(rc == TXT_BM_ADDED)
+					ui_snack(ui, "Bookmark added");
+				else if(rc == TXT_BM_EXISTS)
+					ui_snack(ui, "Already bookmarked");
+				else if(rc == TXT_BM_FULL)
+					ui_snack(ui, "Bookmarks full (32 max)");
+				ui->redraw = 1;
+			}
+			if(ui_button(ui, b2, "Files", BTN_OUTLINED)) {
+				ui->txt_overlay = 0;
+				cp_open_txt_browser(ui, SCREEN_TXT_READER);
+			}
+			if(ui_button(ui, b3, "Close", BTN_FILLED)) {
+				ui->txt_overlay = 0;
+				ui->focus_shown = 0;
+				ui->redraw = 1;
+			}
+		} else {
+			int bw = (ui->w - 2 * MARGIN - 8) / 2;
+			cp_rect b0 = { MARGIN, (int16_t)(sy + 106), (int16_t)bw, 44 };
+			cp_rect b1 = { (int16_t)(MARGIN + bw + 8), b0.y,
+				(int16_t)(ui->w - 2 * MARGIN - bw - 8), 44 };
+			cp_rect b2 = { MARGIN, (int16_t)(sy + 158), (int16_t)bw, 44 };
+			cp_rect b3 = { (int16_t)(MARGIN + bw + 8), b2.y,
+				(int16_t)(ui->w - 2 * MARGIN - bw - 8), 44 };
+
+			if(ui_button(ui, b0, bm_label, BTN_TONAL)) {
+				ui->txt_bm_open = 1;
+				ui->txt_bm_scroll = 0;
+				ui->focus_shown = 0;
+				ui->redraw = 1;
+			}
+			if(ui_button(ui, b1, "+ Mark", BTN_OUTLINED)) {
+				int rc = txt_reader_add_bookmark(r);
+
+				if(rc == TXT_BM_ADDED)
+					ui_snack(ui, "Bookmark added");
+				else if(rc == TXT_BM_EXISTS)
+					ui_snack(ui, "Already bookmarked");
+				else if(rc == TXT_BM_FULL)
+					ui_snack(ui, "Bookmarks full (32 max)");
+				ui->redraw = 1;
+			}
+			if(ui_button(ui, b2, "Files", BTN_OUTLINED)) {
+				ui->txt_overlay = 0;
+				cp_open_txt_browser(ui, SCREEN_TXT_READER);
+			}
+			if(ui_button(ui, b3, "Close", BTN_FILLED)) {
+				ui->txt_overlay = 0;
+				ui->focus_shown = 0;
+				ui->redraw = 1;
+			}
+		}
+	}
+	return FXCG100_MENU_CONTINUE;
+}
+
 /* ---- stepping ------------------------------------------------------------- */
 
 /* A short message along the bottom: it slides up, stays a couple of seconds
@@ -2769,6 +3407,8 @@ static int ui_modal(const cp_ui *ui)
 		return MODAL_CLOCK;
 	if(ui->screen == SCREEN_SETTINGS && ui->sync_warn)
 		return MODAL_FLASHING;
+	if(ui->screen == SCREEN_TXT_READER && ui->txt_bm_open)
+		return MODAL_TXT_BOOKMARKS;
 	return MODAL_NONE;
 }
 
@@ -2799,14 +3439,24 @@ static void ui_strip_shortcuts(cp_ui *ui)
 	}
 }
 
+void fxcg100_menu_open_reader(void)
+{
+	cp_open_reader_direct = 1;
+}
+
 void cp_ui_begin(cp_ui *ui, fxcg100_menu_state *state, int in_game)
 {
+	int direct = cp_open_reader_direct;
+
+	cp_open_reader_direct = 0;
 	memset(ui, 0, sizeof(*ui));
 	ui->state = state;
 	ui->in_game = in_game;
 	ui->screen = in_game ? SCREEN_PAUSE : SCREEN_LIBRARY;
 	ui->capture = -1;
 	ui->redraw = 1;
+	ui->txt_direct = direct && in_game;
+	ui->txt_hotkey_armed = 0;
 	if(in_game)
 		ui_start_upright = 0;
 
@@ -2823,8 +3473,11 @@ void cp_ui_begin(cp_ui *ui, fxcg100_menu_state *state, int in_game)
 	/* Whatever opened the menu is still held: do not let it act here. */
 	ui->prev_keys = fxcg100_poll_app_keys();
 	ui->prev_strip = fxcg100_touch_strip_icons();
-	if(in_game && (ui->prev_strip & FXCG100_STRIP_SETTINGS))
+	if(ui->txt_direct) {
+		cp_open_txt_reader(ui);
+	} else if(in_game && (ui->prev_strip & FXCG100_STRIP_SETTINGS)) {
 		ui->screen = SCREEN_SETTINGS;
+	}
 	if(fxcg100_touch_point(&ui->tx, &ui->ty)) {
 		ui->touching = 1;
 		ui->dragging = 1;
@@ -2837,10 +3490,31 @@ fxcg100_menu_result cp_ui_step(cp_ui *ui)
 {
 	fxcg100_menu_result result;
 	uint32_t real = fxcg100_ticks();
-	int changed = ui_input(ui);
+	int changed;
 	int moving = ui->animating, expired, modal;
 	ui_muted muted = { 0 };
 	cp_theme shown;
+
+	/* Pressing the bound TXT Reader shortcut again closes the reader. */
+	if(ui->in_game && !ui_modal(ui) &&
+			(ui->screen == SCREEN_TXT_READER ||
+			ui->screen == SCREEN_TXT_BROWSER)) {
+		uint16_t hk = ui->state->hotkey_map[FXCG100_HOTKEY_TXT_READER];
+
+		if(hk) {
+			uint16_t phys = fxcg100_poll_physical_key();
+
+			if(!ui->txt_hotkey_armed) {
+				if(phys != hk)
+					ui->txt_hotkey_armed = 1;
+			} else if(phys == hk) {
+				txt_reader_flush(txt_reader_global());
+				return FXCG100_MENU_RETURN;
+			}
+		}
+	}
+
+	changed = ui_input(ui);
 
 	/* A message goes away by itself after a while, or at a new key press or
 	 * touch once it has been up for half a second. */
@@ -2903,12 +3577,14 @@ fxcg100_menu_result cp_ui_step(cp_ui *ui)
 	fxcg100_lcd_sync_calibrate(ui->screen == SCREEN_SYNC);
 
 	switch(ui->screen) {
-	case SCREEN_PAUSE:    result = screen_pause(ui); break;
-	case SCREEN_SETTINGS: result = screen_settings(ui); break;
-	case SCREEN_CONTROLS: result = screen_controls(ui); break;
-	case SCREEN_CLOCK:    result = screen_clock(ui); break;
-	case SCREEN_SYNC:     result = screen_sync(ui); break;
-	default:              result = screen_library(ui); break;
+	case SCREEN_PAUSE:       result = screen_pause(ui); break;
+	case SCREEN_SETTINGS:    result = screen_settings(ui); break;
+	case SCREEN_CONTROLS:    result = screen_controls(ui); break;
+	case SCREEN_CLOCK:       result = screen_clock(ui); break;
+	case SCREEN_SYNC:        result = screen_sync(ui); break;
+	case SCREEN_TXT_BROWSER: result = screen_txt_browser(ui); break;
+	case SCREEN_TXT_READER:  result = screen_txt_reader(ui); break;
+	default:                 result = screen_library(ui); break;
 	}
 	cp_surface_unclip(&ui->s);
 	ui->s.ox = 0;
@@ -2927,17 +3603,20 @@ fxcg100_menu_result cp_ui_step(cp_ui *ui)
 		ui_marks_reset();
 		ui->widgets = 0;
 		switch(modal) {
-		case MODAL_CONFIRM: result = modal_confirm(ui); break;
-		case MODAL_CAPTURE: result = modal_capture(ui); break;
-		case MODAL_FLASHING: result = modal_flashing(ui); break;
-		case MODAL_SORT:    result = modal_sort(ui); break;
-		default:            result = modal_clock(ui); break;
+		case MODAL_CONFIRM:       result = modal_confirm(ui); break;
+		case MODAL_CAPTURE:       result = modal_capture(ui); break;
+		case MODAL_FLASHING:      result = modal_flashing(ui); break;
+		case MODAL_SORT:          result = modal_sort(ui); break;
+		case MODAL_TXT_BOOKMARKS: result = modal_txt_bookmarks(ui); break;
+		default:                  result = modal_clock(ui); break;
 		}
 		ui->s.oy = 0;
 	}
 	ui->widgets_last = ui->widgets;
-	if(result != FXCG100_MENU_CONTINUE)
+	if(result != FXCG100_MENU_CONTINUE) {
+		txt_reader_flush(txt_reader_global());
 		return result;
+	}
 
 	ui_snackbar(ui);
 	fxcg100_lcd_present_frame();
@@ -3000,6 +3679,8 @@ void fxcg100_menu_init(fxcg100_menu_state *state)
 	if(state->game_sort >= FXCG100_GAME_SORT_COUNT)
 		state->game_sort = FXCG100_GAME_SORT_NAME;
 	ui_start_upright = 1;
+	cp_open_reader_direct = 0;
+	txt_reader_init(txt_reader_global());
 	clock_capture_stock();
 }
 
@@ -3022,6 +3703,7 @@ fxcg100_menu_result fxcg100_menu_run(fxcg100_menu_state *state,
 			for(volatile unsigned i = 0; i < 12000; i++)
 				;
 	}
+	txt_reader_flush(txt_reader_global());
 	if(ui.settings_dirty)
 		fxcg100_config_save(state);
 	return result;

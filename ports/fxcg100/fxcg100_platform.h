@@ -25,6 +25,8 @@ void fxcg100_panic(const char *text);
 #define FXCG100_APPKEY_SETTINGS (1u << 11)
 #define FXCG100_APPKEY_DEL      (1u << 12)
 #define FXCG100_APPKEY_SORT     (1u << 13)
+#define FXCG100_APPKEY_PGUP     (1u << 14)
+#define FXCG100_APPKEY_PGDN     (1u << 15)
 #define FXCG100_APPKEY_DIGIT(n) (1u << (16 + (n)))
 #define FXCG100_APPKEY_DIGITS   (0x3ffu << 16)
 
@@ -66,10 +68,13 @@ typedef enum fxcg100_hotkey {
   FXCG100_HOTKEY_FAST_FORWARD = 0,
   FXCG100_HOTKEY_LOAD_STATE,
   FXCG100_HOTKEY_SAVE_STATE,
-  FXCG100_HOTKEY_SAVE_EXIT,
+  FXCG100_HOTKEY_TXT_READER,
   FXCG100_HOTKEY_DISPLAY_FPS,
   FXCG100_HOTKEY_COUNT
 } fxcg100_hotkey;
+
+/* Legacy alias kept for old bare-metal menu/tests; slot 3 is now TXT READER. */
+#define FXCG100_HOTKEY_SAVE_EXIT FXCG100_HOTKEY_TXT_READER
 
 #define FXCG100_HOTKEY_BIT(index) (1u << (index))
 
@@ -166,6 +171,23 @@ int fxcg100_storage_write_blob(const uint16_t *path, const void *src, unsigned s
  * attempts; direct NOR consumers use it to refresh only when necessary. */
 uint32_t fxcg100_storage_mutation_generation(void);
 void fxcg100_storage_note_mutation(void);
+
+/* Read-only storage helpers for the in-game TXT reader (nor_rom.c). Each runs
+ * in a single OS-world transaction; callers must wait for key release first. */
+typedef int (*fxcg100_fs_dir_cb)(const uint16_t *found, int is_dir,
+                                 uint32_t file_size, void *ctx);
+int fxcg100_fs_list_dir(const uint16_t *pattern, fxcg100_fs_dir_cb cb,
+                        void *ctx);
+int fxcg100_fs_open_map(const uint16_t *path, uint32_t *out_size,
+                        const uint8_t **blocks, uint32_t max_blocks,
+                        uint32_t *out_block_count, uint8_t *tail_buf,
+                        uint32_t *tail_block_idx, uint32_t *tail_len);
+int fxcg100_fs_read_range(const uint16_t *path, uint32_t offset, void *dst,
+                          uint32_t size);
+
+/* Ask the next fxcg100_menu_run() call to open straight into the TXT reader
+ * and return straight to gameplay when closed (used by the TXT READER hotkey). */
+void fxcg100_menu_open_reader(void);
 
 void fxcg100_menu_init(fxcg100_menu_state *state);
 fxcg100_menu_result fxcg100_menu_run(fxcg100_menu_state *state,

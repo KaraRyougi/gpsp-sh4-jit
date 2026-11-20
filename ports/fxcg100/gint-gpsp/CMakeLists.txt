@@ -48,6 +48,7 @@ set(PORT_SOURCES
   src/crash_panic.c
   ${FXCG100}/fxcg100_keys.c
   ${FXCG100}/fxcg100_config.c
+  ${FXCG100}/txt_reader.c
   ${FXCG100}/fxcg100_gpsp_stubs.c
   ${FXCG100}/fxcg100_sound_stub.c
 )

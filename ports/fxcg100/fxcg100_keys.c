@@ -167,7 +167,7 @@ static const char * const hotkey_labels[FXCG100_HOTKEY_COUNT] = {
   "FAST FORWARD",
   "LOAD STATE",
   "SAVE STATE",
-  "SAVE+EXIT",
+  "TXT READER",
   "DISPLAY FPS",
 };
 

@@ -2316,8 +2316,12 @@ static int gpsp_main(void)
 		int menu_open_edge =
 			(app_keys & FXCG100_APPKEY_ON) &&
 			!(previous_app_keys & FXCG100_APPKEY_ON);
+		int reader_hotkey_edge =
+			(hotkey_edge & FXCG100_HOTKEY_BIT(FXCG100_HOTKEY_TXT_READER)) != 0;
 
-		if(menu_open_edge) {
+		if(menu_open_edge || reader_hotkey_edge) {
+			if(reader_hotkey_edge && !menu_open_edge)
+				fxcg100_menu_open_reader();
 			last_hash = cgba_gpsp_frame_hash(framebuffer);
 			/* The storage ROM list is immutable for this process. In particular,
 			 * never rescan it while entering the menu: on fx-CG100 that would

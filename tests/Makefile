@@ -17,11 +17,11 @@ comma   := ,
 DEAD_STRIP := $(if $(filter Darwin,$(shell uname -s)),\
 	-Wl$(comma)-dead_strip,-Wl$(comma)--gc-sections)
 
-.PHONY: all smoke audit core litpool thumb cond native-ldst input config-version storage lcd-cleanup scale classpad fxcg-ui rtc backup-dirty nor-world-switch rom-library overclock cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc \
+.PHONY: all smoke audit core litpool thumb cond native-ldst input config-version storage lcd-cleanup scale classpad fxcg-ui txt-reader rtc backup-dirty nor-world-switch rom-library overclock cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc \
 	swi-overlap swi-oam udiv udiv-emitter idle-signature video-opaque \
 	video-blend-cache video-backdrop-shadow video-sprite-decode video-tile-row-cache video-text-fastpaths video-dirty-scanline arm-mixer m4a-skip clean
 
-all: smoke core litpool thumb cond native-ldst rtc pacing backup-dirty nor-world-switch rom-library overclock input config-version storage lcd-cleanup scale classpad fxcg-ui cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc swi-overlap swi-oam udiv \
+all: smoke core litpool thumb cond native-ldst rtc pacing backup-dirty nor-world-switch rom-library overclock input config-version storage lcd-cleanup scale classpad fxcg-ui txt-reader cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc swi-overlap swi-oam udiv \
 	udiv-emitter idle-signature video-opaque video-blend-cache \
 	video-backdrop-shadow video-sprite-decode video-tile-row-cache video-text-fastpaths video-dirty-scanline arm-mixer m4a-skip audit
 
@@ -108,6 +108,9 @@ classpad: $(ROOT)/tests/classpad_render_test.c $(ROOT)/tests/classpad_elf_test.c
 	  $(ROOT)/ports/fxcg100/classpad_clock.h \
 	  $(ROOT)/ports/fxcg100/classpad_font.h \
 	  $(ROOT)/ports/fxcg100/classpad_ui.c \
+	  $(ROOT)/ports/fxcg100/txt_reader.c \
+	  $(ROOT)/ports/fxcg100/txt_reader.h \
+	  $(ROOT)/ports/fxcg100/txt_font_terminus.h \
 	  $(ROOT)/ports/fxcg100/classpad_scale.h \
 	  $(ROOT)/ports/fxcg100/classpad_elf.h \
 	  $(ROOT)/ports/fxcg100/classpad_heap.h \
@@ -145,6 +148,9 @@ overclock: $(ROOT)/tests/overclock_policy_test.c \
 fxcg-ui: $(ROOT)/tests/fxcg_ui_test.c $(ROOT)/ports/fxcg100/cg_ui.c \
 	  $(ROOT)/ports/fxcg100/cg_font.h $(ROOT)/ports/fxcg100/classpad_gfx.h \
 	  $(ROOT)/ports/fxcg100/classpad_theme.h \
+	  $(ROOT)/ports/fxcg100/txt_reader.c \
+	  $(ROOT)/ports/fxcg100/txt_reader.h \
+	  $(ROOT)/ports/fxcg100/txt_font_terminus.h \
 	  $(ROOT)/ports/fxcg100/fxcg100_keys.c \
 	  $(ROOT)/ports/fxcg100/fxcg100_platform.h
 	$(CC) $(CFLAGS) -O2 -I$(ROOT)/tests/stubs_cgui -I$(ROOT)/ports/fxcg100 \
@@ -154,6 +160,19 @@ fxcg-ui: $(ROOT)/tests/fxcg_ui_test.c $(ROOT)/ports/fxcg100/cg_ui.c \
 	  -I$(ROOT)/tests/stubs -I$(ROOT)/ports/fxcg100 -I$(ROOT) \
 	  $(ROOT)/tests/fxcg_ui_test.c -o $(BIN)-fxcg-ui-cg50
 	$(BIN)-fxcg-ui-cg50 $(FXCG_UI_DIR)
+
+# Platform-independent in-game TXT reader engine (directory browsing, Direct
+# NOR + BFile fallback streaming, Wrap On/Off layout, 1-line overlap paging,
+# Jump % + undo, dynamic 0..32 bookmarks, Terminus 6x12/8x14 bitmap rendering).
+txt-reader: $(ROOT)/tests/txt_reader_test.c \
+	    $(ROOT)/ports/fxcg100/txt_reader.c \
+	    $(ROOT)/ports/fxcg100/txt_reader.h \
+	    $(ROOT)/ports/fxcg100/txt_font_terminus.h \
+	    $(ROOT)/ports/fxcg100/classpad_gfx.h \
+	    $(ROOT)/ports/fxcg100/fxcg100_platform.h
+	$(CC) $(CFLAGS) -O2 -I$(ROOT)/ports/fxcg100 -I$(ROOT) \
+	  $(ROOT)/tests/txt_reader_test.c -o $(BIN)-txt-reader
+	$(BIN)-txt-reader
 
 # The speed limiter and automatic frame skipping, on a virtual clock.
 pacing: $(ROOT)/tests/frame_pacing_test.c \

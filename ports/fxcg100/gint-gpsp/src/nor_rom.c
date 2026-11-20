@@ -1298,3 +1298,259 @@ void cgba_nor_rom_status(const cgba_nor_rom *rom, char *dst, size_t dst_size)
 		(unsigned long)rom->first_address,
 		rom->fallback_used ? " R" : "");
 }
+
+/* ---- Read-only storage helpers for the in-game TXT reader ----------------- */
+
+#ifdef CGBA_CLASSPAD
+#define CGBA_FS_TYPE_DIR 5u
+#else
+#define CGBA_FS_TYPE_DIR 0u
+#endif
+
+typedef struct fs_dir_tx {
+	const uint16_t *pattern;
+	fxcg100_fs_dir_cb cb;
+	void *ctx;
+	int status;
+} fs_dir_tx;
+
+typedef struct fs_open_map_tx {
+	const uint16_t *path;
+	uint32_t size;
+	const uint8_t **blocks;
+	uint32_t max_blocks;
+	uint32_t mapped_blocks;
+	uint8_t *tail_buf;
+	uint32_t tail_block_idx;
+	uint32_t tail_len;
+	int ok;
+} fs_open_map_tx;
+
+typedef struct fs_read_tx {
+	const uint16_t *path;
+	uint32_t offset;
+	void *dst;
+	uint32_t size;
+	int bytes_read;
+} fs_read_tx;
+
+#if CGBA_FXCG100_STORAGE
+static int os_fs_list_dir_tx(void *opaque)
+{
+	fs_dir_tx *tx = opaque;
+	typedef int (*find_first_fn)(const uint16_t *, int *, uint16_t *,
+		struct BFile_FileInfo *);
+	typedef int (*find_next_fn)(int, uint16_t *, struct BFile_FileInfo *);
+	typedef int (*find_close_fn)(int);
+	uint16_t found[256];
+	struct BFile_FileInfo info;
+	int handle = -1;
+	int rc;
+
+	memset(&info, 0, sizeof(info));
+	rc = ((find_first_fn)(uintptr_t)CGBA_BFILE_FIND_FIRST)(
+		tx->pattern, &handle, found, &info);
+	while(rc == 0) {
+		int is_dir = (info.type == CGBA_FS_TYPE_DIR);
+		if(tx->cb && !tx->cb(found, is_dir, info.file_size, tx->ctx))
+			break;
+		memset(&info, 0, sizeof(info));
+		rc = ((find_next_fn)(uintptr_t)CGBA_BFILE_FIND_NEXT)(
+			handle, found, &info);
+	}
+	if(handle >= 0)
+		((find_close_fn)(uintptr_t)CGBA_BFILE_FIND_CLOSE)(handle);
+	tx->status = 0;
+	return 0;
+}
+
+static int os_fs_open_map_tx(void *opaque)
+{
+	fs_open_map_tx *tx = opaque;
+	typedef int (*open_fn)(const uint16_t *, int);
+	typedef int (*size_fn)(int);
+	typedef int (*read_fn)(int, void *, int, int);
+	typedef int (*close_fn)(int);
+	int fd, sz;
+
+	fd = ((open_fn)(uintptr_t)CGBA_BFILE_OPEN)(tx->path, BFile_ReadOnly);
+	if(fd < 0)
+		return -1;
+	sz = ((size_fn)(uintptr_t)CGBA_BFILE_SIZE)(fd);
+	if(sz < 0) {
+		((close_fn)(uintptr_t)CGBA_BFILE_CLOSE)(fd);
+		return -1;
+	}
+	tx->size = (uint32_t)sz;
+	tx->mapped_blocks = 0;
+	tx->tail_block_idx = UINT32_MAX;
+	tx->tail_len = 0;
+
+	if(tx->size > 0 && tx->blocks && tx->max_blocks > 0) {
+		uint32_t full_blocks = tx->size / CGBA_FLASH_BLOCK_SIZE;
+		uint32_t rem = tx->size % CGBA_FLASH_BLOCK_SIZE;
+		uint32_t to_map = full_blocks < tx->max_blocks
+			? full_blocks : tx->max_blocks;
+#ifdef CGBA_CLASSPAD
+		cp_block_address_fn get_addr = cp_block_address_call();
+#else
+		typedef int (*get_block_fn)(int, int, void **);
+		get_block_fn get_addr =
+			(get_block_fn)(uintptr_t)CGBA_BFILE_GET_BLOCK_ADDRESS;
+#endif
+		if(get_addr) {
+			for(uint32_t b = 0; b < to_map; b++) {
+				void *raw = NULL;
+				int rc = get_addr(fd, (int)(b * CGBA_FLASH_BLOCK_SIZE), &raw);
+				tx->blocks[b] = (rc >= 0 && raw) ? (const uint8_t *)raw : NULL;
+			}
+			tx->mapped_blocks = to_map;
+		}
+		if(rem > 0 && tx->tail_buf) {
+			uint32_t tail_off = full_blocks * CGBA_FLASH_BLOCK_SIZE;
+			int got = ((read_fn)(uintptr_t)CGBA_BFILE_READ)(
+				fd, tx->tail_buf, (int)rem, (int)tail_off);
+			if(bfile_read_exact_ok(got, (int)rem)) {
+				tx->tail_block_idx = full_blocks;
+				tx->tail_len = rem;
+			}
+		}
+	}
+
+	((close_fn)(uintptr_t)CGBA_BFILE_CLOSE)(fd);
+	tx->ok = 1;
+	return 0;
+}
+
+static int os_fs_read_range_tx(void *opaque)
+{
+	fs_read_tx *tx = opaque;
+	typedef int (*open_fn)(const uint16_t *, int);
+	typedef int (*read_fn)(int, void *, int, int);
+	typedef int (*close_fn)(int);
+	int fd, got;
+
+	fd = ((open_fn)(uintptr_t)CGBA_BFILE_OPEN)(tx->path, BFile_ReadOnly);
+	if(fd < 0)
+		return -1;
+	got = ((read_fn)(uintptr_t)CGBA_BFILE_READ)(
+		fd, tx->dst, (int)tx->size, (int)tx->offset);
+	((close_fn)(uintptr_t)CGBA_BFILE_CLOSE)(fd);
+	if(bfile_read_exact_ok(got, (int)tx->size)) {
+		tx->bytes_read = (int)tx->size;
+		return 0;
+	}
+	if(got > 0) {
+		tx->bytes_read = got;
+		return 0;
+	}
+	tx->bytes_read = -1;
+	return -1;
+}
+#endif
+
+int fxcg100_fs_list_dir(const uint16_t *pattern, fxcg100_fs_dir_cb cb,
+	void *ctx)
+{
+#if CGBA_FXCG100_STORAGE
+	fs_dir_tx tx;
+
+	if(!pattern || !cb)
+		return -1;
+	tx.pattern = pattern;
+	tx.cb = cb;
+	tx.ctx = ctx;
+	tx.status = -1;
+	os_bfile_call(GINT_CALL(os_fs_list_dir_tx, (void *)&tx));
+	return tx.status;
+#else
+	(void)pattern;
+	(void)cb;
+	(void)ctx;
+	return -1;
+#endif
+}
+
+int fxcg100_fs_open_map(const uint16_t *path, uint32_t *out_size,
+	const uint8_t **blocks, uint32_t max_blocks, uint32_t *out_block_count,
+	uint8_t *tail_buf, uint32_t *tail_block_idx, uint32_t *tail_len)
+{
+#if CGBA_FXCG100_STORAGE
+	fs_open_map_tx tx;
+	int cache_inv = 0;
+
+	if(!path || !out_size)
+		return -1;
+	memset(&tx, 0, sizeof(tx));
+	tx.path = path;
+	tx.blocks = blocks;
+	tx.max_blocks = max_blocks;
+	tx.tail_buf = tail_buf;
+	tx.tail_block_idx = UINT32_MAX;
+	if(blocks && max_blocks > 0)
+		memset(blocks, 0, max_blocks * sizeof(*blocks));
+
+	os_bfile_call(GINT_CALL(os_fs_open_map_tx, (void *)&tx));
+	if(!tx.ok)
+		return -1;
+
+	for(uint32_t b = 0; b < tx.mapped_blocks; b++) {
+		unsigned char *raw = (unsigned char *)blocks[b];
+		const uint8_t *ptr = cached_nor_pointer(raw);
+
+		if(ptr) {
+			invalidate_nor_block(ptr);
+			cache_inv = 1;
+		}
+		blocks[b] = ptr;
+	}
+	if(cache_inv) {
+#ifndef CGBA_HOST_TEST
+		__asm__ volatile("synco" ::: "memory");
+#endif
+	}
+
+	*out_size = tx.size;
+	if(out_block_count)
+		*out_block_count = tx.mapped_blocks;
+	if(tail_block_idx)
+		*tail_block_idx = tx.tail_block_idx;
+	if(tail_len)
+		*tail_len = tx.tail_len;
+	return 0;
+#else
+	(void)path;
+	(void)out_size;
+	(void)blocks;
+	(void)max_blocks;
+	(void)out_block_count;
+	(void)tail_buf;
+	(void)tail_block_idx;
+	(void)tail_len;
+	return -1;
+#endif
+}
+
+int fxcg100_fs_read_range(const uint16_t *path, uint32_t offset, void *dst,
+	uint32_t size)
+{
+#if CGBA_FXCG100_STORAGE
+	fs_read_tx tx;
+
+	if(!path || !dst || size == 0)
+		return 0;
+	tx.path = path;
+	tx.offset = offset;
+	tx.dst = dst;
+	tx.size = size;
+	tx.bytes_read = -1;
+	os_bfile_call(GINT_CALL(os_fs_read_range_tx, (void *)&tx));
+	return tx.bytes_read;
+#else
+	(void)path;
+	(void)offset;
+	(void)dst;
+	(void)size;
+	return -1;
+#endif
+}

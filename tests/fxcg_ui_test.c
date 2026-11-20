@@ -145,7 +145,144 @@ int fxcg100_config_save(const fxcg100_menu_state *state)
 	return 1;
 }
 
+/* ---- fake TXT filesystem for cg_ui TXT reader tests ------------------------ */
+
+static const char fake_txt_doc[] =
+	"POKEMON EMERALD WALKTHROUGH\n"
+	"===========================\n"
+	"\n"
+	"1. Littleroot Town\n"
+	"Set the clock in your bedroom, then visit Prof. Birch.\n"
+	"Pick Treecko, Torchic, or Mudkip from the bag.\n"
+	"\n"
+	"2. Route 101 & Oldale Town\n"
+	"Heal at the Pokemon Center and head north to Route 103.\n"
+	"+---------------+---------------+\n"
+	"| North: Rt 103 | West: Petalbg |\n"
+	"+---------------+---------------+\n"
+	"3. Petalburg City\n"
+	"Talk to Norman in the Gym and help Wally catch Ralts.\n"
+	"4. Petalburg Woods\n"
+	"Defeat Team Aqua Grunt to save the Devon researcher.\n"
+	"5. Rustboro City\n"
+	"Challenge Roxanne for the Stone Badge.\n"
+	"6. Dewford Town\n"
+	"Deliver the letter to Steven in Granite Cave.\n";
+
+static uint32_t fake_txt_gen = 1;
+static uint8_t fake_txt_meta[4096];
+static unsigned fake_txt_meta_size;
+
+uint32_t fxcg100_storage_mutation_generation(void) { return fake_txt_gen; }
+
+int fxcg100_storage_read_blob(const uint16_t *path, void *dst, unsigned size)
+{
+	(void)path;
+	if (fake_txt_meta_size != size)
+		return 0;
+	memcpy(dst, fake_txt_meta, size);
+	return 1;
+}
+
+int fxcg100_storage_write_blob(const uint16_t *path, const void *src,
+	unsigned size)
+{
+	(void)path;
+	if (size > sizeof(fake_txt_meta))
+		return 0;
+	memcpy(fake_txt_meta, src, size);
+	fake_txt_meta_size = size;
+	fake_txt_gen++;
+	return 1;
+}
+
+static void fc_to_ascii_ui(const uint16_t *src, char *dst, size_t max)
+{
+	size_t i = 0;
+	while (src && src[i] && i + 1 < max) {
+		dst[i] = (char)(src[i] & 0x7fu);
+		i++;
+	}
+	dst[i] = 0;
+}
+
+static void ascii_to_fc_ui(const char *src, uint16_t *dst, size_t max)
+{
+	size_t i = 0;
+	while (src && src[i] && i + 1 < max) {
+		dst[i] = (uint16_t)(unsigned char)src[i];
+		i++;
+	}
+	dst[i] = 0;
+}
+
+int fxcg100_fs_list_dir(const uint16_t *pattern, fxcg100_fs_dir_cb cb,
+	void *ctx)
+{
+	char pat[160];
+	uint16_t name[64];
+
+	fc_to_ascii_ui(pattern, pat, sizeof(pat));
+	if (strcmp(pat, "\\\\fls0\\*") == 0) {
+		ascii_to_fc_ui("GUIDES", name, 64);
+		cb(name, 1, 0, ctx);
+		ascii_to_fc_ui("README.TXT", name, 64);
+		cb(name, 0, (uint32_t)strlen(fake_txt_doc), ctx);
+		return 1;
+	}
+	if (strcmp(pat, "\\\\fls0\\GUIDES\\*") == 0) {
+		ascii_to_fc_ui("EMERALD.TXT", name, 64);
+		cb(name, 0, (uint32_t)strlen(fake_txt_doc), ctx);
+		return 1;
+	}
+	return 1;
+}
+
+int fxcg100_fs_open_map(const uint16_t *path, uint32_t *out_size,
+	const uint8_t **nor_blocks, unsigned max_blocks,
+	unsigned *out_mapped_blocks, uint8_t *tail_buf,
+	uint32_t *out_tail_block_idx, uint32_t *out_tail_len)
+{
+	char p[160];
+	uint32_t sz = (uint32_t)strlen(fake_txt_doc);
+
+	(void)nor_blocks;
+	(void)max_blocks;
+	fc_to_ascii_ui(path, p, sizeof(p));
+	if (strcmp(p, "\\\\fls0\\README.TXT") != 0 &&
+			strcmp(p, "\\\\fls0\\GUIDES\\EMERALD.TXT") != 0)
+		return 0;
+	if (out_size)
+		*out_size = sz;
+	if (out_mapped_blocks)
+		*out_mapped_blocks = 0;
+	if (tail_buf && out_tail_block_idx && out_tail_len) {
+		memcpy(tail_buf, fake_txt_doc, sz);
+		*out_tail_block_idx = 0;
+		*out_tail_len = sz;
+	}
+	return 1;
+}
+
+int fxcg100_fs_read_range(const uint16_t *path, uint32_t offset,
+	void *dst, uint32_t len)
+{
+	char p[160];
+	uint32_t sz = (uint32_t)strlen(fake_txt_doc);
+
+	fc_to_ascii_ui(path, p, sizeof(p));
+	if ((strcmp(p, "\\\\fls0\\README.TXT") != 0 &&
+			strcmp(p, "\\\\fls0\\GUIDES\\EMERALD.TXT") != 0) ||
+			offset >= sz)
+		return 0;
+	if (len > sz - offset)
+		len = sz - offset;
+	memcpy(dst, fake_txt_doc + offset, len);
+	return (int)len;
+}
+
 #include "ports/fxcg100/fxcg100_keys.c"
+#include "ports/fxcg100/txt_reader.c"
 #include "ports/fxcg100/cg_ui.c"
 
 /* ---- driving it ------------------------------------------------------------ */
@@ -311,6 +448,7 @@ static void test_library_in_game(void)
 	press(FXCG100_APPKEY_DOWN);
 	press(FXCG100_APPKEY_DOWN);
 	press(FXCG100_APPKEY_DOWN);
+	press(FXCG100_APPKEY_DOWN);
 	CHECK(selected_row(&ui_main)->id == ID_GAMES, "pause rows");
 	press(FXCG100_APPKEY_EXE);
 	CHECK(ui_main.page == PAGE_LIBRARY && ui_main.game_sel == 7,
@@ -332,10 +470,12 @@ static void test_library_in_game(void)
 	press(FXCG100_APPKEY_DOWN);
 	press(FXCG100_APPKEY_DOWN);
 	press(FXCG100_APPKEY_DOWN);
+	press(FXCG100_APPKEY_DOWN);
 	press(FXCG100_APPKEY_EXE);
 	CHECK(press(FXCG100_APPKEY_EXE) == FXCG100_MENU_RETURN,
 		"the game being played resumes");
 	begin(1);
+	press(FXCG100_APPKEY_DOWN);
 	press(FXCG100_APPKEY_DOWN);
 	press(FXCG100_APPKEY_DOWN);
 	press(FXCG100_APPKEY_DOWN);
@@ -395,6 +535,7 @@ static void test_pause(void)
 	CHECK(selected_row(&ui_main)->id == ID_EXIT, "up at the top did not wrap");
 	press(FXCG100_APPKEY_DOWN);
 	CHECK(selected_row(&ui_main)->id == ID_RESUME, "down at the end did not wrap");
+	press(FXCG100_APPKEY_DOWN);
 	press(FXCG100_APPKEY_DOWN);
 	press(FXCG100_APPKEY_DOWN);
 	press(FXCG100_APPKEY_DOWN);
@@ -697,6 +838,96 @@ static void test_status(void)
 		"plain page light");
 }
 
+static void test_txt_reader(void)
+{
+	txt_reader *r;
+
+	fake_txt_meta_size = 0;
+	fxcg100_menu_init(&st);
+	st.rom_source = 7;
+	st.hotkey_map[FXCG100_HOTKEY_TXT_READER] = K_FREE;
+	begin(1);
+
+	/* Pause menu has 8 rows fitting exact VIEW_H with no scroll, TXT Reader is row 3. */
+	CHECK(ui_main.list_h == VIEW_H, "pause fits exactly without scroll: %d",
+		ui_main.list_h);
+	press(FXCG100_APPKEY_DOWN);
+	press(FXCG100_APPKEY_DOWN);
+	press(FXCG100_APPKEY_DOWN);
+	CHECK(selected_row(&ui_main)->id == ID_READER &&
+		strcmp(selected_row(&ui_main)->label, "TXT Reader") == 0,
+		"TXT Reader row in pause menu");
+
+	/* Opening with no doc goes to file browser at root (\fls0\). */
+	press(FXCG100_APPKEY_EXE);
+	CHECK(ui_main.page == PAGE_TXT_BROWSER, "opened TXT browser");
+	r = txt_reader_global();
+	CHECK(r->dir_depth == 0 && r->dir_count == 2, "scanned root dir");
+	snap("txt-browser");
+
+	/* Enter subfolder GUIDES/, verify .. row + EMERALD.TXT, then open it. */
+	press(FXCG100_APPKEY_EXE);
+	CHECK(r->dir_depth == 1 && r->dir_count == 1, "entered GUIDES/");
+	press(FXCG100_APPKEY_DOWN);
+	press(FXCG100_APPKEY_EXE);
+	CHECK(ui_main.page == PAGE_TXT_READER && r->has_doc, "opened EMERALD.TXT");
+	CHECK(r->show_hints == 1, "footer hints shown on entry");
+	snap("txt-reader-hints");
+
+	/* First scroll auto-hides the footer hints and expands body lines. */
+	int lines_with_hints = r->layout_vis;
+	press(FXCG100_APPKEY_DOWN);
+	CHECK(r->show_hints == 0, "scroll auto-hid footer hints");
+	CHECK(r->layout_vis > lines_with_hints, "body reclaimed footer band");
+	snap("txt-reader-clean");
+
+	/* Digit jump + DEL undo. */
+	press(FXCG100_APPKEY_DIGIT(5));
+	CHECK(txt_reader_percent(r) >= 40, "digit 5 jumped forward");
+	CHECK(ui_main.message[0] != 0, "jump toast displayed");
+	press(FXCG100_APPKEY_DEL);
+	CHECK(r->top_offset < 60u, "DEL undid jump");
+
+	/* EXE opens Reader Options (Jump, Bookmarks, Font, Wrap, Files). */
+	press(FXCG100_APPKEY_EXE);
+	CHECK(ui_main.dialog == DIALOG_TXT_OPTIONS, "options dialog opened");
+	snap("txt-options");
+	press(FXCG100_APPKEY_DOWN); /* Bookmarks */
+	press(FXCG100_APPKEY_EXE);
+	CHECK(ui_main.dialog == DIALOG_TXT_BOOKMARKS, "bookmarks dialog opened");
+	press(FXCG100_APPKEY_EXE); /* + Add bookmark here */
+	CHECK(txt_reader_bookmark_count(r) == 1, "added dynamic bookmark");
+	CHECK(ui_main.dialog == DIALOG_NONE, "closed dialog after add");
+
+	/* Toggle Font & Wrap inside Options. */
+	press(FXCG100_APPKEY_EXE);
+	press(FXCG100_APPKEY_DOWN);
+	press(FXCG100_APPKEY_DOWN); /* Font */
+	press(FXCG100_APPKEY_RIGHT);
+	CHECK(r->font_idx == TXT_FONT_8X14, "switched to Terminus 8x14");
+	press(FXCG100_APPKEY_DOWN); /* Wrap */
+	press(FXCG100_APPKEY_RIGHT);
+	CHECK(r->wrap == 0, "switched to Wrap Off");
+	press(FXCG100_APPKEY_BACK);
+	CHECK(ui_main.dialog == DIALOG_NONE, "closed options");
+
+	/* Back returns to pause menu and flushes metadata. */
+	press(FXCG100_APPKEY_BACK);
+	CHECK(ui_main.page == PAGE_PAUSE && fake_txt_meta_size == sizeof(txt_meta_blob),
+		"returned to pause and flushed CGBATXT.DAT");
+
+	/* Direct hotkey open jumps straight to reader; pressing hotkey again returns to game. */
+	fxcg100_menu_open_reader();
+	begin(1);
+	CHECK(ui_main.page == PAGE_TXT_READER && ui_main.txt_direct == 1,
+		"hotkey opened reader directly");
+	CHECK(r->show_hints == 1, "re-entry restored footer hints");
+	held_phys = K_FREE;
+	now_ticks++;
+	CHECK(step() == FXCG100_MENU_RETURN, "pressing hotkey again returns to game");
+	held_phys = 0;
+}
+
 int main(int argc, char **argv)
 {
 	int t, dark;
@@ -709,6 +940,7 @@ int main(int argc, char **argv)
 	test_keys();
 	test_baselines();
 	test_status();
+	test_txt_reader();
 
 	/* Every colour scheme draws every page, in dark and light mode. */
 	for (dark = 1; dark >= 0; dark--) {
