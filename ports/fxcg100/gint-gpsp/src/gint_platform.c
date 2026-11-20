@@ -235,6 +235,7 @@ static void cg_sync_restore_timing(void)
 	if(cg_sync_orig_period)
 		cg_sync.period_ticks = cg_sync_orig_period;
 	cg_sync.anchor_valid = 0;
+	cg_sync.pace_valid = 0;
 }
 
 /* Measure 6 consecutive PR.5 periods into *period_out and return the last
@@ -318,6 +319,7 @@ static void cg_sync_apply_rate(uint32_t want_mhz)
 		cg_sync.period_ticks = measured_per;
 		cg_sync.anchor_tcnt = measured_edge;
 		cg_sync.anchor_valid = 1;
+		cg_sync.pace_valid = 0;
 		cg_sync_applied_mhz = want_mhz;
 		cg_sync_regs_dirty = 0;
 	} else {
@@ -398,6 +400,7 @@ static void cg_sync_probe_hw(void)
 	cg_sync.period_ticks = orig_period;
 	cg_sync.anchor_tcnt = last_edge;
 	cg_sync.anchor_valid = 1;
+	cg_sync.pace_valid = 0;
 	memset(cg_sync.write_ticks, 0, sizeof(cg_sync.write_ticks));
 	memset(cg_sync.write_min_ticks, 0, sizeof(cg_sync.write_min_ticks));
 	cg_sync_hw_state = CG_SYNC_HW_READY;
@@ -440,6 +443,19 @@ static uint32_t cg_sync_before_frame(uint32_t mode, uint32_t y0, uint32_t h)
 			cg_sync_note_edge(&cg_sync, edge);
 		else
 			return *cg_sync_tcnt;
+	} else if(cg_sync_wants_soft_resync(&cg_sync, *cg_sync_tcnt)) {
+		/* Opportunistically catch an imminent PR.5 edge (<= 16 rows / ~1 ms
+		 * away) without risking a full-frame stall. */
+		uint32_t now = *cg_sync_tcnt;
+		uint32_t phase = cg_sync_phase_from_tcnt(cg_sync.anchor_tcnt,
+			now, cg_sync.period_ticks);
+		uint32_t near_ticks = (uint32_t)(((uint64_t)16u * cg_sync.period_ticks) /
+			cg_sync.total_rows);
+		if(phase + near_ticks >= cg_sync.period_ticks) {
+			uint32_t edge = 0;
+			if(cg_sync_wait_rising(near_ticks + near_ticks / 2u, &edge))
+				cg_sync_note_edge(&cg_sync, edge);
+		}
 	}
 
 	write_max = (mode < CG_SYNC_MODE_COUNT && cg_sync.write_ticks[mode])
@@ -472,19 +488,24 @@ static uint32_t cg_sync_before_frame(uint32_t mode, uint32_t y0, uint32_t h)
 }
 
 static void cg_sync_after_frame(uint32_t mode, uint32_t start_tcnt,
-	uint32_t total_strips)
+	uint32_t total_rows, uint32_t rows_before_last)
 {
 	uint32_t span, est;
 
 	if(!cg_sync.enabled || cg_sync_hw_state != CG_SYNC_HW_READY ||
-	   !cg_sync_tcnt || total_strips < 2u)
+	   !cg_sync_tcnt || !rows_before_last || rows_before_last >= total_rows)
 		return;
 	cg_sync_poll_fmark();
-	/* Called right before launching the final strip's async DMA, so
-	 * (total_strips - 1) strips have finished; scale up by the last strip. */
+	/* Called right before launching the final strip's async DMA, with
+	 * `start_tcnt` captured right before launching strip 0's DMA:
+	 *   - `span` is the exact elapsed time to final-strip launch (a strict
+	 *     lower bound on actual completion, guarding `safe_lo`).
+	 *   - `est` scales `span` by total_rows / rows_before_last (accurate
+	 *     even when the final strip is shorter, e.g. 4:3's 8-row tail). */
 	span = (uint32_t)(start_tcnt - *cg_sync_tcnt);
-	est = cgba_sync_scale_strips(span, total_strips);
-	cg_sync_update_write_ticks(&cg_sync, mode, est);
+	est = (uint32_t)(((uint64_t)span * total_rows + rows_before_last / 2u) /
+		rows_before_last);
+	cg_sync_update_write_bounds(&cg_sync, mode, span, est);
 }
 #else
 static void cg_sync_restore_timing(void) {}
@@ -492,8 +513,8 @@ static void cg_sync_release_timer(void) {}
 static uint32_t cg_sync_before_frame(uint32_t mode, uint32_t y0, uint32_t h)
 { (void)mode; (void)y0; (void)h; return 0u; }
 static void cg_sync_after_frame(uint32_t mode, uint32_t start_tcnt,
-	uint32_t total_strips)
-{ (void)mode; (void)start_tcnt; (void)total_strips; }
+	uint32_t total_rows, uint32_t rows_before_last)
+{ (void)mode; (void)start_tcnt; (void)total_rows; (void)rows_before_last; }
 #endif
 
 void fxcg100_lcd_set_sync(uint32_t wait, uint32_t offset)
@@ -504,6 +525,7 @@ void fxcg100_lcd_set_sync(uint32_t wait, uint32_t offset)
 		if(cg_sync_target_mhz(cg_sync_refresh_mode, 0u) == 0u)
 			cg_sync_restore_timing();
 		cg_sync.anchor_valid = 0;
+		cg_sync.pace_valid = 0;
 	}
 }
 
@@ -512,6 +534,52 @@ void fxcg100_lcd_set_refresh(uint32_t rate)
 	cg_sync_refresh_mode = (rate <= 6u) ? rate : 0u;
 	if(cg_sync_target_mhz(cg_sync_refresh_mode, cg_sync.enabled) == 0u)
 		cg_sync_restore_timing();
+}
+
+int fxcg100_lcd_sync_is_paced(void)
+{
+#if !defined(CGBA_GPSP_HEADLESS_TEST)
+	return cg_sync.enabled &&
+		cg_sync_hw_state == CG_SYNC_HW_READY &&
+		cg_sync_tcnt != NULL &&
+		cg_sync.period_ticks != 0u &&
+		cg_sync_applied_mhz == CG_SYNC_RATE_GBA_MHZ;
+#else
+	return 0;
+#endif
+}
+
+int fxcg100_lcd_sync_pace_wait(int max_late, int *late_out)
+{
+#if !defined(CGBA_GPSP_HEADLESS_TEST)
+	uint32_t wait_ticks;
+
+	if(!fxcg100_lcd_sync_is_paced()) {
+		cg_sync.pace_valid = 0;
+		if(late_out)
+			*late_out = -1;
+		return 0;
+	}
+	cg_sync_poll_fmark();
+	wait_ticks = cg_sync_pace_advance(&cg_sync, *cg_sync_tcnt,
+		max_late, late_out);
+	if(wait_ticks > 0u) {
+		uint32_t target = cg_sync.pace_due_tcnt;
+		while((int32_t)(*cg_sync_tcnt - target) > 0)
+			cg_sync_poll_fmark();
+	}
+	return 1;
+#else
+	(void)max_late;
+	if(late_out)
+		*late_out = -1;
+	return 0;
+#endif
+}
+
+void fxcg100_lcd_sync_pace_reset(void)
+{
+	cg_sync.pace_valid = 0;
 }
 
 /* Hand the panel back to gint: finish any direct blit DMA and restore the full
@@ -720,6 +788,7 @@ void fxcg100_lcd_init(void)
 	cg_sync_regs_dirty = 0;
 	cg_sync_applied_mhz = 0u;
 	cg_sync.anchor_valid = 0;
+	cg_sync.pace_valid = 0;
 }
 
 void fxcg100_lcd_shutdown(void)
@@ -732,6 +801,7 @@ void fxcg100_lcd_shutdown(void)
 	cg_sync_panel = CG_PANEL_NONE;
 	cg_sync_regs_saved = 0;
 	cg_sync.anchor_valid = 0;
+	cg_sync.pace_valid = 0;
 	lcd_frame_synced = 0;
 }
 
@@ -814,6 +884,7 @@ void fxcg100_lcd_note_os_activity(void)
 	lcd_frame_synced = 0;
 	cg_sync_regs_dirty = 1;
 	cg_sync.anchor_valid = 0;
+	cg_sync.pace_valid = 0;
 }
 
 /* Start the DMA of one prepared YRAM strip to the LCD window. Falls back to CPU
@@ -823,6 +894,7 @@ static void start_strip_dma(const uint16_t *strip, int x, int y,
 {
 	unsigned blocks = (unsigned)(width * rows) * sizeof(uint16_t) / 32u;
 
+	cg_sync_poll_fmark();
 	r61524_start_frame(x, x + width - 1, y, y + rows - 1);
 	if(dma_transfer_async(0, DMA_32B, blocks, (void *)strip, DMA_INC,
 			(void *)LCD_DATA_REGISTER, DMA_FIXED, GINT_CALL_NULL)) {
@@ -930,10 +1002,9 @@ static void blit_gba_scaled_43(const uint16_t *pixels)
 	int ox = (DWIDTH - 320) / 2;
 	int oy = ((DHEIGHT - 212) / 2) & ~3;    /* 4-aligned DMA window */
 	int group = 0, y = 0, bi = 0;
-	uint32_t strips_sent = 0, sync_t0;
+	uint32_t sync_t0 = 0;
 
 	wait_lcd_dma();
-	sync_t0 = cg_sync_before_frame(1u, (uint32_t)oy, 212u);
 	while (y < 212) {
 		int rows = (212 - y < STRIP_43_LINES) ? 212 - y : STRIP_43_LINES;
 		uint16_t *sp = strips[bi];
@@ -962,11 +1033,12 @@ static void blit_gba_scaled_43(const uint16_t *pixels)
 				memcpy(r2, r3, 320 * sizeof(uint16_t));
 			}
 		}
-		if (y > 0)
+		if (y == 0)
+			sync_t0 = cg_sync_before_frame(1u, (uint32_t)oy, 212u);
+		else
 			wait_lcd_dma();
-		strips_sent++;
 		if (y + rows >= 212)
-			cg_sync_after_frame(1u, sync_t0, strips_sent);
+			cg_sync_after_frame(1u, sync_t0, 212u, (uint32_t)y);
 		start_strip_dma(strips[bi], ox, oy + y, 320, rows);
 		bi ^= 1;
 		y += rows;
@@ -999,7 +1071,7 @@ static void blit_gba_scaled_full(const uint16_t *pixels)
 	int ox = (DWIDTH - LCD_W) / 2;
 	int oy = ((DHEIGHT - LCD_H) / 2) & ~3;  /* 4-aligned DMA window */
 	int y = 0, bi = 0;
-	uint32_t strips_sent = 0, sync_t0;
+	uint32_t sync_t0 = 0;
 
 	if (vmap_filter != (int)lcd_scale_filter) {
 		cgba_scale_build_vmap216_f(vmap, (int)lcd_scale_filter);
@@ -1009,7 +1081,6 @@ static void blit_gba_scaled_full(const uint16_t *pixels)
 	scale_hrow_idx[0] = scale_hrow_idx[1] = -1;   /* new frame contents */
 
 	wait_lcd_dma();
-	sync_t0 = cg_sync_before_frame(2u, (uint32_t)oy, LCD_H);
 	while (y < LCD_H) {
 		uint16_t *sp = strips[bi];
 		int rows = (LCD_H - y < STRIP_FULL_LINES)
@@ -1028,11 +1099,12 @@ static void blit_gba_scaled_full(const uint16_t *pixels)
 				memcpy(out, fs_hrow(pixels, src),
 					LCD_W * sizeof(uint16_t));
 		}
-		if (y > 0)
+		if (y == 0)
+			sync_t0 = cg_sync_before_frame(2u, (uint32_t)oy, LCD_H);
+		else
 			wait_lcd_dma();
-		strips_sent++;
 		if (y + rows >= LCD_H)
-			cg_sync_after_frame(2u, sync_t0, strips_sent);
+			cg_sync_after_frame(2u, sync_t0, LCD_H, (uint32_t)y);
 		start_strip_dma(strips[bi], ox, oy + y, LCD_W, rows);
 		bi ^= 1;
 		y += rows;
@@ -1072,13 +1144,13 @@ void fxcg100_lcd_blit_gba(const uint16_t *pixels)
 	 */
 	wait_lcd_dma();
 	{
-		uint32_t sync_t0 = cg_sync_before_frame(0u, (uint32_t)oy, GBA_H);
-		uint32_t strips_sent = 1u;
+		uint32_t sync_t0;
 
 		y = 0;
 		rows = STRIP_LINES;
 		cgba_copy_32b_sh4(strips[0], &pixels[y * GBA_W],
 			(uint32_t)(rows * GBA_W * sizeof(uint16_t)));
+		sync_t0 = cg_sync_before_frame(0u, (uint32_t)oy, GBA_H);
 		start_strip_dma(strips[0], ox, oy + y, GBA_W, rows);
 
 		bi = 1;
@@ -1088,9 +1160,8 @@ void fxcg100_lcd_blit_gba(const uint16_t *pixels)
 			cgba_copy_32b_sh4(strips[bi], &pixels[y * GBA_W],
 				(uint32_t)(rows * GBA_W * sizeof(uint16_t)));
 			wait_lcd_dma();   /* wait for the previous strip's DMA */
-			strips_sent++;
 			if(y + rows >= GBA_H)
-				cg_sync_after_frame(0u, sync_t0, strips_sent);
+				cg_sync_after_frame(0u, sync_t0, GBA_H, (uint32_t)y);
 			start_strip_dma(strips[bi], ox, oy + y, GBA_W, rows);
 			bi ^= 1;
 			y += rows;

@@ -59,7 +59,7 @@ static void test_r008_parse(void)
 	CHECK(bp == 8u && total == 240u, "0x0808 -> bp=%u total=%u", bp, total);
 
 	cg_sync_parse_r008(0x0A0Cu, &bp, &total);
-	CHECK(bp == 10u && total == 246u, "0x0A0C -> bp=%u total=%u", bp, total);
+	CHECK(bp == 12u && total == 246u, "0x0A0C (FP=10, BP=12) -> bp=%u total=%u", bp, total);
 
 	/* Out-of-range values fall back safely to measured defaults. */
 	cg_sync_parse_r008(0x0000u, &bp, &total);
@@ -68,9 +68,9 @@ static void test_r008_parse(void)
 	cg_sync_parse_r008(0xFFFFu, &bp, &total);
 	CHECK(bp == 8u && total == 240u, "0xFFFF fallback");
 
-	/* Hardware-verified 5-bit FP (0x0818 = 24 FP -> 256 rows). */
+	/* Hardware-verified 5-bit BP in low byte (0x0818 = FP 8, BP 24 -> 256 rows). */
 	cg_sync_parse_r008(0x0818u, &bp, &total);
-	CHECK(bp == 8u && total == 256u, "0x0818 -> bp=%u total=%u", bp, total);
+	CHECK(bp == 24u && total == 256u, "0x0818 -> bp=%u total=%u", bp, total);
 }
 
 static void test_timing_solver(void)
@@ -79,16 +79,16 @@ static void test_timing_solver(void)
 	uint32_t bp = 0, total = 0;
 
 	/* Measured fx-CG100 stock: 0x0808 / 0x0036 -> 16355.9 us (61.140 Hz).
-	 * 1x GBA 59.7275 Hz (16743 us) -> 255 * 52 (0x0817 / 0x0034) = 59.757 Hz! */
+	 * 1x GBA 59.7275 Hz (16743 us) -> 255 * 52 (0x0817 / 0x0034, BP=23) = 59.757 Hz! */
 	cg_sync_solve_timing(0x0808u, 0x0036u, 16356u, 16743u,
 		&r8, &r10, &bp, &total);
-	CHECK(r8 == 0x0817u && r10 == 0x0034u && bp == 8u && total == 255u,
+	CHECK(r8 == 0x0817u && r10 == 0x0034u && bp == 23u && total == 255u,
 		"1x GBA: got %04X/%04X bp=%u total=%u", r8, r10, bp, total);
 
-	/* 2x GBA 119.455 Hz (8371 us) -> 255 * 26 (0x0817 / 0x001A) = 119.514 Hz! */
+	/* 2x GBA 119.455 Hz (8371 us) -> 255 * 26 (0x0817 / 0x001A, BP=23) = 119.514 Hz! */
 	cg_sync_solve_timing(0x0808u, 0x0036u, 16356u, 8371u,
 		&r8, &r10, &bp, &total);
-	CHECK(r8 == 0x0817u && r10 == 0x001Au && bp == 8u && total == 255u,
+	CHECK(r8 == 0x0817u && r10 == 0x001Au && bp == 23u && total == 255u,
 		"2x GBA: got %04X/%04X bp=%u total=%u", r8, r10, bp, total);
 
 	/* 75 Hz (13333 us) -> 240 * 44 (0x0808 / 0x002C) = 75.038 Hz. */
@@ -261,12 +261,18 @@ static void test_tcnt_wrap_and_drift(void)
 			"2x gap corrupted period: %u -> %u", before, s.period_ticks);
 	}
 
-	/* Stale anchor triggers resync after CG_SYNC_RESYNC_PERIODS refreshes. */
-	CHECK(!cg_sync_needs_resync(&s, s.anchor_tcnt - s.period_ticks * 10u),
-		"fresh anchor should not resync");
+	/* Soft vs hard resync thresholds. */
+	CHECK(!cg_sync_wants_soft_resync(&s, s.anchor_tcnt - s.period_ticks * 10u),
+		"fresh anchor should not soft-resync");
+	CHECK(cg_sync_wants_soft_resync(&s,
+			s.anchor_tcnt - s.period_ticks * CG_SYNC_SOFT_RESYNC_PERIODS),
+		"45-frame anchor triggers soft resync");
+	CHECK(!cg_sync_needs_resync(&s,
+			s.anchor_tcnt - s.period_ticks * CG_SYNC_SOFT_RESYNC_PERIODS),
+		"45-frame anchor must not force blocking hard resync");
 	CHECK(cg_sync_needs_resync(&s,
 			s.anchor_tcnt - s.period_ticks * CG_SYNC_RESYNC_PERIODS),
-		"stale anchor must trigger resync");
+		"stale anchor must trigger hard resync");
 
 	/* Write-time estimator tracks increases fast and decays decreases slowly. */
 	cg_sync_update_write_ticks(&s, 0u, 30000u);
@@ -302,23 +308,70 @@ static void test_tcnt_wrap_and_drift(void)
 			d.period_ticks, true_per);
 	}
 
-	/* Dual [write_min, write_max] safe window prevents fast frames from
-	 * overtaking the scan beam in the bottom half after a slow-frame spike. */
+	/* Dual [write_min, write_max] safe window with real R008=0x0817 (BP=23,
+	 * FP=8, 255 rows) prevents fast frames from overtaking the scan beam at
+	 * the very bottom rows of Full Screen (y0=4, h=216). */
 	{
-		uint32_t period = 123400u; /* 59.73 Hz, 255 rows (8 BP + 224 + 23 FP) */
+		uint32_t period = 123400u; /* 59.73 Hz, 255 rows (23 BP + 224 + 8 FP) */
 		uint32_t wmin = period * 75u / 167u;  /* 7.5 ms fast frame */
 		uint32_t wmax = period * 115u / 167u; /* 11.5 ms slow frame */
 		uint32_t lo = 0, len = 0, k;
-		int ok = cg_sync_safe_window_range(period, 255u, 8u, 4u, 216u,
+		int ok = cg_sync_safe_window_range(period, 255u, 23u, 4u, 216u,
 			wmin, wmax, &lo, &len);
 
 		CHECK(ok == 1, "dual-envelope 59.73 Hz Full Screen window exists");
+		CHECK(cg_sync_wait_needed(0u, period, lo, len) == 0u,
+			"PR.5 rising edge (phase 0) stays inside BP=23 safe window");
 		for(k = 0; k < 64u && ok; k++) {
 			uint32_t ph = (lo + (uint32_t)((uint64_t)len * k / 64u)) % period;
-			CHECK(!sim_tears(period, 255u, 8u, 4u, 216u, wmin, ph),
+			CHECK(!sim_tears(period, 255u, 23u, 4u, 216u, wmin, ph),
 				"fast frame tore in dual window at phase %u", ph);
-			CHECK(!sim_tears(period, 255u, 8u, 4u, 216u, wmax, ph),
+			CHECK(!sim_tears(period, 255u, 23u, 4u, 216u, wmax, ph),
 				"slow frame tore in dual window at phase %u", ph);
+		}
+	}
+
+	/* 1:1 panel-locked TMU pacer (cg_sync_pace_advance): verify early wait,
+	 * 32-bit down-counter wraparound, overrun late accounting, and clamp. */
+	{
+		cg_sync_state p;
+		int late = -99;
+		uint32_t wait;
+
+		memset(&p, 0, sizeof(p));
+		p.period_ticks = 1000u;
+
+		/* First call anchors deadline with zero wait and late=0. */
+		wait = cg_sync_pace_advance(&p, 500u, 3, &late);
+		CHECK(wait == 0u && late == 0 && p.pace_valid && p.pace_due_tcnt == 500u,
+			"pace init: wait=%u late=%d due=%u", wait, late, p.pace_due_tcnt);
+
+		/* Next frame finishes after 600 ticks (wrapping across 0 -> 0xFFFFFF9C):
+		 * remaining = 400 ticks until due = 500 - 1000 = 0xFFFFFE0C. */
+		wait = cg_sync_pace_advance(&p, (uint32_t)(500u - 600u), 3, &late);
+		CHECK(wait == 400u && late == 0,
+			"pace early wrap: wait=%u late=%d", wait, late);
+
+		/* Frame overruns by 0.2 refreshes (1200 ticks after prior deadline):
+		 * matches ETMU limiter (late == 0 until a full extra refresh is lost). */
+		wait = cg_sync_pace_advance(&p, p.pace_due_tcnt - 1200u, 3, &late);
+		CHECK(wait == 0u && late == 0,
+			"pace 0.2 overrun: wait=%u late=%d", wait, late);
+
+		/* Frame overruns by 1.3 more refreshes -> late == 1. */
+		wait = cg_sync_pace_advance(&p, p.pace_due_tcnt - 2300u, 3, &late);
+		CHECK(wait == 0u && late == 1,
+			"pace 1.3 overrun: wait=%u late=%d", wait, late);
+
+		/* Huge stall (6 refreshes behind) clamps to max_late+1 (4) and forgets
+		 * excess time beyond max_late (3). */
+		{
+			uint32_t now = p.pace_due_tcnt - 7000u;
+			wait = cg_sync_pace_advance(&p, now, 3, &late);
+			CHECK(wait == 0u && late == 4 &&
+				p.pace_due_tcnt == now + 3000u,
+				"pace clamp: wait=%u late=%d due=%u expected=%u",
+				wait, late, p.pace_due_tcnt, now + 3000u);
 		}
 	}
 }

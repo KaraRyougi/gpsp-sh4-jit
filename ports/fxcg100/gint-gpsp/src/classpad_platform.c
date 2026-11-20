@@ -2039,6 +2039,16 @@ void fxcg100_lcd_set_refresh(uint32_t rate)
 #endif
 }
 
+int fxcg100_lcd_sync_is_paced(void) { return 0; }
+int fxcg100_lcd_sync_pace_wait(int max_late, int *late_out)
+{
+	(void)max_late;
+	if(late_out)
+		*late_out = -1;
+	return 0;
+}
+void fxcg100_lcd_sync_pace_reset(void) {}
+
 void fxcg100_lcd_sync_calibrate(uint32_t on)
 {
 #ifndef CGBA_HOST_TEST

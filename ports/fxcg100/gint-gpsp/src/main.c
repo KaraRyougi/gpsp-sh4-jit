@@ -2363,6 +2363,7 @@ static int gpsp_main(void)
 			menu_state.rom_source = normalize_rom_id(menu_state.rom_source);
 			/* The frame clock must not run on while the menu is open. */
 			cgba_frame_limiter_stop();
+			fxcg100_lcd_sync_pace_reset();
 			cgba_gpsp_debug_menu(&debug_info, frame, last_hash,
 				cgba_fps.emu_fps, cgba_fps.draw_fps, framebuffer,
 				read_stack_pointer());
@@ -2534,6 +2535,7 @@ static int gpsp_main(void)
 			enter_gameplay_display(framebuffer, frame);
 #else
 			cgba_frame_limiter_stop();
+			fxcg100_lcd_sync_pace_reset();
 			draw_status("Loading state", slot_line);
 			wait_for_keys_released();
 			draw_status(cgba_gpsp_state_load(menu_state.savestate_slot)
@@ -2559,6 +2561,7 @@ static int gpsp_main(void)
 				int ok, storage_ok;
 
 				cgba_frame_limiter_stop();
+				fxcg100_lcd_sync_pace_reset();
 				snprintf(slot_line, sizeof slot_line, "Slot %u",
 					(unsigned)menu_state.savestate_slot);
 				draw_status("Saving state", slot_line);
@@ -2594,8 +2597,11 @@ static int gpsp_main(void)
 
 		int fast_forward = hotkeys &
 			FXCG100_HOTKEY_BIT(FXCG100_HOTKEY_FAST_FORWARD);
-		cgba_frame_limiter_begin(&frame_limiter,
-			menu_state.frame_limit && !fast_forward);
+		int limit_on = menu_state.frame_limit && !fast_forward;
+		int vsync_paced = limit_on && fxcg100_lcd_sync_is_paced();
+		if(!vsync_paced)
+			fxcg100_lcd_sync_pace_reset();
+		cgba_frame_limiter_begin(&frame_limiter, limit_on && !vsync_paced);
 		gba_buttons = fxcg100_poll_gba_buttons_mapped(menu_state.keymap);
 
 		int render_video;
@@ -2634,8 +2640,14 @@ static int gpsp_main(void)
 		}
 		previous_app_keys = app_keys;
 		previous_hotkeys = hotkeys;
-		cgba_frame_limiter_wait(&frame_limiter);
-		cgba_pacer_feedback(&pacer, frame_limiter.late);
+		if(vsync_paced) {
+			int late = -1;
+			if(fxcg100_lcd_sync_pace_wait(CGBA_LIMITER_MAX_LATE, &late))
+				cgba_pacer_feedback(&pacer, late);
+		} else {
+			cgba_frame_limiter_wait(&frame_limiter);
+			cgba_pacer_feedback(&pacer, frame_limiter.late);
+		}
 	}
 
 	/* Quit from the menu: a normal exit. */

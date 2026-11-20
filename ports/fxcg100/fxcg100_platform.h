@@ -244,6 +244,16 @@ void fxcg100_lcd_set_filter(uint32_t filter);
 void fxcg100_lcd_set_sync(uint32_t wait, uint32_t offset);
 /* Panel refresh rate preset (see fxcg100_menu_state.lcd_refresh). */
 void fxcg100_lcd_set_refresh(uint32_t rate);
+/* Nonzero when VSync is actively locked 1:1 to the native GBA rate (59.73 Hz)
+ * on a panel with a hardware refresh clock, so the frame limiter should pace
+ * against the panel's own period rather than an independent 32.768 kHz ETMU. */
+int fxcg100_lcd_sync_is_paced(void);
+/* Wait for the next 1:1 panel refresh deadline and report `late_out` with the
+ * same semantics as cgba_frame_limiter_wait(). Returns 1 if handled, 0 if the
+ * caller should fall back to cgba_frame_limiter_wait(). */
+int fxcg100_lcd_sync_pace_wait(int max_late, int *late_out);
+/* Reset the 1:1 panel pacer deadline (menu open, state load/save, FF off). */
+void fxcg100_lcd_sync_pace_reset(void);
 #ifdef CGBA_CLASSPAD
 /* ClassPad II: on that model fxcg100_lcd_set_scale() takes a CP_VIEW_* layout
  * (classpad_layout.h) instead of the fx-CG scale modes above. */
