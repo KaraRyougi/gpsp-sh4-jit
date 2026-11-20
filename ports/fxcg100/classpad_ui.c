@@ -2676,15 +2676,16 @@ static fxcg100_menu_result screen_sync(cp_ui *ui)
 	{
 		uint32_t rows, hz;
 		int found = fxcg100_lcd_sync_info(&rows, &hz);
-		char info[32];
+		char info[48];
 		int w, h = 32;
 
 		if(found > 0)
 			snprintf(info, sizeof(info), "%u rows, %u Hz", (unsigned)rows,
 				(unsigned)hz);
+		else if(found < 0)
+			fxcg100_lcd_sync_diag(info, sizeof(info));
 		else
-			snprintf(info, sizeof(info), "%s",
-				found < 0 ? "No row counter" : "Counting rows");
+			snprintf(info, sizeof(info), "Counting rows");
 		w = cp_text_width(&cp_font_small, info) + 32;
 		cp_round_rect(&ui->s, ui->w - MARGIN - w, back.y + (back.h - h) / 2,
 			w, h, h / 2, ui->t.container);

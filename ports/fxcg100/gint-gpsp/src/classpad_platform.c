@@ -47,6 +47,7 @@
 #include <gint/keyboard.h>
 #include <gint/keycodes.h>
 
+#include <stdio.h>
 #include <string.h>
 
 #define LCD_DATA   ((volatile uint16_t *)0xb4000000u)
@@ -210,17 +211,33 @@ static uint16_t r61523_read_word(void)
  *
  * gint's r61523_win_set() is not used: its ID test is always true, so it
  * adds the 40 on every panel. */
+static uint8_t lcd_panel_id;
+
 static int lcd_first_column(void)
 {
 	static int first_column = -1;
 
 	if(first_column < 0) {
-		unsigned id;
+		unsigned prev = 0x100u, id = 0;
+		int tries;
 
 		wait_lcd_dma();
+		/* Discard the first read: right after the OS/launcher wrote
+		 * pixels, the first register read can return stale data. Then
+		 * read 0xda with safe DBI read timing until two consecutive
+		 * reads agree. */
 		lcd_select(0xda);
-		id = *LCD_DATA;          /* the OS discards the first read too */
-		id = *LCD_DATA & 0xffu;
+		(void)r61523_read_word();
+		(void)r61523_read_word();
+		for(tries = 0; tries < 8; tries++) {
+			lcd_select(0xda);
+			(void)r61523_read_word();
+			id = r61523_read_word() & 0xffu;
+			if(id == prev)
+				break;
+			prev = id;
+		}
+		lcd_panel_id = (uint8_t)id;
 		first_column = (id == 0x16 || id == 0x52) ? 0 : 40;
 	}
 	return first_column;
@@ -726,6 +743,9 @@ void fxcg100_lcd_init(void)
 		fxcg100_lcd_set_theme(0);
 #ifndef CGBA_HOST_TEST
 	lcd_cpu_mhz_cached = 0;
+	/* Detect panel family (0xda) and refresh direction (0x0b on R61523)
+	 * while still at stock clocks, before saved overclock raises Bphi. */
+	(void)lcd_refresh_bottom_up();
 	ticks_start();
 #endif
 }
@@ -1553,7 +1573,10 @@ static int sync_calibrating;
 static uint32_t sync_probe_step;
 enum { SCAN_UNKNOWN = 0, SCAN_USABLE, SCAN_NONE };
 static int scan_state;
+static int scan_timed;
 static uint32_t scan_total, scan_hz;
+static uint32_t scan_diag_samples, scan_diag_believed, scan_diag_max;
+static uint32_t scan_diag_ticks;
 static cp_sync_track sync_track;
 static int sync_tracking;
 static uint32_t sync_lines[SYNC_KINDS];   /* rows shown during the last frame */
@@ -1564,14 +1587,15 @@ static int sync_kind;
  * read, as for the ID register above. On R61523 (datasheet p.131), the
  * scanline counter runs on the 1 MHz internal oscillator and requires
  * >= 3 us after writing 0x45 before the dummy read, and >= 3 us after the
- * second parameter before issuing 0x45 again. */
-static uint32_t lcd_scanline(void)
+ * second parameter before issuing 0x45 again. On 0x16/0x52 (timed == 0),
+ * use direct back-to-back reads immediately after lcd_select(0x45). */
+static uint32_t lcd_scanline_mode(int timed)
 {
 	uint32_t hi, lo;
 
 	wait_lcd_dma();
 	lcd_select(0x45);
-	if(!lcd_is_r61523()) {
+	if(!timed) {
 		hi = *LCD_DATA;
 		hi = *LCD_DATA & 0xffu;
 		lo = *LCD_DATA & 0xffu;
@@ -1585,26 +1609,64 @@ static uint32_t lcd_scanline(void)
 	return ((hi << 8) | lo) & 0x3ffu;
 }
 
-/* A quarter of a second of reading it, once a start and again whenever the
- * page that sets the offset opens: is it a row counter, how many rows are
- * there in a refresh, how often does it come round. */
-static void scan_probe(void)
+static uint32_t lcd_scanline(void)
 {
-	cp_scan_probe probe = { 0 };
+	return lcd_scanline_mode(scan_timed);
+}
+
+static uint32_t scan_probe_run(int timed, cp_scan_probe *probe,
+	uint32_t *out_ticks, uint32_t *out_hz)
+{
 	uint32_t start, ticks = 0, n;
 
+	memset(probe, 0, sizeof(*probe));
 	/* Pixels have just been written: the first reads are the least to be
 	 * trusted. The probe does not believe a lone wrong read anyway. */
 	for(n = 0; n < 8u; n++)
-		(void)lcd_scanline();
+		(void)lcd_scanline_mode(timed);
 	start = fxcg100_ticks();
 	for(n = 0; n < 4000000u && ticks < 32u; n++) {
-		cp_scan_probe_add(&probe, lcd_scanline());
+		cp_scan_probe_add(probe, lcd_scanline_mode(timed));
 		if((n & 63u) == 0)
 			ticks = fxcg100_ticks() - start;
 	}
-	scan_total = cp_scan_probe_result(&probe, ticks, &scan_hz);
+	*out_ticks = ticks;
+	return cp_scan_probe_result(probe, ticks, out_hz);
+}
+
+/* A quarter of a second of reading it, once a start and again whenever the
+ * page that sets the offset opens: is it a row counter, how many rows are
+ * there in a refresh, how often does it come round. Tries the panel's
+ * expected 0x45 read timing first and falls back to the alternate timing if
+ * that fails to see a valid counter. */
+static void scan_probe(void)
+{
+	cp_scan_probe probe;
+	uint32_t ticks = 0, hz = 0, total;
+	int primary = lcd_is_r61523();
+
+	scan_timed = primary;
+	total = scan_probe_run(primary, &probe, &ticks, &hz);
+	if(!total) {
+		cp_scan_probe alt_probe;
+		uint32_t alt_ticks = 0, alt_hz = 0, alt_total;
+
+		alt_total = scan_probe_run(!primary, &alt_probe, &alt_ticks, &alt_hz);
+		if(alt_total) {
+			scan_timed = !primary;
+			probe = alt_probe;
+			ticks = alt_ticks;
+			hz = alt_hz;
+			total = alt_total;
+		}
+	}
+	scan_hz = hz;
+	scan_total = total;
 	scan_state = scan_total ? SCAN_USABLE : SCAN_NONE;
+	scan_diag_samples = probe.samples;
+	scan_diag_believed = probe.believed;
+	scan_diag_max = probe.max;
+	scan_diag_ticks = ticks;
 	if(!scan_total)
 		scan_total = probe.max ? probe.max : 1u;
 	/* Measured against the count before, which may not be this one. */
@@ -1733,6 +1795,20 @@ int fxcg100_lcd_sync_info(uint32_t *rows, uint32_t *hz)
 	*rows = 0;
 	*hz = 0;
 	return 0;
+#endif
+}
+
+void fxcg100_lcd_sync_diag(char *buf, size_t size)
+{
+	if(!buf || !size)
+		return;
+#ifndef CGBA_HOST_TEST
+	snprintf(buf, size, "No ctr %02x m%u h%u %u/%u t%u",
+		(unsigned)lcd_panel_id, (unsigned)scan_diag_max, (unsigned)scan_hz,
+		(unsigned)scan_diag_believed, (unsigned)scan_diag_samples,
+		(unsigned)scan_diag_ticks);
+#else
+	snprintf(buf, size, "No row counter");
 #endif
 }
 

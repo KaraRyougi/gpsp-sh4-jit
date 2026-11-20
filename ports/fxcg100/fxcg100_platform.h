@@ -231,6 +231,9 @@ void fxcg100_lcd_sync_calibrate(uint32_t on);
  * refreshes a second. Returns 1 if the panel has a usable row counter, -1 if
  * it has none, 0 if it has not been read yet. */
 int fxcg100_lcd_sync_info(uint32_t *rows, uint32_t *hz);
+/* Compact diagnostic text shown on the calibration page when scan_probe()
+ * fails to recognise a row counter (panel ID, max row, Hz, believed/samples). */
+void fxcg100_lcd_sync_diag(char *buf, size_t size);
 /* fx-CP400: backlight level (1..16, 16 = full) and PWM rate (1..9, 9 the
  * fastest); 0 for either leaves, or puts back, what the system had set. */
 void fxcg100_lcd_set_backlight(uint32_t level, uint32_t pwm);
