@@ -3923,3 +3923,267 @@ _cgba_blend_solid_rect_sh4:
 	.word   480
 	.size   _cgba_blend_solid_rect_sh4, .-_cgba_blend_solid_rect_sh4
 
+/* ============================================================================
+ * _cgba_render_obj_4bpp_affine_scale_sh4
+ *   Fast 4bpp FULLCOLOR non-mosaic affine OBJ scanline (dy == 0, no VRAM wrap).
+ *   r4 = dst_ptr (scanline + d_start)
+ *   r5 = (cnt << 16) | obj_dimw  (cnt >= 1, obj_dimw in {8,16,32,64})
+ *   r6 = source_x (24.8 fixed point)
+ *   r7 = dx (24.8 fixed point)
+ *   stack[0] = row_ptr (&vram[0x10000 + row_base])
+ *   stack[4] = subpal  (palptr + palette)
+ * ============================================================================ */
+	.balign 4
+	.global _cgba_render_obj_4bpp_affine_scale_sh4
+	.type   _cgba_render_obj_4bpp_affine_scale_sh4, @function
+_cgba_render_obj_4bpp_affine_scale_sh4:
+	mov.l   r8, @-r15
+	mov.l   r9, @-r15
+	mov.l   r10, @-r15
+	mov.l   r11, @-r15
+	mov.l   r12, @-r15
+	mov.l   r13, @-r15
+	mov.l   r14, @-r15
+
+	mov.l   @(28, r15), r1              /* r1  = row_ptr */
+	mov.l   @(32, r15), r11             /* r11 = subpal */
+	extu.w  r5, r8                      /* r8  = obj_dimw (8,16,32,64) */
+	shlr16  r5
+	mov     r5, r9                      /* r9  = cnt */
+	mov     #-8, r12                    /* r12 = -8 (shad >> 8) */
+
+	/* Phase 1: skip leading out-of-bounds pixels before touching VRAM. */
+	.balign 4
+.Lafs_skip:
+	mov     r6, r0
+	shad    r12, r0
+	cmp/hs  r8, r0
+	bf      .Lafs_unpack
+	dt      r9
+	bt      .Lafs_done_no_frame
+	add     #2, r4
+	bra     .Lafs_skip
+	add     r7, r6
+
+	/* Phase 2: unpack dimw/8 tiles into 64-byte stack linear[x] = pixval<<1. */
+.Lafs_unpack:
+	mov     r0, r13                     /* save first in-bounds pixel_x */
+	add     #-64, r15
+	mov     r15, r10                    /* r10 = &linear[0] */
+	mov     r10, r3                     /* write cursor */
+	mov     r8, r2
+	shlr2   r2
+	shlr    r2                          /* r2 = num_tiles (1,2,4,8) */
+
+	.balign 4
+.Lafs_tile:
+	mov.l   @r1, r14                    /* 4 bytes = 8 4bpp pixels */
+	tst     r14, r14
+	bt      .Lafs_ztile
+
+	/* Big-endian SH-4: mov.l @r1 loads [b0 | b1 | b2 | b3], so low byte is b3 (p6,p7). */
+	mov     r14, r0
+	shll    r0
+	and     #0x1E, r0
+	mov.b   r0, @(6, r3)
+	mov     r14, r0
+	shlr2   r0
+	shlr    r0
+	and     #0x1E, r0
+	mov.b   r0, @(7, r3)
+	shlr8   r14
+
+	mov     r14, r0
+	shll    r0
+	and     #0x1E, r0
+	mov.b   r0, @(4, r3)
+	mov     r14, r0
+	shlr2   r0
+	shlr    r0
+	and     #0x1E, r0
+	mov.b   r0, @(5, r3)
+	shlr8   r14
+
+	mov     r14, r0
+	shll    r0
+	and     #0x1E, r0
+	mov.b   r0, @(2, r3)
+	mov     r14, r0
+	shlr2   r0
+	shlr    r0
+	and     #0x1E, r0
+	mov.b   r0, @(3, r3)
+	shlr8   r14
+
+	mov     r14, r0
+	shll    r0
+	and     #0x1E, r0
+	mov.b   r0, @(0, r3)
+	mov     r14, r0
+	shlr2   r0
+	shlr    r0
+	and     #0x1E, r0
+	mov.b   r0, @(1, r3)
+
+	add     #32, r1
+	dt      r2
+	bf.s    .Lafs_tile
+	add     #8, r3
+	bra     .Lafs_draw_start
+	mov     r13, r0
+
+.Lafs_ztile:
+	mov.l   r14, @(0, r3)
+	mov.l   r14, @(4, r3)
+	add     #32, r1
+	dt      r2
+	bf.s    .Lafs_tile
+	add     #8, r3
+	mov     r13, r0
+
+	/* Phase 3: inner pixel loop — 10 insns transparent, 12 insns opaque. */
+	.balign 4
+.Lafs_draw_start:
+.Lafs_draw:
+	mov.b   @(r0, r10), r0              /* linear[px] = pixval << 1 (0..30) */
+	tst     r0, r0
+	bt      1f
+	mov.w   @(r0, r11), r0
+	mov.w   r0, @r4
+1:	dt      r9
+	bt      .Lafs_done
+	add     r7, r6
+	mov     r6, r0
+	shad    r12, r0
+	cmp/hs  r8, r0
+	bf.s    .Lafs_draw
+	add     #2, r4
+
+.Lafs_done:
+	add     #64, r15
+.Lafs_done_no_frame:
+	mov.l   @r15+, r14
+	mov.l   @r15+, r13
+	mov.l   @r15+, r12
+	mov.l   @r15+, r11
+	mov.l   @r15+, r10
+	mov.l   @r15+, r9
+	rts
+	mov.l   @r15+, r8
+	.size   _cgba_render_obj_4bpp_affine_scale_sh4, .-_cgba_render_obj_4bpp_affine_scale_sh4
+
+/* ============================================================================
+ * _cgba_render_obj_4bpp_affine_rot_sh4
+ *   Fast 4bpp FULLCOLOR non-mosaic affine OBJ scanline (dy != 0, no VRAM wrap).
+ *   r4 = const cgba_aff_rot_params *p:
+ *     +0  dst_ptr
+ *     +4  base_vram (&vram[0x10000 + base_tile])
+ *     +8  subpal    (palptr + palette)
+ *     +12 source_x
+ *     +16 source_y
+ *     +20 dx
+ *     +24 dy
+ *     +28 cnt (>= 1)
+ *     +32 dimw (8..64)
+ *     +36 dimh (8..64)
+ *     +40 row_shift (pitch_shift - 3: 2,3,4,5,7)
+ * ============================================================================ */
+	.balign 4
+	.global _cgba_render_obj_4bpp_affine_rot_sh4
+	.type   _cgba_render_obj_4bpp_affine_rot_sh4, @function
+_cgba_render_obj_4bpp_affine_rot_sh4:
+	mov.l   r8, @-r15
+	mov.l   r9, @-r15
+	mov.l   r10, @-r15
+	mov.l   r11, @-r15
+	mov.l   r12, @-r15
+	mov.l   r13, @-r15
+	mov.l   r14, @-r15
+
+	mov     r4, r0
+	mov.l   @(0, r0), r4                /* r4  = dst_ptr */
+	mov.l   @(4, r0), r5                /* r5  = base_vram */
+	mov.l   @(8, r0), r11               /* r11 = subpal */
+	mov.l   @(12, r0), r6               /* r6  = source_x */
+	mov.l   @(16, r0), r7               /* r7  = source_y */
+	mov.l   @(20, r0), r8               /* r8  = dx */
+	mov.l   @(24, r0), r9               /* r9  = dy */
+	mov.l   @(28, r0), r10              /* r10 = cnt */
+	mov.l   @(32, r0), r12              /* r12 = dimw */
+	mov.l   @(36, r0), r13              /* r13 = dimh */
+	mov.l   @(40, r0), r14              /* r14 = row_shift */
+
+	.balign 4
+.Lafr_skip:
+	mov     #-8, r3
+	mov     r6, r2
+	shad    r3, r2                      /* r2 = pixel_x */
+	cmp/hs  r12, r2
+	bt      .Lafr_skip_next
+	mov     r7, r0
+	shad    r3, r0                      /* r0 = pixel_y */
+	cmp/hs  r13, r0
+	bf      .Lafr_draw
+.Lafr_skip_next:
+	dt      r10
+	bt      .Lafr_done
+	add     #2, r4
+	add     r8, r6
+	bra     .Lafr_skip
+	add     r9, r7
+
+	.balign 4
+.Lafr_draw:
+	/* r2 = pixel_x (0..63), r0 = pixel_y (0..63) */
+	mov     r0, r1
+	and     #0xF8, r0
+	shld    r14, r0                     /* (py >> 3) * tile_pitch */
+	mov     r0, r3
+	mov     r1, r0
+	and     #0x07, r0
+	shll2   r0                          /* (py & 7) * 4 */
+	add     r0, r3
+
+	mov     r2, r0
+	and     #0xF8, r0
+	shll2   r0                          /* (px >> 3) * 32 */
+	add     r0, r3
+	mov     r2, r0
+	shlr    r0                          /* T = px & 1; r0 = px >> 1 */
+	and     #0x03, r0                   /* (px >> 1) & 3 (T unchanged) */
+	add     r3, r0                      /* total byte offset (T unchanged) */
+	mov.b   @(r0, r5), r0               /* pixpair (T unchanged) */
+	bf      1f
+	shlr2   r0
+	shlr2   r0
+1:	and     #0x0F, r0
+	tst     r0, r0
+	bt      2f
+	shll    r0
+	mov.w   @(r0, r11), r0
+	mov.w   r0, @r4
+2:	dt      r10
+	bt      .Lafr_done
+	add     #2, r4
+	add     r8, r6
+	add     r9, r7
+	mov     #-8, r3
+	mov     r6, r2
+	shad    r3, r2
+	cmp/hs  r12, r2
+	bt      .Lafr_done
+	mov     r7, r0
+	shad    r3, r0
+	cmp/hs  r13, r0
+	bf      .Lafr_draw
+
+.Lafr_done:
+	mov.l   @r15+, r14
+	mov.l   @r15+, r13
+	mov.l   @r15+, r12
+	mov.l   @r15+, r11
+	mov.l   @r15+, r10
+	mov.l   @r15+, r9
+	rts
+	mov.l   @r15+, r8
+	.size   _cgba_render_obj_4bpp_affine_rot_sh4, .-_cgba_render_obj_4bpp_affine_rot_sh4

@@ -68,6 +68,23 @@ void cgba_render_obj_4bpp_tiles_sh4(
   const u8 *tile_ptr, u32 num_tiles, u16 *dst_ptr, const u16 *subpal);
 void cgba_render_obj_4bpp_tiles_hf_sh4(
   const u8 *tile_ptr, u32 num_tiles, u16 *dst_ptr, const u16 *subpal);
+struct cgba_aff_rot_params {
+  u16 *dst_ptr;
+  const u8 *base_vram;
+  const u16 *subpal;
+  s32 source_x;
+  s32 source_y;
+  s32 dx;
+  s32 dy;
+  u32 cnt;
+  u32 dimw;
+  u32 dimh;
+  u32 row_shift;
+};
+void cgba_render_obj_4bpp_affine_scale_sh4(
+  u16 *dst_ptr, u32 cnt_and_dimw, s32 source_x, s32 dx,
+  const u8 *row_ptr, const u16 *subpal);
+void cgba_render_obj_4bpp_affine_rot_sh4(const cgba_aff_rot_params *p);
 }
 #endif
 
@@ -2003,12 +2020,53 @@ static void render_affine_object(
 
   u32 d_start = MAX((signed)start, obji->obj_x);
   u32 d_end   = MIN((signed)end,   obji->obj_x + obj_width);
+  if (d_end <= d_start)
+    return;
   u32 cnt = d_end - d_start;
   dst_ptr += d_start;
+
+  if (!rotate && (u32)(source_y >> 8) >= obj_dimh)
+    return;
 
   bool obj1dmap = read_ioreg(REG_DISPCNT) & 0x40;
   const u32 tile_pitch = obj1dmap ? (obj_dimw / 8) * tile_bsize : 1024;
   u32 px_attr = pxcomb | palette | 0x100;  // Combine flags + high palette bit
+
+#ifdef CGBA_SH4_ASM_4BPP
+  if (rdtype == FULLCOLOR && !is8bpp && !mosaic && sizeof(stype) == sizeof(u16)) {
+    if (!rotate) {
+      u32 py = (u32)(source_y >> 8);
+      u32 row_base = (base_tile + (py >> 3) * tile_pitch + ((py & 7u) << 2)) & 0x7FFFu;
+      u32 max_byte = row_base + (((obj_dimw >> 3) - 1u) << 5) + 4u;
+      if (__builtin_expect(max_byte <= 0x8000u, 1)) {
+        cgba_render_obj_4bpp_affine_scale_sh4(
+          (u16 *)(void *)dst_ptr, (cnt << 16) | obj_dimw, source_x, dx,
+          &vram[0x10000u + row_base], palptr + palette);
+        return;
+      }
+    } else {
+      u32 bt = base_tile & 0x7FFFu;
+      u32 max_byte = bt + ((obj_dimh >> 3) - 1u) * tile_pitch +
+                     (((obj_dimw >> 3) - 1u) << 5) + 32u;
+      if (__builtin_expect(max_byte <= 0x8000u, 1)) {
+        u32 row_shift = 7u;
+        if (obj1dmap) {
+          /* dimw in {8, 16, 32, 64} -> row_shift in {2, 3, 4, 5}. */
+          row_shift = (obj_dimw == 8u) ? 2u : (obj_dimw == 16u) ? 3u
+                    : (obj_dimw == 32u) ? 4u : 5u;
+        }
+        cgba_aff_rot_params p = {
+          (u16 *)(void *)dst_ptr,
+          &vram[0x10000u + bt],
+          palptr + palette,
+          source_x, source_y, dx, dy, cnt, obj_dimw, obj_dimh, row_shift
+        };
+        cgba_render_obj_4bpp_affine_rot_sh4(&p);
+        return;
+      }
+    }
+  }
+#endif
 
   // Skip pixels outside of the sprite area, until we reach the sprite "inside"
   while (cnt) {
@@ -2815,21 +2873,52 @@ static void merge_brightness(u32 start, u32 end, u16 *srcdst) {
   }
 }
 
+static inline void cgba_fill_u16_fast(u16 *dst, u32 count, u16 val)
+{
+  if (count == 0u)
+    return;
+  if (((uintptr_t)dst & 2u) != 0u) {
+    *dst++ = val;
+    count--;
+  }
+  u32 pair = ((u32)val << 16) | (u32)val;
+  u32 *d32 = (u32 *)dst;
+  u32 pairs = count >> 1;
+  while (pairs >= 4u) {
+    d32[0] = pair;
+    d32[1] = pair;
+    d32[2] = pair;
+    d32[3] = pair;
+    d32 += 4;
+    pairs -= 4u;
+  }
+  while (pairs--)
+    *d32++ = pair;
+  if (count & 1u)
+    *((u16 *)d32) = val;
+}
+
 // Fills a segment using the backdrop color (in the right mode).
 template<rendtype rdmode, typename dsttype>
 void fill_line_background(u32 start, u32 end, dsttype *scanline) {
-  dsttype bgcol = palette_ram_converted[0];
-  u16 bg_comb = color_flags(5);
+  if (start >= end)
+    return;
+  dsttype fillval = (rdmode == FULLCOLOR)
+                      ? (dsttype)palette_ram_converted[0]
+                      : (dsttype)color_flags(5);
+  if (sizeof(dsttype) == sizeof(u16)) {
+    cgba_fill_u16_fast((u16 *)(void *)(scanline + start), end - start, (u16)fillval);
+    return;
+  }
   while (start < end)
-    if (rdmode == FULLCOLOR)
-      scanline[start++] = bgcol;
-    else
-      scanline[start++] = 0 | bg_comb;
+    scanline[start++] = fillval;
 }
 
 // Renders the backdrop color (ie. whenever no layer is active) applying
 // any effects that might still apply (usually darken/brighten).
 static void render_backdrop(u32 start, u32 end, u16 *scanline) {
+  if (start >= end)
+    return;
   u16 bldcnt = read_ioreg(REG_BLDCNT);
   u16 pixcol = palette_ram_converted[0];
   u32 effect = (bldcnt >> 6) & 0x03;
@@ -2853,8 +2942,7 @@ static void render_backdrop(u32 start, u32 end, u16 *scanline) {
   }
 
   // Fill the line with that color
-  while (start < end)
-    scanline[start++] = pixcol;
+  cgba_fill_u16_fast(scanline + start, end - start, pixcol);
 }
 
 // Renders all the available and enabled layers (in tiled mode).
@@ -3369,6 +3457,7 @@ static bool cgba_sl_frame_obj_dirty = true;
 static bool cgba_bg_plan_valid = false;
 
 static inline void cgba_bg_vram_invalidate(void);
+static inline void cgba_bg_plan_invalidate_all(void);
 
 extern "C" void video_invalidate_scanline_cache(u32 start_y, u32 end_y)
 {
@@ -3388,6 +3477,7 @@ extern "C" void video_invalidate_scanline_cache(u32 start_y, u32 end_y)
     cgba_sl_frame_obj_dirty = true;
     cgba_bg_plan_valid = false;
     cgba_bg_vram_invalidate();
+    cgba_bg_plan_invalidate_all();
   }
   cgba_video_frame_dirty_rows = 160;
 }
@@ -3582,6 +3672,10 @@ struct alignas(32) cgba_mode0_state {
   u8   lcount[16];
   u32  lorder_key;
   u32  used_sb_mask;
+  u32  bg_static_key[4];
+  u32  bg_sb_mask[4];
+  u16  bg_hofs[4];
+  u8   bg_wide[4];
   u8   fast_fullframe;
   u8   fast_no_obj;
   u8   obj_alpha_can_blend;
@@ -3825,17 +3919,72 @@ static __attribute__((noinline)) void cgba_rebuild_mode0_bg_plans(u16 dispcnt)
       continue;
     cgba_mode0_bg_plan *p = &cgba_bg_plans[layer];
     u32 bg_control = read_ioreg(REG_BGxCNT(layer));
+    u32 h_raw = read_ioreg(REG_BGxHOFS(layer)) & 511u;
+    u16 vofs = read_ioreg(REG_BGxVOFS(layer));
+#if defined(CGBA_VIDEO_DIRTY_SCANLINE) && CGBA_VIDEO_DIRTY_SCANLINE
+    bool base_no_blend = (layer == always_base_layer && layer != blend_bg);
+#else
+    bool base_no_blend = false;
+#endif
+    u32 skey = 0x80000000u | bg_control |
+               ((mos_bg != 0u) ? 0x10000u : 0u) |
+               (base_no_blend ? 0x20000u : 0u);
+    if (__builtin_expect(skey == cgba_m0.bg_static_key[layer], 1)) {
+      used_sbs |= cgba_m0.bg_sb_mask[layer];
+      if (!(p->flags & 1u))
+        continue;
+      p->vofs = vofs;
+      if (__builtin_expect(h_raw == cgba_m0.bg_hofs[layer], 1))
+        continue;
+      cgba_m0.bg_hofs[layer] = (u16)h_raw;
+      u32 wide = cgba_m0.bg_wide[layer];
+      u32 h = h_raw;
+      u16 map_right_off = 0, second_off = 0;
+      if (wide) {
+        if (h >= 256u) {
+          h -= 256u;
+          map_right_off = 1024u;
+        } else {
+          second_off = 1024u;
+        }
+      } else {
+        h &= 255u;
+      }
+      u32 pixel_run = 256u - h;
+      u32 tile_hoff = h & 7u;
+      u32 partial_left = tile_hoff ? (8u - tile_hoff) : 0u;
+      u32 rem = 240u - partial_left;
+      pixel_run -= partial_left;
+      u32 todraw1 = MIN(rem, pixel_run) >> 3;
+      rem -= todraw1 << 3;
+      pixel_run -= todraw1 << 3;
+      bool need_switch = (rem > 0u) && (pixel_run == 0u);
+      u32 todraw2 = rem >> 3;
+      u16 first_off = (u16)(map_right_off + (h >> 3));
+      u16 map2_off = need_switch ? second_off
+                                 : (u16)(first_off + (tile_hoff ? 1u : 0u) + todraw1);
+      p->counts_packed = (u32)todraw1 | ((u32)todraw2 << 16);
+      p->first_byte_off = (u16)(first_off << 1);
+      p->map2_byte_off = (u16)(map2_off << 1);
+      p->tile_hoff = (u8)tile_hoff;
+      continue;
+    }
+
     bool is8bpp = (bg_control & 0x80u) != 0;
     bool has_mosaic = ((bg_control & 0x40u) != 0) && (mos_bg != 0);
     if (is8bpp || has_mosaic) {
       p->flags = 0u;
+      cgba_m0.bg_static_key[layer] = skey;
+      cgba_m0.bg_sb_mask[layer] = 0u;
       continue;
     }
     u32 map_size = (bg_control >> 14) & 3u;
     u32 base_block = (bg_control >> 8) & 0x1Fu;
     u32 sb_bot = base_block + ((map_size & 2u) ? ((map_size & 1u) ? 2u : 1u) : 0u);
     u32 tilecntrl = (bg_control >> 2) & 3u;
-    u32 h = read_ioreg(REG_BGxHOFS(layer)) & 511u;
+    u32 h = h_raw;
+    cgba_m0.bg_hofs[layer] = (u16)h;
+    cgba_m0.bg_wide[layer] = (u8)(map_size & 1u);
     u16 map_right_off = 0, second_off = 0;
     if (map_size & 1u) {
       if (h >= 256u) {
@@ -3865,12 +4014,13 @@ static __attribute__((noinline)) void cgba_rebuild_mode0_bg_plans(u16 dispcnt)
     p->sb_ptr[0] = (u16 *)&vram[base_block * 2048u];
     p->sb_ptr[1] = (u16 *)&vram[sb_bot * 2048u];
     p->counts_packed = (u32)todraw1 | ((u32)todraw2 << 16);
-    p->vofs = read_ioreg(REG_BGxVOFS(layer));
+    p->vofs = vofs;
     p->first_byte_off = (u16)(first_off << 1);
     p->map2_byte_off = (u16)(map2_off << 1);
     p->tile_hoff = (u8)tile_hoff;
+    u32 layer_sbs = 0u;
 #if defined(CGBA_VIDEO_DIRTY_SCANLINE) && CGBA_VIDEO_DIRTY_SCANLINE
-    if (layer == always_base_layer && layer != blend_bg) {
+    if (base_no_blend) {
       /* Base layer always renders with base_done == 0; never skips zero rows. */
       p->row_nonzero[0] = 0xFFFFFFFFu;
       p->row_nonzero[1] = 0xFFFFFFFFu;
@@ -3879,28 +4029,28 @@ static __attribute__((noinline)) void cgba_rebuild_mode0_bg_plans(u16 dispcnt)
       u32 nz0 = 0xFFFFFFFFu, nz1 = 0xFFFFFFFFu;
       if (sb_bot == base_block) {
         nz0 = cgba_sb_get_row_nonzero(base_block);
-        used_sbs |= (1u << base_block);
+        layer_sbs |= (1u << base_block);
         if (map_size & 1u) {
           nz0 |= cgba_sb_get_row_nonzero(base_block + 1u);
           if (base_block + 1u < 32u)
-            used_sbs |= (1u << (base_block + 1u));
+            layer_sbs |= (1u << (base_block + 1u));
         }
         nz1 = nz0;
       } else {
         nz0 = cgba_sb_get_row_nonzero(base_block);
-        used_sbs |= (1u << base_block);
+        layer_sbs |= (1u << base_block);
         if (map_size & 1u) {
           nz0 |= cgba_sb_get_row_nonzero(base_block + 1u);
           if (base_block + 1u < 32u)
-            used_sbs |= (1u << (base_block + 1u));
+            layer_sbs |= (1u << (base_block + 1u));
         }
         nz1 = cgba_sb_get_row_nonzero(sb_bot);
         if (sb_bot < 32u)
-          used_sbs |= (1u << sb_bot);
+          layer_sbs |= (1u << sb_bot);
         if (map_size & 1u) {
           nz1 |= cgba_sb_get_row_nonzero(sb_bot + 1u);
           if (sb_bot + 1u < 32u)
-            used_sbs |= (1u << (sb_bot + 1u));
+            layer_sbs |= (1u << (sb_bot + 1u));
         }
       }
       p->row_nonzero[0] = nz0;
@@ -3912,6 +4062,9 @@ static __attribute__((noinline)) void cgba_rebuild_mode0_bg_plans(u16 dispcnt)
     p->row_nonzero[1] = 0xFFFFFFFFu;
     p->flags = 1u;
 #endif
+    cgba_m0.bg_static_key[layer] = skey;
+    cgba_m0.bg_sb_mask[layer] = layer_sbs;
+    used_sbs |= layer_sbs;
   }
   cgba_m0.used_sb_mask = used_sbs;
   if (blend_bg < 4u && !(cgba_bg_plans[blend_bg].flags & 1u))
@@ -4210,6 +4363,12 @@ static __attribute__((noinline)) void cgba_render_4bpp_part_fullcolor(
   }
 }
 
+static inline void cgba_bg_plan_invalidate_all(void)
+{
+  for (u32 l = 0; l < 4u; l++)
+    cgba_m0.bg_static_key[l] = 0u;
+}
+
 #if defined(CGBA_VIDEO_DIRTY_SCANLINE) && CGBA_VIDEO_DIRTY_SCANLINE
 static inline void cgba_bg_vram_invalidate(void)
 {
@@ -4217,11 +4376,23 @@ static inline void cgba_bg_vram_invalidate(void)
   u32 sbd = cgba_vram_sb_dirty;
   cgba_vram_sb_dirty = 0;
   cgba_sb_valid_mask &= sbd ? ~sbd : 0u;
-  if (!sbd || (sbd & cgba_m0.used_sb_mask))
+  if (!sbd) {
     cgba_bg_plan_valid = false;
+    for (u32 l = 0; l < 4u; l++)
+      cgba_m0.bg_static_key[l] = 0u;
+  } else {
+    if (sbd & cgba_m0.used_sb_mask)
+      cgba_bg_plan_valid = false;
+    for (u32 l = 0; l < 4u; l++) {
+      if (sbd & cgba_m0.bg_sb_mask[l])
+        cgba_m0.bg_static_key[l] = 0u;
+    }
+  }
 #else
   cgba_sb_valid_mask = 0;
   cgba_bg_plan_valid = false;
+  for (u32 l = 0; l < 4u; l++)
+    cgba_m0.bg_static_key[l] = 0u;
 #endif
 }
 #endif
@@ -4450,6 +4621,7 @@ static __attribute__((noinline)) void render_mode0_fullcolor_scanline(
     fill_line_background<FULLCOLOR, u16>(0, 240, screen_offset);
 }
 #else
+static inline void cgba_bg_plan_invalidate_all(void) {}
 #if defined(CGBA_VIDEO_DIRTY_SCANLINE) && CGBA_VIDEO_DIRTY_SCANLINE
 static inline void cgba_bg_vram_invalidate(void)
 {
