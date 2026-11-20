@@ -4183,11 +4183,11 @@ bool translate_block_arm(u32 pc, bool ram_region)
          * run (2..8 ops, non-S, rd != rn) — caches reg[rn] and shift count across run. */
         if (!arm_fused && (pc >> 24) == 0x03 &&
             (cur_op & 0xFE100010u) == 0xE0000000u &&
-            (cur_op & 0xFFF00FF0u) == (next_op & 0xFFF00FF0u)) {
+            (cur_op & 0xFFFF0FF0u) == (next_op & 0xFFFF0FF0u)) {
           u32 run_alu = (cur_op >> 21) & 0xFu;
           if (run_alu == 0x0u || run_alu == 0x1u || run_alu == 0x4u || run_alu == 0xCu) {
             u32 run_ops[8];
-            u32 run_key = cur_op & 0xFFF00FF0u;
+            u32 run_key = cur_op & 0xFFFF0FF0u;
             unsigned run_rn = (cur_op >> 16) & 0xFu;
             int rcnt = 0;
             u32 save_pc = pc;
@@ -4204,7 +4204,7 @@ bool translate_block_arm(u32 pc, bool ram_region)
                 u32 rop = readaddress32(pc_address_block, (save_pc + (u32)(rcnt * 4)) & 0x0FFF);
                 unsigned rrd = (rop >> 12) & 0xFu;
                 unsigned rrm = rop & 0xFu;
-                if ((rop & 0xFFF00FF0u) != run_key ||
+                if ((rop & 0xFFFF0FF0u) != run_key ||
                     rrd == 15u || rrm == 15u || rrd == run_rn)
                   break;
                 pc = save_pc + (u32)(rcnt * 4);

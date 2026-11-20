@@ -2439,6 +2439,83 @@ int main(void)
   }
   }
 
+  /* ---- ARM same-Rn same-shift DP run (peephole 5) ----
+   * Regression coverage for the 0xFFF00FF0u vs 0xFFFF0FF0u mask bug where ops
+   * with different Rn (e.g. Minish Cap 0x0300607c: ADD r3,r2,r3 + ADD r5,r4,r3)
+   * were wrongly fused into a single-Rn cached run. */
+  {
+    static const struct {
+      const char *nm;
+      u32 ops[4];
+      int cnt;
+      int want_emit;
+    } rn_cases[] = {
+      { "diff-rn-minish",  { 0xE0823003u, 0xE0845003u }, 2, 0 },
+      { "diff-rn-lsr7",    { 0xE00213A3u, 0xE00543A6u }, 2, 0 },
+      { "s-bit-reject",    { 0xE0923003u, 0xE0925003u }, 2, 0 },
+      { "rd-eq-rn-reject", { 0xE0822003u, 0xE0825003u }, 2, 0 },
+      { "same-rn-add",     { 0xE0823003u, 0xE0825003u }, 2, 1 },
+      { "same-rn-and-lsr", { 0xE00C13A1u, 0xE00C43A4u, 0xE00C73A7u }, 3, 1 },
+      { "same-rn-orr-lsl", { 0xE1861182u, 0xE1863184u }, 2, 1 },
+      { "same-rn-eor-asr", { 0xE0281242u, 0xE0285243u }, 2, 1 },
+    };
+    for (size_t ci = 0; ci < sizeof(rn_cases) / sizeof(rn_cases[0]); ci++) {
+      static u8 sbuf[512] __attribute__((aligned(4)));
+      u8 *sp = sbuf;
+      int emitted = sh4g_arm_dp_same_rn_run_native(&sp, rn_cases[ci].ops,
+                                                   rn_cases[ci].cnt);
+      cases++;
+      if (emitted != rn_cases[ci].want_emit) {
+        printf("FAIL same-rn %s: emitted=%d want %d\n",
+               rn_cases[ci].nm, emitted, rn_cases[ci].want_emit);
+        fails++;
+        continue;
+      }
+      if (!emitted) continue;
+      u32 want_reg[16];
+      memset(g_reg, 0, sizeof g_reg);
+      for (int i = 0; i < 16; i++) {
+        u32 v = (i == 2 || i == 3) ? (0x80012340u + (u32)i * 0x1111u)
+                                   : (0x13579BDFu ^ ((u32)i * 0x01010101u));
+        g_reg[i] = want_reg[i] = v;
+      }
+      for (int k = 0; k < rn_cases[ci].cnt; k++) {
+        u32 op = rn_cases[ci].ops[k];
+        u32 alu = (op >> 21) & 0xFu;
+        unsigned rn = (op >> 16) & 0xFu;
+        unsigned rd = (op >> 12) & 0xFu;
+        unsigned rm = op & 0xFu;
+        unsigned st = (op >> 5) & 3u;
+        unsigned si = (op >> 7) & 0x1Fu;
+        u32 op2 = want_reg[rm];
+        if (si != 0u) {
+          if (st == 0u)      op2 <<= si;
+          else if (st == 1u) op2 >>= si;
+          else               op2 = (u32)((s32)op2 >> si);
+        }
+        if (alu == 0x0u)      want_reg[rd] = want_reg[rn] & op2;
+        else if (alu == 0x1u) want_reg[rd] = want_reg[rn] ^ op2;
+        else if (alu == 0x4u) want_reg[rd] = want_reg[rn] + op2;
+        else                  want_reg[rd] = want_reg[rn] | op2;
+      }
+      orc_reset_windows();
+      orc_add_window(sbuf, sizeof sbuf, 0);
+      if (!run_at((u32)(uintptr_t)sbuf, (u32)(uintptr_t)sp)) {
+        printf("FAIL same-rn %s: interpreter: %s\n", rn_cases[ci].nm, unmodeled);
+        fails++;
+        continue;
+      }
+      for (int i = 0; i < 15; i++) {
+        if (g_reg[i] != want_reg[i]) {
+          printf("FAIL same-rn %s: r%d=%08X want %08X\n",
+                 rn_cases[ci].nm, i, g_reg[i], want_reg[i]);
+          fails++;
+          break;
+        }
+      }
+    }
+  }
+
   if (fails) {
     printf("SH4 EXEC ORACLE FAILED: %d of %d cases\n", fails, cases);
     return 1;

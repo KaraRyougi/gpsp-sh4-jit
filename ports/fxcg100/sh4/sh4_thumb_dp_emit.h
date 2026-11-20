@@ -2047,6 +2047,8 @@ static inline int sh4g_arm_dp_same_rn_run_native(u8 **tp, const u32 *ops, int cn
 
   if (cnt < 2 || cnt > 8 || rn == 15u)
     return 0;
+  if ((op0 & 0xFE100010u) != 0xE0000000u)
+    return 0;
   if (alu != 0x0u && alu != 0x1u && alu != 0x4u && alu != 0xCu)
     return 0;
   if (sh_type > 2u || (sh_type != 0u && sh_imm == 0u))
@@ -2056,7 +2058,7 @@ static inline int sh4g_arm_dp_same_rn_run_native(u8 **tp, const u32 *ops, int cn
     u32 op = ops[i];
     unsigned rd = (op >> 12) & 0xFu;
     unsigned rm = op & 0xFu;
-    if ((op & 0xFFF00FF0u) != (op0 & 0xFFF00FF0u) ||
+    if ((op & 0xFFFF0FF0u) != (op0 & 0xFFFF0FF0u) ||
         rd == 15u || rm == 15u || rd == rn)
       return 0;
   }
