@@ -167,11 +167,19 @@ static const char *const fake_games[] = {
 	"Wario Land 4.gba", "WarioWare Inc.gba", "Yoshi's Island.gba",
 	"Zelda A Link to the Past.gba",
 };
+static const uint32_t fake_last_played[12] = {
+	0, 5, 0, 0, 10, 0, 0, 0, 20, 0, 0, 0,
+};
+static const uint32_t fake_added_order[12] = {
+	3, 1, 5, 2, 4, 8, 11, 6, 7, 9, 10, 12,
+};
 static uint32_t fake_game_count = 12;
 static int config_saves;
 
 uint32_t fxcg100_rom_source_count(void) { return fake_game_count; }
 const char *fxcg100_rom_source_label(uint32_t i) { return fake_games[i % 12]; }
+uint32_t fxcg100_rom_source_last_played(uint32_t i) { return fake_last_played[i % 12]; }
+uint32_t fxcg100_rom_source_added_order(uint32_t i) { return fake_added_order[i % 12]; }
 /* What a saved configuration would put in the view, if not negative. */
 static int fake_saved_view = -1;
 static uint32_t fake_saved_rotation = CP_ROTATION_KEYS_RIGHT;
@@ -1016,13 +1024,62 @@ static void test_ui(const char *dir)
 			"keypad left: strip must be on the right");
 	}
 
+	/* Library sorting: tapping the top-right Sort icon opens the sort dialog;
+	 * picking Last Played / Newly Added reorders the rows while preserving
+	 * each game's stable rom_source index. */
+	ui_open(0, CP_VIEW_PORTRAIT_43);
+	CHECK(ui_tap_on("Sort icon", 0) == FXCG100_MENU_CONTINUE && ui.sort_open,
+		"tap on Sort icon opens sort dialog");
+	ui_shot(dir, "ui-library-sort");
+	CHECK(ui_tap_on("Last Played", 0) == FXCG100_MENU_CONTINUE &&
+		!ui.sort_open &&
+		ui_state.game_sort == FXCG100_GAME_SORT_LAST_PLAYED &&
+		ui.settings_dirty,
+		"tap on Last Played sort option (sort=%u)",
+		(unsigned)ui_state.game_sort);
+	{
+		const cp_rect *r_wario = ui_find("Wario Land 4", 0);
+		const cp_rect *r_metroid = ui_find("Metroid Fusion", 0);
+		const cp_rect *r_golden = ui_find("Golden Sun", 0);
+		const cp_rect *r_aw = ui_find("Advance Wars", 0);
+
+		CHECK(r_wario && r_metroid && r_golden && r_aw &&
+			r_wario->y < r_metroid->y && r_metroid->y < r_golden->y &&
+			r_golden->y < r_aw->y,
+			"Last Played did not order recently played games first");
+	}
+	CHECK(ui_tap_on("Wario Land 4", 0) == FXCG100_MENU_LOAD_GAME &&
+		ui_state.rom_source == 8,
+		"tapping top Last Played game chose %u, want 8",
+		(unsigned)ui_state.rom_source);
+
+	ui_open(0, CP_VIEW_PORTRAIT_43);
+	CHECK(ui_tap_on("Sort icon", 0) == FXCG100_MENU_CONTINUE && ui.sort_open,
+		"tap on Sort icon opens sort dialog (2)");
+	CHECK(ui_tap_on("Newly Added", 0) == FXCG100_MENU_CONTINUE &&
+		!ui.sort_open &&
+		ui_state.game_sort == FXCG100_GAME_SORT_NEWLY_ADDED,
+		"tap on Newly Added sort option");
+	{
+		const cp_rect *r_zelda = ui_find("Zelda A Link to the Past", 0);
+		const cp_rect *r_tetris = ui_find("Tetris Worlds", 0);
+
+		CHECK(r_zelda && r_tetris && r_zelda->y < r_tetris->y,
+			"Newly Added did not put newest games first");
+	}
+	CHECK(ui_tap_on("Zelda A Link to the Past", 0) == FXCG100_MENU_LOAD_GAME &&
+		ui_state.rom_source == 11,
+		"tapping top Newly Added game chose %u, want 11",
+		(unsigned)ui_state.rom_source);
+
 	/* Keypad: Down reveals the focus, Down moves it, EXE starts the game. */
 	ui_open(0, CP_VIEW_PORTRAIT_43);
 	ui_key(KEY_DOWN);
 	CHECK(ui.focus_shown && ui.focus == 0, "first Down should show focus");
 	ui_key(KEY_DOWN);
 	ui_key(KEY_DOWN);
-	ui_key(KEY_DOWN);    /* bar icons are widgets 0 and 1; rows follow */
+	ui_key(KEY_DOWN);    /* bar icons are 0 (Close), 1 (Sort), 2 (Settings); rows follow */
+	ui_key(KEY_DOWN);
 	CHECK(ui_key(KEY_EXE) == FXCG100_MENU_LOAD_GAME &&
 		ui_state.rom_source == 1, "keypad chose game %u (focus %d)",
 		(unsigned)ui_state.rom_source, ui.focus);
@@ -1051,7 +1108,13 @@ static void test_ui(const char *dir)
 	ui_shot(dir, "ui-pause-portrait");
 	CHECK(ui_tap_on("Resume", 0) == FXCG100_MENU_RETURN, "Resume");
 	ui_open(1, CP_VIEW_PORTRAIT_43);
-	CHECK(ui_tap_on("Save state", 0) == FXCG100_MENU_SAVE_STATE, "Save state");
+	CHECK(ui_tap_on("Save state", 0) == FXCG100_MENU_CONTINUE &&
+		ui.confirm == CONFIRM_SAVE, "Save state should ask first");
+	CHECK(ui_tap_on("Cancel", 0) == FXCG100_MENU_CONTINUE &&
+		ui.confirm == CONFIRM_NONE, "Save state Cancel");
+	CHECK(ui_tap_on("Save state", 0) == FXCG100_MENU_CONTINUE &&
+		ui.confirm == CONFIRM_SAVE, "Save state asks again");
+	CHECK(ui_tap_on("Save", 0) == FXCG100_MENU_SAVE_STATE, "Save state confirm");
 	ui_open(1, CP_VIEW_PORTRAIT_43);
 	CHECK(ui_tap_on("Load state", 0) == FXCG100_MENU_LOAD_STATE, "Load state");
 	/* Slot chips. */
@@ -1529,15 +1592,19 @@ static void test_ui(const char *dir)
 	ui_frame();
 	CHECK(ui_state.screen_scale == CP_VIEW_LANDSCAPE_2X &&
 		ui_state.rotation == CP_ROTATION_KEYS_LEFT, "Rotate icon");
-	/* Again: the other way round. Again: upright. */
+	/* Portrait -> CW -> 180 -> CCW -> Portrait. */
 	{
 		uint32_t view = ui_state.screen_scale, rot = ui_state.rotation;
 
 		cp_rotate_next(&view, &rot);
-		CHECK(view == CP_VIEW_LANDSCAPE_2X && rot == CP_ROTATION_KEYS_RIGHT,
-			"second Rotate");
+		CHECK(view == CP_VIEW_PORTRAIT_43 && rot == CP_ROTATION_KEYS_LEFT,
+			"second Rotate (180)");
 		cp_rotate_next(&view, &rot);
-		CHECK(view == CP_VIEW_PORTRAIT_43, "third Rotate");
+		CHECK(view == CP_VIEW_LANDSCAPE_2X && rot == CP_ROTATION_KEYS_RIGHT,
+			"third Rotate (CCW)");
+		cp_rotate_next(&view, &rot);
+		CHECK(view == CP_VIEW_PORTRAIT_43 && rot == CP_ROTATION_KEYS_RIGHT,
+			"fourth Rotate (Portrait)");
 	}
 
 	/* The status card. */

@@ -119,6 +119,18 @@ const char *__attribute__((weak)) fxcg100_rom_source_label(uint32_t index)
   return rom_options[index % count];
 }
 
+uint32_t __attribute__((weak)) fxcg100_rom_source_last_played(uint32_t index)
+{
+  (void)index;
+  return 0;
+}
+
+uint32_t __attribute__((weak)) fxcg100_rom_source_added_order(uint32_t index)
+{
+  (void)index;
+  return 0;
+}
+
 static const char * const frameskip_options[] = {
   "AUTOMATIC",
   "MANUAL",

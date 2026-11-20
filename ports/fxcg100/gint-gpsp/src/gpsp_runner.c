@@ -10,6 +10,7 @@
 
 #include "fxcg100_platform.h"
 #include "nor_rom.h"
+#include "rom_meta.h"
 #include "vendor/gpsp/common.h"
 #include "vendor/gpsp/gba_memory.h"
 #include "vendor/gpsp/savestate.h"
@@ -216,34 +217,16 @@ static void cgba_prof_window_frame(void)
 }
 #endif
 
-typedef struct cgba_rom_source {
-	const char *name;
-	const uint8_t *data;
-	uint32_t size;
-	int lcd_test;
-	int mode3_debug_copy;
-} cgba_rom_source;
-
-static const cgba_rom_source cgba_rom_sources[] = {
-	[CGBA_GPSP_ROM_LCD_TEST] = {
-		"LCD TEST",
-		NULL,
-		0,
-		1,
-		0,
-	},
-};
-
 static cgba_nor_rom cgba_current_nor_rom = { .fd = -1 };
 static uint16_t cgba_current_nor_path[CGBA_NOR_ROM_PATH_MAX];
 static uint8_t cgba_current_rom_header[0xC0];
 static uint32_t cgba_current_rom_size;
 static cgba_nor_rom_list cgba_storage_roms;
+static cgba_rom_meta_file cgba_rom_meta;
 static int cgba_storage_roms_scanned;
 static char cgba_last_error[96];
 static int cgba_rom_mapping_failed;
 static uint32_t cgba_storage_generation_seen;
-static int cgba_lcd_test_active;
 static int cgba_mode3_debug_copy_active;
 static unsigned cgba_loaded_rom_id;
 static uint16_t *cgba_active_framebuffer;
@@ -561,15 +544,37 @@ static void trace_jit_state(const char *phase, u32 cycles)
 }
 #endif
 
+#if !defined(CGBA_GPSP_DISABLE_STORAGE) && !defined(CGBA_GPSP_HEADLESS_TEST)
+static const uint16_t cgba_rom_meta_path[] = {
+	'\\', '\\', 'f', 'l', 's', '0', '\\',
+	'C', 'G', 'B', 'A', 'L', 'I', 'B', '.', 'D', 'A', 'T', 0
+};
+#endif
+
 unsigned cgba_gpsp_refresh_roms(void)
 {
 #ifdef CGBA_GPSP_DISABLE_STORAGE
 	memset(&cgba_storage_roms, 0, sizeof(cgba_storage_roms));
+	cgba_rom_meta_reset(&cgba_rom_meta);
 	cgba_storage_roms_scanned = 1;
 	return 0;
 #else
+	unsigned count;
+
 	cgba_storage_roms_scanned = 1;
-	return cgba_nor_rom_scan_gba(&cgba_storage_roms);
+	count = cgba_nor_rom_scan_gba(&cgba_storage_roms);
+#ifndef CGBA_GPSP_HEADLESS_TEST
+	if (!fxcg100_storage_read_blob(cgba_rom_meta_path, &cgba_rom_meta,
+			sizeof(cgba_rom_meta)) || !cgba_rom_meta_valid(&cgba_rom_meta))
+		cgba_rom_meta_reset(&cgba_rom_meta);
+	if (cgba_rom_meta_reconcile(&cgba_rom_meta, &cgba_storage_roms))
+		(void)fxcg100_storage_write_blob(cgba_rom_meta_path, &cgba_rom_meta,
+			sizeof(cgba_rom_meta));
+#else
+	cgba_rom_meta_reset(&cgba_rom_meta);
+	(void)cgba_rom_meta_reconcile(&cgba_rom_meta, &cgba_storage_roms);
+#endif
+	return count;
 #endif
 }
 
@@ -581,21 +586,17 @@ static void ensure_storage_roms_scanned(void)
 
 const char *cgba_gpsp_rom_name(unsigned rom_id)
 {
-	if(rom_id < CGBA_GPSP_ROM_BUILTIN_COUNT)
-		return cgba_rom_sources[rom_id].name;
-
 	ensure_storage_roms_scanned();
-	rom_id -= CGBA_GPSP_ROM_BUILTIN_COUNT;
 	if(rom_id < cgba_storage_roms.count)
 		return cgba_storage_roms.entries[rom_id].label;
 
-	return cgba_rom_sources[CGBA_GPSP_ROM_LCD_TEST].name;
+	return "";
 }
 
 unsigned cgba_gpsp_rom_count(void)
 {
 	ensure_storage_roms_scanned();
-	return CGBA_GPSP_ROM_BUILTIN_COUNT + cgba_storage_roms.count;
+	return cgba_storage_roms.count;
 }
 
 uint32_t fxcg100_rom_source_count(void)
@@ -608,10 +609,23 @@ const char *fxcg100_rom_source_label(uint32_t index)
 	return cgba_gpsp_rom_name(index);
 }
 
+uint32_t fxcg100_rom_source_last_played(uint32_t index)
+{
+	ensure_storage_roms_scanned();
+	return index < cgba_storage_roms.count
+		? cgba_storage_roms.entries[index].last_played : 0;
+}
+
+uint32_t fxcg100_rom_source_added_order(uint32_t index)
+{
+	ensure_storage_roms_scanned();
+	return index < cgba_storage_roms.count
+		? cgba_storage_roms.entries[index].added_order : 0;
+}
+
 int cgba_gpsp_init(uint16_t *framebuffer, unsigned rom_id)
 {
-	const cgba_rom_source *rom = NULL;
-	const cgba_nor_rom_entry *nor_entry = NULL;
+	cgba_nor_rom_entry *nor_entry = NULL;
 	int nor_result;
 
 	if(!framebuffer)
@@ -619,33 +633,23 @@ int cgba_gpsp_init(uint16_t *framebuffer, unsigned rom_id)
 
 	cgba_last_error[0] = 0;
 	cgba_rom_mapping_failed = 0;
-	cgba_storage_generation_seen = fxcg100_storage_mutation_generation();
 	memset(cgba_current_nor_path, 0, sizeof(cgba_current_nor_path));
 	memset(cgba_current_rom_header, 0, sizeof(cgba_current_rom_header));
 	cgba_current_rom_size = 0;
 
-	if(rom_id < CGBA_GPSP_ROM_BUILTIN_COUNT)
-		rom = &cgba_rom_sources[rom_id];
-	else {
-		ensure_storage_roms_scanned();
-		unsigned storage_id = rom_id - CGBA_GPSP_ROM_BUILTIN_COUNT;
-		if(storage_id < cgba_storage_roms.count)
-			nor_entry = &cgba_storage_roms.entries[storage_id];
-	}
-	if(!rom && !nor_entry) {
-		rom_id = CGBA_GPSP_ROM_LCD_TEST;
-		rom = &cgba_rom_sources[rom_id];
+	ensure_storage_roms_scanned();
+	if(rom_id < cgba_storage_roms.count)
+		nor_entry = &cgba_storage_roms.entries[rom_id];
+	if(!nor_entry) {
+		snprintf(cgba_last_error, sizeof(cgba_last_error), "No ROM available");
+		return -1;
 	}
 
 	memset(framebuffer, 0, CGBA_GBA_BUFFER_PIXELS * sizeof(*framebuffer));
 	gba_screen_pixels = framebuffer;
 	cgba_active_framebuffer = framebuffer;
-	cgba_lcd_test_active = rom ? rom->lcd_test : 0;
-	cgba_mode3_debug_copy_active = rom ? rom->mode3_debug_copy : 0;
+	cgba_mode3_debug_copy_active = 0;
 	cgba_loaded_rom_id = rom_id;
-
-	if(rom && rom->lcd_test)
-		return 0;
 
 	init_gamepak_buffer();
 	init_sound();
@@ -653,45 +657,53 @@ int cgba_gpsp_init(uint16_t *framebuffer, unsigned rom_id)
 
 	cgba_gamepak_bind_fragment_table(NULL);
 	cgba_nor_rom_close(&cgba_current_nor_rom);
-	if(nor_entry) {
-		memcpy(cgba_current_nor_path, nor_entry->path,
-			sizeof(cgba_current_nor_path));
-		nor_result = cgba_nor_rom_open_path(&cgba_current_nor_rom,
-			nor_entry->path);
-		if(nor_result != 0) {
-			cgba_nor_rom_status(&cgba_current_nor_rom,
-				cgba_last_error, sizeof(cgba_last_error));
-			return -3;
-		}
-		cgba_current_rom_size = cgba_current_nor_rom.size;
-		memcpy(cgba_current_rom_header, cgba_current_nor_rom.pages[0],
-			sizeof(cgba_current_rom_header));
-		/* Fragmented pages are left unmapped by load_gamepak_from_pages and
-		 * resolved through the 4 KiB NOR table. Unsafe blocks still page-fault
-		 * through the aligned gather fallback. */
-		cgba_gpsp_filestream_bind(&cgba_current_nor_rom);
-		gamepak_file_large = filestream_open(NULL, 0, 0);
-		cgba_gamepak_bind_fragment_table(
-			cgba_nor_rom_block_table(&cgba_current_nor_rom));
-		if(load_gamepak_from_pages(cgba_current_nor_rom.pages,
-				cgba_current_nor_rom.padded_size,
-				FEAT_AUTODETECT, FEAT_DISABLE,
-				SERIAL_MODE_DISABLED) != 0) {
-			snprintf(cgba_last_error, sizeof(cgba_last_error),
-				"NOR gpSP map s%u ps%u p%u",
-				(unsigned)cgba_current_nor_rom.size,
-				(unsigned)cgba_current_nor_rom.padded_size,
-				(unsigned)cgba_current_nor_rom.page_count);
-			cgba_nor_rom_close(&cgba_current_nor_rom);
-			cgba_gamepak_bind_fragment_table(NULL);
-			return -4;
-		}
+	/* Record last-played BEFORE opening the NOR ROM so any CGBALIB.DAT
+	 * flash write happens before direct NOR block addresses are queried
+	 * (zero post-write remap overhead). */
+	{
+		int meta_dirty = cgba_rom_meta_record_play(&cgba_rom_meta,
+			&cgba_storage_roms, nor_entry);
+#if !defined(CGBA_GPSP_DISABLE_STORAGE) && !defined(CGBA_GPSP_HEADLESS_TEST)
+		if (meta_dirty)
+			(void)fxcg100_storage_write_blob(cgba_rom_meta_path, &cgba_rom_meta,
+				sizeof(cgba_rom_meta));
+#else
+		(void)meta_dirty;
+#endif
 	}
-	else if(load_gamepak_from_memory(rom->data,
-			rom->size,
+	cgba_storage_generation_seen = fxcg100_storage_mutation_generation();
+	memcpy(cgba_current_nor_path, nor_entry->path,
+		sizeof(cgba_current_nor_path));
+	nor_result = cgba_nor_rom_open_path(&cgba_current_nor_rom,
+		nor_entry->path);
+	if(nor_result != 0) {
+		cgba_nor_rom_status(&cgba_current_nor_rom,
+			cgba_last_error, sizeof(cgba_last_error));
+		return -3;
+	}
+	cgba_current_rom_size = cgba_current_nor_rom.size;
+	memcpy(cgba_current_rom_header, cgba_current_nor_rom.pages[0],
+		sizeof(cgba_current_rom_header));
+	/* Fragmented pages are left unmapped by load_gamepak_from_pages and
+	 * resolved through the 4 KiB NOR table. Unsafe blocks still page-fault
+	 * through the aligned gather fallback. */
+	cgba_gpsp_filestream_bind(&cgba_current_nor_rom);
+	gamepak_file_large = filestream_open(NULL, 0, 0);
+	cgba_gamepak_bind_fragment_table(
+		cgba_nor_rom_block_table(&cgba_current_nor_rom));
+	if(load_gamepak_from_pages(cgba_current_nor_rom.pages,
+			cgba_current_nor_rom.padded_size,
 			FEAT_AUTODETECT, FEAT_DISABLE,
-			SERIAL_MODE_DISABLED) != 0)
-		return -2;
+			SERIAL_MODE_DISABLED) != 0) {
+		snprintf(cgba_last_error, sizeof(cgba_last_error),
+			"NOR gpSP map s%u ps%u p%u",
+			(unsigned)cgba_current_nor_rom.size,
+			(unsigned)cgba_current_nor_rom.padded_size,
+			(unsigned)cgba_current_nor_rom.page_count);
+		cgba_nor_rom_close(&cgba_current_nor_rom);
+		cgba_gamepak_bind_fragment_table(NULL);
+		return -4;
+	}
 
 	selected_boot_mode = boot_game;
 	dynarec_enable = 1;   /* JIT on by default (SAVE_STATE hotkey still toggles) */
@@ -866,30 +878,6 @@ unsigned cgba_gpsp_state_lines(unsigned frame, const char *phase,
 	return n;
 }
 #endif
-
-static void fill_lcd_test_frame(uint32_t frame)
-{
-	uint16_t *dst = cgba_active_framebuffer;
-
-	if(!dst)
-		return;
-
-	for(unsigned y = 0; y < CGBA_GBA_HEIGHT; y++) {
-		for(unsigned x = 0; x < CGBA_GBA_WIDTH; x++) {
-			uint16_t color;
-			if(x < CGBA_GBA_WIDTH / 3)
-				color = 0xf800;
-			else if(x < (CGBA_GBA_WIDTH * 2) / 3)
-				color = 0x07e0;
-			else
-				color = 0x001f;
-
-			if(((x >> 4) ^ (y >> 4) ^ frame) & 1)
-				color ^= 0xffff;
-			dst[y * CGBA_GBA_PITCH + x] = color;
-		}
-	}
-}
 
 static void copy_mode3_vram_to_framebuffer(void)
 {
@@ -1355,11 +1343,6 @@ void cgba_gpsp_run_frame(uint32_t gba_buttons, int render_video)
 {
 	u32 cycles = (reg[CPU_HALT_STATE] == CPU_ACTIVE) ? execute_cycles : (u32)-64;
 
-	if(cgba_lcd_test_active) {
-		static uint32_t test_frame;
-		fill_lcd_test_frame(test_frame++);
-		return;
-	}
 	if(cgba_rom_mapping_failed)
 		return;
 
@@ -1755,8 +1738,7 @@ uint32_t cgba_gpsp_jit_ram_full(void)
 
 void cgba_gpsp_shutdown(void)
 {
-	if(!cgba_lcd_test_active)
-		memory_term();
+	memory_term();
 	cgba_nor_rom_close(&cgba_current_nor_rom);
 	memset(cgba_current_nor_path, 0, sizeof(cgba_current_nor_path));
 	memset(cgba_current_rom_header, 0, sizeof(cgba_current_rom_header));
@@ -1765,7 +1747,6 @@ void cgba_gpsp_shutdown(void)
 	/* No guest can resume now, so persist backup only after closing the ROM;
 	 * this avoids a pointless full-ROM block refresh on exit. */
 	cgba_gpsp_backup_flush();
-	cgba_lcd_test_active = 0;
 	cgba_mode3_debug_copy_active = 0;
 	cgba_active_framebuffer = NULL;
 }

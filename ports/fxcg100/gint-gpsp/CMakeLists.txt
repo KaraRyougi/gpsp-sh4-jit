@@ -504,15 +504,6 @@ if(CGBA_GBA_OVER_AZLE_IDLE)
     CGBA_GBA_OVER_AZLE_IDLE=1)
 endif()
 
-# Hardware-only diagnostic: bypass the menu/storage scan and boot the built-in
-# LCD test directly. This keeps ROM/NOR syscalls out of the launch path while
-# still exercising the display loop and the same add-in runtime.
-option(CGBA_GPSP_DIRECT_LCD_TEST
-  "Hardware debug: boot the built-in LCD test without scanning storage" OFF)
-if(CGBA_GPSP_DIRECT_LCD_TEST)
-  target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_GPSP_DIRECT_LCD_TEST=1)
-endif()
-
 # Hardware-only diagnostic: avoid all BFile/config/storage calls. If this boots
 # through the normal menu while the regular build faults, the crash is isolated
 # to the storage syscall path rather than LCD, key scan, menu drawing, or gpSP's
@@ -747,6 +738,6 @@ if(CGBA_CLASSPAD)
       "$<TARGET_FILE:cgba-gint-gpsp>")
 else()
   generate_g3a(TARGET cgba-gint-gpsp OUTPUT "gpSP.g3a"
-    NAME "gpSP" VERSION "00.10.0804"
+    NAME "gpSP" VERSION "01.12.1119"
     ICONS icon-uns.png icon-sel.png)
 endif()

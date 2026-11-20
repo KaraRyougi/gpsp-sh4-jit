@@ -24,6 +24,7 @@ void fxcg100_panic(const char *text);
  * fx-CG50, SETTINGS on the fx-CG100), DEL, and the digit keys. */
 #define FXCG100_APPKEY_SETTINGS (1u << 11)
 #define FXCG100_APPKEY_DEL      (1u << 12)
+#define FXCG100_APPKEY_SORT     (1u << 13)
 #define FXCG100_APPKEY_DIGIT(n) (1u << (16 + (n)))
 #define FXCG100_APPKEY_DIGITS   (0x3ffu << 16)
 
@@ -91,8 +92,16 @@ typedef struct fxcg100_debug_info {
   char lines[FXCG100_DEBUG_MENU_LINES][FXCG100_DEBUG_MENU_LINE_MAX];
 } fxcg100_debug_info;
 
+typedef enum fxcg100_game_sort {
+  FXCG100_GAME_SORT_NAME = 0,
+  FXCG100_GAME_SORT_LAST_PLAYED,
+  FXCG100_GAME_SORT_NEWLY_ADDED,
+  FXCG100_GAME_SORT_COUNT
+} fxcg100_game_sort;
+
 typedef struct fxcg100_menu_state {
   uint32_t rom_source;
+  uint32_t game_sort;
   uint32_t screen_scale;
   uint32_t screen_filter;
   uint32_t frameskip_type;
@@ -164,6 +173,10 @@ fxcg100_menu_result fxcg100_menu_run(fxcg100_menu_state *state,
 int fxcg100_menu_should_blit(fxcg100_menu_state *state, uint32_t frame);
 uint32_t fxcg100_rom_source_count(void);
 const char *fxcg100_rom_source_label(uint32_t index);
+/* Monotonic play-order counter for ROM `index` (higher = played more recently;
+ * 0 = never played) and monotonic added-order counter (higher = added later). */
+uint32_t fxcg100_rom_source_last_played(uint32_t index);
+uint32_t fxcg100_rom_source_added_order(uint32_t index);
 
 void fxcg100_lcd_init(void);
 void fxcg100_lcd_shutdown(void);

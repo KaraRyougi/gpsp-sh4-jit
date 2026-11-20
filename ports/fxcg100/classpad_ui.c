@@ -33,6 +33,7 @@
  */
 
 #include "fxcg100_platform.h"
+#include "fxcg100_rom_sort.h"
 #include "classpad_layout.h"
 #include "classpad_clock.h"
 #include "classpad_font.h"
@@ -72,10 +73,11 @@ enum {
 	SCREEN_COUNT
 };
 
-enum { CONFIRM_NONE = 0, CONFIRM_RESTART, CONFIRM_EXIT };
+enum { CONFIRM_NONE = 0, CONFIRM_RESTART, CONFIRM_EXIT, CONFIRM_SAVE };
 
 enum {
-	MODAL_NONE = 0, MODAL_CONFIRM, MODAL_CAPTURE, MODAL_CLOCK, MODAL_FLASHING
+	MODAL_NONE = 0, MODAL_CONFIRM, MODAL_CAPTURE, MODAL_CLOCK, MODAL_FLASHING,
+	MODAL_SORT
 };
 
 enum { BTN_FILLED = 0, BTN_TONAL, BTN_OUTLINED, BTN_TEXT, BTN_DANGER };
@@ -84,7 +86,7 @@ enum { SLIDER_NONE = 0, SLIDER_PENDING, SLIDER_DRAG };
 
 enum {
 	ICON_NONE = 0, ICON_BACK, ICON_CLOSE, ICON_SETTINGS, ICON_CHEVRON,
-	ICON_CHECK, ICON_PLAY
+	ICON_CHECK, ICON_PLAY, ICON_SORT
 };
 
 #define UI_ANIMS 16
@@ -169,6 +171,7 @@ typedef struct cp_ui {
 	uint32_t toast_out_t0;
 	int settings_dirty;
 	int confirm;
+	int sort_open;
 	int capture;               /* binding being captured, -1 if none */
 	int capture_armed;         /* keys were released since capture began */
 
@@ -546,6 +549,7 @@ static void ui_goto(cp_ui *ui, int screen)
 	ui->focus = 0;
 	ui->focus_shown = 0;
 	ui->confirm = CONFIRM_NONE;
+	ui->sort_open = 0;
 	ui->capture = -1;
 	ui->clock_loaded = 0;
 	ui->redraw = 1;
@@ -682,6 +686,11 @@ static void ui_icon(const cp_ui *ui, int icon, int cx, int cy, uint16_t color)
 		break;
 	case ICON_PLAY:
 		cp_triangle(s, cx - 5, cy - 9, cx + 9, cy, cx - 5, cy + 9, color);
+		break;
+	case ICON_SORT:                /* Material filter/sort inverted triangle */
+		cp_line(s, cx - 9, cy - 5, cx + 9, cy - 5, 2, color);
+		cp_line(s, cx - 6, cy,     cx + 6, cy,     2, color);
+		cp_line(s, cx - 3, cy + 5, cx + 3, cy + 5, 2, color);
 		break;
 	default:
 		break;
@@ -1163,16 +1172,18 @@ static int ui_swatches(cp_ui *ui, cp_rect r, int cols, uint32_t *value)
 	return *value != old;
 }
 
-#define BAR_BACK   1
-#define BAR_ACTION 2
+#define BAR_BACK    1
+#define BAR_ACTION  2
+#define BAR_ACTION2 4
 
-/* Top bar: optional icon on the left (back, close), the title, optional
- * icon button on the right. It takes the card tone once the page under it
+/* Top bar: optional icon on the left (back, close), the title, up to two
+ * icon buttons on the right. It takes the card tone once the page under it
  * has been scrolled. Returns which icon was used.
  *
  * What is drawn after the bar is the screen's content, which slides in when
  * the screen is new; the bar itself stays put. */
-static int ui_bar(cp_ui *ui, const char *title, int nav, int action)
+static int ui_bar_ex(cp_ui *ui, const char *title, int nav, int action2,
+	int action)
 {
 	int scroll = ui->scroll[ui->screen];
 	int lift = scroll <= 0 ? 0 : scroll >= 24 ? 256 : scroll * 256 / 24;
@@ -1193,6 +1204,21 @@ static int ui_bar(cp_ui *ui, const char *title, int nav, int action)
 		ui_mark(nav == ICON_BACK ? "Back" : "Close", r);
 		x = 56;
 	}
+	if(action2) {
+		cp_rect r = { (int16_t)(ui->w - (action ? 108 : 56)),
+			(int16_t)(cy - 24), 48, 48 };
+		int flags = ui_widget(ui, r), id = ui->last_id;
+
+		cp_disc(&ui->s, r.x + 24, cy, 20, ui->t.container_high);
+		ui_layer(ui, id, r, 24, flags, ui->t.on_surface);
+		ui_icon(ui, action2, r.x + 24, cy, ui->t.on_surface_variant);
+		if(flags & HIT_FOCUS)
+			ui_focus_ring(ui, r, 24);
+		if(flags & HIT_CLICK)
+			used = BAR_ACTION2;
+		ui_mark("Sort icon", r);
+		right = r.x - 4;
+	}
 	if(action) {
 		cp_rect r = { (int16_t)(ui->w - 56), (int16_t)(cy - 24), 48, 48 };
 		int flags = ui_widget(ui, r), id = ui->last_id;
@@ -1205,12 +1231,18 @@ static int ui_bar(cp_ui *ui, const char *title, int nav, int action)
 		if(flags & HIT_CLICK)
 			used = BAR_ACTION;
 		ui_mark("Settings icon", r);
-		right = r.x - 4;
+		if(!action2)
+			right = r.x - 4;
 	}
 	cp_text_fit(&ui->s, &cp_font_title, x, (ui->bar_h - cp_font_title.height) / 2,
 		right - x, title, ui->t.on_surface);
 	ui->s.ox = ui->slide;
 	return used;
+}
+
+static int ui_bar(cp_ui *ui, const char *title, int nav, int action)
+{
+	return ui_bar_ex(ui, title, nav, ICON_NONE, action);
 }
 
 /* The part of the screen under the bar scrolls. Call before drawing its
@@ -1541,14 +1573,73 @@ static void game_title(char *dst, size_t size, uint32_t index)
 
 #define GAME_ROW_H 64
 
+static fxcg100_menu_result modal_sort(cp_ui *ui)
+{
+	static const char *const sort_names[FXCG100_GAME_SORT_COUNT] = {
+		"Name", "Last Played", "Newly Added"
+	};
+	cp_rect box = dialog_box(ui, 232);
+	uint32_t i;
+
+	cp_text_fit(&ui->s, &cp_font_title, box.x + 24, box.y + 20, box.w - 48,
+		"Sort by", ui->t.on_surface);
+	for(i = 0; i < FXCG100_GAME_SORT_COUNT; i++) {
+		cp_rect r = { (int16_t)(box.x + 12), (int16_t)(box.y + 68 + (int)i * 50),
+			(int16_t)(box.w - 24), 46 };
+		int flags = ui_widget(ui, r), id = ui->last_id;
+		int chosen = ui->state->game_sort == i;
+
+		if(chosen)
+			cp_round_rect(&ui->s, r.x, r.y, r.w, r.h, 23,
+				ui->t.secondary_container);
+		cp_text_fit(&ui->s, &cp_font_body, r.x + 16,
+			r.y + (r.h - cp_font_body.height) / 2, r.w - 56, sort_names[i],
+			chosen ? ui->t.on_secondary_container : ui->t.on_surface);
+		if(chosen)
+			ui_icon(ui, ICON_CHECK, r.x + r.w - 22, r.y + r.h / 2,
+				ui->t.on_secondary_container);
+		ui_layer(ui, id, r, 23, flags, chosen ? ui->t.on_secondary_container
+			: ui->t.on_surface);
+		if(flags & HIT_FOCUS)
+			ui_focus_ring(ui, r, 23);
+		ui_mark(sort_names[i], r);
+		if(flags & HIT_CLICK) {
+			if(ui->state->game_sort != i) {
+				ui->state->game_sort = i;
+				ui->settings_dirty = 1;
+			}
+			ui->sort_open = 0;
+			ui->focus_shown = 0;
+			ui->redraw = 1;
+			return FXCG100_MENU_CONTINUE;
+		}
+	}
+	if((ui->key_edge & FXCG100_APPKEY_BACK) ||
+			(ui->tap && !point_in(box, ui->tap_x, ui->tap_y))) {
+		ui->sort_open = 0;
+		ui->focus_shown = 0;
+		ui->redraw = 1;
+	}
+	return FXCG100_MENU_CONTINUE;
+}
+
 static fxcg100_menu_result screen_library(cp_ui *ui)
 {
-	uint32_t count = fxcg100_rom_source_count(), i;
+	uint32_t order[FXCG100_ROM_SORT_MAX];
+	uint32_t count = fxcg100_rom_source_count(), shown_count, i;
 	int bar, y, top;
 	char name[64], text[32];
 
-	bar = ui_bar(ui, "Games", ui->in_game ? ICON_BACK : ICON_CLOSE,
-		ICON_SETTINGS);
+	if(ui->state->game_sort >= FXCG100_GAME_SORT_COUNT)
+		ui->state->game_sort = FXCG100_GAME_SORT_NAME;
+
+	bar = ui_bar_ex(ui, "Games", ui->in_game ? ICON_BACK : ICON_CLOSE,
+		count ? ICON_SORT : ICON_NONE, ICON_SETTINGS);
+	if(bar == BAR_ACTION2) {
+		ui->sort_open = 1;
+		ui->focus_shown = 0;
+		ui->redraw = 1;
+	}
 	if(bar == BAR_ACTION)
 		ui_goto(ui, SCREEN_SETTINGS);
 	if(bar == BAR_BACK || (ui->key_edge & FXCG100_APPKEY_BACK)) {
@@ -1599,16 +1690,26 @@ static fxcg100_menu_result screen_library(cp_ui *ui)
 		y += r.h;
 	}
 
-	section_label(ui, &y, "All games");
+	{
+		const char *sort_lbl = fxcg100_game_sort_label(ui->state->game_sort);
+
+		cp_text(&ui->s, &cp_font_small,
+			ui->w - PAD - cp_text_width(&cp_font_small, sort_lbl), y + 16,
+			sort_lbl, ui->t.on_surface_variant);
+		section_label(ui, &y, "All games");
+	}
+	shown_count = fxcg100_rom_sort_order(order, FXCG100_ROM_SORT_MAX,
+		ui->state->game_sort);
 	card_begin(ui, y);
-	for(i = 0; i < count; i++) {
+	for(i = 0; i < shown_count; i++) {
+		uint32_t rom = order[i];
 		cp_rect r = row_begin(ui, &y, GAME_ROW_H);
 		int flags = ui_widget(ui, r), id = ui->last_id;
-		int current = ui->in_game && i == ui->state->rom_source;
+		int current = ui->in_game && rom == ui->state->rom_source;
 		char initial[2] = { '?', 0 };
 		const char *c;
 
-		game_title(name, sizeof(name), i);
+		game_title(name, sizeof(name), rom);
 		for(c = name; *c; c++)
 			if((*c >= '0' && *c <= '9') || ((*c | 0x20) >= 'a' &&
 					(*c | 0x20) <= 'z')) {
@@ -1631,7 +1732,7 @@ static fxcg100_menu_result screen_library(cp_ui *ui)
 		row_feedback(ui, r, flags, id);
 		ui_mark(name, r);
 		if(flags & HIT_CLICK) {
-			ui->state->rom_source = i;
+			ui->state->rom_source = rom;
 			return FXCG100_MENU_LOAD_GAME;
 		}
 	}
@@ -1644,13 +1745,26 @@ static fxcg100_menu_result screen_library(cp_ui *ui)
 
 static fxcg100_menu_result modal_confirm(cp_ui *ui)
 {
-	int restart = ui->confirm == CONFIRM_RESTART;
-	const char *go = restart ? "Restart" : "Exit";
+	const char *title, *body, *go;
+	char body_buf[48];
 	cp_rect box = dialog_box(ui, 172), cancel, ok;
 
-	dialog_text(ui, box, restart ? "Restart this game?" : "Exit gpSP?",
-		restart ? "Progress since the last save is lost."
-		: "The in-game save is written first.");
+	if(ui->confirm == CONFIRM_SAVE) {
+		title = "Save state?";
+		snprintf(body_buf, sizeof(body_buf), "Slot %u will be overwritten.",
+			(unsigned)(ui->state->savestate_slot % 10u));
+		body = body_buf;
+		go = "Save";
+	} else if(ui->confirm == CONFIRM_RESTART) {
+		title = "Restart this game?";
+		body = "Progress since the last save is lost.";
+		go = "Restart";
+	} else {
+		title = "Exit gpSP?";
+		body = "The in-game save is written first.";
+		go = "Exit";
+	}
+	dialog_text(ui, box, title, body);
 	dialog_buttons(box, "Cancel", go, &cancel, &ok);
 	if(ui_button(ui, cancel, "Cancel", BTN_TEXT) ||
 			(ui->key_edge & FXCG100_APPKEY_BACK)) {
@@ -1659,8 +1773,14 @@ static fxcg100_menu_result modal_confirm(cp_ui *ui)
 		ui->redraw = 1;
 		return FXCG100_MENU_CONTINUE;
 	}
-	if(ui_button(ui, ok, go, BTN_FILLED))
-		return restart ? FXCG100_MENU_RESET : FXCG100_MENU_QUIT;
+	if(ui_button(ui, ok, go, BTN_FILLED)) {
+		int c = ui->confirm;
+
+		ui->confirm = CONFIRM_NONE;
+		if(c == CONFIRM_SAVE)
+			return FXCG100_MENU_SAVE_STATE;
+		return c == CONFIRM_RESTART ? FXCG100_MENU_RESET : FXCG100_MENU_QUIT;
+	}
 	return FXCG100_MENU_CONTINUE;
 }
 
@@ -1679,8 +1799,11 @@ static fxcg100_menu_result pause_state_card(cp_ui *ui, int x, int y, int w)
 		ui->t.on_surface_variant);
 	if(ui_slot_chips(ui, x + 12, y + 42, w - 24, &ui->state->savestate_slot))
 		ui->redraw = 1;
-	if(ui_button(ui, save, "Save state", BTN_TONAL))
-		return FXCG100_MENU_SAVE_STATE;
+	if(ui_button(ui, save, "Save state", BTN_TONAL)) {
+		ui->confirm = CONFIRM_SAVE;
+		ui->focus_shown = 0;
+		ui->redraw = 1;
+	}
 	if(ui_button(ui, load, "Load state", BTN_TONAL))
 		return FXCG100_MENU_LOAD_STATE;
 	return FXCG100_MENU_CONTINUE;
@@ -2625,6 +2748,8 @@ static void ui_snackbar(cp_ui *ui)
 
 static int ui_modal(const cp_ui *ui)
 {
+	if(ui->screen == SCREEN_LIBRARY && ui->sort_open)
+		return MODAL_SORT;
 	if(ui->screen == SCREEN_PAUSE && ui->confirm != CONFIRM_NONE)
 		return MODAL_CONFIRM;
 	if(ui->screen == SCREEN_CONTROLS && ui->capture >= 0)
@@ -2792,6 +2917,7 @@ fxcg100_menu_result cp_ui_step(cp_ui *ui)
 		case MODAL_CONFIRM: result = modal_confirm(ui); break;
 		case MODAL_CAPTURE: result = modal_capture(ui); break;
 		case MODAL_FLASHING: result = modal_flashing(ui); break;
+		case MODAL_SORT:    result = modal_sort(ui); break;
 		default:            result = modal_clock(ui); break;
 		}
 		ui->s.oy = 0;
@@ -2857,6 +2983,8 @@ void fxcg100_menu_init(fxcg100_menu_state *state)
 	fxcg100_config_load(state);
 	if(state->screen_scale >= CP_VIEW_COUNT)
 		state->screen_scale = CP_VIEW_PORTRAIT_43;
+	if(state->game_sort >= FXCG100_GAME_SORT_COUNT)
+		state->game_sort = FXCG100_GAME_SORT_NAME;
 	ui_start_upright = 1;
 	clock_capture_stock();
 }

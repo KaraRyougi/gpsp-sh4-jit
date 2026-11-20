@@ -29,13 +29,6 @@ _Static_assert((CGBA_STATE_FILE_BUCKET & (CGBA_STATE_FILE_BUCKET - 1u)) == 0,
 _Static_assert(CGBA_STATE_WORK_SIZE <= 1024u * 1024u,
 	"savestate work area must fit one contiguous GamePak cache block");
 
-typedef enum cgba_gpsp_rom_id {
-	/* LCD TEST is a generated pattern (no embedded ROM); kept as the built-in
-	 * fallback when no storage ROM is present. Games load from \fls0\ storage. */
-	CGBA_GPSP_ROM_LCD_TEST = 0,
-	CGBA_GPSP_ROM_BUILTIN_COUNT
-} cgba_gpsp_rom_id;
-
 /* Where the time of the last savestate save went, in 128 Hz ticks
  * (fxcg100_ticks()): the snapshot, its compression, the file write, and the
  * ROM's flash addresses asked for again after storage changed. `bytes` is

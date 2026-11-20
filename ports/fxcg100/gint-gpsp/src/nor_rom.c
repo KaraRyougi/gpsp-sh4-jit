@@ -1164,6 +1164,29 @@ static int path_is_appledouble(const uint16_t *path)
 	return path && path[b] == '.' && path[b + 1] == '_';
 }
 
+static int basename_equals_ascii_nocase(const uint16_t *path, const char *name)
+{
+	size_t i = basename_start(path), j = 0;
+
+	if(!path || !name)
+		return 0;
+	while(path[i] && name[j]) {
+		if(ascii_upper(fc_ascii(path[i])) != ascii_upper(name[j]))
+			return 0;
+		i++;
+		j++;
+	}
+	return path[i] == 0 && name[j] == 0;
+}
+
+/* Exclude macOS AppleDouble sidecars and the internal VSync test ROM
+ * (VSYNCTST.GBA) from the player's game library. */
+static int path_is_ignored_rom(const uint16_t *path)
+{
+	return path_is_appledouble(path) ||
+		basename_equals_ascii_nocase(path, "VSYNCTST.GBA");
+}
+
 static int add_rom_entry_from_path(cgba_nor_rom_list *list,
 	const uint16_t *path)
 {
@@ -1172,7 +1195,7 @@ static int add_rom_entry_from_path(cgba_nor_rom_list *list,
 
 	if(!list || list->count >= CGBA_NOR_ROM_MAX_ENTRIES || !path ||
 			!path_has_gba_extension(path) ||
-			path_is_appledouble(path) ||
+			path_is_ignored_rom(path) ||
 			rom_entry_exists(list, path))
 		return 0;
 
@@ -1191,6 +1214,9 @@ static int add_rom_entry_from_path(cgba_nor_rom_list *list,
 	label_from_path(list->entries[list->count].label,
 		CGBA_NOR_ROM_LABEL_MAX, path);
 	list->entries[list->count].size = (uint32_t)size;
+	list->entries[list->count].scan_order = list->count + 1u;
+	list->entries[list->count].added_order = list->count + 1u;
+	list->entries[list->count].last_played = 0;
 	list->count++;
 	return 1;
 }
@@ -1240,8 +1266,11 @@ unsigned cgba_nor_rom_scan_gba(cgba_nor_rom_list *list)
 
 	memset(list, 0, sizeof(*list));
 	list->find_result = 0;
-	list_storage_roms_with_pattern(list, cgba_storage_gba_pattern);
+	/* Enumerate the root directory in a single pass first so mixed-case
+	 * .gba/.GBA files preserve their relative directory-entry scan_order;
+	 * keep *.GBA afterwards as a fallback for firmware wildcard quirks. */
 	list_storage_roms_with_pattern(list, cgba_storage_root_pattern);
+	list_storage_roms_with_pattern(list, cgba_storage_gba_pattern);
 
 	for(size_t i = 0; i < sizeof(fallback_paths) / sizeof(fallback_paths[0]);
 			i++)

@@ -142,7 +142,7 @@ uint32_t fxcg100_poll_app_keys(void)
 	 * are polled only inside the menu, where GBA input is paused, so they can
 	 * reuse the arrows / EXE / EXIT. */
 	if(keydown(KEY_SHIFT))
-		keys |= FXCG100_APPKEY_SHIFT;
+		keys |= FXCG100_APPKEY_SHIFT | FXCG100_APPKEY_SORT;
 	if(keydown(KEY_MENU))
 		keys |= FXCG100_APPKEY_HOME;
 	if(keydown(KEY_ACON))
@@ -200,6 +200,8 @@ uint32_t fxcg100_poll_app_keys(void)
 		keys |= FXCG100_APPKEY_SETTINGS;
 	if(fxcg100_key_down(44))
 		keys |= FXCG100_APPKEY_DEL;
+	if(fxcg100_key_down(37))
+		keys |= FXCG100_APPKEY_SORT;
 	{
 		/* Skin positions of 0..9 (see fxcg100_keys.c). */
 		static const uint8_t digits[10] = { 71, 72, 62, 52, 73, 63, 53, 74,

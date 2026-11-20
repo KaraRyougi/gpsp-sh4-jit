@@ -17,11 +17,11 @@ comma   := ,
 DEAD_STRIP := $(if $(filter Darwin,$(shell uname -s)),\
 	-Wl$(comma)-dead_strip,-Wl$(comma)--gc-sections)
 
-.PHONY: all smoke audit core litpool thumb cond native-ldst input config-version storage lcd-cleanup scale classpad fxcg-ui rtc backup-dirty nor-world-switch overclock cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc \
+.PHONY: all smoke audit core litpool thumb cond native-ldst input config-version storage lcd-cleanup scale classpad fxcg-ui rtc backup-dirty nor-world-switch rom-library overclock cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc \
 	swi-overlap swi-oam udiv udiv-emitter idle-signature video-opaque \
 	video-blend-cache video-backdrop-shadow video-sprite-decode video-tile-row-cache video-text-fastpaths video-dirty-scanline arm-mixer m4a-skip clean
 
-all: smoke core litpool thumb cond native-ldst rtc pacing backup-dirty nor-world-switch overclock input config-version storage lcd-cleanup scale classpad fxcg-ui cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc swi-overlap swi-oam udiv \
+all: smoke core litpool thumb cond native-ldst rtc pacing backup-dirty nor-world-switch rom-library overclock input config-version storage lcd-cleanup scale classpad fxcg-ui cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc swi-overlap swi-oam udiv \
 	udiv-emitter idle-signature video-opaque video-blend-cache \
 	video-backdrop-shadow video-sprite-decode video-tile-row-cache video-text-fastpaths video-dirty-scanline arm-mixer m4a-skip audit
 
@@ -202,6 +202,19 @@ nor-world-switch: $(ROOT)/tests/nor_rom_world_switch_test.c \
 	  $(ROOT)/tests/nor_rom_world_switch_test.c $(DEAD_STRIP) \
 	  -o $(BIN)-nor-world-switch
 	$(BIN)-nor-world-switch
+
+rom-library: $(ROOT)/tests/rom_library_test.c \
+	     $(ROOT)/ports/fxcg100/gint-gpsp/src/nor_rom.c \
+	     $(ROOT)/ports/fxcg100/gint-gpsp/src/nor_rom.h \
+	     $(ROOT)/ports/fxcg100/gint-gpsp/src/rom_meta.h \
+	     $(ROOT)/ports/fxcg100/fxcg100_rom_sort.h \
+	     $(ROOT)/tests/stubs/gint/bfile.h \
+	     $(ROOT)/tests/stubs/gint/gint.h
+	$(CC) $(CFLAGS) -Wno-unused-function -ffunction-sections -fdata-sections \
+	  -I$(ROOT)/tests/stubs -I$(ROOT)/ports/fxcg100 -I$(ROOT) \
+	  $(ROOT)/tests/rom_library_test.c $(DEAD_STRIP) \
+	  -o $(BIN)-rom-library
+	$(BIN)-rom-library
 
 
 # ARM condition-code -> SH4 T-bit emission, every cond x every NZCV (host-only).

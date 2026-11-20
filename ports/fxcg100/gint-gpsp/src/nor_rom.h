@@ -32,6 +32,9 @@ typedef struct cgba_nor_rom_entry {
 	uint16_t path[CGBA_NOR_ROM_PATH_MAX];
 	char label[CGBA_NOR_ROM_LABEL_MAX];
 	uint32_t size;
+	uint32_t scan_order;
+	uint32_t last_played;
+	uint32_t added_order;
 } cgba_nor_rom_entry;
 
 typedef struct cgba_nor_rom_list {

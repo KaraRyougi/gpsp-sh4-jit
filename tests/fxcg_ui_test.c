@@ -103,6 +103,12 @@ static const char *const games[] = {
 	"Metroid Fusion.gba", "Pokemon Emerald Version.gba", "Tetris Worlds.gba",
 	"The Minish Cap.gba", "WarioWare Twisted.gba",
 };
+static const uint32_t game_last_played[12] = {
+	0, 0, 0, 5, 0, 0, 0, 10, 20, 0, 0, 0,
+};
+static const uint32_t game_added_order[12] = {
+	3, 1, 5, 2, 4, 8, 11, 6, 7, 9, 10, 12,
+};
 static uint32_t game_count = 12;
 
 uint32_t fxcg100_rom_source_count(void)
@@ -113,6 +119,16 @@ uint32_t fxcg100_rom_source_count(void)
 const char *fxcg100_rom_source_label(uint32_t index)
 {
 	return index < 12 ? games[index] : "?";
+}
+
+uint32_t fxcg100_rom_source_last_played(uint32_t index)
+{
+	return index < 12 ? game_last_played[index] : 0;
+}
+
+uint32_t fxcg100_rom_source_added_order(uint32_t index)
+{
+	return index < 12 ? game_added_order[index] : 0;
 }
 
 int fxcg100_config_load(fxcg100_menu_state *state)
@@ -258,6 +274,27 @@ static void test_library_start(void)
 	CHECK(press(FXCG100_APPKEY_EXE) == FXCG100_MENU_LOAD_GAME &&
 		st.rom_source == 1, "picking a game");
 
+	/* SORT (CATALOG on CG100, SHIFT on CG50) cycles sort mode. */
+	fxcg100_menu_init(&st);
+	begin(0);
+	press(FXCG100_APPKEY_SORT);
+	CHECK(st.game_sort == FXCG100_GAME_SORT_LAST_PLAYED &&
+		ui_main.game_sel == 0 && ui_main.settings_dirty,
+		"SORT switches to Last Played");
+	CHECK(press(FXCG100_APPKEY_EXE) == FXCG100_MENU_LOAD_GAME &&
+		st.rom_source == 8, "Last Played top game: %u",
+		(unsigned)st.rom_source);
+	begin(0);
+	press(FXCG100_APPKEY_SORT);
+	CHECK(st.game_sort == FXCG100_GAME_SORT_NEWLY_ADDED &&
+		ui_main.game_sel == 0, "SORT switches to Newly Added");
+	CHECK(press(FXCG100_APPKEY_EXE) == FXCG100_MENU_LOAD_GAME &&
+		st.rom_source == 11, "Newly Added top game: %u",
+		(unsigned)st.rom_source);
+	begin(0);
+	press(FXCG100_APPKEY_SORT);
+	CHECK(st.game_sort == FXCG100_GAME_SORT_NAME, "SORT wraps back to Name");
+
 	game_count = 0;
 	begin(0);
 	snap("library-empty");
@@ -330,6 +367,13 @@ static void test_pause(void)
 	press(FXCG100_APPKEY_LEFT);
 	press(FXCG100_APPKEY_LEFT);
 	CHECK(st.savestate_slot == 3, "left lowers the slot");
+	CHECK(press(FXCG100_APPKEY_EXE) == FXCG100_MENU_CONTINUE &&
+		ui_main.dialog == DIALOG_SAVE, "Save state asks first");
+	press(FXCG100_APPKEY_EXE);    /* Cancel is selected by default */
+	CHECK(ui_main.dialog == DIALOG_NONE, "Save state Cancel");
+	press(FXCG100_APPKEY_EXE);
+	CHECK(ui_main.dialog == DIALOG_SAVE, "Save state asks again");
+	press(FXCG100_APPKEY_DOWN);
 	CHECK(press(FXCG100_APPKEY_EXE) == FXCG100_MENU_SAVE_STATE, "Save state");
 
 	/* main() saves and comes back with the result in the footer. */

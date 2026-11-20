@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "fxcg100_platform.h"
+#include "fxcg100_rom_sort.h"
 #include "frame_pacing.h"
 #include "gpsp_runner.h"
 #include "overclock.h"
@@ -15,7 +16,7 @@
 HHK_NAME("gpSP")
 HHK_DESCRIPTION("Game Boy Advance emulator with an SH4 JIT")
 HHK_AUTHOR("KaraRyougi")
-HHK_VERSION("0.10.0804")
+HHK_VERSION("v01.12.1119")
 #elif defined(CGBA_FXCG50)
 extern int cgba_hottext_init(void);
 #endif
@@ -1392,12 +1393,10 @@ static int cgba_headless_test(uint16_t *framebuffer)
 	cgba_crash_reporting_init();
 	cgba_gpsp_refresh_roms();
 	hputs_dbg("=== CGBA headless test ===");
-	snprintf(buf, sizeof buf, "rom_count=%u builtin=%u",
-		cgba_gpsp_rom_count(), (unsigned)CGBA_GPSP_ROM_BUILTIN_COUNT);
+	snprintf(buf, sizeof buf, "rom_count=%u", cgba_gpsp_rom_count());
 	hputs_dbg(buf);
 
-	rom = (cgba_gpsp_rom_count() > CGBA_GPSP_ROM_BUILTIN_COUNT)
-		? CGBA_GPSP_ROM_BUILTIN_COUNT : 0;
+	rom = 0u;
 	if(start_gpsp(framebuffer, rom) != 0) {
 		hputs_dbg("start_gpsp FAILED");
 		hputs_dbg(cgba_gpsp_last_error() ? cgba_gpsp_last_error() : "(none)");
@@ -2264,26 +2263,19 @@ static int gpsp_main(void)
 
 	fxcg100_lcd_init();
 	cgba_crash_reporting_init();
-#ifdef CGBA_GPSP_DIRECT_LCD_TEST
-	if(start_gpsp(framebuffer, CGBA_GPSP_ROM_LCD_TEST) != 0)
-		return exit_to_os(1);
-	enter_gameplay_display(framebuffer, frame);
-	for(;; frame++) {
-		if(fxcg100_poll_app_keys() & FXCG100_APPKEY_ON)
-			break;
-		cgba_gpsp_run_frame(FXCG100_GBA_BUTTON_NONE, 1);
-		blit_gba_frame(framebuffer, frame, FXCG100_GBA_BUTTON_NONE);
-	}
-	return shutdown_gpsp_and_exit(1);
-#endif
 	cgba_gpsp_refresh_roms();
 	fxcg100_menu_init(&menu_state);
 	status_state = &menu_state;
 #ifdef CGBA_CLASSPAD
 	cp_ui_apply_saved_clock();
 #endif
-	if(cgba_gpsp_rom_count() > CGBA_GPSP_ROM_BUILTIN_COUNT)
-		menu_state.rom_source = CGBA_GPSP_ROM_BUILTIN_COUNT;
+	if(cgba_gpsp_rom_count() > 0) {
+		uint32_t order[FXCG100_ROM_SORT_MAX];
+		uint32_t n = fxcg100_rom_sort_order(order, FXCG100_ROM_SORT_MAX,
+			menu_state.game_sort);
+		if(n > 0)
+			menu_state.rom_source = order[0];
+	}
 
 	menu_result = fxcg100_menu_run(&menu_state, 0, 0, NULL);
 	apply_display_options(&menu_state);

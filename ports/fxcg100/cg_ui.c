@@ -27,6 +27,7 @@
  */
 
 #include "fxcg100_platform.h"
+#include "fxcg100_rom_sort.h"
 #include "cg_font.h"
 #include "classpad_gfx.h"
 #include "classpad_theme.h"
@@ -80,13 +81,19 @@
 #define KEY_NAME_BACK "EXIT"
 #define KEY_NAME_HOME "MENU"
 #define KEY_NAME_SETTINGS "OPTN"
+#define KEY_NAME_SORT "SHIFT"
 #define KEY_NAME_MENU "AC/ON"
+#define HINT_SETTINGS_LABEL "Settings"
+#define HINT_BACK_LABEL "Back"
 #else
 #define KEY_NAME_OK "OK"
 #define KEY_NAME_BACK "BACK"
 #define KEY_NAME_HOME "HOME"
 #define KEY_NAME_SETTINGS "SETTINGS"
+#define KEY_NAME_SORT "CATALOG"
 #define KEY_NAME_MENU "ON"
+#define HINT_SETTINGS_LABEL ""
+#define HINT_BACK_LABEL ""
 #endif
 
 #define CURSOR_KEYS (FXCG100_APPKEY_UP | FXCG100_APPKEY_DOWN | \
@@ -96,7 +103,7 @@ enum { PAGE_LIBRARY = 0, PAGE_PAUSE, PAGE_SETTINGS, PAGE_KEYS, PAGE_DEBUG,
 	PAGE_COUNT };
 
 enum { DIALOG_NONE = 0, DIALOG_EXIT, DIALOG_RESTART, DIALOG_SWITCH,
-	DIALOG_CAPTURE };
+	DIALOG_SAVE, DIALOG_CAPTURE };
 
 enum { REDRAW_NONE = 0, REDRAW_FOOTER, REDRAW_SELECTION, REDRAW_FULL };
 
@@ -321,7 +328,7 @@ static void icon_check(const cg_ui *ui, int cx, int cy, uint16_t color)
 /* ---- keycaps and the footer ----------------------------------------------- */
 
 enum { TK_UD = 0, TK_LR, TK_OK, TK_BACK, TK_HOME, TK_SETTINGS, TK_MENU,
-	TK_DEL, TK_DIGITS, TK_ANY };
+	TK_DEL, TK_DIGITS, TK_SORT, TK_ANY };
 
 /* Footers that did not fit even without their optional hints (checked by
  * the host test). */
@@ -343,6 +350,7 @@ static const char *token_text(int token)
 	case TK_MENU:     return KEY_NAME_MENU;
 	case TK_DEL:      return "DEL";
 	case TK_DIGITS:   return "0-9";
+	case TK_SORT:     return KEY_NAME_SORT;
 	case TK_ANY:      return "ANY KEY";
 	default:          return "";
 	}
@@ -398,7 +406,8 @@ static void footer_band(const cg_ui *ui)
 
 static int hint_w(const hint *h)
 {
-	return keycap_w(h->token) + 4 + text_w(F_SMALL, h->label);
+	return keycap_w(h->token) +
+		(h->label[0] ? 4 + text_w(F_SMALL, h->label) : 0);
 }
 
 /* Key hints: `left` from the left edge, `right` against the right edge.
@@ -408,7 +417,7 @@ static void hint_bar(const cg_ui *ui, const hint *left, int nl,
 {
 	uint8_t keep[8];
 	/* Keycap text shares the labels' baseline. */
-	int i, total, x, base = row_base(F_SMALL, FY, FOOT);
+	int i, total, x, gap = 12, base = row_base(F_SMALL, FY, FOOT);
 
 	footer_band(ui);
 	for (i = 0; i < nl + nr && i < 8; i++)
@@ -422,7 +431,7 @@ static void hint_bar(const cg_ui *ui, const hint *left, int nl,
 				total += hint_w(i < nl ? &left[i] : &right[i - nl]);
 				n++;
 			}
-		total += n > 1 ? (n - 1) * 12 : 0;
+		total += n > 1 ? (n - 1) * gap : 0;
 		if (total <= W - 20)
 			break;
 		for (i = nl + nr - 1; i >= nl && drop < 0; i--)
@@ -432,6 +441,10 @@ static void hint_bar(const cg_ui *ui, const hint *left, int nl,
 			if (keep[i] && left[i].optional)
 				drop = i;
 		if (drop < 0) {
+			if (gap > 8) {
+				gap = 8;
+				continue;
+			}
 			hint_overflows++;
 			break;
 		}
@@ -441,18 +454,26 @@ static void hint_bar(const cg_ui *ui, const hint *left, int nl,
 	for (i = 0; i < nl; i++) {
 		if (!keep[i])
 			continue;
-		x += keycap(ui, x, base, left[i].token) + 4;
-		text(ui, F_SMALL, x, base, left[i].label, ui->t.on_surface_variant);
-		x += text_w(F_SMALL, left[i].label) + 12;
+		x += keycap(ui, x, base, left[i].token);
+		if (left[i].label[0]) {
+			x += 4;
+			text(ui, F_SMALL, x, base, left[i].label, ui->t.on_surface_variant);
+			x += text_w(F_SMALL, left[i].label);
+		}
+		x += gap;
 	}
 	x = W - 10;
 	for (i = nr - 1; i >= 0; i--) {
+		int kw;
+
 		if (!keep[nl + i])
 			continue;
 		x -= hint_w(&right[i]);
-		text(ui, F_SMALL, x + keycap(ui, x, base, right[i].token) + 4, base,
-			right[i].label, ui->t.on_surface_variant);
-		x -= 12;
+		kw = keycap(ui, x, base, right[i].token);
+		if (right[i].label[0])
+			text(ui, F_SMALL, x + kw + 4, base, right[i].label,
+				ui->t.on_surface_variant);
+		x -= gap;
 	}
 }
 
@@ -811,10 +832,18 @@ static void list_reveal(cg_ui *ui)
 		*scroll = 0;
 }
 
+static uint32_t library_order(const cg_ui *ui, uint32_t *order)
+{
+	return fxcg100_rom_sort_order(order, FXCG100_ROM_SORT_MAX,
+		ui->state->game_sort);
+}
+
 static void library_reveal(cg_ui *ui)
 {
 	uint32_t count = fxcg100_rom_source_count(), max;
 
+	if (count > FXCG100_ROM_SORT_MAX)
+		count = FXCG100_ROM_SORT_MAX;
 	max = count > LIB_ROWS ? count - LIB_ROWS : 0;
 	if (ui->game_sel >= count)
 		ui->game_sel = count ? count - 1 : 0;
@@ -861,8 +890,9 @@ static void draw_list(cg_ui *ui, const char *title, const char *meta)
 
 static void draw_library(cg_ui *ui)
 {
-	uint32_t count = fxcg100_rom_source_count(), i;
-	char name[64], meta[24];
+	uint32_t order[FXCG100_ROM_SORT_MAX];
+	uint32_t count = library_order(ui, order), i;
+	char name[64], meta[36];
 
 	cp_fill(&ui->s, -SCR_X, -SCR_Y, DWIDTH, DHEIGHT, ui->t.surface);
 	if (count == 0) {
@@ -876,11 +906,13 @@ static void draw_library(cg_ui *ui)
 		return;
 	}
 	library_reveal(ui);
-	snprintf(meta, sizeof(meta), "%u / %u", (unsigned)ui->game_sel + 1,
-		(unsigned)count);
+	snprintf(meta, sizeof(meta), "%s  %u / %u",
+		fxcg100_game_sort_label(ui->state->game_sort),
+		(unsigned)ui->game_sel + 1, (unsigned)count);
 	header(ui, "Games", meta);
 	for (i = 0; i < LIB_ROWS && ui->game_first + i < count; i++) {
-		uint32_t g = ui->game_first + i;
+		uint32_t pos = ui->game_first + i;
+		uint32_t g = order[pos];
 		ui_row r;
 
 		memset(&r, 0, sizeof(r));
@@ -891,7 +923,7 @@ static void draw_library(cg_ui *ui)
 			snprintf(r.value, sizeof(r.value), "Playing");
 			r.accent = 1;
 		}
-		draw_row(ui, HEAD + (int)i * ROW, &r, !ui->dialog && g == ui->game_sel);
+		draw_row(ui, HEAD + (int)i * ROW, &r, !ui->dialog && pos == ui->game_sel);
 	}
 	scrollbar(ui, (int)ui->game_first, LIB_ROWS, (int)count);
 }
@@ -932,11 +964,11 @@ static void page_hints(cg_ui *ui)
 	switch (ui->page) {
 	case PAGE_LIBRARY: {
 		static const hint l[] = { { TK_UD, 1, "Choose" }, { TK_OK, 0, "Play" },
-			{ TK_LR, 1, "Page" } };
-		static const hint in[] = { { TK_SETTINGS, 0, "Settings" },
-			{ TK_BACK, 0, "Back" } };
-		static const hint start[] = { { TK_SETTINGS, 0, "Settings" },
-			{ TK_HOME, 0, "Exit" } };
+			{ TK_SORT, 0, "Sort" }, { TK_LR, 1, "Page" } };
+		static const hint in[] = { { TK_BACK, 0, HINT_BACK_LABEL },
+			{ TK_SETTINGS, 0, HINT_SETTINGS_LABEL } };
+		static const hint start[] = { { TK_HOME, 0, "Exit" },
+			{ TK_SETTINGS, 0, HINT_SETTINGS_LABEL } };
 
 		if (fxcg100_rom_source_count() == 0)
 			hint_bar(ui, NULL, 0, HINTS(start));
@@ -978,7 +1010,7 @@ static void page_hints(cg_ui *ui)
 			{ TK_DEL, 0, "Clear" }, { TK_UD, 1, "Move" } };
 		static const hint reset[] = { { TK_OK, 0, "Reset" },
 			{ TK_UD, 0, "Move" } };
-		static const hint right[] = { { TK_BACK, 0, "Back" } };
+		static const hint right[] = { { TK_BACK, 0, HINT_BACK_LABEL } };
 
 		if (id == ID_RESET_KEYS)
 			hint_bar(ui, HINTS(reset), HINTS(right));
@@ -990,7 +1022,7 @@ static void page_hints(cg_ui *ui)
 	}
 	default: {
 		static const hint l[] = { { TK_UD, 0, "Scroll" } };
-		static const hint right[] = { { TK_BACK, 0, "Back" } };
+		static const hint right[] = { { TK_BACK, 0, HINT_BACK_LABEL } };
 
 		hint_bar(ui, HINTS(l), HINTS(right));
 		break;
@@ -1028,6 +1060,12 @@ static void draw_confirm(cg_ui *ui)
 		title = "Restart this game?";
 		line = "Progress since the last save is lost.";
 		go = "Restart";
+	} else if (ui->dialog == DIALOG_SAVE) {
+		title = "Save state?";
+		snprintf(text_buf, sizeof(text_buf), "Slot %u will be overwritten.",
+			(unsigned)(ui->state->savestate_slot % 10u));
+		line = text_buf;
+		go = "Save";
 	} else {
 		game_title(name, sizeof(name), ui->switch_rom);
 		snprintf(text_buf, sizeof(text_buf), "Play %s?", name);
@@ -1201,7 +1239,11 @@ static void goto_page(cg_ui *ui, int page)
 {
 	ui->page = page;
 	if (page == PAGE_LIBRARY && ui->in_game) {
-		ui->game_sel = ui->state->rom_source;
+		uint32_t order[FXCG100_ROM_SORT_MAX];
+		uint32_t count = library_order(ui, order);
+
+		ui->game_sel = fxcg100_rom_sort_find(order, count,
+			ui->state->rom_source);
 		library_reveal(ui);
 	}
 	build_rows(ui);
@@ -1326,7 +1368,8 @@ static void change_setting(cg_ui *ui, int id, int delta)
 
 static fxcg100_menu_result input_library(cg_ui *ui)
 {
-	uint32_t count = fxcg100_rom_source_count(), e = ui->edge;
+	uint32_t order[FXCG100_ROM_SORT_MAX];
+	uint32_t count = library_order(ui, order), e = ui->edge;
 
 	if (e & FXCG100_APPKEY_BACK) {
 		if (ui->in_game)
@@ -1335,7 +1378,14 @@ static fxcg100_menu_result input_library(cg_ui *ui)
 	}
 	if (count == 0)
 		return FXCG100_MENU_CONTINUE;
-	if (e & FXCG100_APPKEY_UP) {
+	if (e & FXCG100_APPKEY_SORT) {
+		ui->state->game_sort = (ui->state->game_sort + 1u) %
+			FXCG100_GAME_SORT_COUNT;
+		ui->settings_dirty = 1;
+		ui->game_sel = 0;
+		ui->game_first = 0;
+		want(ui, REDRAW_FULL);
+	} else if (e & FXCG100_APPKEY_UP) {
 		if (ui->game_sel > 0)
 			ui->game_sel--;
 		else if (!ui->repeat)
@@ -1362,14 +1412,16 @@ static fxcg100_menu_result input_library(cg_ui *ui)
 		}
 		want(ui, REDRAW_SELECTION);
 	} else if (e & FXCG100_APPKEY_EXE) {
-		if (ui->in_game && ui->game_sel == ui->state->rom_source)
+		uint32_t rom = order[ui->game_sel < count ? ui->game_sel : 0];
+
+		if (ui->in_game && rom == ui->state->rom_source)
 			return FXCG100_MENU_RETURN;
 		if (ui->in_game) {
-			ui->switch_rom = ui->game_sel;
+			ui->switch_rom = rom;
 			open_dialog(ui, DIALOG_SWITCH);
 			return FXCG100_MENU_CONTINUE;
 		}
-		ui->state->rom_source = ui->game_sel;
+		ui->state->rom_source = rom;
 		return FXCG100_MENU_LOAD_GAME;
 	}
 	library_reveal(ui);
@@ -1401,7 +1453,7 @@ static fxcg100_menu_result input_pause(cg_ui *ui)
 	} else if (e & FXCG100_APPKEY_EXE) {
 		switch (id) {
 		case ID_RESUME:   return FXCG100_MENU_RETURN;
-		case ID_SAVE:     return FXCG100_MENU_SAVE_STATE;
+		case ID_SAVE:     open_dialog(ui, DIALOG_SAVE); break;
 		case ID_LOAD:     return FXCG100_MENU_LOAD_STATE;
 		case ID_SETTINGS: open_settings(ui); break;
 		case ID_GAMES:    goto_page(ui, PAGE_LIBRARY); break;
@@ -1558,6 +1610,8 @@ static fxcg100_menu_result input_dialog(cg_ui *ui)
 			return FXCG100_MENU_QUIT;
 		if (dialog == DIALOG_RESTART)
 			return FXCG100_MENU_RESET;
+		if (dialog == DIALOG_SAVE)
+			return FXCG100_MENU_SAVE_STATE;
 		ui->state->rom_source = ui->switch_rom;
 		return FXCG100_MENU_LOAD_GAME;
 	}
@@ -1612,18 +1666,25 @@ static void cg_ui_begin(cg_ui *ui, fxcg100_menu_state *state, int in_game,
 	ui->settings_dirty = 0;
 	ui->progress = NULL;
 	ui->resume = 0;
+	if (state->game_sort >= FXCG100_GAME_SORT_COUNT)
+		state->game_sort = FXCG100_GAME_SORT_NAME;
 	if (resume) {
 		ui->message_t0 = rtc_ticks();
 	} else {
+		uint32_t order[FXCG100_ROM_SORT_MAX];
+		uint32_t count = library_order(ui, order);
+
 		ui->message[0] = 0;
 		ui->page = in_game ? PAGE_PAUSE : PAGE_LIBRARY;
 		ui->sel[PAGE_PAUSE] = ID_RESUME;
-		ui->game_sel = state->rom_source;
+		ui->game_sel = fxcg100_rom_sort_find(order, count, state->rom_source);
 		ui->game_first = 0;
 		library_reveal(ui);
 	}
 	if (state->theme >= CP_THEME_COUNT)
 		state->theme = 0;
+	if (state->game_sort >= FXCG100_GAME_SORT_COUNT)
+		state->game_sort = FXCG100_GAME_SORT_NAME;
 	/* Whatever opened the menu is still held: do not let it act here. */
 	ui->keys = fxcg100_poll_app_keys();
 	ui->edge = 0;
@@ -1794,6 +1855,8 @@ void fxcg100_menu_init(fxcg100_menu_state *state)
 		state->screen_filter = 0;
 	if (state->theme >= CP_THEME_COUNT)
 		state->theme = 0;
+	if (state->game_sort >= FXCG100_GAME_SORT_COUNT)
+		state->game_sort = FXCG100_GAME_SORT_NAME;
 	/* Save+Exit was never implemented and is no longer offered. */
 	state->hotkey_map[FXCG100_HOTKEY_SAVE_EXIT] = 0;
 	memset(&ui_main, 0, sizeof(ui_main));

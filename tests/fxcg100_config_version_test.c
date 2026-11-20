@@ -47,6 +47,22 @@ int main(void)
   memset(&state, 0, sizeof(state));
   state_from_config(&state, &config);
   assert(state.frame_limit == 1);
+  assert(state.game_sort == FXCG100_GAME_SORT_NAME);
+
+  /* Library sort mode round-trips in lcd_extra bits 24..25 without changing
+   * file size or version. */
+  for (uint32_t s = 0; s < FXCG100_GAME_SORT_COUNT; s++) {
+    memset(&state, 0, sizeof(state));
+    state.frame_limit = 1;
+    state.game_sort = s;
+    config_from_state(&config, &state);
+    assert(config_valid(&config));
+    memset(&state, 0, sizeof(state));
+    state_from_config(&state, &config);
+    assert(state.game_sort == s);
+  }
+  config.lcd_extra |= (3u << 24);
+  assert(!config_valid(&config));
 
   puts("fx-CG config frame-limit migration passed");
   return 0;

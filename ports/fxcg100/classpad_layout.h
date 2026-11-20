@@ -272,19 +272,16 @@ static inline cp_layout cp_layout_for(unsigned view, unsigned rotation)
 	return l;
 }
 
-/* The Rotate icon steps through the three ways of holding the calculator:
- * portrait, turned clockwise (keypad under the left hand), turned
- * counter-clockwise (keypad under the right hand), and back. */
+/* The Rotate icon steps clockwise through all four orientations:
+ * portrait -> CW (keys left) -> 180 (upside down) -> CCW (keys right) -> portrait. */
 static inline void cp_rotate_next(uint32_t *view, uint32_t *rotation)
 {
 	if (!cp_view_is_landscape(*view)) {
 		*view = cp_view_turned(*view);
-		*rotation = CP_ROTATION_KEYS_LEFT;
-	} else if (*rotation == CP_ROTATION_KEYS_LEFT) {
-		*rotation = CP_ROTATION_KEYS_RIGHT;
+		*rotation = (*rotation == CP_ROTATION_KEYS_RIGHT)
+			? CP_ROTATION_KEYS_LEFT : CP_ROTATION_KEYS_RIGHT;
 	} else {
 		*view = cp_view_turned(*view);
-		*rotation = CP_ROTATION_KEYS_RIGHT;
 	}
 }
 
