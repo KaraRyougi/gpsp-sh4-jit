@@ -2806,7 +2806,10 @@ u8 *cgba_gamepak_resolve_4k(u32 address)
 #if defined(CGBA_FXCG100) || defined(CGBA_FXCG50)
   if (cgba_gamepak_fragment_blocks)
   {
-    u32 block = (address & 0x01FFFFFFu) >> 12;
+    u32 off = address & 0x01FFFFFFu;
+    if (gamepak_mirror_1m)
+      off &= 0x000FFFFFu;
+    u32 block = off >> 12;
     const u8 *direct = cgba_gamepak_fragment_blocks[block];
     if (direct)
       return (u8 *)direct;
@@ -2947,9 +2950,12 @@ bool cgba_gamepak_remap_pages(const u8 * const *pages, u32 rom_size)
   u32 map_blocks;
 
   cgba_gamepak_unmap_pages();
-  if (!pages || !pages[0] || rom_size != gamepak_size ||
-      (rom_size & 0x7FFFu) != 0)
-    return false;
+  {
+    u32 expected_size = gamepak_mirror_1m ? (gamepak_file_blocks << 15) : gamepak_size;
+    if (!pages || !pages[0] || rom_size != expected_size ||
+        (rom_size & 0x7FFFu) != 0)
+      return false;
+  }
   map_blocks = rom_size >> 15;
   if (map_blocks == 0 || map_blocks > 1024)
     return false;
@@ -3388,6 +3394,8 @@ static s32 load_gamepak_raw(const char *name)
 
 static void normalize_blank_backup_for_detected_type(void);
 static void detect_backup_subcircuit(const u8 *rom, u32 rom_size);
+static u32 rom_scan_signature_chunk(const u8 *chunk, u32 chunk_size);
+static void apply_backup_signatures(u32 sigs);
 
 u32 load_gamepak_from_memory(const u8 *rom, u32 rom_size,
                              int force_rtc, int force_rumble,
@@ -3546,8 +3554,8 @@ u32 load_gamepak_from_pages(const u8 * const *pages, u32 rom_size,
   free_gamepak_mini_rom();
   gamepak_mini_materialized = false;
   gamepak_file_blocks = map_blocks;
-  gamepak_size = raw_size;
-  gamepak_mirror_1m = false;
+  gamepak_mirror_1m = (raw_size == 0x00100000);
+  gamepak_size = gamepak_mirror_1m ? 0x00400000 : raw_size;
 
   map_null(read, 0x8000000, 0xE000000);
   for (phyn = 0; phyn < map_blocks; phyn++)
@@ -3598,6 +3606,25 @@ u32 load_gamepak_from_pages(const u8 * const *pages, u32 rom_size,
   {
     u32 scan_size = raw_size < (32 * 1024) ? raw_size : (32 * 1024);
     detect_backup_subcircuit(header, scan_size);
+    if (backup_type_reset == BACKUP_UNKN && map_blocks > 1)
+    {
+      u32 page_sigs = 0;
+      for (phyn = 1; phyn < map_blocks; phyn++)
+      {
+        if (pages[phyn])
+        {
+          page_sigs |= rom_scan_signature_chunk(pages[phyn], 32 * 1024);
+          if (pages[phyn - 1])
+          {
+            u8 seam[24];
+            memcpy(seam, pages[phyn - 1] + (32 * 1024 - 12), 12);
+            memcpy(seam + 12, pages[phyn], 12);
+            page_sigs |= rom_scan_signature_chunk(seam, sizeof(seam));
+          }
+        }
+      }
+      apply_backup_signatures(page_sigs);
+    }
   }
 
   normalize_blank_backup_for_detected_type();
@@ -3695,13 +3722,14 @@ static u32 rom_scan_signatures_in_memory(void)
     u8 * const scratch = cgba_gamepak_cache[0];
     const u32 capacity = CGBA_SIGNATURE_SCRATCH_BYTES;
     const u32 overlap = 12u;
+    const u32 scan_limit = gamepak_mirror_1m ? (gamepak_file_blocks << 15) : gamepak_size;
     u32 offset = 0;
 
     cgba_gamepak_cache_invalidate();
 
-    while (offset < gamepak_size)
+    while (offset < scan_limit)
     {
-      u32 request = gamepak_size - offset;
+      u32 request = scan_limit - offset;
       int64_t got;
 
       if (request > capacity)
@@ -3722,7 +3750,7 @@ static u32 rom_scan_signatures_in_memory(void)
                     ROM_SIG_FLASH1M | ROM_SIG_FLASH5)) ==
           (ROM_SIG_EEPROM | ROM_SIG_SRAM |
            ROM_SIG_FLASH1M | ROM_SIG_FLASH5) ||
-          request < capacity || gamepak_size - offset <= capacity)
+          request < capacity || scan_limit - offset <= capacity)
         break;
       offset += capacity - overlap;
     }
@@ -3797,43 +3825,21 @@ static void normalize_blank_backup_for_detected_type(void)
     memset(gamepak_backup, 0xFF, size);
 }
 
-static void detect_backup_subcircuit(const u8 *rom, u32 rom_size)
+static void apply_backup_signatures(u32 sigs)
 {
-  bool has_eeprom = rom_has_signature(rom, rom_size, "EEPROM_V");
-  bool has_sram = rom_has_signature(rom, rom_size, "SRAM_V");
-  bool has_flash1m = rom_has_signature(rom, rom_size, "FLASH1M_V");
-  bool has_flash5 = rom_has_signature(rom, rom_size, "FLASH512_V") ||
-                    rom_has_signature(rom, rom_size, "FLASH_V");
-  u32 file_sigs = 0;
-
-  if (!has_eeprom && !has_sram && !has_flash1m && !has_flash5 &&
-      rom_is_pokemon_family(rom))
-  {
-    backup_type_reset = BACKUP_FLASH;
-    flash_bank_cnt = FLASH_SIZE_128KB;
-    flash_device_id = FLASH_DEVICE_SANYO_128KB;
-    return;
-  }
-
-  if (!has_eeprom && !has_sram && !has_flash1m && !has_flash5)
-    file_sigs = rom_scan_signatures_in_memory();
-
-  if (has_eeprom ||
-      (file_sigs & ROM_SIG_EEPROM))
+  if (sigs & ROM_SIG_EEPROM)
   {
     backup_type_reset = BACKUP_EEPROM;
     return;
   }
 
-  if (has_sram ||
-      (file_sigs & ROM_SIG_SRAM))
+  if (sigs & ROM_SIG_SRAM)
   {
     backup_type_reset = BACKUP_SRAM;
     return;
   }
 
-  if (has_flash1m ||
-      (file_sigs & ROM_SIG_FLASH1M))
+  if (sigs & ROM_SIG_FLASH1M)
   {
     backup_type_reset = BACKUP_FLASH;
     flash_bank_cnt = FLASH_SIZE_128KB;
@@ -3841,14 +3847,41 @@ static void detect_backup_subcircuit(const u8 *rom, u32 rom_size)
     return;
   }
 
-  if (has_flash5 ||
-      (file_sigs & ROM_SIG_FLASH5))
+  if (sigs & ROM_SIG_FLASH5)
   {
     backup_type_reset = BACKUP_FLASH;
     flash_bank_cnt = FLASH_SIZE_64KB;
     flash_device_id = FLASH_DEVICE_MACRONIX_64KB;
     return;
   }
+}
+
+static void detect_backup_subcircuit(const u8 *rom, u32 rom_size)
+{
+  u32 sigs = 0;
+
+  if (rom_has_signature(rom, rom_size, "EEPROM_V"))
+    sigs |= ROM_SIG_EEPROM;
+  if (rom_has_signature(rom, rom_size, "SRAM_V"))
+    sigs |= ROM_SIG_SRAM;
+  if (rom_has_signature(rom, rom_size, "FLASH1M_V"))
+    sigs |= ROM_SIG_FLASH1M;
+  if (rom_has_signature(rom, rom_size, "FLASH512_V") ||
+      rom_has_signature(rom, rom_size, "FLASH_V"))
+    sigs |= ROM_SIG_FLASH5;
+
+  if (!sigs && rom_is_pokemon_family(rom))
+  {
+    backup_type_reset = BACKUP_FLASH;
+    flash_bank_cnt = FLASH_SIZE_128KB;
+    flash_device_id = FLASH_DEVICE_SANYO_128KB;
+    return;
+  }
+
+  if (!sigs)
+    sigs = rom_scan_signatures_in_memory();
+
+  apply_backup_signatures(sigs);
 }
 
 u32 load_gamepak(const struct retro_game_info* info, const char *name,

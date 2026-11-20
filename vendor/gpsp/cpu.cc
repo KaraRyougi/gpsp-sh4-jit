@@ -911,6 +911,75 @@ const u32 spsr_masks[4] = { 0x00000000, 0x000000EF, 0xF0000000, 0xF00000EF };
   }                                                                           \
 }                                                                             \
 
+/* ARM7TDMI 3-stage pipeline prefetch latch for self-modifying code.
+ * Classic NES / Famicom Mini titles execute an ARM store at PC that overwrites
+ * PC+8 in VRAM (e.g. 0600026c writing to 06000274) and rely on the CPU
+ * executing the already-prefetched instruction at PC+8 instead of the newly
+ * written word. Latching the two in-flight instructions only when a store hits
+ * [next_pc, next_pc + 2*isz) keeps the common path to a single predicted-not-
+ * taken check while preserving ARM7TDMI pipeline semantics across both pure-
+ * interpreter and JIT cold-interp chunk boundaries. */
+static u32 cgba_pf_pc[2];
+static u32 cgba_pf_op[2];
+static u8 cgba_pf_valid;
+static u8 cgba_pf_thumb;
+
+static void cgba_pf_latch(u32 addr, u32 bytes)
+{
+  u32 isz = (reg[REG_CPSR] & 0x20u) ? 2u : 4u;
+  u32 next_pc = reg[REG_PC] & ~(isz - 1u);
+  u8 is_thumb = (isz == 2u);
+  u32 wend = addr + bytes;
+  u32 new_pc[2];
+  u32 new_op[2];
+
+  if (wend <= next_pc || addr >= next_pc + isz * 2u)
+    return;
+  if (cgba_pf_valid && cgba_pf_thumb != is_thumb)
+    cgba_pf_valid = 0;
+  for (unsigned s = 0; s < 2u; s++) {
+    u32 spc = next_pc + s * isz;
+    new_pc[s] = spc;
+    if ((cgba_pf_valid & 1u) && cgba_pf_pc[0] == spc)
+      new_op[s] = cgba_pf_op[0];
+    else if ((cgba_pf_valid & 2u) && cgba_pf_pc[1] == spc)
+      new_op[s] = cgba_pf_op[1];
+    else
+      new_op[s] = is_thumb ? read_memory16(spc) : read_memory32(spc);
+  }
+  cgba_pf_pc[0] = new_pc[0];
+  cgba_pf_op[0] = new_op[0];
+  cgba_pf_pc[1] = new_pc[1];
+  cgba_pf_op[1] = new_op[1];
+  cgba_pf_thumb = is_thumb;
+  cgba_pf_valid = 3u;
+}
+
+static inline void cgba_pf_check_store(u32 addr, u32 bytes)
+{
+  if (__builtin_expect((addr - (reg[REG_PC] - 4u)) < 12u, 0))
+    cgba_pf_latch(addr, bytes);
+}
+
+static inline u32 cgba_pf_fetch(u32 pc, u8 is_thumb, u8 *pc_address_block)
+{
+  if (__builtin_expect(cgba_pf_valid != 0, 0)) {
+    if (cgba_pf_thumb == is_thumb) {
+      if ((cgba_pf_valid & 1u) && cgba_pf_pc[0] == pc) {
+        cgba_pf_valid &= (u8)~1u;
+        return cgba_pf_op[0];
+      }
+      if ((cgba_pf_valid & 2u) && cgba_pf_pc[1] == pc) {
+        cgba_pf_valid &= (u8)~2u;
+        return cgba_pf_op[1];
+      }
+    }
+    cgba_pf_valid = 0;
+  }
+  return is_thumb ? readaddress16(pc_address_block, (pc & 0x0FFF))
+                  : readaddress32(pc_address_block, (pc & 0x0FFF));
+}
+
 #if defined(CGBA_DYNAREC)
 extern "C" {
 extern int cgba_diff_stop_on_bios_exit;
@@ -952,6 +1021,7 @@ static inline void cgba_interp_smc_check(u32 address, unsigned bytes)
     STATS_MEMORY_ACCESS(write, type, region);                                 \
   }                                                                           \
                                                                               \
+  cgba_pf_check_store(_address, (size) / 8);                                  \
   cpu_alert |= write_memory##size(_address, value);                           \
   cgba_interp_smc_check(_address, (size) / 8);                                \
 }                                                                             \
@@ -990,6 +1060,7 @@ static inline void cgba_interp_smc_check(u32 address, unsigned bytes)
     cycles_remaining -= ws_cyc_seq[region][1];                                \
     STATS_MEMORY_ACCESS(write, u32, region);                                  \
   }                                                                           \
+  cgba_pf_check_store(_address, 4);                                           \
   cpu_alert |= write_memory32(_address, value);                               \
   cgba_interp_smc_check(_address, 4);                                         \
 }                                                                             \
@@ -1664,7 +1735,7 @@ extern u32 cgba_interp_instr_bios, cgba_interp_instr_rom, cgba_interp_instr_ram;
                        (u32)CGBA_SH4_HOT_THRESHOLD;                           \
              if (_et > (u32)CGBA_SH4_HOT_THRESHOLD)                           \
                _et = (u32)CGBA_SH4_HOT_THRESHOLD;                             \
-             if (cgba_hot_count[_hi] >= _et) {                                \
+             if (cgba_hot_count[_hi] >= _et && !cgba_pf_valid) {              \
                collapse_flags();                                              \
                cgba_diff_stop_cycles_remaining = cycles_remaining;            \
                return;                                                        \
@@ -1677,7 +1748,7 @@ extern u32 cgba_interp_instr_bios, cgba_interp_instr_rom, cgba_interp_instr_ram;
 #define CGBA_DIFF_STOP_CHECK()                                                \
   do { if(cgba_diff_stop_active) {                                            \
          if(cgba_diff_stop_on_budget) {                                       \
-           if(cycles_remaining <= 0) {                                        \
+           if(cycles_remaining <= 0 && !cgba_pf_valid) {                      \
              collapse_flags();                                                \
              cgba_diff_stop_cycles_remaining = cycles_remaining; return;      \
            }                                                                  \
@@ -1734,6 +1805,7 @@ void execute_arm(u32 cycles)
 
   if(!pc_address_block)
     cgba_wild_pc_trap(reg[REG_PC]);
+  cgba_pf_valid = 0;
   touch_gamepak_page(reg[REG_PC] >> 15);
 
   cycles_remaining = cycles;
@@ -1785,7 +1857,7 @@ arm_loop:
        CGBA_DIFF_STOP_CHECK();
        CGBA_COLD_HEAT(4, 0);
        CGBA_INTERP_COUNT();
-       opcode = readaddress32(pc_address_block, (reg[REG_PC] & 0x0FFF));
+       opcode = cgba_pf_fetch(reg[REG_PC], 0, pc_address_block);
        condition = opcode >> 28;
 
        switch(condition)
@@ -3391,7 +3463,7 @@ thumb_loop:
        CGBA_DIFF_STOP_CHECK();
        CGBA_COLD_HEAT(2, 1);
        CGBA_INTERP_COUNT();
-       opcode = readaddress16(pc_address_block, (reg[REG_PC] & 0x0FFF));
+       opcode = cgba_pf_fetch(reg[REG_PC], 1, pc_address_block);
 
        #ifdef TRACE_INSTRUCTIONS
        interp_trace_instruction(reg[REG_PC], 0);
@@ -3896,6 +3968,7 @@ thumb_loop:
 void init_cpu(void)
 {
   // Initialize CPU registers
+  cgba_pf_valid = 0;
   memset(reg, 0, REG_USERDEF * sizeof(u32));
   memset(reg_mode, 0, sizeof(reg_mode));
   for (u32 i = 0; i < sizeof(spsr)/sizeof(spsr[0]); i++)
@@ -3949,6 +4022,7 @@ bool cpu_check_savestate(const u8 *src)
 bool cpu_read_savestate(const u8 *src)
 {
   const u8 *cpudoc = bson_find_key(src, "cpu");
+  cgba_pf_valid = 0;
   return bson_read_int32(cpudoc, "bus-value", &reg[REG_BUS_VALUE]) &&
          bson_read_int32_array(cpudoc, "regs", reg, REG_ARCH_COUNT) &&
          bson_read_int32_array(cpudoc, "spsr", spsr, 6) &&
