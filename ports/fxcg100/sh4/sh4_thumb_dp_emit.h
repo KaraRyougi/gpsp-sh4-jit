@@ -1090,6 +1090,69 @@ static inline int sh4g_thumb_ldst_native(u8 **tp, u32 opcode, u32 pc,
     return 0;
   }
 
+#if CGBA_SH4_COMPACT_FASTMEM_TUPLE
+  if (is_load && !pc_relative &&
+      !(!reg_offset && sh4g_thumb_ldst_runtime_io_candidate(opcode))) {
+    uint16_t load_delay_op = 0x0009u;
+    if (reg_offset) {
+      sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_load_greg(&cg, rb, SH4_REG_T0);
+      sh4_emit_load_greg(&cg, ro, SH4_REG_T1);
+      sh4g_close(tp, &cg);
+      load_delay_op = 0x312Cu;                       /* ADD R2, R1 */
+    } else if (offset == 0u) {
+#if CGBA_SH4_REG_FORWARD
+      if (*tp == sh4_forward_at && rb == sh4_forward_guest) {
+        if (sh4_forward_host == SH4_REG_RET) {
+          sh4_codegen cg = sh4g_open(tp);
+          sh4_emit_load_greg(&cg, rb, SH4_REG_T0);
+          sh4g_close(tp, &cg);
+        } else if (sh4_forward_host == SH4_REG_T0) {
+          sh4_forward_at = NULL;
+        } else {
+          load_delay_op = (uint16_t)(0x6103u | (sh4_forward_host << 4));
+          sh4_forward_at = NULL;
+        }
+      } else
+#endif
+      {
+#if CGBA_SH4_PIN_GUEST_R0
+        if (rb == 0u)
+          load_delay_op = 0x61B3u;                   /* MOV R11, R1 */
+        else
+#endif
+#if CGBA_SH4_PIN_GUEST_R1
+        if (rb == 1u)
+          load_delay_op = 0x61C3u;                   /* MOV R12, R1 */
+        else
+#endif
+          load_delay_op = (uint16_t)(0x51E0u | (rb & 0xFu));
+      }
+    } else if (offset <= 127u) {
+      sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_load_greg(&cg, rb, SH4_REG_T0);
+      sh4g_close(tp, &cg);
+      load_delay_op = (uint16_t)(0x7100u | (offset & 0xFFu));
+    } else if (offset <= 254u) {
+      sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_load_greg(&cg, rb, SH4_REG_T0);
+      sh4_emit_add_imm(&cg, 127, SH4_REG_T0);
+      sh4g_close(tp, &cg);
+      load_delay_op = (uint16_t)(0x7100u | ((offset - 127u) & 0xFFu));
+    } else {
+      { sh4_codegen cg = sh4g_open(tp);
+        sh4_emit_load_greg(&cg, rb, SH4_REG_T0);
+        sh4g_close(tp, &cg); }
+      sh4g_const(tp, offset, SH4_REG_T1);
+      load_delay_op = 0x312Cu;                       /* ADD R2, R1 */
+    }
+    sh4g_fastmem_site_compact(tp, (int)kind,
+                              (const void *)cgba_sh4_thumb_ldst, (u32)opcode,
+                              (u32)pc, cycle_count, rd, load_delay_op);
+    return 1;
+  }
+#endif
+
   if (pc_relative) {
     sh4g_const(tp, ((pc & ~2u) + 4u + offset), SH4_REG_T0);
   } else {
@@ -1322,7 +1385,7 @@ static inline int sh4g_thumb_sp_run_native(u8 **tp, const u32 *ops,
     }
   }
 
-  sh4g_litseg_reserve_bytes(tp, 5, (u32)(72 + cnt * 16));
+  sh4g_litseg_reserve_bytes(tp, 6, (u32)(88 + cnt * 16));
 
   /* Guard 1: SP in canonical IWRAM [0x03000000, 0x03007FFF - max_off - 3] & aligned. */
   { sh4_codegen cg = sh4g_open(tp);
@@ -1344,9 +1407,17 @@ static inline int sh4g_thumb_sp_run_native(u8 **tp, const u32 *ops,
     sh4g_close(tp, &cg); }
   miss[nmiss++] = sh4g_emit_bf_placeholder(tp);
 
-  /* Guard 2: if any store, verify all destination IWRAM SMC tags are 0. */
+  /* Guard 2: if any store, fast-bypass via cgba_iwram_code_end, else check tags. */
   if (has_store) {
+    u8 *smc_ok;
     int first = 1, w;
+    sh4g_const(tp, (u32)(uintptr_t)&cgba_iwram_code_end, SH4_REG_T2);
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_l_load(&cg, SH4_REG_T2, SH4_REG_ARG0);
+      sh4_emit_cmphs(&cg, SH4_REG_ARG0, SH4_REG_RET); /* T = (sp_off >= code_end) */
+      sh4g_close(tp, &cg); }
+    smc_ok = sh4g_emit_bt_placeholder(tp);
+
     sh4g_const(tp, (u32)(uintptr_t)iwram, SH4_REG_T2);
     { sh4_codegen cg = sh4g_open(tp);
       sh4_emit_add_reg(&cg, SH4_REG_RET, SH4_REG_T2); /* R3 = iwram + sp_off */
@@ -1364,6 +1435,7 @@ static inline int sh4g_thumb_sp_run_native(u8 **tp, const u32 *ops,
       sh4_emit_tst(&cg, SH4_REG_ARG0, SH4_REG_ARG0);  /* T = all tags clear */
       sh4g_close(tp, &cg); }
     miss[nmiss++] = sh4g_emit_bf_placeholder(tp);
+    sh4g_patch_cond(smc_ok, *tp);
   }
 
   /* Hot body: zero guards, zero JSR/RTS, 5 insns per word load/store. */
@@ -1436,7 +1508,7 @@ static inline int sh4g_thumb_strh_stride_run_native(u8 **tp, const u32 *ops,
     if (total_step > 127u) return 0;
   }
 
-  sh4g_litseg_reserve_bytes(tp, 5, (u32)(96 + npairs * 16));
+  sh4g_litseg_reserve_bytes(tp, 6, (u32)(112 + npairs * 16));
 
   /* Guard 1: rB in canonical aligned IWRAM with zero 32 KiB wrap. */
   { sh4_codegen cg = sh4g_open(tp);
@@ -1459,18 +1531,27 @@ static inline int sh4g_thumb_strh_stride_run_native(u8 **tp, const u32 *ops,
     sh4g_close(tp, &cg); }
   miss[nmiss++] = sh4g_emit_bf_placeholder(tp);
 
-  /* Guard 2: verify every destination IWRAM halfword SMC tag is 0. */
-  sh4g_const(tp, (u32)(uintptr_t)iwram, SH4_REG_T2);
-  { sh4_codegen cg = sh4g_open(tp);
-    sh4_emit_add_reg(&cg, SH4_REG_ARG1, SH4_REG_T2);  /* R3 = iwram + iw_off */
-    sh4_emit_mov_w_load(&cg, SH4_REG_T2, SH4_REG_ARG0); /* off[0] == 0 */
-    for (p = 1; p < npairs; p++) {
-      sh4_emit_mov_w_load_disp(&cg, SH4_REG_T2, off[p] >> 1);
-      sh4_emit_or(&cg, SH4_REG_RET, SH4_REG_ARG0);
-    }
-    sh4_emit_tst(&cg, SH4_REG_ARG0, SH4_REG_ARG0);    /* T = all tags clear */
-    sh4g_close(tp, &cg); }
-  miss[nmiss++] = sh4g_emit_bf_placeholder(tp);
+  /* Guard 2: fast-bypass via cgba_iwram_code_end, else check halfword tags. */
+  { u8 *smc_ok;
+    sh4g_const(tp, (u32)(uintptr_t)&cgba_iwram_code_end, SH4_REG_T2);
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_l_load(&cg, SH4_REG_T2, SH4_REG_ARG0);
+      sh4_emit_cmphs(&cg, SH4_REG_ARG0, SH4_REG_ARG1); /* T = (iw_off >= code_end) */
+      sh4g_close(tp, &cg); }
+    smc_ok = sh4g_emit_bt_placeholder(tp);
+
+    sh4g_const(tp, (u32)(uintptr_t)iwram, SH4_REG_T2);
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_add_reg(&cg, SH4_REG_ARG1, SH4_REG_T2);  /* R3 = iwram + iw_off */
+      sh4_emit_mov_w_load(&cg, SH4_REG_T2, SH4_REG_ARG0); /* off[0] == 0 */
+      for (p = 1; p < npairs; p++) {
+        sh4_emit_mov_w_load_disp(&cg, SH4_REG_T2, off[p] >> 1);
+        sh4_emit_or(&cg, SH4_REG_RET, SH4_REG_ARG0);
+      }
+      sh4_emit_tst(&cg, SH4_REG_ARG0, SH4_REG_ARG0);    /* T = all tags clear */
+      sh4g_close(tp, &cg); }
+    miss[nmiss++] = sh4g_emit_bf_placeholder(tp);
+    sh4g_patch_cond(smc_ok, *tp); }
 
   /* Hot body: write all npairs halfwords inline, commit rB += total_step. */
   sh4g_vec_load(tp, SH4G_VEC_iwram_data, SH4_REG_T2);
@@ -1502,6 +1583,265 @@ static inline int sh4g_thumb_strh_stride_run_native(u8 **tp, const u32 *ops,
       sh4_emit_add_imm(&cg, (int)step[p], SH4_REG_T0);
       sh4_emit_store_greg(&cg, SH4_REG_T0, rB);
       sh4g_close(tp, &cg); }
+  }
+  sh4g_patch_bra(bra_done, *tp);
+  return 1;
+}
+
+/* Fuse a run of 2..8 consecutive Thumb same-base immediate-offset loads/stores
+ * (`0x6000..0x8FFF`: LDR/STR, LDRB/STRB, LDRH/STRH [rB, #imm]).
+ * Validates canonical aligned IWRAM rB + range + SMC tags ONCE (with fast
+ * cgba_iwram_code_end bypass), eliminates dead IWRAM loads overwritten later in
+ * the same run, runs all accesses inline (2..6 insns each), and debits cnt
+ * IWRAM cycles once. For cnt<=3 fallback emits fastmem sites (keeping ROM/EWRAM
+ * fast); for cnt>=4 fallback emits one compact 28-byte cgba_sh4_thumb_ldst_run. */
+static inline int sh4g_thumb_base_run_native(u8 **tp, const u32 *ops,
+  const int *ccs, int cnt, u32 pc)
+{
+  unsigned rB;
+  u8 is_load[8], rd[8], sz[8], off[8], dead_load[8];
+  u32 max_end = 0u, req_align = 0u;
+  int has_store = 0, k, j;
+  u8 *miss[3], *bra_done;
+  int nmiss = 0;
+
+  if (cnt < 2 || cnt > 8) return 0;
+  if (ops[0] < 0x6000u || ops[0] >= 0x9000u) return 0;
+  rB = (ops[0] >> 3) & 7u;
+
+  for (k = 0; k < cnt; k++) {
+    u32 op = ops[k];
+    u32 hi = (op >> 8) & 0xFFu;
+    u32 o, s, al;
+    if (op < 0x6000u || op >= 0x9000u) return 0;
+    if (((op >> 3) & 7u) != rB) return 0;
+    is_load[k] = (u8)((op >> 11) & 1u);
+    rd[k] = (u8)(op & 7u);
+    if (k < cnt - 1 && is_load[k] && rd[k] == rB) return 0;
+    if (hi < 0x70u) {
+      s = 4u; al = 3u; o = ((op >> 6) & 31u) << 2;
+    } else if (hi < 0x80u) {
+      s = 1u; al = 0u; o = (op >> 6) & 31u;
+    } else {
+      s = 2u; al = 1u; o = ((op >> 6) & 31u) << 1;
+    }
+    sz[k] = (u8)s;
+    off[k] = (u8)o;
+    dead_load[k] = 0;
+    if (o + s > max_end) max_end = o + s;
+    req_align |= al;
+    if (!is_load[k]) has_store = 1;
+  }
+
+  /* Pure IWRAM dead-load elimination: if load k writes rd[k] and a later load j
+   * overwrites rd[k] before any intervening store reads rd[k], skip load k on
+   * the IWRAM fast path while still debiting its cycle in `add #-cnt, r13`. */
+  for (k = 0; k < cnt; k++) {
+    if (!is_load[k] || rd[k] == rB) continue;
+    for (j = k + 1; j < cnt; j++) {
+      if (!is_load[j] && rd[j] == rd[k]) break;
+      if (is_load[j] && rd[j] == rd[k]) {
+        dead_load[k] = 1;
+        break;
+      }
+    }
+  }
+
+  sh4g_litseg_reserve_bytes(tp, 6, (u32)(96 + cnt * 20));
+
+  /* Guard 1: rB in canonical IWRAM [0x03000000, 0x03008000 - max_end] & aligned. */
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_load_greg(&cg, rB, SH4_REG_T0);            /* R1 = reg[rB] */
+    sh4g_close(tp, &cg); }
+  sh4g_const(tp, 0x03000000u, SH4_REG_RET);
+  sh4g_const(tp, 0x8000u - (max_end - 1u), SH4_REG_T1);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_sub(&cg, SH4_REG_RET, SH4_REG_T0);         /* R1 = rB - 0x03000000 */
+    sh4_emit_cmphs(&cg, SH4_REG_T1, SH4_REG_T0);        /* T = out of bounds */
+    sh4g_close(tp, &cg); }
+  miss[nmiss++] = sh4g_emit_bt_placeholder(tp);
+
+  if (req_align) {
+    sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
+    sh4_emit_tst_imm(&cg, (int)req_align);              /* T = aligned */
+    sh4g_close(tp, &cg);
+    miss[nmiss++] = sh4g_emit_bf_placeholder(tp);
+  }
+
+  /* Guard 2: if any store, fast-bypass via cgba_iwram_code_end, else check tags. */
+  if (has_store) {
+    u8 *smc_ok;
+    int first = 1;
+    sh4g_const(tp, (u32)(uintptr_t)&cgba_iwram_code_end, SH4_REG_T2);
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_l_load(&cg, SH4_REG_T2, SH4_REG_T1);
+      sh4_emit_cmphs(&cg, SH4_REG_T1, SH4_REG_T0);      /* T = (off >= code_end) */
+      sh4g_close(tp, &cg); }
+    smc_ok = sh4g_emit_bt_placeholder(tp);
+
+    sh4g_const(tp, (u32)(uintptr_t)iwram, SH4_REG_T2);
+    { sh4_codegen cg = sh4g_open(tp);
+      u32 seen_wmask = 0u;
+      sh4_emit_add_reg(&cg, SH4_REG_T0, SH4_REG_T2);    /* R3 = iwram + off */
+      for (k = 0; k < cnt; k++) {
+        unsigned o = off[k], s = sz[k];
+        unsigned dst_r;
+        if (is_load[k]) continue;
+        if (s == 4u && o <= 60u) {
+          if (seen_wmask & (1u << (o >> 2))) continue;
+          seen_wmask |= (1u << (o >> 2));
+        }
+        dst_r = first ? SH4_REG_ARG0 : SH4_REG_T1;
+        if (s == 4u) {
+          if (o == 0u)      sh4_emit_mov_l_load(&cg, SH4_REG_T2, dst_r);
+          else if (o <= 60u) sh4_emit_mov_l_load_disp(&cg, SH4_REG_T2, dst_r, o >> 2);
+          else {
+            sh4_emit_mov_imm(&cg, (int)o, SH4_REG_RET);
+            sh4_emit_mov_l_load_r0(&cg, SH4_REG_T2, dst_r);
+          }
+        } else if (s == 2u) {
+          if (o == 0u) sh4_emit_mov_w_load(&cg, SH4_REG_T2, dst_r);
+          else if (o <= 30u) {
+            sh4_emit_mov_w_load_disp(&cg, SH4_REG_T2, o >> 1);
+            sh4_emit_mov_reg(&cg, SH4_REG_RET, dst_r);
+          } else {
+            sh4_emit_mov_imm(&cg, (int)o, SH4_REG_RET);
+            sh4_emit_mov_w_load_r0(&cg, SH4_REG_T2, dst_r);
+          }
+          sh4_emit_extu_w(&cg, dst_r, dst_r);
+        } else {
+          if (o == 0u) sh4_emit_mov_b_load(&cg, SH4_REG_T2, dst_r);
+          else if (o <= 15u) {
+            sh4_emit_mov_b_load_disp(&cg, SH4_REG_T2, o);
+            sh4_emit_mov_reg(&cg, SH4_REG_RET, dst_r);
+          } else {
+            sh4_emit_mov_imm(&cg, (int)o, SH4_REG_RET);
+            sh4_emit_mov_b_load_r0(&cg, SH4_REG_T2, dst_r);
+          }
+          sh4_emit_extu_b(&cg, dst_r, dst_r);
+        }
+        if (first) first = 0;
+        else       sh4_emit_or(&cg, SH4_REG_T1, SH4_REG_ARG0);
+      }
+      sh4_emit_tst(&cg, SH4_REG_ARG0, SH4_REG_ARG0);    /* T = all tags clear */
+      sh4g_close(tp, &cg); }
+    miss[nmiss++] = sh4g_emit_bf_placeholder(tp);
+    sh4g_patch_cond(smc_ok, *tp);
+  }
+
+  /* Hot body: R3 = iwram_data + off, zero guards, zero JSR/JMP. */
+  sh4g_vec_load(tp, SH4G_VEC_iwram_data, SH4_REG_T2);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_add_reg(&cg, SH4_REG_T0, SH4_REG_T2);      /* R3 = iwram_data + off */
+    for (k = 0; k < cnt; k++) {
+      unsigned o = off[k], s = sz[k], r = rd[k];
+      if (dead_load[k]) continue;
+      if (is_load[k]) {
+        if (s == 4u) {
+          if (o == 0u)      sh4_emit_mov_l_load(&cg, SH4_REG_T2, SH4_REG_T1);
+          else if (o <= 60u) sh4_emit_mov_l_load_disp(&cg, SH4_REG_T2, SH4_REG_T1, o >> 2);
+          else {
+            sh4_emit_mov_imm(&cg, (int)o, SH4_REG_RET);
+            sh4_emit_mov_l_load_r0(&cg, SH4_REG_T2, SH4_REG_T1);
+          }
+          sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
+          sh4_emit_swap_w(&cg, SH4_REG_T1, SH4_REG_T1);
+          sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
+          sh4_emit_store_greg(&cg, SH4_REG_T1, r);
+        } else if (s == 2u) {
+          if (o == 0u) {
+            sh4_emit_mov_w_load(&cg, SH4_REG_T2, SH4_REG_T1);
+            sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
+            sh4_emit_extu_w(&cg, SH4_REG_T1, SH4_REG_T1);
+            sh4_emit_store_greg(&cg, SH4_REG_T1, r);
+          } else if (o <= 30u) {
+            sh4_emit_mov_w_load_disp(&cg, SH4_REG_T2, o >> 1);
+            sh4_emit_swap_b(&cg, SH4_REG_RET, SH4_REG_RET);
+            sh4_emit_extu_w(&cg, SH4_REG_RET, SH4_REG_RET);
+            sh4_emit_store_greg(&cg, SH4_REG_RET, r);
+          } else {
+            sh4_emit_mov_imm(&cg, (int)o, SH4_REG_RET);
+            sh4_emit_mov_w_load_r0(&cg, SH4_REG_T2, SH4_REG_T1);
+            sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
+            sh4_emit_extu_w(&cg, SH4_REG_T1, SH4_REG_T1);
+            sh4_emit_store_greg(&cg, SH4_REG_T1, r);
+          }
+        } else {
+          if (o == 0u) {
+            sh4_emit_mov_b_load(&cg, SH4_REG_T2, SH4_REG_T1);
+            sh4_emit_extu_b(&cg, SH4_REG_T1, SH4_REG_T1);
+            sh4_emit_store_greg(&cg, SH4_REG_T1, r);
+          } else if (o <= 15u) {
+            sh4_emit_mov_b_load_disp(&cg, SH4_REG_T2, o);
+            sh4_emit_extu_b(&cg, SH4_REG_RET, SH4_REG_RET);
+            sh4_emit_store_greg(&cg, SH4_REG_RET, r);
+          } else {
+            sh4_emit_mov_imm(&cg, (int)o, SH4_REG_RET);
+            sh4_emit_mov_b_load_r0(&cg, SH4_REG_T2, SH4_REG_T1);
+            sh4_emit_extu_b(&cg, SH4_REG_T1, SH4_REG_T1);
+            sh4_emit_store_greg(&cg, SH4_REG_T1, r);
+          }
+        }
+      } else {
+        if (s == 4u) {
+          sh4_emit_load_greg(&cg, r, SH4_REG_T1);
+          sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
+          sh4_emit_swap_w(&cg, SH4_REG_T1, SH4_REG_T1);
+          sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
+          if (o == 0u)      sh4_emit_mov_l_store(&cg, SH4_REG_T1, SH4_REG_T2);
+          else if (o <= 60u) sh4_emit_mov_l_store_disp(&cg, SH4_REG_T1, SH4_REG_T2, o >> 2);
+          else {
+            sh4_emit_mov_imm(&cg, (int)o, SH4_REG_RET);
+            sh4_emit_mov_l_store_r0(&cg, SH4_REG_T1, SH4_REG_T2);
+          }
+        } else if (s == 2u) {
+          if (o == 0u) {
+            sh4_emit_load_greg(&cg, r, SH4_REG_T1);
+            sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
+            sh4_emit_mov_w_store(&cg, SH4_REG_T1, SH4_REG_T2);
+          } else if (o <= 30u) {
+            sh4_emit_load_greg(&cg, r, SH4_REG_RET);
+            sh4_emit_swap_b(&cg, SH4_REG_RET, SH4_REG_RET);
+            sh4_emit_mov_w_store_disp(&cg, SH4_REG_T2, o >> 1);
+          } else {
+            sh4_emit_load_greg(&cg, r, SH4_REG_T1);
+            sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
+            sh4_emit_mov_imm(&cg, (int)o, SH4_REG_RET);
+            sh4_emit_mov_w_store_r0(&cg, SH4_REG_T1, SH4_REG_T2);
+          }
+        } else {
+          if (o == 0u) {
+            sh4_emit_load_greg(&cg, r, SH4_REG_T1);
+            sh4_emit_mov_b_store(&cg, SH4_REG_T1, SH4_REG_T2);
+          } else if (o <= 15u) {
+            sh4_emit_load_greg(&cg, r, SH4_REG_RET);
+            sh4_emit_mov_b_store_disp(&cg, SH4_REG_T2, o);
+          } else {
+            sh4_emit_load_greg(&cg, r, SH4_REG_T1);
+            sh4_emit_mov_imm(&cg, (int)o, SH4_REG_RET);
+            sh4_emit_mov_b_store_r0(&cg, SH4_REG_T1, SH4_REG_T2);
+          }
+        }
+      }
+    }
+    sh4g_close(tp, &cg); }
+  bra_done = *tp;
+  sh4g_u16(tp, 0xA000);                                 /* BRA done */
+  sh4g_u16(tp, (uint16_t)(0x7000 | (SH4_REG_CYCLES << 8) | ((-cnt) & 0xFF)));
+
+  /* Cold fallback: fastmem sites for cnt<=3, compact 1-call helper for cnt>=4. */
+  while (nmiss)
+    sh4g_patch_cond(miss[--nmiss], *tp);
+  if (cnt <= 3) {
+    for (k = 0; k < cnt; k++) {
+      sh4_greg_forward_reset();
+      sh4g_thumb_ldst_native(tp, ops[k], pc + (u32)(k * 2), ccs[k]);
+    }
+  } else {
+    sh4g_op2_tramp_call(tp, (const void *)sh4_op2_pc_mem_tramp,
+                        (const void *)cgba_sh4_thumb_ldst_run,
+                        (u32)cnt, (u32)pc, 1, ccs[cnt - 1]);
   }
   sh4g_patch_bra(bra_done, *tp);
   return 1;
@@ -2197,10 +2537,11 @@ static inline void sh4g_fused_mat_flags(u8 **tp, int kind, int extra)
   }
 }
 
-static inline u8 *sh4g_emit_fused_cmp_bcc_ex(
+static inline u8 *sh4g_emit_fused_cmp_bcc_known(
   u8 **tp, int kind, unsigned rd, unsigned cond,
   int taken_debit, uint32_t target_pc, int is_internal,
-  const void *block_exit_fn, int taken_dead, int fall_dead, int extra)
+  const void *block_exit_fn, int taken_dead, int fall_dead, int extra,
+  u8 *known_target)
 {
   const unsigned a = SH4_REG_T0;                         /* R1 */
   const unsigned b = SH4_REG_T1;                         /* R2 */
@@ -2267,50 +2608,111 @@ static inline u8 *sh4g_emit_fused_cmp_bcc_ex(
                       : sh4g_emit_bf_placeholder(tp);
 
   /* --- TAKEN path (R1, R2 still intact!) --- */
-  sh4g_cycle_debit_r0(tp, taken_debit);
-  if (taken_dead) {
-    u8 *bt, *bt2 = NULL;
-    { sh4_codegen cg = sh4g_open(tp);
-      if (taken_dead == 1) {
-        sh4_emit_cmppl(&cg, SH4_REG_CYCLES);             /* T = (cycles > 0) */
-      } else {
-        /* External ROM lookahead (step 1..5): require cycles > 96 so neither a
-         * mid-block gate nor cold-interp chunk can stop before the killer. */
-        sh4_emit_mov_imm(&cg, 96, SH4_REG_RET);
-        sh4_emit_cmpgt(&cg, SH4_REG_RET, SH4_REG_CYCLES); /* T = (cycles > 96) */
-      }
-      sh4g_close(tp, &cg); }
-    bt = sh4g_emit_bt_placeholder(tp);                   /* 98%+: hot jump, skip CPSR */
-    sh4g_fused_mat_flags(tp, kind, extra);               /* cold: exact CPSR */
-    if (taken_dead != 1) {
-      /* 0 < cycles <= 96: CPSR is now exact; still jump to target without
-       * calling update_gba prematurely. */
-      sh4_codegen cg = sh4g_open(tp);
-      sh4_emit_cmppl(&cg, SH4_REG_CYCLES);               /* T = (cycles > 0) */
-      sh4g_close(tp, &cg);
-      bt2 = sh4g_emit_bt_placeholder(tp);
-    }
-    sh4g_const(tp, target_pc, SH4_REG_ARG0);
-    sh4g_block_exit_jmp(tp);
-    sh4g_patch_cond(bt, *tp);
-    if (bt2)
-      sh4g_patch_cond(bt2, *tp);
-    if (is_internal) {
-      site = sh4g_emit_patch_jump(tp);                   /* patched -> BRA body_offset */
+  if (is_internal >= 2) {
+    /* Forward internal branch: cannot form a loop, so skip CMP/PL R13 and
+     * cold block_exit stub. For short forward skips (is_internal == 3), pack
+     * small cycle debits directly into the BRA delay slot (4 bytes total). */
+    if (!taken_dead)
+      sh4g_fused_mat_flags(tp, kind, extra);
+    if (is_internal == 3 && taken_debit > 0 && taken_debit <= 128) {
+      site = *tp;
+      sh4g_u16(tp, 0xA000);                              /* patched -> BRA body_offset */
+      sh4g_u16(tp, (uint16_t)(0x7000 | (SH4_REG_CYCLES << 8) | ((-taken_debit) & 0xFF)));
     } else {
-      sh4g_const(tp, target_pc, SH4_REG_ARG0);           /* R4 = target_pc (lazy link) */
-#if CGBA_SH4_LAZY_CHAIN
-      site = sh4g_emit_patch_call(tp);
-#else
-      site = sh4g_emit_patch_jump(tp);
-#endif
-      sh4g_patch_jump(site, block_exit_fn);
+      sh4g_cycle_debit_r0(tp, taken_debit);
+      if (is_internal == 3) {
+        site = *tp;
+        sh4g_u16(tp, 0xA000);
+        sh4g_u16(tp, 0x0009);
+      } else {
+        site = sh4g_emit_patch_jump(tp);
+      }
     }
   } else {
-    sh4g_fused_mat_flags(tp, kind, extra);
-    site = is_internal ? sh4g_branch_exit_internal(tp, target_pc)
-                       : sh4g_branch_exit(tp, target_pc, block_exit_fn);
+    sh4g_cycle_debit_r0(tp, taken_debit);
+    if (taken_dead) {
+      sh4g_litseg_reserve_bytes(tp, 1, 32u);
+      if (is_internal && known_target != NULL && taken_dead == 1) {
+        long d_bt = ((long)(uintptr_t)known_target -
+                     ((long)(uintptr_t)(*tp + 2) + 4)) / 2;
+        if (d_bt >= -128 && d_bt <= 127) {
+          { sh4_codegen cg = sh4g_open(tp);
+            sh4_emit_cmppl(&cg, SH4_REG_CYCLES);         /* T = (cycles > 0) */
+            sh4g_close(tp, &cg); }
+          sh4g_u16(tp, (uint16_t)(0x8900 | (d_bt & 0xFF))); /* BT known_target */
+          sh4g_fused_mat_flags(tp, kind, extra);         /* cold: exact CPSR */
+          sh4g_const(tp, target_pc, SH4_REG_ARG0);
+          sh4g_block_exit_jmp(tp);
+          site = NULL;
+          goto fused_taken_done;
+        }
+        {
+          long d_bra = ((long)(uintptr_t)known_target -
+                        ((long)(uintptr_t)(*tp + 4) + 4)) / 2;
+          if (d_bra >= -2048 && d_bra <= 2047) {
+            u8 *cold;
+            { sh4_codegen cg = sh4g_open(tp);
+              sh4_emit_cmppl(&cg, SH4_REG_CYCLES);       /* T = (cycles > 0) */
+              sh4g_close(tp, &cg); }
+            cold = sh4g_emit_bf_placeholder(tp);         /* cold: cycles <= 0 */
+            sh4g_u16(tp, (uint16_t)(0xA000 | (d_bra & 0x0FFF))); /* BRA target */
+            sh4g_u16(tp, 0x0009);                        /* delay NOP */
+            sh4g_patch_cond(cold, *tp);
+            sh4g_fused_mat_flags(tp, kind, extra);       /* cold: exact CPSR */
+            sh4g_const(tp, target_pc, SH4_REG_ARG0);
+            sh4g_block_exit_jmp(tp);
+            site = NULL;
+            goto fused_taken_done;
+          }
+        }
+      }
+      {
+        u8 *cold, *go_target;
+        { sh4_codegen cg = sh4g_open(tp);
+          if (taken_dead == 1) {
+            sh4_emit_cmppl(&cg, SH4_REG_CYCLES);         /* T = (cycles > 0) */
+          } else {
+            /* External ROM lookahead (step 1..5): require cycles > 96 so neither a
+             * mid-block gate nor cold-interp chunk can stop before the killer. */
+            sh4_emit_mov_imm(&cg, 96, SH4_REG_RET);
+            sh4_emit_cmpgt(&cg, SH4_REG_RET, SH4_REG_CYCLES); /* T = (cycles > 96) */
+          }
+          sh4g_close(tp, &cg); }
+        cold = sh4g_emit_bf_placeholder(tp);             /* cold: not-taken 98%+ */
+        go_target = *tp;
+        if (is_internal) {
+          site = sh4g_emit_patch_jump(tp);               /* patched -> BRA body_offset */
+        } else {
+          sh4g_const(tp, target_pc, SH4_REG_ARG0);       /* R4 = target_pc (lazy link) */
+#if CGBA_SH4_LAZY_CHAIN
+          site = sh4g_emit_patch_call(tp);
+#else
+          site = sh4g_emit_patch_jump(tp);
+#endif
+          sh4g_patch_jump(site, block_exit_fn);
+        }
+        sh4g_patch_cond(cold, *tp);
+        sh4g_fused_mat_flags(tp, kind, extra);           /* cold: exact CPSR */
+        if (taken_dead != 1) {
+          /* 0 < cycles <= 96: CPSR is now exact; jump back to go_target without
+           * calling update_gba prematurely. */
+          long d_go;
+          { sh4_codegen cg = sh4g_open(tp);
+            sh4_emit_cmppl(&cg, SH4_REG_CYCLES);         /* T = (cycles > 0) */
+            sh4g_close(tp, &cg); }
+          d_go = ((long)(uintptr_t)go_target - ((long)(uintptr_t)*tp + 4)) / 2;
+          sh4g_u16(tp, (uint16_t)(0x8900 | (d_go & 0xFF))); /* BT go_target */
+        }
+        sh4g_const(tp, target_pc, SH4_REG_ARG0);
+        sh4g_block_exit_jmp(tp);
+      }
+    } else {
+      sh4g_fused_mat_flags(tp, kind, extra);
+      site = is_internal ? sh4g_branch_exit_internal_known(tp, target_pc, known_target)
+                         : sh4g_branch_exit(tp, target_pc, block_exit_fn);
+    }
   }
+fused_taken_done:
 
   /* --- NOT-TAKEN fallthrough (R1, R2 still intact!) --- */
   sh4g_patch_cond(skip, *tp);
@@ -2320,14 +2722,24 @@ static inline u8 *sh4g_emit_fused_cmp_bcc_ex(
   return site;
 }
 
+static inline u8 *sh4g_emit_fused_cmp_bcc_ex(
+  u8 **tp, int kind, unsigned rd, unsigned cond,
+  int taken_debit, uint32_t target_pc, int is_internal,
+  const void *block_exit_fn, int taken_dead, int fall_dead, int extra)
+{
+  return sh4g_emit_fused_cmp_bcc_known(
+    tp, kind, rd, cond, taken_debit, target_pc, is_internal,
+    block_exit_fn, taken_dead, fall_dead, extra, NULL);
+}
+
 static inline u8 *sh4g_emit_fused_cmp_bcc(
   u8 **tp, int kind, unsigned rd, unsigned cond,
   int taken_debit, uint32_t target_pc, int is_internal,
   const void *block_exit_fn, int taken_dead, int fall_dead)
 {
-  return sh4g_emit_fused_cmp_bcc_ex(
+  return sh4g_emit_fused_cmp_bcc_known(
     tp, kind, rd, cond, taken_debit, target_pc, is_internal,
-    block_exit_fn, taken_dead, fall_dead, 0);
+    block_exit_fn, taken_dead, fall_dead, 0, NULL);
 }
 
 /* ---- 4-slot intra-segment BBRA for straight-line dead-flag Thumb ALU runs ---
@@ -2336,6 +2748,15 @@ static inline u8 *sh4g_emit_fused_cmp_bcc(
  * keeping r0 in R11 and r1 in R12. Eliminates intermediate reg[] loads/stores
  * and SH7305 2-cycle Load-Use stalls; flushes only dirty slots at run end so
  * no dirty state ever escapes across branch/memory/helper boundaries. */
+/* Fast inline prefilter: returns 1 for any opcode that sh4g_thumb_bbra_classify
+ * could possibly accept, rejecting loads/stores/branches/PUSH/POP in 2 ops. */
+static inline int sh4g_thumb_bbra_maybe(u32 op)
+{
+  unsigned hi = (op >> 8) & 0xFFu;
+  return hi <= 0x46u ? (hi <= 0x27u || (hi >= 0x30u && hi != 0x45u))
+                     : (hi >= 0xA8u && hi <= 0xAFu);
+}
+
 static inline int sh4g_thumb_bbra_classify(u32 op, u32 *rmask, u32 *wmask)
 {
   unsigned hi = (op >> 8) & 0xFFu;
@@ -2399,59 +2820,82 @@ static inline int sh4g_thumb_bbra_classify(u32 op, u32 *rmask, u32 *wmask)
   return 0;
 }
 
-static inline int sh4g_thumb_alu_run_native(u8 **tp, const u16 *ops, int len,
-                                            u32 *written_mask_out)
+static inline int sh4g_thumb_alu_run_native_ex(u8 **tp, const u16 *ops,
+                                               const u32 *rm_in, const u32 *wm_in,
+                                               int len, u32 *written_mask_out)
 {
   static const unsigned slot_reg[4] = {
     SH4_REG_ARG0, SH4_REG_ARG1, SH4_REG_ARG2, SH4_REG_ARG3
   };
+  const u32 unpinned_mask = 0x7FFFu
+#if CGBA_SH4_PIN_GUEST_R0
+    & ~1u
+#endif
+#if CGBA_SH4_PIN_GUEST_R1
+    & ~2u
+#endif
+    ;
   u8 refs[16];
   u8 writes[16];
   s8 gslot[16];
   unsigned slot_guest[4];
   int nslots = 0, i, s;
   u32 slot_loaded = 0u, slot_dirty = 0u, wmask_all = 0u;
+  u32 seen_once = 0u, cand_mask = 0u;
   u8 *start_tp;
 
   if (len < 2 || len > 16)
     return 0;
   memset(refs, 0, sizeof refs);
   memset(writes, 0, sizeof writes);
-  for (i = 0; i < 16; i++)
-    gslot[i] = -1;
 
   for (i = 0; i < len; i++) {
-    u32 rm, wm, g;
-    if (!sh4g_thumb_bbra_classify(ops[i], &rm, &wm))
+    u32 rm, wm, m;
+    if (rm_in) {
+      rm = rm_in[i];
+      wm = wm_in[i];
+    } else if (!sh4g_thumb_bbra_classify(ops[i], &rm, &wm)) {
       return 0;
+    }
     wmask_all |= wm;
-    for (g = 0; g < 15u; g++) {
-      if (rm & (1u << g)) refs[g]++;
-      if (wm & (1u << g)) { refs[g]++; writes[g]++; }
+    rm &= unpinned_mask;
+    wm &= unpinned_mask;
+    cand_mask |= (seen_once & (rm | wm)) | (rm & wm);
+    seen_once |= rm | wm;
+    for (m = rm; m; m &= m - 1u)
+      refs[__builtin_ctz(m)]++;
+    for (m = wm; m; m &= m - 1u) {
+      unsigned g = (unsigned)__builtin_ctz(m);
+      refs[g]++;
+      writes[g]++;
     }
   }
+  if (!cand_mask)
+    return 0;                                 /* no unpinned reuse: nothing to save */
 
+  memset(gslot, -1, sizeof gslot);
   /* Pick up to 4 hottest unpinned guest regs with refs >= 2. */
-  for (s = 0; s < 4; s++) {
+  for (s = 0; s < 4 && cand_mask; s++) {
     int best = -1;
-    unsigned best_score = 1u;                 /* require refs >= 2 */
-    for (i = 0; i < 15; i++) {
-      if (sh4_pinned_reg((unsigned)i) >= 0 || gslot[i] >= 0)
-        continue;
-      if (refs[i] > best_score ||
-          (refs[i] == best_score && best >= 0 && writes[i] > writes[best])) {
-        best = i;
-        best_score = refs[i];
+    unsigned best_score = 1u;
+    u32 m;
+    for (m = cand_mask; m; m &= m - 1u) {
+      int g = __builtin_ctz(m);
+      if (refs[g] > best_score ||
+          (refs[g] == best_score && best >= 0 && writes[g] > writes[best])) {
+        best = g;
+        best_score = refs[g];
       }
     }
     if (best < 0)
       break;
+    cand_mask &= ~(1u << best);
     gslot[best] = (s8)nslots;
     slot_guest[nslots] = (unsigned)best;
     nslots++;
   }
   if (nslots == 0)
-    return 0;                                 /* no unpinned reuse: nothing to save */
+    return 0;
 
   sh4_greg_forward_reset();
   start_tp = *tp;
@@ -2745,6 +3189,13 @@ static inline int sh4g_thumb_alu_run_native(u8 **tp, const u16 *ops, int len,
   if (written_mask_out)
     *written_mask_out = wmask_all;
   return 1;
+}
+
+static inline int sh4g_thumb_alu_run_native(u8 **tp, const u16 *ops, int len,
+                                            u32 *written_mask_out)
+{
+  return sh4g_thumb_alu_run_native_ex(tp, ops, NULL, NULL, len,
+                                      written_mask_out);
 }
 
 #endif /* CGBA_SH4_THUMB_DP_EMIT_H */

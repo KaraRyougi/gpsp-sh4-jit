@@ -75,8 +75,10 @@ u8 *ram_translation_ptr = ram_translation_cache;
  * translated code.  Host RAM-cache byte zero is a separate sentinel. */
 u32 iwram_code_min = ~0U;
 u32 iwram_code_max =  0U;
+u32 cgba_iwram_code_end = 0U;
 u32 ewram_code_min = ~0U;
 u32 ewram_code_max =  0U;
+u32 cgba_ewram_code_end = 0U;
 
 #define INITIAL_ROM_WATERMARK   16   // To avoid NULL aliasing
 u32 rom_cache_watermark = INITIAL_ROM_WATERMARK;
@@ -101,8 +103,8 @@ typedef struct
 
 u32 rom_branch_hash[ROM_BRANCH_HASH_SIZE] CGBA_HIGH_BSS;
 u32 cgba_dynarec_arm_hot[128] CGBA_HIGH_BSS;   /* 64 interleaved {key, ptr} */
-u32 cgba_dynarec_thumb_hot[128] CGBA_HIGH_BSS;
-u32 cgba_dynarec_dual_hot[128] CGBA_HIGH_BSS;
+u32 cgba_dynarec_thumb_hot[512] CGBA_HIGH_BSS; /* 256 interleaved {key, ptr} */
+u32 cgba_dynarec_dual_hot[512] CGBA_HIGH_BSS;  /* 256 interleaved {key, ptr} */
 
 /* Always kept: the ClassPad settings page shows them. */
 u32 cgba_dynarec_rom_flush_count;
@@ -248,7 +250,7 @@ static inline int sh4_flags_dead_from(const block_data_type *bd,
   for (p = start; p < lim; p++) {
     u16 fd;
     u32 req;
-    if (p > start && bd[p].update_cycles)
+    if (p > start && (bd[p].update_cycles & 1u))
       return 0;
     fd = bd[p].raw_flag_data;
     req = (fd >> 8) & 0x0Fu;
@@ -420,6 +422,11 @@ typedef struct
 #elif defined(ARM64_ARCH)
   #include "arm/arm64_emit.h"
 #elif defined(SH4_ARCH)
+  #define SH4_INTERNAL_KNOWN_TARGET(tgt_pc)                                   \
+    (((tgt_pc) <= (u32)pc)                                                    \
+      ? block_data[((tgt_pc) - block_start_pc) >>                             \
+                   (sh4_block_is_thumb ? 1 : 2)].body_offset                  \
+      : NULL)
   #include "sh4/sh4_emit.h"
 #else
   #include "x86/x86_emit.h"
@@ -507,6 +514,28 @@ void translate_icache_sync() {
 /* End of Cache invalidation */
 
 
+#if defined(SH4_ARCH) && CGBA_SH4_COMPACT_FASTMEM_TUPLE && CGBA_SH4_FASTMEM_OOL_DESC
+#define CGBA_SH4_FM_OOL_REWIND(ptr, ram) cgba_sh4_fm_ool_rewind((ptr), (ram))
+#else
+#define CGBA_SH4_FM_OOL_REWIND(ptr, ram) ((void)0)
+#endif
+
+#ifdef SH4_ARCH
+#define check_pc_region(pc)                                                   \
+  new_pc_region = (pc >> 12);                                                 \
+  if(new_pc_region != pc_region)                                              \
+  {                                                                           \
+    pc_region = new_pc_region;                                                \
+    pc_address_block = cgba_memory_map_read_4k(pc);                           \
+    if(!pc_address_block)                                                     \
+    {                                                                         \
+      sh4_greg_forward_reset();                                               \
+      sh4g_litseg_abort();                                                    \
+      CGBA_SH4_FM_OOL_REWIND(attempt_base, ram_region);                       \
+      return false;                                                           \
+    }                                                                         \
+  }
+#else
 #define check_pc_region(pc)                                                   \
   new_pc_region = (pc >> 12);                                                 \
   if(new_pc_region != pc_region)                                              \
@@ -515,7 +544,8 @@ void translate_icache_sync() {
     pc_address_block = cgba_memory_map_read_4k(pc);                           \
     if(!pc_address_block)                                                     \
       return false;                                                           \
-  }                                                                           \
+  }
+#endif                                                                           \
 
 #ifndef arm_instruction_prefix
 #define arm_instruction_prefix() do {} while(0)
@@ -2979,6 +3009,49 @@ extern int cgba_cold_gate_probe;
 #define cgba_cold_gate_probe 0
 #endif
 
+#ifdef SH4_ARCH
+#ifndef CGBA_SH4_THUMB_CHAIN_EXISTING
+#define CGBA_SH4_THUMB_CHAIN_EXISTING 1
+#endif
+#ifndef CGBA_SH4_THUMB_SEAM_ALIAS
+#define CGBA_SH4_THUMB_SEAM_ALIAS 1
+#endif
+static inline u8 *cgba_sh4_chase_bra(u8 *target)
+{
+  if (target >= rom_translation_cache &&
+      target + 4 <= rom_translation_ptr) {
+    u16 ins0 = ((u16)target[0] << 8) | (u16)target[1];
+    u16 ins1 = ((u16)target[2] << 8) | (u16)target[3];
+    if ((ins0 & 0xF000u) == 0xA000u && ins1 == 0x0009u) {
+      s32 disp = (s32)(((u32)(ins0 & 0x0FFFu) ^ 0x0800u) - 0x0800u) * 2;
+      u8 *dst = target + 4 + disp;
+      if (dst >= rom_translation_cache && dst < rom_translation_ptr)
+        return dst;
+    }
+  }
+  return target;
+}
+
+static u8 *cgba_rom_hash_lookup_thumb(u32 pc)
+{
+  u32 key = pc | 1u;
+  u32 hash_target = ((key * 2654435761U) >> (32 - ROM_BRANCH_HASH_BITS))
+                    & (ROM_BRANCH_HASH_SIZE - 1);
+  u32 blk_offset = rom_branch_hash[hash_target];
+  while (blk_offset) {
+    hashhdr_type *bhdr = (hashhdr_type *)&rom_translation_cache[blk_offset];
+    if (bhdr->pc_value == key)
+      return cgba_sh4_chase_bra(&rom_translation_cache[
+        blk_offset + sizeof(hashhdr_type) + block_prologue_size]);
+    blk_offset = bhdr->next_entry;
+  }
+  return NULL;
+}
+#define CGBA_SH4_CHASE_ROM_HIT(ptr) cgba_sh4_chase_bra(ptr)
+#else
+#define CGBA_SH4_CHASE_ROM_HIT(ptr) (ptr)
+#endif
+
 #define block_lookup_translate_builder(type)                                  \
 u8 function_cc *block_lookup_translate_##type(u32 pc)                         \
 {                                                                             \
@@ -2999,6 +3072,13 @@ u8 function_cc *block_lookup_translate_##type(u32 pc)                         \
       /* Allocate a tag if not a valid one, and initialize header */          \
       if (!VALID_TAG(*tagp)) {                                                \
         allocate_tag_##type(tagp);                                            \
+        if (pcregion == 3) {                                                  \
+          u32 _iw_end = (pc & 0x7FFFu) + 4u;                                  \
+          if (_iw_end > cgba_iwram_code_end) cgba_iwram_code_end = _iw_end;   \
+        } else {                                                              \
+          u32 _ew_end = (pc & 0x3FFFFu) + 4u;                                 \
+          if (_ew_end > cgba_ewram_code_end) cgba_ewram_code_end = _ew_end;   \
+        }                                                                     \
         trentry = get_ram_tag(*tagp);                                         \
         trentry->offset_arm = 0;                                              \
         trentry->offset_thumb = 0;                                            \
@@ -3034,8 +3114,8 @@ u8 function_cc *block_lookup_translate_##type(u32 pc)                         \
       {                                                                       \
         bhdr = (hashhdr_type*)&rom_translation_cache[blk_offset];             \
         if(bhdr->pc_value == key) {                                           \
-          return &rom_translation_cache[                                      \
-                  blk_offset + sizeof(hashhdr_type) + block_prologue_size];   \
+          return CGBA_SH4_CHASE_ROM_HIT(&rom_translation_cache[               \
+                  blk_offset + sizeof(hashhdr_type) + block_prologue_size]);  \
         }                                                                     \
                                                                               \
         blk_offset = bhdr->next_entry;                                        \
@@ -3632,6 +3712,12 @@ static void cgba_block_overflow_shrink(u8 *attempt_base, u8 *attempt_end,
 
 block_data_type block_data[MAX_BLOCK_SIZE];
 block_exit_type block_exits[MAX_EXITS];
+#ifdef SH4_ARCH
+static u32 cgba_block_exit_pc[MAX_EXITS];
+#define cgba_record_exit_pc(idx, epc) (cgba_block_exit_pc[(idx)] = (epc))
+#else
+#define cgba_record_exit_pc(idx, epc) ((void)0)
+#endif
 
 /* DIAG: with -DCGBA_DIAG_SINGLE_INSN, force one-instruction blocks ONLY for the
  * divergent BIOS function-entry block (start PC == CGBA_DIAG_BLK_PC, default
@@ -3658,6 +3744,13 @@ extern int cgba_dynarec_single_block;
   {                                                                           \
     address32(tag_base, tag_off) = CODE_TAG_BLOCK32;                          \
   }                                                                           \
+  if (block_end_pc >= 0x03000000u) {                                          \
+    if ((tag_off + 4u) > cgba_iwram_code_end)                                 \
+      cgba_iwram_code_end = tag_off + 4u;                                     \
+  } else {                                                                    \
+    if ((tag_off + 4u) > cgba_ewram_code_end)                                 \
+      cgba_ewram_code_end = tag_off + 4u;                                     \
+  }                                                                           \
 }
 
 #define smc_write_thumb_yes() {                                               \
@@ -3668,11 +3761,37 @@ extern int cgba_dynarec_single_block;
   {                                                                           \
     address16(tag_base, tag_off) = CODE_TAG_BLOCK16;                          \
   }                                                                           \
+  if (block_end_pc >= 0x03000000u) {                                          \
+    if ((tag_off + 2u) > cgba_iwram_code_end)                                 \
+      cgba_iwram_code_end = tag_off + 2u;                                     \
+  } else {                                                                    \
+    if ((tag_off + 2u) > cgba_ewram_code_end)                                 \
+      cgba_ewram_code_end = tag_off + 2u;                                     \
+  }                                                                           \
 }
 
 #define smc_write_arm_no()                                                    \
 
 #define smc_write_thumb_no()                                                  \
+
+#define cgba_scan_existing_arm()                                              \
+
+#if defined(SH4_ARCH) && CGBA_SH4_THUMB_CHAIN_EXISTING
+#define cgba_scan_existing_thumb()                                            \
+  if (!ram_region && !CGBA_SH4_DIFF_ACTIVE() &&                               \
+      cgba_blk_start >= 0x08000000u &&                                        \
+      (opcode & 0xF800u) != 0xF000u &&                                        \
+      (idle_loop_target_pc == 0xFFFFFFFFu ||                                  \
+       (u32)(block_end_pc - (idle_loop_target_pc - 64u)) > 128u)) {           \
+    u8 *_existing = cgba_rom_hash_lookup_thumb(block_end_pc);                 \
+    if (_existing != NULL && _existing != attempt_base) {                     \
+      chain_existing_target = _existing;                                      \
+      break;                                                                  \
+    }                                                                         \
+  }
+#else
+#define cgba_scan_existing_thumb()
+#endif
 
 #define scan_block(type)                                                      \
 {                                                                             \
@@ -3727,6 +3846,8 @@ extern int cgba_dynarec_single_block;
         __label__ no_direct_branch;                                           \
         type##_branch_target();                                               \
         block_exits[block_exit_position].branch_target = branch_target;       \
+        cgba_record_exit_pc(block_exit_position,                              \
+                            block_end_pc - type##_instruction_width);         \
         block_exit_position++;                                                \
                                                                               \
         /* Give the branch target macro somewhere to bail if it turns out to  \
@@ -3739,6 +3860,8 @@ extern int cgba_dynarec_single_block;
       if(type##_opcode_swi)                                                   \
       {                                                                       \
         block_exits[block_exit_position].branch_target = 0x00000008;          \
+        cgba_record_exit_pc(block_exit_position,                              \
+                            block_end_pc - type##_instruction_width);         \
         block_exit_position++;                                                \
       }                                                                       \
                                                                               \
@@ -3784,6 +3907,7 @@ extern int cgba_dynarec_single_block;
     }                                                                         \
                                                                               \
     block_data_position++;                                                    \
+    cgba_scan_existing_##type();                                              \
     if((u32)block_data_position >= cgba_eff_cap)                              \
     {                                                                         \
       break;                                                                  \
@@ -4059,12 +4183,16 @@ bool translate_block_arm(u32 pc, bool ram_region)
                 arm_base_cycles();                         /* Bcc fetch cycle */
                 taken_debit = (int)cycle_count +
                   (int)ws_cyc_nseq[(b_target >> 24) & 0x0Fu][1];
-                block_exits[block_exit_position].branch_source =
-                  sh4g_emit_fused_cmp_bcc(
-                    &translation_ptr, fkind, f_rd, next_cond,
-                    taken_debit, b_target, is_internal,
-                    SH4_DEFAULT_BRANCH_EXIT(b_target),
-                    taken_dead, fall_dead);
+                {
+                  u8 *known_target = (is_internal && tgt_idx <= (s32)block_data_position)
+                    ? block_data[tgt_idx].body_offset : NULL;
+                  block_exits[block_exit_position].branch_source =
+                    sh4g_emit_fused_cmp_bcc_known(
+                      &translation_ptr, fkind, f_rd, next_cond,
+                      taken_debit, b_target, is_internal,
+                      SH4_DEFAULT_BRANCH_EXIT(b_target),
+                      taken_dead, fall_dead, 0, known_target);
+                }
                 block_exit_position++;
                 block_data_position++;
                 pc += 4;
@@ -4780,7 +4908,7 @@ cgba_thumb_try_peephole(
     u32 *const_mask_p, const u32 *sh4_thumb_const_val,
     const u8 *pc_address_block, u32 pc_region,
     u32 block_start_pc, u32 block_end_pc,
-    s32 num_insns, u32 cheat_hook, bool ram_region)
+    s32 num_insns, u32 total_exits, u32 cheat_hook, bool ram_region)
 {
   u8 *translation_ptr = *tp_p;
   u32 pc = *pc_p;
@@ -4984,6 +5112,157 @@ cgba_thumb_try_peephole(
       cycle_count = save_cc;
     }
   }
+  /* General Thumb peephole: consecutive same-base immediate-offset load/store
+   * run (2..8 ops of 0x6000..0x8FFF sharing rB, no mid-run write to rB). */
+  if (!thumb_fused &&
+      cur_op >= 0x6000u && cur_op < 0x9000u &&
+      next_op >= 0x6000u && next_op < 0x9000u &&
+      ((cur_op >> 3) & 7u) == ((next_op >> 3) & 7u) &&
+      !(((cur_op >> 11) & 1u) && (cur_op & 7u) == ((cur_op >> 3) & 7u))) {
+    u32 run_ops[8];
+    int run_ccs[8];
+    unsigned run_rb = (cur_op >> 3) & 7u;
+    int rcnt = 0;
+    u32 save_pc = pc;
+    u32 save_cc = cycle_count;
+    run_ops[0] = cur_op;
+    run_ccs[0] = (int)cycle_count;
+    rcnt = 1;
+    while (rcnt < 8 &&
+           block_data_position + rcnt < num_insns &&
+           !block_data[block_data_position + rcnt].update_cycles &&
+           (save_pc + (u32)(rcnt * 2)) != cheat_hook &&
+           ((save_pc + (u32)(rcnt * 2)) >> 12) == pc_region) {
+      u32 rop = readaddress16(pc_address_block,
+                              (save_pc + (u32)(rcnt * 2)) & 0x0FFFu);
+      if (rop < 0x6000u || rop >= 0x9000u || ((rop >> 3) & 7u) != run_rb)
+        break;
+      /* Stop if previous op loaded into run_rb (only allowed as final op). */
+      if (rcnt > 1 && ((run_ops[rcnt - 1] >> 11) & 1u) &&
+          (run_ops[rcnt - 1] & 7u) == run_rb)
+        break;
+      pc = save_pc + (u32)(rcnt * 2);
+      thumb_base_cycles();
+      run_ops[rcnt] = rop;
+      run_ccs[rcnt] = (int)cycle_count;
+      rcnt++;
+    }
+    pc = save_pc;
+    if (rcnt >= 2 &&
+        sh4g_thumb_base_run_native(&translation_ptr, run_ops, run_ccs,
+                                   rcnt, pc)) {
+      int k;
+      for (k = 0; k < rcnt; k++) {
+        if ((run_ops[k] >> 11) & 1u)
+          sh4_thumb_const_kill(run_ops[k] & 7u);
+      }
+      block_data_position += rcnt - 1;
+      *last_op_p = run_ops[rcnt - 1];
+      *op_p = run_ops[rcnt - 1];
+      pc += (u32)(rcnt * 2);
+      sh4_greg_forward_reset();
+      sh4g_litseg_maybe_flush(&translation_ptr);
+      thumb_fused = 1;
+    } else {
+      cycle_count = save_cc;
+    }
+  }
+  /* General Thumb signed-bias / signed-div-pow2 idiom:
+   *   CMP rX, #0; BGE pc+6; ADD rX, (#imm8 | rH | rY)  (dead flags at pc+6).
+   * Eliminates the forward branch seam and executes in 2 insns (rX>=0) or
+   * 5 insns (rX<0) with exact GBA cycle accounting on both arms. */
+  if (!thumb_fused &&
+      (cur_op & 0xF8FFu) == 0x2800u &&
+      next_op == 0xDA00u &&
+      block_data_position + 3 < num_insns &&
+      !block_data[block_data_position + 2].update_cycles &&
+      (u32)(pc + 4) != cheat_hook &&
+      ((u32)(pc + 4) >> 12) == pc_region &&
+      block_exits[block_exit_position].branch_target == (u32)(pc + 6)) {
+    u32 op2 = readaddress16(pc_address_block, (pc + 4) & 0x0FFFu);
+    unsigned rx = (cur_op >> 8) & 7u;
+    int add_kind = 0; /* 1=imm8, 2=hi_reg/reg */
+    unsigned add_arg = 0;
+    if ((op2 & 0xFF00u) == (0x3000u | (rx << 8))) {
+      add_kind = 1;
+      add_arg = op2 & 0xFFu;
+    } else if ((op2 & 0xFF87u) == (0x4400u | rx)) {
+      unsigned rh = (op2 >> 3) & 0xFu;
+      if (rh != 15u) {
+        add_kind = 2;
+        add_arg = rh;
+      }
+    } else if ((op2 & 0xFE00u) == 0x1800u &&
+               (op2 & 7u) == rx && ((op2 >> 3) & 7u) == rx) {
+      add_kind = 2;
+      add_arg = (op2 >> 6) & 7u;
+    }
+    if (add_kind &&
+        sh4_flags_dead_from(block_data, block_data_position + 3, num_insns, 0xFu)) {
+      u32 region = (pc >> 24) & 0x0Fu;
+      int seq_c = (int)ws_cyc_seq[region][0];
+      int nseq_c = (int)ws_cyc_nseq[region][0];
+      unsigned dst_r = SH4_REG_T0;
+      u8 *skip_br;
+      sh4g_litseg_reserve(&translation_ptr, 1);
+      {
+        int pin = sh4_pinned_reg(rx);
+        if (pin >= 0)
+          dst_r = (unsigned)pin;
+      }
+      { sh4_codegen cg = sh4g_open(&translation_ptr);
+        if (dst_r == SH4_REG_T0)
+          sh4_emit_load_greg(&cg, rx, SH4_REG_T0);
+        sh4_emit_cmppz(&cg, dst_r);                     /* T = (rX >= 0) */
+        sh4g_close(&translation_ptr, &cg); }
+      skip_br = sh4g_emit_bt_placeholder(&translation_ptr);
+      { sh4_codegen cg = sh4g_open(&translation_ptr);
+        if (add_kind == 1) {
+          if (add_arg <= 127u) {
+            if (add_arg) sh4_emit_add_imm(&cg, (int)add_arg, dst_r);
+          } else if (add_arg <= 254u) {
+            sh4_emit_add_imm(&cg, 127, dst_r);
+            sh4_emit_add_imm(&cg, (int)(add_arg - 127u), dst_r);
+          } else {
+            sh4_emit_add_imm(&cg, 127, dst_r);
+            sh4_emit_add_imm(&cg, 127, dst_r);
+            sh4_emit_add_imm(&cg, 1, dst_r);
+          }
+        } else {
+          sh4_emit_load_greg(&cg, add_arg, SH4_REG_T1);
+          sh4_emit_add_reg(&cg, SH4_REG_T1, dst_r);
+        }
+        if (dst_r == SH4_REG_T0)
+          sh4_emit_store_greg(&cg, SH4_REG_T0, rx);
+        if (seq_c > 0 && seq_c <= 128)
+          sh4_emit_add_imm(&cg, -seq_c, SH4_REG_CYCLES);
+        sh4g_close(&translation_ptr, &cg); }
+      sh4g_patch_cond(skip_br, translation_ptr);
+      cycle_count += (u32)(seq_c + nseq_c);
+      block_exits[block_exit_position].branch_source = NULL;
+      /* Clear the now-dead forward seam at pc+6 if no other exit targets it. */
+      { u32 e, other = 0;
+        for (e = 0; e < total_exits; e++) {
+          if (e != block_exit_position &&
+              block_exits[e].branch_target == (u32)(pc + 6)) {
+            other = 1;
+            break;
+          }
+        }
+        if (!other)
+          block_data[block_data_position + 3].update_cycles = 0;
+      }
+      sh4_thumb_const_kill(rx);
+      block_exit_position++;
+      block_data_position += 2;
+      *last_op_p = op2;
+      *op_p = op2;
+      pc += 6;
+      sh4_greg_forward_reset();
+      sh4g_litseg_maybe_flush(&translation_ptr);
+      thumb_fused = 1;
+    }
+  }
   if (!thumb_fused && next_hi >= 0xD0u && next_hi <= 0xDDu) {
     u32 next_cond = next_hi & 0x0Fu;
     u32 b_target = block_exits[block_exit_position].branch_target;
@@ -5099,12 +5378,24 @@ cgba_thumb_try_peephole(
           : sh4_thumb_flags_dead_at_rom_pc(eff_target, need_kill, cheat_hook);
         s32 fall_idx = block_data_position + (long_br ? 3 : 2);
         int fall_dead = (fall_idx < num_insns &&
-                         !block_data[fall_idx].update_cycles)
+                         !(block_data[fall_idx].update_cycles & 1u))
           ? sh4_flags_dead_from(block_data, fall_idx, num_insns, need_kill)
           : 0;
         if (taken_dead || fall_dead || long_br) {
           int taken_debit;
+          int internal_mode = 0;
+          u8 *known_target = NULL;
           u8 *site;
+          if (is_internal) {
+            u32 br_pc = pc + (long_br ? 4u : 2u);
+            if (eff_target > br_pc) {
+              internal_mode = ((tgt_idx - fall_idx) <= 28) ? 3 : 2;
+            } else {
+              internal_mode = 1;
+              if (tgt_idx <= (s32)block_data_position)
+                known_target = block_data[tgt_idx].body_offset;
+            }
+          }
           if (fkind == 0 && f_is_imm && f_imm == 0u &&
               (eff_cond <= 1u || eff_cond >= 0xAu))
             fkind = 4;                               /* CMP a, #0 -> TST/PZ/PL */
@@ -5159,11 +5450,11 @@ cgba_thumb_try_peephole(
               (int)ws_cyc_nseq[((u32)(pc + 2) >> 24) & 0x0Fu][0] +
               (int)ws_cyc_seq[((u32)(pc + 2) >> 24) & 0x0Fu][0] +
               (int)ws_cyc_nseq[(eff_target >> 24) & 0x0Fu][0];
-            site = sh4g_emit_fused_cmp_bcc_ex(
+            site = sh4g_emit_fused_cmp_bcc_known(
               &translation_ptr, fkind, f_rd, eff_cond,
-              taken_debit, eff_target, is_internal,
+              taken_debit, eff_target, internal_mode,
               SH4_DEFAULT_BRANCH_EXIT(eff_target),
-              taken_dead, fall_dead, f_extra);
+              taken_dead, fall_dead, f_extra, known_target);
             block_exits[block_exit_position].branch_source = NULL;
             block_exits[block_exit_position + 1].branch_source = site;
             cycle_count += ws_cyc_nseq[((u32)(pc + 4) >> 24) & 0x0Fu][0];
@@ -5176,11 +5467,11 @@ cgba_thumb_try_peephole(
             taken_debit = (int)cycle_count +
               (int)ws_cyc_nseq[(eff_target >> 24) & 0x0Fu][0];
             block_exits[block_exit_position].branch_source =
-              sh4g_emit_fused_cmp_bcc_ex(
+              sh4g_emit_fused_cmp_bcc_known(
                 &translation_ptr, fkind, f_rd, eff_cond,
-                taken_debit, eff_target, is_internal,
+                taken_debit, eff_target, internal_mode,
                 SH4_DEFAULT_BRANCH_EXIT(eff_target),
-                taken_dead, fall_dead, f_extra);
+                taken_dead, fall_dead, f_extra, known_target);
             cycle_count += ws_cyc_nseq[((u32)(pc + 2) >> 24) & 0x0Fu][0];
             block_exit_position++;
             block_data_position++;
@@ -5229,6 +5520,9 @@ bool translate_block_thumb(u32 pc, bool ram_region)
   u8 *translation_ptr = NULL;
   u8 *translation_cache_limit = NULL;
   u8 *attempt_base = NULL;
+#ifdef SH4_ARCH
+  u8 *chain_existing_target = NULL;
+#endif
   s32 i;
   u32 flag_status;
   block_exit_type external_block_exits[MAX_EXITS];
@@ -5272,6 +5566,8 @@ bool translate_block_thumb(u32 pc, bool ram_region)
 
 #ifdef SH4_ARCH
   s32 num_insns = block_data_position;
+  s32 total_insns = (s32)((block_end_pc - block_start_pc) /
+                          thumb_instruction_width);
 #endif
 
   for(i = 0; i < block_exit_position; i++)
@@ -5286,32 +5582,49 @@ bool translate_block_thumb(u32 pc, bool ram_region)
      (branch_target < block_end_pc))
 #endif
     {
-      block_data[(branch_target - block_start_pc) /
-       thumb_instruction_width].update_cycles = 1;
+      u32 seam_idx = (branch_target - block_start_pc) /
+                     thumb_instruction_width;
 #ifdef SH4_ARCH
-      /* Same as the ARM loop: the flush+gate at this seam can take an IRQ
-         with CPSR architecturally observable — keep flags live across it. */
-      block_data[(branch_target - block_start_pc) /
-       thumb_instruction_width].flag_data |= 0xF00;
+      block_data[seam_idx].body_offset = NULL;
+      if (branch_target <= cgba_block_exit_pc[i] || cgba_dynarec_single_block) {
+        block_data[seam_idx].update_cycles |= 1u;
+        /* Backward/loop seam: the flush+gate at this seam can take an IRQ
+           with CPSR architecturally observable — keep flags live across it. */
+        block_data[seam_idx].flag_data |= 0xF00;
+      } else {
+        /* Forward-only join: syncs R13 without a loop-break IRQ gate. */
+        block_data[seam_idx].update_cycles |= 2u;
+      }
+#else
+      block_data[seam_idx].update_cycles = 1;
 #endif
     }
   }
 
   thumb_dead_flag_eliminate();
 
+#ifdef SH4_ARCH
+  u32 total_exits = block_exit_position;
+#endif
   block_exit_position = 0;
   block_data_position = 0;
 #ifdef SH4_ARCH
   sh4_greg_forward_reset();
 #ifndef CGBA_SH4_EXACT_CYCLE_BOUNDARIES
   const int allow_fuse = !cgba_dynarec_single_block;
+  int sp_span_valid = 0;       /* 0=none, 1=loads-only, 2=loads+stores */
+  u32 sp_span_max_off = 0u;
 #endif
   u32 pc_seq_cycles = ws_cyc_seq[(pc >> 24) & 0x0Fu][0];
   if ((pc >> 12) != pc_region) {
     pc_region = pc >> 12;
     pc_address_block = cgba_memory_map_read_4k(pc);
-    if (!pc_address_block)
+    if (!pc_address_block) {
+      sh4_greg_forward_reset();
+      sh4g_litseg_abort();
+      CGBA_SH4_FM_OOL_REWIND(attempt_base, ram_region);
       return false;
+    }
   }
 #endif
   const u32 cheat_hook = cheat_master_hook;
@@ -5324,18 +5637,33 @@ bool translate_block_thumb(u32 pc, bool ram_region)
      * force-close is needed -- the flush is already unconditional here. */
     if(block_data[block_data_position].update_cycles)
     {
-      generate_cycle_update();
-      block_data[block_data_position].block_offset = translation_ptr;
-      sh4_thumb_const_clear_all();
-      sh4_greg_forward_reset();
-      generate_prof_block_entry(1);
-      generate_cycle_gate(0);
-#if defined(CGBA_SH4_BLOCK_PROFILE) && CGBA_SH4_BLOCK_PROFILE
-      block_data[block_data_position].body_offset =
-        block_data[block_data_position].block_offset;
-#else
-      block_data[block_data_position].body_offset = translation_ptr;
+#ifndef CGBA_SH4_EXACT_CYCLE_BOUNDARIES
+      sp_span_valid = 0;
 #endif
+      if (block_data[block_data_position].update_cycles & 1u) {
+        generate_cycle_update();
+        block_data[block_data_position].block_offset = translation_ptr;
+        sh4_thumb_const_clear_all();
+        sh4_greg_forward_reset();
+        generate_prof_block_entry(1);
+        generate_cycle_gate(0);
+#if defined(CGBA_SH4_BLOCK_PROFILE) && CGBA_SH4_BLOCK_PROFILE
+        block_data[block_data_position].body_offset =
+          block_data[block_data_position].block_offset;
+#else
+        block_data[block_data_position].body_offset = translation_ptr;
+#endif
+      } else {
+        /* Forward-only join: debit accumulated cycles without an IRQ gate. */
+        if (cycle_count != 0) {
+          sh4g_cycle_debit(&translation_ptr, (int)cycle_count);
+          cycle_count = 0;
+        }
+        block_data[block_data_position].block_offset = translation_ptr;
+        block_data[block_data_position].body_offset = translation_ptr;
+        sh4_thumb_const_clear_all();
+        sh4_greg_forward_reset();
+      }
     }
     else
     {
@@ -5348,8 +5676,12 @@ bool translate_block_thumb(u32 pc, bool ram_region)
     if (__builtin_expect(new_pc_region != pc_region, 0)) {
       pc_region = new_pc_region;
       pc_address_block = cgba_memory_map_read_4k(pc);
-      if (!pc_address_block)
+      if (!pc_address_block) {
+        sh4_greg_forward_reset();
+        sh4g_litseg_abort();
+        CGBA_SH4_FM_OOL_REWIND(attempt_base, ram_region);
         return false;
+      }
       pc_seq_cycles = ws_cyc_seq[(pc >> 24) & 0x0Fu][0];
     }
     cycle_count += pc_seq_cycles;
@@ -5370,13 +5702,58 @@ bool translate_block_thumb(u32 pc, bool ram_region)
       int thumb_fused = 0;
 #ifndef CGBA_SH4_EXACT_CYCLE_BOUNDARIES
       if (allow_fuse &&
+          cgba_sh4_pop1_bx_routine != NULL &&
+          (cur_op >> 8) == 0xBCu &&
+          block_data_position + 1 < total_insns &&
+          !block_data[block_data_position + 1].update_cycles &&
+          (pc + 2) != cheat_hook &&
+          ((pc + 2) & 0x0FFFu) != 0u) {
+        u32 rlist = cur_op & 0xFFu;
+        if (rlist != 0u && (rlist & (rlist - 1u)) == 0u) {
+          u32 next_op = readaddress16(pc_address_block, (pc + 2) & 0x0FFF);
+          unsigned rx = (unsigned)__builtin_ctz(rlist);
+          if (next_op == (0x4700u | (rx << 3))) {
+            /* POP {rX}; BX rX -> compact 12-byte ILRAM call. POP's fetch cycle
+             * is already in cycle_count; BX cancels its own fetch cycle. */
+            sh4g_litseg_reserve(&translation_ptr, 1);
+            if (cycle_count != 0) {
+              sh4g_cycle_debit(&translation_ptr, (int)cycle_count);
+              cycle_count = 0;
+            }
+            sh4g_const(&translation_ptr,
+                       (u32)(uintptr_t)cgba_sh4_pop1_bx_routine, SH4_REG_RET);
+            if (((uintptr_t)translation_ptr + 4u) & 3u)
+              sh4g_u16(&translation_ptr, 0x0009u);
+            { sh4_codegen _cg = sh4g_open(&translation_ptr);
+              sh4_emit_jsr(&_cg, SH4_REG_RET);
+              sh4_emit_mov_imm(&_cg, (int)(rx * 4u), SH4_REG_ARG1);
+              sh4_emit_u32_be(&_cg, (u32)pc);
+              sh4g_close(&translation_ptr, &_cg); }
+            sh4_thumb_const_clear_all();
+            sh4_greg_forward_reset();
+            last_opcode = next_op;
+            opcode = next_op;
+            pc += 2;
+            update_pc_limits();
+            pc += 2;
+            block_data_position++;
+            sh4g_litseg_maybe_flush(&translation_ptr);
+            thumb_fused = 1;
+          }
+        }
+      }
+      if (!thumb_fused &&
+          allow_fuse &&
           block_data_position + 1 < num_insns &&
           !block_data[block_data_position + 1].update_cycles &&
           (pc + 2) != cheat_hook &&
           ((pc + 2) & 0x0FFFu) != 0u) {
         u32 next_op = readaddress16(pc_address_block, (pc + 2) & 0x0FFF);
         if ((cgba_thumb_hi_lut[cur_op >> 8] & 0x4000u) ||
-            (u32)(next_op - 0xD000u) < 0x0E00u) {
+            (u32)(next_op - 0xD000u) < 0x0E00u ||
+            ((u32)(cur_op - 0x6000u) < 0x3000u &&
+             (u32)(next_op - 0x6000u) < 0x3000u &&
+             ((cur_op >> 3) & 7u) == ((next_op >> 3) & 7u))) {
           thumb_fused = cgba_thumb_try_peephole(
             &translation_ptr, cur_op, next_op,
             &pc, &cycle_count, &block_data_position, &block_exit_position,
@@ -5384,15 +5761,38 @@ bool translate_block_thumb(u32 pc, bool ram_region)
             &sh4_thumb_const_mask, sh4_thumb_const_val,
             pc_address_block, pc_region,
             block_start_pc, block_end_pc,
-            num_insns, cheat_hook, ram_region);
+            num_insns, total_exits, cheat_hook, ram_region);
         }
         /* 4-slot R4..R7 BBRA for straight-line dead-flag Thumb ALU runs. */
-        if (!thumb_fused && !(block_data[block_data_position].flag_data & 0xFu)) {
-          u32 rm0, wm0;
-          if (sh4g_thumb_bbra_classify(cur_op, &rm0, &wm0)) {
+        if (!thumb_fused && !(block_data[block_data_position].flag_data & 0xFu) &&
+            sh4g_thumb_bbra_maybe(cur_op) &&
+            block_data_position + 1 < num_insns &&
+            !block_data[block_data_position + 1].update_cycles &&
+            !(block_data[block_data_position + 1].flag_data & 0xFu) &&
+            (pc + 2u) != cheat_hook &&
+            ((pc + 2u) & 0x0FFFu) != 0u) {
+          u32 rm_arr[16], wm_arr[16];
+          u16 next_rop = readaddress16(pc_address_block, (pc + 2u) & 0x0FFF);
+          if (sh4g_thumb_bbra_maybe(next_rop) &&
+              sh4g_thumb_bbra_classify(cur_op, &rm_arr[0], &wm_arr[0]) &&
+              sh4g_thumb_bbra_classify(next_rop, &rm_arr[1], &wm_arr[1])) {
+            const u32 unpin = 0x7FFFu
+#if CGBA_SH4_PIN_GUEST_R0
+              & ~1u
+#endif
+#if CGBA_SH4_PIN_GUEST_R1
+              & ~2u
+#endif
+              ;
             u16 run_ops[16];
-            int rlen = 1;
+            int rlen = 2;
+            u32 t0 = (rm_arr[0] | wm_arr[0]) & unpin;
+            u32 t1 = (rm_arr[1] | wm_arr[1]) & unpin;
+            u32 seen = t0 | t1;
+            u32 dup  = (t0 & t1) | (rm_arr[0] & wm_arr[0] & unpin) |
+                       (rm_arr[1] & wm_arr[1] & unpin);
             run_ops[0] = (u16)cur_op;
+            run_ops[1] = next_rop;
             while (rlen < 16 &&
                    block_data_position + rlen < num_insns &&
                    !block_data[block_data_position + rlen].update_cycles &&
@@ -5401,9 +5801,13 @@ bool translate_block_thumb(u32 pc, bool ram_region)
                    ((pc + (u32)(rlen * 2)) & 0x0FFFu) != 0u) {
               u16 rop = readaddress16(pc_address_block,
                                       (pc + (u32)(rlen * 2)) & 0x0FFF);
-              u32 rmk, wmk;
-              if (!sh4g_thumb_bbra_classify(rop, &rmk, &wmk))
+              u32 tk;
+              if (!sh4g_thumb_bbra_maybe(rop) ||
+                  !sh4g_thumb_bbra_classify(rop, &rm_arr[rlen], &wm_arr[rlen]))
                 break;
+              tk = (rm_arr[rlen] | wm_arr[rlen]) & unpin;
+              dup |= (seen & tk) | (rm_arr[rlen] & wm_arr[rlen] & unpin);
+              seen |= tk;
               run_ops[rlen++] = rop;
             }
             /* Preserve trailing const-RAM ADD+LDR peephole if present. */
@@ -5419,10 +5823,13 @@ bool translate_block_thumb(u32 pc, bool ram_region)
                   (after_op & 0xF800u) == 0x6800u)
                 rlen--;
             }
-            if (rlen >= 2) {
+            if (rlen >= 2 && dup != 0u) {
               u32 wmask = 0u;
-              if (sh4g_thumb_alu_run_native(&translation_ptr, run_ops, rlen, &wmask)) {
+              if (sh4g_thumb_alu_run_native_ex(&translation_ptr, run_ops,
+                                               rm_arr, wm_arr, rlen, &wmask)) {
                 sh4_thumb_const_mask &= ~wmask;
+                if (wmask & (1u << SH4_GREG_SP))
+                  sp_span_valid = 0;
                 pc += (u32)(rlen * 2);
                 cycle_count += pc_seq_cycles * (u32)(rlen - 1);
                 block_data_position += rlen - 1;
@@ -5433,6 +5840,154 @@ bool translate_block_thumb(u32 pc, bool ram_region)
               }
             }
           }
+        }
+      }
+      /* Proven-IWRAM-SP span for isolated `LDR/STR rd, [sp, #imm]` (off <= 60).
+       * Validates canonical aligned IWRAM SP ONCE at the first SP access in a
+       * straight-line span of >=2 SP accesses (deopting to cold interp on
+       * non-IWRAM/unaligned SP), turning each SP access into 8 branchless SH-4
+       * insns (16B, no JSR, compile-time cycle fold, full reg forwarding). */
+      if (!thumb_fused && allow_fuse &&
+          (cur_op & 0xF000u) == 0x9000u &&
+          ((cur_op & 0xFFu) <= 15u)) {
+        u32 sp_off = (cur_op & 0xFFu) << 2;
+        int sp_is_load = (int)((cur_op >> 11) & 1u);
+        unsigned sp_rd = (cur_op >> 8) & 7u;
+        if (!sp_span_valid) {
+          /* Forward scan across straight-line instructions (peeking across
+           * short forward CMP+BGE+ADD joins whose update_cycles will clear). */
+          s32 scan = block_data_position;
+          u32 scan_pc = pc;
+          int sp_cnt = 0, sp_has_st = 0;
+          u32 max_o = 0u;
+          while (scan < num_insns && (scan_pc >> 12) == pc_region &&
+                 scan_pc != cheat_hook) {
+            u32 sop = readaddress16(pc_address_block, scan_pc & 0x0FFFu);
+            u32 shi = sop >> 8;
+            if (scan > block_data_position &&
+                (block_data[scan].update_cycles & 1u))
+              break;
+            if ((sop & 0xF000u) == 0x9000u) {
+              u32 so = (sop & 0xFFu) << 2;
+              if (so <= 60u) {
+                sp_cnt++;
+                if (so > max_o) max_o = so;
+                if (!((sop >> 11) & 1u)) sp_has_st = 1;
+              }
+            } else if (shi == 0xB0u || shi == 0xB4u || shi == 0xB5u ||
+                       shi == 0xBCu || shi == 0xBDu ||
+                       (sop & 0xFF80u) == 0x4700u ||
+                       ((shi == 0x44u || shi == 0x46u) &&
+                        (((sop & 7u) | ((sop >> 4) & 8u)) == 13u))) {
+              break; /* SP write or BX */
+            } else if (shi >= 0xD0u) {
+              /* Allow peeking over BGE +2 (0xDA00); stop at any other branch/SWI. */
+              if (sop != 0xDA00u)
+                break;
+            }
+            scan++;
+            scan_pc += 2u;
+          }
+          if (sp_cnt >= 2) {
+            u8 *deopt[3], *sp_ok;
+            int nd = 0, pre_deb = (int)(cycle_count - pc_seq_cycles);
+            sh4g_litseg_reserve(&translation_ptr, 6);
+            sh4_greg_forward_reset();
+            { sh4_codegen cg = sh4g_open(&translation_ptr);
+              sh4_emit_load_greg(&cg, 13, SH4_REG_T0);  /* R1 = SP */
+              sh4g_close(&translation_ptr, &cg); }
+            sh4g_const(&translation_ptr, 0x03000000u, SH4_REG_RET);
+            sh4g_const(&translation_ptr, 0x8000u - (max_o + 3u), SH4_REG_T1);
+            { sh4_codegen cg = sh4g_open(&translation_ptr);
+              sh4_emit_sub(&cg, SH4_REG_RET, SH4_REG_T0);
+              sh4_emit_cmphs(&cg, SH4_REG_T1, SH4_REG_T0);
+              sh4g_close(&translation_ptr, &cg); }
+            deopt[nd++] = sh4g_emit_bt_placeholder(&translation_ptr);
+            { sh4_codegen cg = sh4g_open(&translation_ptr);
+              sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
+              sh4_emit_tst_imm(&cg, 3);
+              sh4g_close(&translation_ptr, &cg); }
+            deopt[nd++] = sh4g_emit_bf_placeholder(&translation_ptr);
+            if (sp_has_st) {
+              sh4g_const(&translation_ptr, (u32)(uintptr_t)&cgba_iwram_code_end,
+                         SH4_REG_T2);
+              { sh4_codegen cg = sh4g_open(&translation_ptr);
+                sh4_emit_mov_l_load(&cg, SH4_REG_T2, SH4_REG_T1);
+                sh4_emit_cmphs(&cg, SH4_REG_T1, SH4_REG_T0);
+                sh4g_close(&translation_ptr, &cg); }
+              deopt[nd++] = sh4g_emit_bf_placeholder(&translation_ptr);
+            }
+            sp_ok = sh4g_emit_bra_placeholder(&translation_ptr);
+            while (nd)
+              sh4g_patch_cond(deopt[--nd], translation_ptr);
+            if (pre_deb != 0)
+              sh4g_cycle_debit(&translation_ptr, pre_deb);
+            sh4g_const(&translation_ptr, (u32)pc, SH4_REG_RET);
+            sh4g_store_greg(&translation_ptr, SH4_REG_RET, SH4_GREG_PC);
+            sh4g_far_jmp(&translation_ptr, (const void *)sh4_cold_interp_entry);
+            sh4g_patch_bra(sp_ok, translation_ptr);
+            sp_span_valid = sp_has_st ? 2 : 1;
+            sp_span_max_off = max_o;
+          }
+        }
+        if (sp_span_valid && sp_off <= sp_span_max_off &&
+            (sp_is_load || sp_span_valid == 2)) {
+          u8 *forward_start = translation_ptr;
+          u32 iwram_bias = (u32)(uintptr_t)(iwram + 0x8000) - 0x03000000u;
+          sh4g_litseg_reserve(&translation_ptr, 1);
+          if (!sp_is_load) {
+            /* Load store value FIRST so it can consume forwarding from prev op. */
+            sh4_codegen cg = sh4g_open(&translation_ptr);
+            sh4_emit_load_greg(&cg, sp_rd, SH4_REG_T1);
+            sh4g_close(&translation_ptr, &cg);
+          }
+          sh4g_const(&translation_ptr, iwram_bias, SH4_REG_RET);
+          { sh4_codegen cg = sh4g_open(&translation_ptr);
+            sh4_emit_load_greg(&cg, 13, SH4_REG_T2);    /* R3 = SP */
+            sh4_emit_add_reg(&cg, SH4_REG_RET, SH4_REG_T2);
+            if (sp_is_load) {
+              if (sp_off == 0u) sh4_emit_mov_l_load(&cg, SH4_REG_T2, SH4_REG_T1);
+              else              sh4_emit_mov_l_load_disp(&cg, SH4_REG_T2, SH4_REG_T1, sp_off >> 2);
+              sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
+              sh4_emit_swap_w(&cg, SH4_REG_T1, SH4_REG_T1);
+              sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
+              sh4_emit_store_greg(&cg, SH4_REG_T1, sp_rd);
+            } else {
+              sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
+              sh4_emit_swap_w(&cg, SH4_REG_T1, SH4_REG_T1);
+              sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
+              if (sp_off == 0u) sh4_emit_mov_l_store(&cg, SH4_REG_T1, SH4_REG_T2);
+              else              sh4_emit_mov_l_store_disp(&cg, SH4_REG_T1, SH4_REG_T2, sp_off >> 2);
+            }
+            sh4g_close(&translation_ptr, &cg); }
+          cycle_count += 1u; /* IWRAM nseq cost folded into compile-time budget */
+          if (sp_is_load) {
+            sh4_thumb_const_kill(sp_rd);
+            if (translation_ptr > forward_start && translation_ptr[-2] == 0x1Eu)
+              sh4_greg_forward_finish(forward_start, translation_ptr, 1);
+            else
+              sh4_greg_forward_reset();
+          } else {
+            sh4_greg_forward_reset();
+          }
+          last_opcode = opcode;
+          opcode = cur_op;
+          pc += 2u;
+          sh4g_litseg_maybe_flush(&translation_ptr);
+          thumb_fused = 1;
+        }
+      }
+      /* Invalidate proven-IWRAM-SP span on any SP write or branch/call/SWI. */
+      if (sp_span_valid) {
+        u32 cur_hi = cur_op >> 8;
+        if (cur_hi == 0xB0u || cur_hi == 0xB4u || cur_hi == 0xB5u ||
+            cur_hi == 0xBCu || cur_hi == 0xBDu ||
+            (cur_op & 0xFF80u) == 0x4700u ||
+            ((cur_hi == 0x44u || cur_hi == 0x46u) &&
+             (((cur_op & 7u) | ((cur_op >> 4) & 8u)) == 13u)) ||
+            (!thumb_fused && cur_hi >= 0xD0u) ||
+            (thumb_fused && (opcode >> 8) >= 0xD0u)) {
+          sp_span_valid = 0;
         }
       }
 #endif
@@ -5456,7 +6011,17 @@ bool translate_block_thumb(u32 pc, bool ram_region)
                ((opcode >> 6) & 15) != 4 && ((opcode >> 6) & 15) != 7))) ||
             (((opcode & 0xFF00) == 0x4400 || (opcode & 0xFF00) == 0x4600) &&
              (((opcode & 7) | ((opcode >> 4) & 8)) != 15)) ||
-            (opcode & 0xF000) == 0xA000);
+            (opcode & 0xF000) == 0xA000 ||
+            (CGBA_SH4_COMPACT_FASTMEM_TUPLE &&
+             cycle_count <= 0xFFFFu &&
+             sh4g_thumb_ldst_is_load(opcode) &&
+             !sh4g_thumb_ldst_runtime_io_candidate(opcode) &&
+             ((opcode & 0xF800u) == 0x4800u ||
+              (opcode & 0xF000u) == 0x5000u ||
+              (opcode & 0xF000u) == 0x6000u ||
+              (opcode & 0xF000u) == 0x7000u ||
+              (opcode & 0xF000u) == 0x8000u ||
+              (opcode & 0xF000u) == 0x9000u)));
         } else {
           sh4_greg_forward_reset();
         }
@@ -5512,7 +6077,29 @@ bool translate_block_thumb(u32 pc, bool ram_region)
 
 #ifdef SH4_ARCH
   sh4_greg_forward_reset();
-  sh4g_litseg_end(&translation_ptr);
+  if (chain_existing_target != NULL) {
+    u8 *chain_dst;
+    long chain_disp;
+    sh4g_litseg_reserve(&translation_ptr, 2);
+    if (cycle_count != 0) {
+      sh4g_cycle_debit(&translation_ptr, (int)cycle_count);
+      cycle_count = 0;
+    }
+    chain_dst = cgba_sh4_chase_bra(chain_existing_target);
+    chain_disp = ((long)(uintptr_t)chain_dst -
+                  ((long)(uintptr_t)translation_ptr + 4)) / 2;
+    if (chain_disp >= -2048 && chain_disp <= 2047) {
+      sh4g_u16(&translation_ptr, (u16)(0xA000u | (chain_disp & 0x0FFFu)));
+      sh4g_u16(&translation_ptr, 0x0009u);
+    } else {
+      sh4g_far_jmp(&translation_ptr, chain_dst);
+    }
+    ended_uncond = 1;
+  }
+  if (ended_uncond)
+    sh4g_litseg_end_tail(&translation_ptr);
+  else
+    sh4g_litseg_end(&translation_ptr);
 #endif
 
   /* See translate_block_arm: the gate is dead code after a clean
@@ -5565,6 +6152,53 @@ bool translate_block_thumb(u32 pc, bool ram_region)
     *(u16 *)translation_ptr = 0x0009;             /* NOP pad (never executed) */
     translation_ptr += 2;
   }
+
+  /* Register internal update_cycles seams in rom_branch_hash as 12-byte
+     BRA-to-body_offset aliases so IRQ returns / external branches / later
+     overlapping prefixes reuse this compiled tail instead of duplicating it. */
+#if CGBA_SH4_THUMB_SEAM_ALIAS
+  if (!ram_region && !CGBA_SH4_DIFF_ACTIVE() && block_start_pc >= 0x08000000u) {
+    for (i = 1; i < total_insns; i++) {
+      u8 *target_ptr;
+      u32 seam_pc, key, hash_target, alias_off;
+      u8 *seam_blk, *bra_site;
+      u16 seam_op;
+      long disp;
+      if (!block_data[i].update_cycles || block_data[i].body_offset == NULL)
+        continue;
+      seam_pc = block_start_pc + (u32)i * thumb_instruction_width;
+      if (idle_loop_target_pc != 0xFFFFFFFFu &&
+          (u32)(seam_pc - (idle_loop_target_pc - 64u)) <= 128u)
+        continue;
+      seam_blk = cgba_memory_map_read_4k(seam_pc);
+      seam_op = seam_blk ? readaddress16(seam_blk, seam_pc & 0x0FFFu) : 0xFFFFu;
+      if (seam_op >= 0xF800u)
+        continue;
+      if (cgba_rom_hash_lookup_thumb(seam_pc) != NULL)
+        continue;
+      if (translation_ptr + sizeof(hashhdr_type) + 4 > translation_cache_limit)
+        break;
+      target_ptr = block_data[i].body_offset;
+      bra_site = translation_ptr + sizeof(hashhdr_type);
+      disp = ((long)(uintptr_t)target_ptr - ((long)(uintptr_t)bra_site + 4)) / 2;
+      if (disp < -2048 || disp > 2047)
+        continue;
+      key = seam_pc | 1u;
+      hash_target = ((key * 2654435761U) >> (32 - ROM_BRANCH_HASH_BITS))
+                    & (ROM_BRANCH_HASH_SIZE - 1);
+      alias_off = (u32)(translation_ptr - rom_translation_cache);
+      {
+        hashhdr_type *ahdr = (hashhdr_type *)translation_ptr;
+        ahdr->pc_value = key;
+        ahdr->next_entry = rom_branch_hash[hash_target];
+        rom_branch_hash[hash_target] = alias_off;
+      }
+      translation_ptr += sizeof(hashhdr_type);
+      sh4g_u16(&translation_ptr, (u16)(0xA000u | (disp & 0x0FFFu)));
+      sh4g_u16(&translation_ptr, 0x0009u);
+    }
+  }
+#endif
 #endif
   if (ram_region)
     ram_translation_ptr = translation_ptr;
@@ -5643,7 +6277,13 @@ void init_bios_hooks(void)
   // SWI calls from ROM and RAM regardless of cache flushes.
   rom_translation_ptr = &rom_translation_cache[rom_cache_watermark];
   last_rom_translation_ptr = rom_translation_ptr;
+#if defined(SH4_ARCH) && CGBA_SH4_COMPACT_FASTMEM_TUPLE && CGBA_SH4_FASTMEM_OOL_DESC
+  cgba_sh4_fm_ool_set_bios_mode(1);
+#endif
   bios_swi_entrypoint = block_lookup_address_arm(0x8);
+#if defined(SH4_ARCH) && CGBA_SH4_COMPACT_FASTMEM_TUPLE && CGBA_SH4_FASTMEM_OOL_DESC
+  cgba_sh4_fm_ool_set_bios_mode(0);
+#endif
   rom_cache_watermark = (u32)(rom_translation_ptr - rom_translation_cache);
 }
 
@@ -5678,28 +6318,34 @@ void flush_translation_cache_ram(void)
   // Proceed to clean the SMC area if needed
   // (also try to memset as little as possible for performance)
   /* min == ~0U is the explicit unseen state; offset zero is valid code. */
-  if (cgba_sh4_ram_code_seen(iwram_code_min)) {
-    if(iwram_code_max > iwram_code_min) {
+  if (cgba_sh4_ram_code_seen(iwram_code_min) || cgba_iwram_code_end > 0U) {
+    if (cgba_sh4_ram_code_seen(iwram_code_min) &&
+        iwram_code_max > iwram_code_min) {
+      u32 clr_max = MAX(iwram_code_max, cgba_iwram_code_end);
       iwram_code_min &= ~15U;
-      iwram_code_max = MIN(iwram_code_max + 8, 0x8000);
-      memset(&iwram[iwram_code_min], 0, iwram_code_max - iwram_code_min);
+      clr_max = MIN(clr_max + 8, 0x8000);
+      memset(&iwram[iwram_code_min], 0, clr_max - iwram_code_min);
     } else
       memset(iwram, 0, 0x8000);
   }
 
-  if (cgba_sh4_ram_code_seen(ewram_code_min)) {
-    if(ewram_code_max > ewram_code_min) {
+  if (cgba_sh4_ram_code_seen(ewram_code_min) || cgba_ewram_code_end > 0U) {
+    if (cgba_sh4_ram_code_seen(ewram_code_min) &&
+        ewram_code_max > ewram_code_min) {
+      u32 clr_max = MAX(ewram_code_max, cgba_ewram_code_end);
       ewram_code_min &= ~15U;
-      ewram_code_max = MIN(ewram_code_max + 8, 0x40000);
-      memset(&ewram[0x40000 + ewram_code_min], 0, ewram_code_max - ewram_code_min);
+      clr_max = MIN(clr_max + 8, 0x40000);
+      memset(&ewram[0x40000 + ewram_code_min], 0, clr_max - ewram_code_min);
     } else
       memset(&ewram[0x40000], 0, 0x40000);
   }
 
   iwram_code_min = ~0U;
   iwram_code_max =  0U;
+  cgba_iwram_code_end = 0U;
   ewram_code_min = ~0U;
   ewram_code_max =  0U;
+  cgba_ewram_code_end = 0U;
   ram_block_tag = INITIAL_TOP_TAG;
 
   /* The dual-hot dispatch table (sh4_stub.S) caches RESOLVED HOST POINTERS,
@@ -5798,8 +6444,7 @@ void init_dynarec_caches(void)
 #ifdef SH4_ARCH
   cgba_sh4_fastmem_init();     /* resident ldst fast paths (sh4_fastmem.c) */
 #if CGBA_SH4_COMPACT_FASTMEM_TUPLE && CGBA_SH4_FASTMEM_OOL_DESC
-  cgba_sh4_fm_ool_reset_rom();
-  cgba_sh4_fm_ool_reset_ram();
+  cgba_sh4_fm_ool_reset_all();
 #endif
   memset(cgba_hot_count, 0, sizeof(cgba_hot_count));
   cgba_cold_pending = 0;
@@ -5829,8 +6474,10 @@ void init_dynarec_caches(void)
 
   ewram_code_min = 0;
   ewram_code_max = 0x40000;
+  cgba_ewram_code_end = 0U;
   iwram_code_min = 0;
   iwram_code_max = 0x8000;
+  cgba_iwram_code_end = 0U;
 }
 
 void flush_dynarec_caches(void)

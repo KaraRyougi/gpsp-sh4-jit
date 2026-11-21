@@ -179,11 +179,11 @@ set(CGBA_GPSP_ROM_BRANCH_HASH_BITS "${_CGBA_DEFAULT_ROM_HASH_BITS}" CACHE STRING
   "SH4 dynarec ROM branch-hash = 2^N u32 entries (12 = 16 KiB, 13 = 32 KiB)")
 if(CGBA_CLASSPAD)
   # The ClassPad II arena is in the OS heap and not under the fx-CG ceiling
-  # above, so the ROM cache is 2 MiB (2048 KiB) there: Pokemon Emerald was
-  # seen to fill the 1 MiB one 11 times in a session, while leaving ~58 KiB
-  # headroom in the 5.5 MiB arena for .cgba.core (incl. main.c + Phase 3 ASM)
-  # and .cgba.highbss. The hash table is doubled to keep chains short.
-  set(CGBA_GPSP_ROM_TRANSLATION_CACHE_SIZE 2097152)
+  # above, so the ROM cache is 1920 KiB (1.875 MiB) there: Pokemon Emerald was
+  # seen to fill the 1 MiB one 11 times in a session, while leaving ~78 KiB
+  # headroom in the 5.5 MiB arena for .cgba.core (incl. main.c + Mode 1/Phase 3
+  # ASM) and .cgba.highbss. The hash table is doubled to keep chains short.
+  set(CGBA_GPSP_ROM_TRANSLATION_CACHE_SIZE 1966080)
   set(CGBA_GPSP_ROM_BRANCH_HASH_BITS 13)
 endif()
 if(CGBA_DYNAREC)

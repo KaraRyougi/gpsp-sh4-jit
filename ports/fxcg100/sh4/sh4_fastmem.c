@@ -17,21 +17,42 @@ extern u8 rom_translation_cache[ROM_TRANSLATION_CACHE_SIZE];
 extern u8 ram_translation_cache[RAM_TRANSLATION_CACHE_SIZE];
 extern int cgba_sh4_extra_cycles;
 
-/* Out-of-line slow-path descriptors for non-WB single fastmem sites:
+/* Out-of-line slow-path descriptors for fastmem sites (single + WB + block):
  *   - ROM cache: grows downward from the top of rom_translation_cache (sorted
  *     in strictly descending ret_pc order; shares the existing ROM arena with
  *     zero extra .cgba.highbss cost).
+ *   - BIOS watermark descriptors: 32-entry table in .cgba.highbss so SWI/BIOS
+ *     stubs below rom_cache_watermark survive flush_translation_cache_rom().
  *   - RAM cache: fixed 1024-entry table (16 KiB in .cgba.highbss, sorted in
- *     strictly ascending ret_pc order; any overflow falls back to op2 tramp). */
-enum { CGBA_SH4_RAM_FM_DESC_MAX = 1024 };
+ *     strictly ascending ret_pc order; any overflow falls back to inline).
+ *   - 512-entry direct-mapped cache in .cgba.highbss probed directly in SH-4
+ *     ASM inside sh4_fastmem_compact8_tramp. */
+enum {
+  CGBA_SH4_BIOS_FM_DESC_MAX = 32,
+  CGBA_SH4_RAM_FM_DESC_MAX = 1024,
+  CGBA_SH4_OOL_CACHE_SIZE = 512
+};
+static cgba_sh4_fm_desc cgba_sh4_bios_fm_desc[CGBA_SH4_BIOS_FM_DESC_MAX] CGBA_HIGH_BSS;
+static u32 cgba_sh4_bios_fm_desc_count CGBA_HIGH_BSS;
+static int cgba_sh4_fm_ool_bios_mode CGBA_HIGH_BSS;
 static cgba_sh4_fm_desc cgba_sh4_ram_fm_desc[CGBA_SH4_RAM_FM_DESC_MAX] CGBA_HIGH_BSS;
 static u32 cgba_sh4_ram_fm_desc_count CGBA_HIGH_BSS;
 static cgba_sh4_fm_desc *cgba_sh4_rom_fm_desc_cur CGBA_HIGH_BSS;
-const cgba_sh4_fm_desc *cgba_sh4_fm_ool_cache[256] CGBA_HIGH_BSS;
+const cgba_sh4_fm_desc *cgba_sh4_fm_ool_cache[CGBA_SH4_OOL_CACHE_SIZE] CGBA_HIGH_BSS;
+
+static inline unsigned cgba_sh4_fm_ool_hash(u32 ret_pc)
+{
+  return ((ret_pc >> 1) ^ (ret_pc >> 10)) & (CGBA_SH4_OOL_CACHE_SIZE - 1u);
+}
 
 static inline cgba_sh4_fm_desc *cgba_sh4_rom_fm_desc_top(void)
 {
   return (cgba_sh4_fm_desc *)(void *)(rom_translation_cache + ROM_TRANSLATION_CACHE_SIZE);
+}
+
+void cgba_sh4_fm_ool_set_bios_mode(int on)
+{
+  cgba_sh4_fm_ool_bios_mode = on;
 }
 
 void cgba_sh4_fm_ool_reset_rom(void)
@@ -42,6 +63,15 @@ void cgba_sh4_fm_ool_reset_rom(void)
 
 void cgba_sh4_fm_ool_reset_ram(void)
 {
+  cgba_sh4_ram_fm_desc_count = 0u;
+  memset(cgba_sh4_fm_ool_cache, 0, sizeof(cgba_sh4_fm_ool_cache));
+}
+
+void cgba_sh4_fm_ool_reset_all(void)
+{
+  cgba_sh4_bios_fm_desc_count = 0u;
+  cgba_sh4_fm_ool_bios_mode = 0;
+  cgba_sh4_rom_fm_desc_cur = cgba_sh4_rom_fm_desc_top();
   cgba_sh4_ram_fm_desc_count = 0u;
   memset(cgba_sh4_fm_ool_cache, 0, sizeof(cgba_sh4_fm_ool_cache));
 }
@@ -59,10 +89,34 @@ u8 *cgba_sh4_fm_ool_rom_limit(u32 threshold)
   return top_bytes - threshold;
 }
 
+void cgba_sh4_fm_ool_rewind(const u8 *ptr, int ram_region)
+{
+  u32 lim = (u32)(uintptr_t)ptr;
+  if (ram_region) {
+    while (cgba_sh4_ram_fm_desc_count > 0u &&
+           cgba_sh4_ram_fm_desc[cgba_sh4_ram_fm_desc_count - 1u].ret_pc >= lim)
+      cgba_sh4_ram_fm_desc_count--;
+  } else if (cgba_sh4_fm_ool_bios_mode) {
+    while (cgba_sh4_bios_fm_desc_count > 0u &&
+           cgba_sh4_bios_fm_desc[cgba_sh4_bios_fm_desc_count - 1u].ret_pc >= lim)
+      cgba_sh4_bios_fm_desc_count--;
+  } else {
+    cgba_sh4_fm_desc *top = cgba_sh4_rom_fm_desc_top();
+    if (!cgba_sh4_rom_fm_desc_cur)
+      cgba_sh4_rom_fm_desc_cur = top;
+    while (cgba_sh4_rom_fm_desc_cur < top &&
+           cgba_sh4_rom_fm_desc_cur->ret_pc >= lim)
+      cgba_sh4_rom_fm_desc_cur++;
+  }
+  memset(cgba_sh4_fm_ool_cache, 0, sizeof(cgba_sh4_fm_ool_cache));
+}
+
 int cgba_sh4_fm_ool_can_record(const u8 *tp)
 {
   if (tp >= rom_translation_cache &&
       tp < rom_translation_cache + ROM_TRANSLATION_CACHE_SIZE) {
+    if (cgba_sh4_fm_ool_bios_mode)
+      return cgba_sh4_bios_fm_desc_count < CGBA_SH4_BIOS_FM_DESC_MAX;
     cgba_sh4_fm_desc *cur = cgba_sh4_rom_fm_desc_cur;
     if (!cur) {
       cur = cgba_sh4_rom_fm_desc_top();
@@ -83,12 +137,38 @@ void cgba_sh4_fm_ool_push(u32 ret_pc, u32 pc_flags, u32 opcode, u32 cycle_count)
   const u8 *p = (const u8 *)(uintptr_t)ret_pc;
   if (p >= rom_translation_cache &&
       p < rom_translation_cache + ROM_TRANSLATION_CACHE_SIZE) {
+    if (cgba_sh4_fm_ool_bios_mode) {
+      while (cgba_sh4_bios_fm_desc_count > 0u &&
+             cgba_sh4_bios_fm_desc[cgba_sh4_bios_fm_desc_count - 1u].ret_pc >= ret_pc) {
+        cgba_sh4_bios_fm_desc_count--;
+        memset(cgba_sh4_fm_ool_cache, 0, sizeof(cgba_sh4_fm_ool_cache));
+      }
+      cgba_sh4_fm_desc *d = &cgba_sh4_bios_fm_desc[cgba_sh4_bios_fm_desc_count++];
+      d->ret_pc = ret_pc;
+      d->pc_flags = pc_flags;
+      d->opcode = opcode;
+      d->cycle_count = cycle_count;
+      return;
+    }
+    cgba_sh4_fm_desc *top = cgba_sh4_rom_fm_desc_top();
+    if (!cgba_sh4_rom_fm_desc_cur)
+      cgba_sh4_rom_fm_desc_cur = top;
+    while (cgba_sh4_rom_fm_desc_cur < top &&
+           cgba_sh4_rom_fm_desc_cur->ret_pc >= ret_pc) {
+      cgba_sh4_rom_fm_desc_cur++;
+      memset(cgba_sh4_fm_ool_cache, 0, sizeof(cgba_sh4_fm_ool_cache));
+    }
     cgba_sh4_fm_desc *d = --cgba_sh4_rom_fm_desc_cur;
     d->ret_pc = ret_pc;
     d->pc_flags = pc_flags;
     d->opcode = opcode;
     d->cycle_count = cycle_count;
   } else {
+    while (cgba_sh4_ram_fm_desc_count > 0u &&
+           cgba_sh4_ram_fm_desc[cgba_sh4_ram_fm_desc_count - 1u].ret_pc >= ret_pc) {
+      cgba_sh4_ram_fm_desc_count--;
+      memset(cgba_sh4_fm_ool_cache, 0, sizeof(cgba_sh4_fm_ool_cache));
+    }
     cgba_sh4_fm_desc *d = &cgba_sh4_ram_fm_desc[cgba_sh4_ram_fm_desc_count++];
     d->ret_pc = ret_pc;
     d->pc_flags = pc_flags;
@@ -104,13 +184,23 @@ CGBA_HOT_TEXT const cgba_sh4_fm_desc *cgba_sh4_fastmem_ool_lookup(u32 ret_pc)
   if (p >= rom_translation_cache &&
       p < rom_translation_cache + ROM_TRANSLATION_CACHE_SIZE) {
     const cgba_sh4_fm_desc *arr = cgba_sh4_rom_fm_desc_cur;
-    u32 n = (u32)(cgba_sh4_rom_fm_desc_top() - arr);
-    u32 lo = 0u, hi = n;
-    while (lo < hi) {
-      u32 mid = lo + ((hi - lo) >> 1);
-      u32 k = arr[mid].ret_pc;
-      if (k == ret_pc) { found = &arr[mid]; break; }
-      if (k > ret_pc) lo = mid + 1u; else hi = mid;
+    if (arr) {
+      u32 n = (u32)(cgba_sh4_rom_fm_desc_top() - arr);
+      u32 lo = 0u, hi = n;
+      while (lo < hi) {
+        u32 mid = lo + ((hi - lo) >> 1);
+        u32 k = arr[mid].ret_pc;
+        if (k == ret_pc) { found = &arr[mid]; break; }
+        if (k > ret_pc) lo = mid + 1u; else hi = mid;
+      }
+    }
+    if (!found) {
+      for (u32 i = 0u; i < cgba_sh4_bios_fm_desc_count; i++) {
+        if (cgba_sh4_bios_fm_desc[i].ret_pc == ret_pc) {
+          found = &cgba_sh4_bios_fm_desc[i];
+          break;
+        }
+      }
     }
   } else {
     const cgba_sh4_fm_desc *arr = cgba_sh4_ram_fm_desc;
@@ -130,7 +220,7 @@ CGBA_HOT_TEXT const cgba_sh4_fm_desc *cgba_sh4_fastmem_ool_lookup(u32 ret_pc)
     for (;;)
       ;
   }
-  cgba_sh4_fm_ool_cache[((ret_pc >> 1) ^ (ret_pc >> 9)) & 255u] = found;
+  cgba_sh4_fm_ool_cache[cgba_sh4_fm_ool_hash(ret_pc)] = found;
   return found;
 }
 #endif
@@ -153,10 +243,13 @@ extern u8 cgba_ilram_fastmem_end[];
 
 u8 *cgba_sh4_fastmem_routine[CGBA_FM_TOTAL] CGBA_HIGH_BSS;
 u8 *cgba_sh4_fastmem_io16_store CGBA_HIGH_BSS;
+u8 *cgba_sh4_fastmem_block_cold[4] CGBA_HIGH_BSS;
+u8 *cgba_sh4_pop1_bx_routine CGBA_HIGH_BSS;
+u8 *cgba_sh4_thumb_bx_routine CGBA_HIGH_BSS;
 u8 *cgba_sh4_psr_rebank_routine CGBA_HIGH_BSS;
 
 #if CGBA_SH4_FASTMEM_XYRAM
-static u8 cgba_fastmem_buf[8192]
+static u8 cgba_fastmem_buf[10240]
   __attribute__((section(".xyram.fastmem"), aligned(32)));
 #else
 /* Place overflow/cold resident fastmem routines (io16_store, psr_rebank, WB
@@ -164,7 +257,7 @@ static u8 cgba_fastmem_buf[8192]
  * calling them never consumes a P0 ITLB/UTLB entry. Co-locating the routine
  * table in .cgba.highbss also guarantees clear_gpsp_highbss() invalidates the
  * cached pointers whenever cgba_fastmem_buf is wiped on ROM switch. */
-static u8 cgba_fastmem_buf[8192] CGBA_HIGH_BSS;
+static u8 cgba_fastmem_buf[10240] CGBA_HIGH_BSS;
 #endif
 
 #if (defined(CGBA_FXCG100) || defined(CGBA_FXCG50)) && !defined(CGBA_CLASSPAD) && \
@@ -227,10 +320,19 @@ void cgba_sh4_fastmem_init(void)
   last_gamepak_size = gamepak_size;
   last_ws8_0 = ws_cyc_nseq[8][0];
   last_ws8_1 = ws_cyc_nseq[8][1];
-  /* Emit the out-of-line IO16 store handler into .bss first so STORE_UH can
-   * reference it and shrink from ~1140 B to ~360 B (fitting in ILRAM). */
+  /* Emit the out-of-line IO16 store handler into .cgba.highbss first so
+   * STORE_UH can reference it and shrink from ~1140 B to ~360 B (ILRAM). */
   tp = (u8 *)(((uintptr_t)tp + 3u) & ~(uintptr_t)3u);
   cgba_sh4_fastmem_io16_store = sh4g_fastmem_emit_io16_store(&tp);
+  /* Emit cold/generic block-transfer fallbacks for the two WB variants so their
+   * ILRAM entries hold only the compact branchless 8-step contiguous ladder. */
+  memset(cgba_sh4_fastmem_block_cold, 0, sizeof(cgba_sh4_fastmem_block_cold));
+  tp = (u8 *)(((uintptr_t)tp + 3u) & ~(uintptr_t)3u);
+  cgba_sh4_fastmem_block_cold[CGBA_FMB_LDM_WB - CGBA_FMB_LDM] =
+    sh4g_fastmem_emit_block_cold(&tp, CGBA_FMB_LDM_WB);
+  tp = (u8 *)(((uintptr_t)tp + 3u) & ~(uintptr_t)3u);
+  cgba_sh4_fastmem_block_cold[CGBA_FMB_STM_WB - CGBA_FMB_LDM] =
+    sh4g_fastmem_emit_block_cold(&tp, CGBA_FMB_STM_WB);
   for (i = 0; i < CGBA_FM_TOTAL; i++) {
     int fm = emit_order[i];
     u8 *entry;
@@ -253,6 +355,26 @@ void cgba_sh4_fastmem_init(void)
       }
     }
 #endif
+    if (fm == CGBA_FMB_STM_WB) {
+      size_t bx_tail_off = 0;
+      u8 *pop_entry;
+      tp = (u8 *)(((uintptr_t)tp + 3u) & ~(uintptr_t)3u);
+      pop_entry = sh4g_fastmem_emit_pop1_bx(&tp, &bx_tail_off);
+      cgba_sh4_pop1_bx_routine = pop_entry;
+      cgba_sh4_thumb_bx_routine = pop_entry + bx_tail_off;
+#if (defined(CGBA_FXCG100) || defined(CGBA_FXCG50)) && CGBA_SH4_FASTMEM_ILRAM
+      {
+        size_t sz = (size_t)(tp - pop_entry);
+        if (ilram_tp < ilram_end && sz <= (size_t)(ilram_end - ilram_tp)) {
+          memcpy(ilram_tp, pop_entry, sz);
+          cgba_sh4_pop1_bx_routine = ilram_tp;
+          cgba_sh4_thumb_bx_routine = ilram_tp + bx_tail_off;
+          ilram_tp = (u8 *)(((uintptr_t)ilram_tp + sz + 3u) & ~(uintptr_t)3u);
+          tp = pop_entry;
+        }
+      }
+#endif
+    }
   }
   tp = (u8 *)(((uintptr_t)tp + 3u) & ~(uintptr_t)3u);
   cgba_sh4_psr_rebank_routine = sh4g_psr_emit_rebank_routine(&tp);

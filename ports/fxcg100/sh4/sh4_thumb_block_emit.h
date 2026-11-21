@@ -165,7 +165,8 @@ static inline int sh4g_thumb_block_native(u8 **tp, u32 opcode, u32 pc,
   u8 *guards[16]; int ng = 0;
   u8 *bra_done = NULL;
 
-  if (sh4g_thumb_push_iwram_native(tp, opcode, pc, cycle_count))
+  if (CGBA_SH4_FASTMEM_BLOCK_MIN > 2 &&
+      sh4g_thumb_push_iwram_native(tp, opcode, pc, cycle_count))
     return 1;
 
   if (hi == 0xB4 || hi == 0xB5) {             /* PUSH {rlist[,lr]} */

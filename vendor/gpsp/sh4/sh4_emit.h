@@ -396,7 +396,7 @@ static inline int sh4g_m4a_skip_match_head(u32 head_pc, cgba_sh4_m4a_match *out)
   uint32_t w[CGBA_SH4_M4A_MAX_LOOP_WORDS];
   u32 page = 0xFFFFFFFFu;
   const u8 *map = NULL;
-  u32 i, n, max_w, reg;
+  u32 i, n, max_w, min_w, reg;
   int has_pre = 0;
 
   if ((head_pc & 3u) ||
@@ -404,17 +404,23 @@ static inline int sh4g_m4a_skip_match_head(u32 head_pc, cgba_sh4_m4a_match *out)
     return 0;
   if (!sh4g_m4a_read_word(head_pc, &w[0]))
     return 0;
-  if (w[0] == 0xE19500D6u)
+  if (w[0] == 0xE19500D6u) {
     max_w = 17u;
-  else if (w[0] == 0xE5956000u)
+    min_w = 17u;
+  } else if (w[0] == 0xE1D500D0u) {
+    max_w = 12u;
+    min_w = 12u;
+  } else if (w[0] == 0xE5956000u) {
     max_w = CGBA_SH4_M4A_MAX_LOOP_WORDS;
-  else
+    min_w = 10u;
+  } else {
     return 0;
+  }
 
   n = (0x01000000u - (head_pc & 0x00FFFFFFu)) >> 2;
   if (n > max_w)
     n = max_w;
-  if (n < 15u)
+  if (n < min_w)
     return 0;
 
   for (i = 1u; i < n; i++) {
@@ -429,7 +435,7 @@ static inline int sh4g_m4a_skip_match_head(u32 head_pc, cgba_sh4_m4a_match *out)
     }
     w[i] = (uint32_t)readaddress32(map, addr & 0x0FFFu);
   }
-  if (n < 15u)
+  if (n < min_w)
     return 0;
 
   if (w[0] == 0xE5956000u && (head_pc & 0x00FFFFFFu) >= 12u) {
@@ -501,7 +507,7 @@ static inline void sh4g_m4a_skip_step(cgba_sh4_m4a_match *m, const u8 *map,
   if (((pc >> 24) != 0x02u && (pc >> 24) != 0x03u) || !map)
     return;
   op = readaddress32(map, pc & 0x0FFFu);
-  if (op == 0xE19500D6u || op == 0xE5956000u) {
+  if (op == 0xE19500D6u || op == 0xE1D500D0u || op == 0xE5956000u) {
     if (sh4g_m4a_skip_match_head(pc, &tmp)) {
       sh4g_m4a_cache_put(&tmp);
       *m = tmp;
@@ -598,7 +604,11 @@ static inline void sh4g_m4a_loop_entry(u8 **tp, const cgba_sh4_m4a_match *m,
   if (m->kind != CGBA_SH4_M4A_KIND_REVERB &&
       m->kind != CGBA_SH4_M4A_KIND_FIXED &&
       m->kind != CGBA_SH4_M4A_KIND_INTERP_A &&
-      m->kind != CGBA_SH4_M4A_KIND_INTERP_B)
+      m->kind != CGBA_SH4_M4A_KIND_INTERP_B &&
+      m->kind != CGBA_SH4_M4A_KIND_MONO_REVERB &&
+      m->kind != CGBA_SH4_M4A_KIND_MONO_FIXED &&
+      m->kind != CGBA_SH4_M4A_KIND_MONO_INTERP_A &&
+      m->kind != CGBA_SH4_M4A_KIND_MONO_INTERP_B)
     return;
   if (sh4g_m4a_loop_has_observer(m->head_pc, m->head_pc + m->body_bytes))
     return;
@@ -892,16 +902,22 @@ static inline void sh4g_prof_block_entry(u8 **tp, u32 pc, int thumb)
 #define SH4_DEFAULT_BRANCH_EXIT(new_pc) ((void)(new_pc), (const void *)sh4_block_exit)
 #endif
 
+#ifndef SH4_INTERNAL_KNOWN_TARGET
+#define SH4_INTERNAL_KNOWN_TARGET(tgt_pc) ((u8 *)NULL)
+#endif
+
 #define generate_branch_no_cycle_update(writeback_location, new_pc)           \
   do { u32 _gbncu_pc = (u32)(new_pc);                                         \
        if (!cgba_dynarec_single_block &&                                      \
-           _gbncu_pc >= block_start_pc && _gbncu_pc < block_end_pc)           \
-         (writeback_location) =                                               \
-           sh4g_branch_exit_internal(&translation_ptr, _gbncu_pc);            \
-       else                                                                   \
+           _gbncu_pc >= block_start_pc && _gbncu_pc < block_end_pc) {         \
+         u8 *_gbncu_known = SH4_INTERNAL_KNOWN_TARGET(_gbncu_pc);             \
+         (writeback_location) = sh4g_branch_exit_internal_known(              \
+           &translation_ptr, _gbncu_pc, _gbncu_known);                        \
+       } else {                                                               \
          (writeback_location) =                                               \
            sh4g_branch_exit(&translation_ptr, _gbncu_pc,                      \
-                            SH4_DEFAULT_BRANCH_EXIT(_gbncu_pc)); } while(0)
+                            SH4_DEFAULT_BRANCH_EXIT(_gbncu_pc));              \
+       } } while(0)
 
 /* ---- idle-loop elimination (dynarec mirror of the interpreter's) ---------
  * The interpreter zeroes the remaining cycle budget when it (a) arrives at the
@@ -969,10 +985,30 @@ static inline int sh4g_registered_idle_signature_ok(const u8 *map,
 
 #define generate_branch_cycle_update(cycle_type, writeback_location, new_pc)  \
   do { u32 _gbc_tgt = (u32)(new_pc);                                          \
-       sh4g_cycle_debit(&translation_ptr, (int)cycle_count +                  \
-         (int)ws_cyc_nseq[(_gbc_tgt >> 24) & 0x0F][cycle_type]);              \
+       int _gbc_deb = (int)cycle_count +                                      \
+         (int)ws_cyc_nseq[(_gbc_tgt >> 24) & 0x0F][cycle_type];               \
        cycle_count = 0;                                                       \
-       generate_branch_no_cycle_update(writeback_location, _gbc_tgt); } while(0)
+       if (!cgba_dynarec_single_block && (cycle_type) == 0 &&                 \
+           _gbc_tgt > (u32)pc && _gbc_tgt < block_end_pc) {                   \
+         if ((_gbc_tgt - (u32)pc) <= 56u && _gbc_deb > 0 && _gbc_deb <= 128) {\
+           (writeback_location) = translation_ptr;                            \
+           sh4g_u16(&translation_ptr, 0xA000);                                \
+           sh4g_u16(&translation_ptr, (uint16_t)(0x7000 |                     \
+                    (SH4_REG_CYCLES << 8) | ((-_gbc_deb) & 0xFF)));           \
+         } else {                                                             \
+           sh4g_cycle_debit(&translation_ptr, _gbc_deb);                      \
+           if ((_gbc_tgt - (u32)pc) <= 56u) {                                 \
+             (writeback_location) = translation_ptr;                          \
+             sh4g_u16(&translation_ptr, 0xA000);                              \
+             sh4g_u16(&translation_ptr, 0x0009);                              \
+           } else {                                                           \
+             (writeback_location) = sh4g_emit_patch_jump(&translation_ptr);   \
+           }                                                                  \
+         }                                                                    \
+       } else {                                                               \
+         sh4g_cycle_debit(&translation_ptr, _gbc_deb);                        \
+         generate_branch_no_cycle_update(writeback_location, _gbc_tgt);       \
+       } } while(0)
 
 /* A CONDITIONAL branch's exit sequence is emitted INSIDE the condition guard
  * (the not-taken path skips it). So it must NOT reset the translate-time
@@ -983,9 +1019,29 @@ static inline int sh4g_registered_idle_signature_ok(const u8 *map,
  * it always exits.) */
 #define generate_branch_taken(cycle_type, writeback_location, new_pc)         \
   do { u32 _gbt_tgt = (u32)(new_pc);                                          \
-       sh4g_cycle_debit(&translation_ptr, (int)cycle_count +                  \
-         (int)ws_cyc_nseq[(_gbt_tgt >> 24) & 0x0F][cycle_type]);              \
-       generate_branch_no_cycle_update(writeback_location, _gbt_tgt); } while(0)
+       int _gbt_deb = (int)cycle_count +                                      \
+         (int)ws_cyc_nseq[(_gbt_tgt >> 24) & 0x0F][cycle_type];               \
+       if (!cgba_dynarec_single_block && (cycle_type) == 0 &&                 \
+           _gbt_tgt > (u32)pc && _gbt_tgt < block_end_pc) {                   \
+         if ((_gbt_tgt - (u32)pc) <= 56u && _gbt_deb > 0 && _gbt_deb <= 128) {\
+           (writeback_location) = translation_ptr;                            \
+           sh4g_u16(&translation_ptr, 0xA000);                                \
+           sh4g_u16(&translation_ptr, (uint16_t)(0x7000 |                     \
+                    (SH4_REG_CYCLES << 8) | ((-_gbt_deb) & 0xFF)));           \
+         } else {                                                             \
+           sh4g_cycle_debit(&translation_ptr, _gbt_deb);                      \
+           if ((_gbt_tgt - (u32)pc) <= 56u) {                                 \
+             (writeback_location) = translation_ptr;                          \
+             sh4g_u16(&translation_ptr, 0xA000);                              \
+             sh4g_u16(&translation_ptr, 0x0009);                              \
+           } else {                                                           \
+             (writeback_location) = sh4g_emit_patch_jump(&translation_ptr);   \
+           }                                                                  \
+         }                                                                    \
+       } else {                                                               \
+         sh4g_cycle_debit(&translation_ptr, _gbt_deb);                        \
+         generate_branch_no_cycle_update(writeback_location, _gbt_tgt);       \
+       } } while(0)
 
 #define generate_arm_branch()                                                 \
   do {                                                                        \
@@ -1347,21 +1403,74 @@ static inline int sh4g_registered_idle_signature_ok(const u8 *map,
  * STALE LR and branch wild. So always set LR here (combined BLs overwrite it in
  * thumb_bl()). Emit unconditionally — gating on "block ends at the prefix" misses
  * the far more common mid-BL cycle exit. */
+#ifndef CGBA_SH4_EXACT_CYCLE_BOUNDARIES
+#define thumb_bl_prefix()                                                     \
+  do { if (!cgba_dynarec_single_block &&                                      \
+           (u32)(pc + 2) < block_end_pc &&                                    \
+           !block_data[block_data_position + 1].update_cycles &&              \
+           (u32)(pc + 2) != cheat_hook &&                                     \
+           ((u32)(pc + 2) >> 12) == pc_region &&                              \
+           readaddress16(pc_address_block, (pc + 2) & 0x0FFFu) >= 0xF800u) {  \
+         /* Combined BL with no mid-BL gate/cheat: thumb_bl() at pc+2         \
+            immediately overwrites LR without reading the prefix temp. */     \
+       } else {                                                               \
+         thumb_decode_branch();                                               \
+         u32 _ct_lr = (u32)(pc + 4 + ((s32)((offset & 0x07FF) << 21) >> 9));  \
+         sh4g_const(&translation_ptr, _ct_lr, SH4_REG_T0);                    \
+         sh4g_store_greg(&translation_ptr, SH4_REG_T0, REG_LR);               \
+         sh4_thumb_const_set(REG_LR, _ct_lr);                                 \
+       } } while(0)
+#else
 #define thumb_bl_prefix()                                                     \
   do { thumb_decode_branch();                                                 \
        u32 _ct_lr = (u32)(pc + 4 + ((s32)((offset & 0x07FF) << 21) >> 9));    \
        sh4g_const(&translation_ptr, _ct_lr, SH4_REG_T0);                      \
        sh4g_store_greg(&translation_ptr, SH4_REG_T0, REG_LR);                 \
        sh4_thumb_const_set(REG_LR, _ct_lr); } while(0)
+#endif
 
+#ifndef CGBA_SH4_EXACT_CYCLE_BOUNDARIES
 #define thumb_bx()                                                            \
   do { thumb_decode_hireg_op();                                               \
-       generate_load_reg_pc(SH4_REG_ARG0, rs, 4);                            \
-       cycle_count -= ws_cyc_seq[(pc >> 24) & 0x0F][0];                      \
+       if (!cgba_dynarec_single_block && cgba_sh4_thumb_bx_routine != NULL) { \
+         int _tbx_deb;                                                        \
+         sh4g_litseg_reserve(&translation_ptr, 2);                            \
+         generate_load_reg_pc(SH4_REG_ARG0, rs, 4);                           \
+         cycle_count -= ws_cyc_seq[(pc >> 24) & 0x0F][0];                     \
+         _tbx_deb = (int)cycle_count;                                         \
+         cycle_count = 0;                                                     \
+         if (_tbx_deb != 0 && (_tbx_deb < -127 || _tbx_deb > 128)) {          \
+           sh4g_cycle_debit(&translation_ptr, _tbx_deb);                      \
+           _tbx_deb = 0;                                                      \
+         }                                                                    \
+         sh4_thumb_const_clear_all();                                         \
+         sh4g_const(&translation_ptr,                                         \
+                    (u32)(uintptr_t)cgba_sh4_thumb_bx_routine, SH4_REG_RET);  \
+         { sh4_codegen _cg = sh4g_open(&translation_ptr);                     \
+           sh4_emit_jmp(&_cg, SH4_REG_RET);                                   \
+           if (_tbx_deb != 0)                                                 \
+             sh4_emit_add_imm(&_cg, -_tbx_deb, SH4_REG_CYCLES);               \
+           else                                                               \
+             sh4_emit_nop(&_cg);                                              \
+           sh4g_close(&translation_ptr, &_cg); }                              \
+       } else {                                                               \
+         generate_load_reg_pc(SH4_REG_ARG0, rs, 4);                           \
+         cycle_count -= ws_cyc_seq[(pc >> 24) & 0x0F][0];                     \
+         sh4g_charge_thumb_bx_target_fetch(&translation_ptr, SH4_REG_ARG0);   \
+         generate_cycle_update();                                             \
+         sh4_thumb_const_clear_all();                                         \
+         sh4g_thumb_bx_dispatch(&translation_ptr);                            \
+       } } while(0)
+#else
+#define thumb_bx()                                                            \
+  do { thumb_decode_hireg_op();                                               \
+       generate_load_reg_pc(SH4_REG_ARG0, rs, 4);                             \
+       cycle_count -= ws_cyc_seq[(pc >> 24) & 0x0F][0];                       \
        sh4g_charge_thumb_bx_target_fetch(&translation_ptr, SH4_REG_ARG0);     \
        generate_cycle_update();                                               \
        sh4_thumb_const_clear_all();                                           \
        sh4g_thumb_bx_dispatch(&translation_ptr); } while(0)
+#endif
 
 /* Conditional Thumb branch. A registered idle loop is usually exactly this
  * shape — `ldrh/and/cmp; beq back` with idle_loop_target_pc AT the branch

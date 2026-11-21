@@ -139,6 +139,90 @@ static uint32_t ref_interp(uint32_t groups, cgba_sh4_m4a_interp_state *s,
   }
   return cyc;
 }
+
+static uint32_t ref_reverb_mono(uint32_t n, uint32_t *r4, uint32_t *r5,
+                                uint32_t *r7, uint32_t *cpsr)
+{
+  uint32_t cyc = 0;
+  while (n--) {
+    I; M(*r5, 0);                 /* ldrsb r0,[r5]      */
+    I; M(*r7, 0); *r7 += 1;       /* ldrsb r1,[r7],#1   */
+    I;                            /* add                */
+    I;                            /* mul                */
+    I;                            /* asr                */
+    I;                            /* tst                */
+    I;                            /* addne              */
+    I; M(*r5, 0); *r5 += 1;       /* strb r0,[r5],#1    */
+    I; *cpsr = (*cpsr & 0x0FFFFFFFu) | cgba_sh4_m4a_subs_flags(*r4, 1);
+       *r4 -= 1;                  /* subs r4,r4,#1      */
+    I; B;                         /* bgt (taken)        */
+  }
+  return cyc;
+}
+
+static uint32_t ref_fixed_mono(uint32_t groups, uint32_t *r3, uint32_t *r5,
+                               uint32_t *r8, uint32_t *cpsr)
+{
+  uint32_t cyc = 0;
+  while (groups--) {
+    I; M(*r5, 1);                 /* ldr r6,[r5]        */
+    for (;;) {
+      uint32_t before;
+      I; M(*r3, 0); *r3 += 1;     /* ldrsb r0,[r3],#1   */
+      I; I; I;                    /* mul/bic/add        */
+      before = *r5;
+      I; *r5 += 0x40000000u;      /* adds r5,r5,#0x40000000 */
+      I;                          /* bcc                */
+      if (*r5 >= before) { B; continue; }
+      break;
+    }
+    I; M(*r5, 1); *r5 += 4;       /* str r6,[r5],#4     */
+    I; *cpsr = (*cpsr & 0x0FFFFFFFu) | cgba_sh4_m4a_subs_flags(*r8, 4);
+       *r8 -= 4;                  /* subs r8,r8,#4      */
+    I; B;                         /* bgt (taken)        */
+  }
+  return cyc;
+}
+
+static uint32_t ref_interp_mono(uint32_t groups, cgba_sh4_m4a_interp_state *s,
+                                int *stopped)
+{
+  uint32_t cyc = 0;
+  *stopped = 0;
+  while (groups--) {
+    I; M(s->r5, 1);               /* ldr r6,[r5]            */
+    for (;;) {
+      uint32_t before;
+      I; I; I; I; I;              /* mul/add/mul/bic/add    */
+      I; s->r9 += s->r4;          /* add lr,lr,r4           */
+      I; s->lr = s->r9 >> 23;     /* lsrs r9,lr,#23         */
+      I;                          /* beq                    */
+      if (s->lr == 0) {
+        B;
+      } else {
+        I; s->r9 &= ~0x3F800000u; /* bic lr                 */
+        I; if ((int32_t)s->r2 <= (int32_t)s->lr) { *stopped = 1; return 0; }
+           s->r2 -= s->lr;        /* subs r2,r2,r9          */
+        I;                        /* ble (not taken)        */
+        I; s->lr -= 1;            /* subs r9,r9,#1          */
+        I;                        /* addeq                  */
+        I; if (s->lr) { s->r3 += s->lr; M(s->r3, 0); }  /* ldrsbne r0,[r3,r9]! */
+        I; s->r3 += 1; M(s->r3, 0);                     /* ldrsb r1,[r3,#1]!   */
+        I;                        /* sub                    */
+      }
+      before = s->r5;
+      I; s->r5 += 0x40000000u;    /* adds r5,r5,#0x40000000 */
+      I;                          /* bcc                    */
+      if (s->r5 >= before) { B; continue; }
+      break;
+    }
+    I; M(s->r5, 1); s->r5 += 4;   /* str r6,[r5],#4         */
+    I; s->cpsr = (s->cpsr & 0x0FFFFFFFu) | cgba_sh4_m4a_subs_flags(s->r8, 4);
+       s->r8 -= 4;                /* subs r8,r8,#4          */
+    I; B;                         /* bgt (taken)            */
+  }
+  return cyc;
+}
 #undef I
 #undef B
 #undef M
@@ -254,6 +338,96 @@ static int test_folds(void)
           FAIL("interp: fold exhausted the budget");
       }
     }
+    {                                                   /* mono reverb */
+      uint32_t r4 = (n % 7 == 0) ? rnd() % 3 : rnd() % 300;
+      uint32_t r5 = 0x03000000u + (rnd() & 0x7FFF);
+      uint32_t r7 = (rnd() & 1) ? r5 : 0x03000000u + (rnd() & 0x7FFF);
+      uint32_t cpsr = rnd();
+      uint32_t a4 = r4, a5 = r5, a7 = r7, ac = cpsr;
+      uint32_t spent, want;
+      if (n % 11 == 0) { r5 = a5 = 0x00FFFFF0u + rnd() % 32; }
+      spent = cgba_sh4_m4a_fold_reverb_mono(&a4, &a5, &a7, &ac, budget, &costs);
+      if (!spent) {
+        declined++;
+        if (a4 != r4 || a5 != r5 || a7 != r7 || ac != cpsr)
+          FAIL("mono reverb: declined fold changed state");
+      } else {
+        uint32_t k = r4 - a4;
+        folded++;
+        want = ref_reverb_mono(k, &r4, &r5, &r7, &cpsr);
+        if (want != spent || a4 != r4 || a5 != r5 || a7 != r7 || ac != cpsr)
+          FAIL("mono reverb: fold of %u iterations differs (cycles %u vs %u)",
+               k, spent, want);
+        if ((int32_t)a4 < 1)
+          FAIL("mono reverb: folded the exiting iteration");
+        if (budget - (int32_t)spent <= 0)
+          FAIL("mono reverb: fold exhausted the budget");
+      }
+    }
+    {                                                   /* mono fixed-rate */
+      uint32_t r3 = 0x08000000u + (rnd() & 0x00FFFFFF);
+      uint32_t r5 = 0x03000000u + (rnd() & 0x7FFC);
+      uint32_t r8 = (n % 9 == 0) ? rnd() % 9 : rnd() % 300;
+      uint32_t cpsr = rnd();
+      uint32_t a3, a5, a8, ac;
+      uint32_t spent, want, groups;
+      if (n % 13 == 0) r3 = 0x08FFFFF0u + rnd() % 32;
+      if (n % 17 == 0) r5 = 0x03FFFFE0u + (rnd() % 64);
+      a3 = r3; a5 = r5; a8 = r8; ac = cpsr;
+      spent = cgba_sh4_m4a_fold_fixed_mono(&a3, &a5, &a8, &ac, budget, &costs);
+      if (!spent) {
+        declined++;
+        if (a3 != r3 || a5 != r5 || a8 != r8 || ac != cpsr)
+          FAIL("mono fixed: declined fold changed state");
+      } else {
+        groups = (r8 - a8) / 4;
+        folded++;
+        want = ref_fixed_mono(groups, &r3, &r5, &r8, &cpsr);
+        if (want != spent || a3 != r3 || a5 != r5 || a8 != r8 || ac != cpsr)
+          FAIL("mono fixed: fold of %u groups differs (cycles %u vs %u)",
+               groups, spent, want);
+        if ((int32_t)a8 <= 0)
+          FAIL("mono fixed: folded the last group");
+        if (budget - (int32_t)spent <= 0)
+          FAIL("mono fixed: fold exhausted the budget");
+      }
+    }
+    {                                                   /* mono interpolating */
+      cgba_sh4_m4a_interp_state s, a, r;
+      uint32_t spent, want, groups;
+      int stopped;
+      s.r2 = (n % 5 == 0) ? rnd() % 40 : rnd() % 20000;
+      s.r3 = 0x08000000u + (rnd() & 0x00FFFFFF);
+      s.r4 = (n % 3 == 0) ? rnd() & 0x00FFFFFF : rnd() & 0x03FFFFFF;
+      s.r5 = 0x03000000u + (rnd() & 0x7FFC);
+      s.r8 = (n % 9 == 0) ? rnd() % 9 : rnd() % 300;
+      s.r9 = rnd() & 0x007FFFFF;
+      s.lr = rnd(); s.cpsr = rnd();
+      if (n % 13 == 0) s.r3 = 0x08FFFFF0u + rnd() % 64;
+      a = s; r = s;
+      spent = cgba_sh4_m4a_fold_interp_mono(&a, budget, &costs);
+      if (!spent) {
+        declined++;
+        if (a.r2 != s.r2 || a.r3 != s.r3 || a.r5 != s.r5 || a.r8 != s.r8 ||
+            a.r9 != s.r9 || a.lr != s.lr || a.cpsr != s.cpsr)
+          FAIL("mono interp: declined fold changed state");
+      } else {
+        groups = (s.r8 - a.r8) / 4;
+        folded++;
+        want = ref_interp_mono(groups, &r, &stopped);
+        if (stopped)
+          FAIL("mono interp: folded across a wave end");
+        if (want != spent || a.r2 != r.r2 || a.r3 != r.r3 || a.r5 != r.r5 ||
+            a.r8 != r.r8 || a.r9 != r.r9 || a.lr != r.lr || a.cpsr != r.cpsr ||
+            a.r4 != r.r4)
+          FAIL("mono interp: fold of %u groups differs (cycles %u vs %u)",
+               groups, spent, want);
+        if ((int32_t)a.r8 <= 0)
+          FAIL("mono interp: folded the last group");
+        if (budget - (int32_t)spent <= 0)
+          FAIL("mono interp: fold exhausted the budget");
+      }
+    }
   }
   if (!folded || !declined)
     FAIL("fold test did not cover both outcomes");
@@ -266,8 +440,16 @@ static int dead_reg_for_kind(uint8_t kind, unsigned r)
 {
   if (r == 0 || r == 1)
     return 1;
-  if (kind == CGBA_SH4_M4A_KIND_REVERB)
+  if (kind == CGBA_SH4_M4A_KIND_REVERB ||
+      kind == CGBA_SH4_M4A_KIND_MONO_REVERB)
     return 0;
+  if (kind == CGBA_SH4_M4A_KIND_MONO_FIXED ||
+      kind == CGBA_SH4_M4A_KIND_MONO_FIXED_TAIL)
+    return r == 6;
+  if (kind == CGBA_SH4_M4A_KIND_MONO_INTERP_B)
+    return r == 6 || r == 9 || r == 12;
+  if (kind == CGBA_SH4_M4A_KIND_MONO_INTERP_A)
+    return r == 6 || r == 12 || r == 14;
   if (kind == CGBA_SH4_M4A_KIND_INTERP_B)
     return r == 6 || r == 7 || r == 9 || r == 12;
   return r == 6 || r == 7 || r == 12 || r == 14;
@@ -368,7 +550,37 @@ static int test_structural_matcher(void)
     0xE0411000u, 0xE2955101u, 0x3AFFFFEAu, 0xE5857630u, 0xE4856004u,
     0xE2588004u, 0xCAFFFFE4u, 0xE2433001u, 0xE8BD1010u
   };
+  /* Exact Mario Kart: Super Circuit mono MP2K loops (Flavor B) + Flavor A dual. */
+  static const uint32_t mono_rev[12] = {
+    0xE1D500D0u, 0xE0D710D1u, 0xE0800001u, 0xE0010390u, 0xE1A00441u,
+    0xE3100080u, 0x12800001u, 0xE4C50001u, 0xE2544001u, 0xCAFFFFF5u,
+    0xE28F001Fu, 0xE12FFF10u
+  };
+  static const uint32_t mono_fix[10] = {
+    0xE5956000u, 0xE0D300D1u, 0xE001009Au, 0xE3C118FFu, 0xE0816466u,
+    0xE2955101u, 0x3AFFFFF9u, 0xE4856004u, 0xE2588004u, 0xCAFFFFF5u
+  };
+  static const uint32_t mono_fix_tail[12] = {
+    0xE5956000u, 0xE0D300D1u, 0xE001009Au, 0xE3C118FFu, 0xE0816466u,
+    0xE2522001u, 0x0A000011u, 0xE2955101u, 0x3AFFFFF7u, 0xE4856004u,
+    0xE2588004u, 0xCAFFFFDCu
+  };
+  static const uint32_t mono_interp_b[24] = {
+    0xE5956000u, 0xE009019Eu, 0xE0809BC9u, 0xE00C099Au, 0xE3CCC8FFu,
+    0xE08C6466u, 0xE08EE004u, 0xE1B09BAEu, 0x0A000007u, 0xE3CEE5FEu,
+    0xE0522009u, 0xDAFFFFD4u, 0xE2599001u, 0x00800001u, 0x11B300D9u,
+    0xE1F310D1u, 0xE0411000u, 0xE2955101u, 0x3AFFFFEDu, 0xE4856004u,
+    0xE2588004u, 0xCAFFFFE9u, 0xE2433001u, 0xE8BD1010u
+  };
+  static const uint32_t mono_interp_a[24] = {
+    0xE5956000u, 0xE00E0199u, 0xE080EBCEu, 0xE00C0E9Au, 0xE3CCC8FFu,
+    0xE08C6466u, 0xE0899004u, 0xE1B0EBA9u, 0x0A000007u, 0xE3C995FEu,
+    0xE052200Eu, 0xDAFFFFD2u, 0xE25EE001u, 0x00800001u, 0x11B300DEu,
+    0xE1F310D1u, 0xE0411000u, 0xE2955101u, 0x3AFFFFEDu, 0xE4856004u,
+    0xE2588004u, 0xCAFFFFE9u, 0xE2433001u, 0xE8BD1010u
+  };
   uint32_t custom_b[29];
+  uint32_t bad_mrev[12];
   cgba_sh4_m4a_match m;
   unsigned i;
 
@@ -382,6 +594,27 @@ static int test_structural_matcher(void)
     return 1;
   if (audit_structural_loop("interp_b", interp_b, 29u, 1, CGBA_SH4_M4A_KIND_INTERP_B, 0x630u))
     return 1;
+  if (audit_structural_loop("mono_reverb", mono_rev, 12u, 0, CGBA_SH4_M4A_KIND_MONO_REVERB, 0u))
+    return 1;
+  if (audit_structural_loop("mono_fixed", mono_fix, 10u, 0, CGBA_SH4_M4A_KIND_MONO_FIXED, 0u))
+    return 1;
+  if (audit_structural_loop("mono_fixed_tail", mono_fix_tail, 12u, 0, CGBA_SH4_M4A_KIND_MONO_FIXED_TAIL, 0u))
+    return 1;
+  if (audit_structural_loop("mono_interp_b", mono_interp_b, 24u, 1, CGBA_SH4_M4A_KIND_MONO_INTERP_B, 0u))
+    return 1;
+  if (audit_structural_loop("mono_interp_a", mono_interp_a, 24u, 1, CGBA_SH4_M4A_KIND_MONO_INTERP_A, 0u))
+    return 1;
+
+  /* Mono negative checks: truncated buffers and wrong shift count. */
+  if (cgba_sh4_m4a_match_loop_words(mono_rev, 11u, 0x03000B04u, 0, &m) ||
+      cgba_sh4_m4a_match_loop_words(mono_fix, 9u, 0x03000B04u, 0, &m) ||
+      cgba_sh4_m4a_match_loop_words(mono_fix_tail, 11u, 0x03000B04u, 0, &m) ||
+      cgba_sh4_m4a_match_loop_words(mono_interp_b, 23u, 0x03000B04u, 1, &m))
+    FAIL("truncated mono loop buffer must be rejected");
+  for (i = 0; i < 12u; i++) bad_mrev[i] = mono_rev[i];
+  bad_mrev[4] = 0xE1A004C1u; /* stereo asr #9 instead of mono asr #8 */
+  if (cgba_sh4_m4a_match_loop_words(bad_mrev, 12u, 0x03000B04u, 0, &m))
+    FAIL("mono reverb with asr #9 must be rejected");
 
   /* Custom stride (0x310) on Flavor B + mismatched load/store stride rejection. */
   for (i = 0; i < 29u; i++) custom_b[i] = interp_b[i];
@@ -397,7 +630,7 @@ static int test_structural_matcher(void)
   if (cgba_sh4_m4a_match_loop_words(custom_b, 29u, 0x03000DD0u, 1, &m))
     FAIL("unaligned stride must be rejected");
 
-  /* Pre-header classification checks. */
+  /* Pre-header classification checks (stereo + mono). */
   if (!cgba_sh4_m4a_match_loop_words(interp_b, 29u, 0x03000DDCu, 1, &m))
     FAIL("interp_b pre-header match failed");
   if (cgba_sh4_m4a_match_class(&m, 0x03000DD0u, 0xE1D300D0u) != CGBA_SH4_M4A_SKIP_MEM ||
@@ -405,8 +638,15 @@ static int test_structural_matcher(void)
       cgba_sh4_m4a_match_class(&m, 0x03000DD8u, 0xE0411000u) != CGBA_SH4_M4A_SKIP_DROP ||
       cgba_sh4_m4a_match_class(&m, 0x03000DD0u, 0xE1D300D1u) != CGBA_SH4_M4A_SKIP_KEEP)
     FAIL("pre-header classification mismatch");
+  if (!cgba_sh4_m4a_match_loop_words(mono_interp_b, 24u, 0x03000DDCu, 1, &m))
+    FAIL("mono_interp_b pre-header match failed");
+  if (cgba_sh4_m4a_match_class(&m, 0x03000DD0u, 0xE1D300D0u) != CGBA_SH4_M4A_SKIP_MEM ||
+      cgba_sh4_m4a_match_class(&m, 0x03000DD4u, 0xE1F310D1u) != CGBA_SH4_M4A_SKIP_MEM ||
+      cgba_sh4_m4a_match_class(&m, 0x03000DD8u, 0xE0411000u) != CGBA_SH4_M4A_SKIP_DROP ||
+      cgba_sh4_m4a_match_class(&m, 0x03000DD0u, 0xE1D300D1u) != CGBA_SH4_M4A_SKIP_KEEP)
+    FAIL("mono pre-header classification mismatch");
 
-  printf("m4a structural matcher: 5 loop forms + custom stride + corruption checks passed\n");
+  printf("m4a structural matcher: 10 loop forms (5 stereo + 5 mono) + corruption checks passed\n");
   return 0;
 }
 

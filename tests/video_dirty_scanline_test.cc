@@ -237,9 +237,359 @@ static bool test_fast4bpp_standalone(void)
   return true;
 }
 
+static bool test_affine_clip_axis(void)
+{
+  static const s32 special_d[] = { 0, 1, -1, 256, -256, 187, -100, 512, -512, 3, -7 };
+  static const s32 limits[] = { 8 << 8, 16 << 8, 32 << 8, 64 << 8, 128 << 8, 256 << 8, 1024 << 8 };
+  for (unsigned t = 0; t < 4000; t++) {
+    s32 limit = limits[t % (sizeof(limits) / sizeof(limits[0]))];
+    s32 d = (t < 400)
+              ? special_d[t % (sizeof(special_d) / sizeof(special_d[0]))]
+              : ((s32)(rand_u32() & 0x7FFu) - 1024);
+    s32 s = (s32)(rand_u32() % (u32)(limit * 2)) - limit / 2;
+    s32 cnt = 1 + (s32)(rand_u32() % 240u);
+    s32 lo = (s32)(rand_u32() % (u32)cnt);
+    s32 hi = lo + (s32)(rand_u32() % (u32)(cnt - lo));
+
+    /* Brute-force exact valid interval [ref_lo, ref_hi] within [lo, hi]. */
+    s32 ref_lo = hi + 1, ref_hi = lo - 1;
+    for (s32 i = lo; i <= hi; i++) {
+      s32 v = s + i * d;
+      if (v >= 0 && v < limit) {
+        if (i < ref_lo) ref_lo = i;
+        if (i > ref_hi) ref_hi = i;
+      }
+    }
+
+    s32 got_lo = lo, got_hi = hi;
+    cgba_affine_clip_axis(s, d, limit, got_lo, got_hi);
+    if (ref_lo > ref_hi) {
+      CHECK(got_lo > got_hi);
+    } else {
+      CHECK(got_lo == ref_lo && got_hi == ref_hi);
+    }
+  }
+  return true;
+}
+
+static bool test_mode1_direct_and_fused_blend(void)
+{
+  /* Compare try_render_direct_single_bg_blend (both fused 4bpp-over-4bpp and
+   * general direct blend, bd_is_tgt2 true/false, opaque/transparent base,
+   * single/mixed subpalettes, saturating/non-saturating, evb==16, palette
+   * mutation, and opaque-row VRAM invalidation) against STCKCOLOR + merge_blend. */
+  memset(vram, 0, sizeof(vram));
+  memset(oam_ram, 0, sizeof(oam_ram));
+  for (unsigned i = 0; i < 512; i++)
+    palette_ram_converted[i] = (u16)(rand_u32() & 0xFFFFu);
+  palette_ram_dirty = CGBA_PALETTE_DIRTY_ACTIVE;
+  cgba_vram_dirty = CGBA_VRAM_DIRTY_BG | CGBA_VRAM_DIRTY_OBJ;
+  cgba_bg_vram_invalidate();
+
+  /* Populate CBB 2 (0x8000): tile 0 empty, tiles 1..15 opaque, tiles 16..31 sparse. */
+  u8 *cbb2 = &vram[2 * 16384];
+  for (unsigned t = 1; t < 16; t++) {
+    for (unsigned b = 0; b < 32; b++) {
+      u8 p0 = (u8)(1u + ((t + b) % 15u));
+      u8 p1 = (u8)(1u + ((t * 3u + b) % 15u));
+      cbb2[t * 32 + b] = (u8)(p0 | (p1 << 4));
+    }
+  }
+  for (unsigned t = 16; t < 32; t++) {
+    for (unsigned b = 0; b < 32; b++)
+      cbb2[t * 32 + b] = (u8)((rand_u32() % 3 == 0) ? 0u : (rand_u32() & 0xFFu));
+  }
+
+  /* Populate Mode 1 affine BG2 map (SBB 4) and 8bpp tiles (CBB 0). */
+  for (unsigned i = 0; i < 64 * 64; i++)
+    vram[i] = (u8)((rand_u32() % 5 == 0) ? 0u : (1u + (rand_u32() % 200u)));
+  for (unsigned i = 0; i < 1024; i++)
+    vram[4 * 2048 + i] = (u8)(rand_u32() & 0x3Fu);
+
+  static const u16 alphas[] = { 0x1008u, 0x0808u, 0x0C0Au, 0x0010u, 0x1000u, 0x0509u };
+  for (unsigned cfg = 0; cfg < 24; cfg++) {
+    bool bd_tgt2 = (cfg & 1) != 0;
+    bool base_opaque = (cfg & 2) != 0;
+    bool base_mixed_pal = (cfg & 4) != 0;
+    bool cand_mixed_pal = (cfg & 8) != 0;
+
+    /* SBB 0 = BG0 (cand), SBB 2 = BG1 (base). */
+    u16 *m0 = (u16 *)&vram[0 * 2048];
+    u16 *m1 = (u16 *)&vram[2 * 2048];
+    for (unsigned i = 0; i < 1024; i++) {
+      u32 c_tid = (rand_u32() % 4 == 0) ? 0u : (16u + (rand_u32() & 15u));
+      u32 c_pal = cand_mixed_pal ? (rand_u32() & 15u) : 8u;
+      u32 c_flip = (rand_u32() & 3u) << 10;
+      m0[i] = eswap16((u16)(c_tid | c_flip | (c_pal << 12)));
+
+      u32 b_tid = base_opaque ? (1u + (rand_u32() % 15u))
+                              : ((rand_u32() % 4 == 0) ? 0u : (16u + (rand_u32() & 15u)));
+      u32 b_pal = base_mixed_pal ? (rand_u32() & 15u) : 7u;
+      u32 b_flip = (rand_u32() & 3u) << 10;
+      m1[i] = eswap16((u16)(b_tid | b_flip | (b_pal << 12)));
+    }
+    cgba_vram_dirty = CGBA_VRAM_DIRTY_BG;
+    cgba_bg_vram_invalidate();
+
+    /* Mode 1: BG0 (prio 3, 4bpp), BG1 (prio 3, 4bpp), BG2 (prio 2, 8bpp affine). */
+    write_ioreg(REG_DISPCNT, 0x0701u); /* Mode 1, BG0|BG1|BG2 enabled */
+    write_ioreg(REG_BG0CNT, 0x000Bu);  /* CBB=2, SBB=0, prio=3 */
+    write_ioreg(REG_BG1CNT, 0x020Bu);  /* CBB=2, SBB=2, prio=3 */
+    write_ioreg(REG_BG2CNT, 0x4402u);  /* CBB=0, SBB=4, 256x256, prio=2 */
+    write_ioreg(REG_BG0HOFS, (u16)(123u + cfg * 7u));
+    write_ioreg(REG_BG0VOFS, (u16)(cfg * 13u));
+    write_ioreg(REG_BG1HOFS, (u16)(cfg * 5u));
+    write_ioreg(REG_BG1VOFS, (u16)(cfg * 3u));
+    write_ioreg(REG_BG2PA, 187);
+    write_ioreg(REG_BG2PC, (u16)(s16)-100);
+    affine_reference_x[0] = 16 << 8;
+    affine_reference_y[0] = 24 << 8;
+    write_ioreg(REG_MOSAIC, 0);
+    write_ioreg(REG_BLDALPHA, alphas[cfg % (sizeof(alphas) / sizeof(alphas[0]))]);
+    write_ioreg(REG_BLDCNT, (u16)(0x0041u | 0x0200u | (bd_tgt2 ? 0x2000u : 0u)));
+
+    /* Mutate palette mid-loop to verify fused LUT invalidation. */
+    if (cfg == 12) {
+      for (unsigned i = 0; i < 256; i++)
+        palette_ram_converted[i] ^= 0x14A5u;
+      palette_ram_dirty = CGBA_PALETTE_DIRTY_ACTIVE;
+    }
+
+    for (u32 y = 0; y < 16; y++) {
+      write_ioreg(REG_VCOUNT, (u16)(y * 9u));
+      u32 start = (cfg + y) % 11u;
+      u32 end = 240u - ((cfg * 3u + y) % 13u);
+      order_layers(0x07u, y * 9u);
+
+      u16 got[240], ref[240];
+      u32 tmp_buf[240];
+      memset(got, 0x5A, sizeof(got));
+      memset(ref, 0x5A, sizeof(ref));
+
+      bool used = try_render_direct_single_bg_blend(
+        start, end, got, 0x27u, 0x07u, read_ioreg(REG_BLDCNT));
+      if (!base_mixed_pal || bd_tgt2 || base_opaque)
+        CHECK(used);
+
+      if (used) {
+        tile_render_layers<STCKCOLOR, STCKCOLOR, u32>(start, end, tmp_buf, 0x07u);
+        merge_blend<BLEND_ONLY, false>(start, end, ref, tmp_buf);
+        CHECK(memcmp(got, ref, sizeof(got)) == 0);
+      }
+    }
+
+    /* Verify opaque-row cache invalidation when a tile becomes transparent. */
+    if (cfg == 2) {
+      CHECK(cgba_sb_row_is_all_opaque(2u, 2u, 1u));
+      cbb2[1 * 32] = 0u; /* tile 1 now has transparent pixels */
+      cgba_vram_dirty = CGBA_VRAM_DIRTY_BG;
+      cgba_bg_vram_invalidate();
+      CHECK(!cgba_sb_row_is_all_opaque(2u, 2u, 1u));
+      /* Restore tile 1 */
+      cbb2[1 * 32] = 0x21u;
+      cgba_vram_dirty = CGBA_VRAM_DIRTY_BG;
+      cgba_bg_vram_invalidate();
+    }
+  }
+  return true;
+}
+
+static bool test_mode1_batch_and_bg2_snaps(void)
+{
+  /* Verify Mode 1 batch renderer + deferred per-scanline BG2 HBlank snapshots
+   * (cgba_snapshot_bg2_affine_pending / cgba_flush_pending_scanlines /
+   * cgba_try_render_mode1_batch) against immediate per-scanline rendering across:
+   *  - Mode 0 top split + Mode 1 bottom Mode-7 with per-scanline BG2 PA..Y updates
+   *  - BG1 alpha-blended horizon (evb=16 and general eva/evb, uniform solid + mixed + empty rows)
+   *  - OBJs below and above blend_bg, plus dy==0 rows and non-wrap BG2
+   *  - Windowed / mosaic fallback with pending BG2 snapshots + live register preservation
+   *  - 160-bit cgba_video_frame_dirty_row_mask coverage */
+  memset(vram, 0, sizeof(vram));
+  memset(oam_ram, 0, sizeof(oam_ram));
+  for (unsigned i = 0; i < 512; i++)
+    palette_ram_converted[i] = (u16)(rand_u32() & 0xFFFFu);
+  palette_ram_dirty = CGBA_PALETTE_DIRTY_ACTIVE;
+  cgba_vram_dirty = CGBA_VRAM_DIRTY_ALL;
+  cgba_vram_sb_dirty = 0xFFFFFFFFu;
+  cgba_bg_vram_invalidate();
+
+  /* CBB 0 (4bpp text tiles for BG0/BG1):
+   *   tile 0: empty
+   *   tiles 1..8: mixed 4bpp tiles
+   *   tile 9: per-scanline uniform solid rows (like Mario Kart horizon fog!) */
+  for (unsigned i = 32; i < 9 * 32; i++)
+    vram[i] = (u8)(rand_u32() & 0xFFu);
+  for (unsigned r = 0; r < 8; r++) {
+    u8 p = (u8)((r % 6u) + 1u);
+    u8 b = (u8)(p | (p << 4));
+    memset(&vram[9 * 32 + r * 4], b, 4);
+  }
+  /* CBB 1 (8bpp affine tiles for BG2): 64 tiles with full 0..255 color indices */
+  for (unsigned i = 0; i < 64 * 64; i++)
+    vram[16384 + i] = (u8)(rand_u32() & 0xFFu);
+  /* OBJ VRAM (0x10000): 4bpp tiles */
+  for (unsigned i = 32; i < 0x1000; i++)
+    vram[0x10000 + i] = (u8)(rand_u32() & 0xFFu);
+
+  /* SB 16: BG0 HUD map (sparse) */
+  u16 *map0 = (u16 *)&vram[16 * 2048];
+  for (unsigned i = 0; i < 1024; i++) {
+    u16 tid = (rand_u32() % 6 == 0) ? (u16)(1u + (rand_u32() & 7u)) : 0u;
+    u16 fl = (u16)((rand_u32() & 3u) << 10);
+    u16 pal = (u16)((rand_u32() & 3u) << 12);
+    map0[i] = eswap16((u16)(tid | fl | pal));
+  }
+  /* SB 17: BG1 horizon fog map (rows 0..3 solid tile 9, row 4 mixed, rest empty) */
+  u16 *map1 = (u16 *)&vram[17 * 2048];
+  for (unsigned row = 0; row < 32; row++) {
+    for (unsigned col = 0; col < 32; col++) {
+      u16 e = 0u;
+      if (row < 4) e = (u16)(9u | ((row & 3u) << 12));
+      else if (row == 4) e = (u16)((1u + (col & 7u)) | (2u << 12));
+      map1[row * 32 + col] = eswap16(e);
+    }
+  }
+  /* SB 24..31: BG2 8bpp affine map (1024x1024 -> 128x128 bytes = 16 KiB) */
+  for (unsigned i = 0; i < 16384; i++)
+    vram[24 * 2048 + i] = (u8)(rand_u32() & 63u);
+
+  /* Two 4bpp OBJs: one at prio 0 (above BG1) and one at prio 2 (below BG1) */
+  oam_ram[0] = eswap16(82u);
+  oam_ram[1] = eswap16(60u | 0x4000u); /* 16x16 */
+  oam_ram[2] = eswap16(4u | (0u << 10));
+  oam_ram[4] = eswap16(90u);
+  oam_ram[5] = eswap16(120u | 0x4000u); /* 16x16 */
+  oam_ram[6] = eswap16(8u | (2u << 10));
+  reg[OAM_UPDATED] = 1;
+
+  auto run_hblank_mode1_case = [&](const char *label, u16 dispcnt, u16 bg2cnt,
+                                   u16 bldcnt, u16 bldalpha, u16 mosaic,
+                                   bool inject_dy0) -> bool {
+    static u16 ref_fb[240 * 160];
+    static u16 got_fb[240 * 160];
+
+    auto setup_regs = [&]() {
+      write_ioreg(REG_DISPCNT, dispcnt);
+      write_ioreg(REG_BG0CNT, 0x1000u); /* CBB0, SB16, prio 0 */
+      write_ioreg(REG_BG1CNT, 0x1101u); /* CBB0, SB17, prio 1 */
+      write_ioreg(REG_BG2CNT, bg2cnt);  /* CBB1, SB24, prio 3 */
+      write_ioreg(REG_BG0HOFS, 0u);
+      write_ioreg(REG_BG0VOFS, 0u);
+      write_ioreg(REG_BG1HOFS, 0u);
+      write_ioreg(REG_BG1VOFS, 0u);
+      write_ioreg(REG_BLDCNT, bldcnt);
+      write_ioreg(REG_BLDALPHA, bldalpha);
+      write_ioreg(REG_MOSAIC, mosaic);
+      write_ioreg(REG_WIN0H, 0x10E0u);
+      write_ioreg(REG_WIN0V, 0x4098u);
+      write_ioreg(REG_WININ, 0x003Fu);
+      write_ioreg(REG_WINOUT, 0x0027u);
+      write_ioreg(REG_BG2PA, 0x0100u);
+      write_ioreg(REG_BG2PB, 0x0000u);
+      write_ioreg(REG_BG2PC, 0x0040u);
+      write_ioreg(REG_BG2PD, 0x0100u);
+      affine_reference_x[0] = 0x00100000;
+      affine_reference_y[0] = 0x00080000;
+      affine_reference_x[1] = 0;
+      affine_reference_y[1] = 0;
+    };
+
+    /* Reference: render each scanline immediately before HBlank BG2 write */
+    setup_regs();
+    memset(ref_fb, 0x5A, sizeof(ref_fb));
+    gba_screen_pixels = ref_fb;
+    video_invalidate_scanline_cache(0, 160);
+    for (u32 y = 74u; y < 160u; y++) {
+      write_ioreg(REG_VCOUNT, (u16)y);
+      update_scanline();
+      /* Simulate HBlank DMA0 updating BG2PA..BG2Y for next scanline */
+      s16 pa = (s16)(96 + (int)((y - 74u) * 3u) * ((y & 16u) ? -1 : 1));
+      s16 pc = (inject_dy0 && (y == 90u || y == 125u)) ? 0 : (s16)(64 + (int)(y - 74u) * 2);
+      write_ioreg(REG_BG2PA, (u16)pa);
+      write_ioreg(REG_BG2PC, (u16)pc);
+      affine_reference_x[0] = (s32)((y * 0x1357u) & 0x0FFFFFFFu);
+      affine_reference_y[0] = (s32)((y * 0x2468u) & 0x0FFFFFFFu);
+      if (y == 118u)
+        write_ioreg(REG_BG0HOFS, 3u);
+    }
+    const u16 ref_end_pa = read_ioreg(REG_BG2PA);
+    const u16 ref_end_pc = read_ioreg(REG_BG2PC);
+    const s32 ref_end_rx = affine_reference_x[0];
+    const s32 ref_end_ry = affine_reference_y[0];
+
+    /* Deferred: queue scanlines + snapshot BG2 affine before each HBlank write */
+    setup_regs();
+    memset(got_fb, 0x5A, sizeof(got_fb));
+    gba_screen_pixels = got_fb;
+    video_invalidate_scanline_cache(0, 160);
+    memset(cgba_video_frame_dirty_row_mask, 0, sizeof(cgba_video_frame_dirty_row_mask));
+    for (u32 y = 74u; y < 160u; y++) {
+      write_ioreg(REG_VCOUNT, (u16)y);
+      cgba_queue_scanlines(y, 1u);
+      cgba_snapshot_bg2_affine_pending();
+      s16 pa = (s16)(96 + (int)((y - 74u) * 3u) * ((y & 16u) ? -1 : 1));
+      s16 pc = (inject_dy0 && (y == 90u || y == 125u)) ? 0 : (s16)(64 + (int)(y - 74u) * 2);
+      write_ioreg(REG_BG2PA, (u16)pa);
+      write_ioreg(REG_BG2PC, (u16)pc);
+      affine_reference_x[0] = (s32)((y * 0x1357u) & 0x0FFFFFFFu);
+      affine_reference_y[0] = (s32)((y * 0x2468u) & 0x0FFFFFFFu);
+      if (y == 118u) {
+        /* Mid-batch non-BG2 write forces flush + live register preservation */
+        cgba_flush_pending_scanlines();
+        write_ioreg(REG_BG0HOFS, 3u);
+      }
+    }
+    cgba_flush_pending_scanlines();
+
+    if (read_ioreg(REG_BG2PA) != ref_end_pa ||
+        read_ioreg(REG_BG2PC) != ref_end_pc ||
+        affine_reference_x[0] != ref_end_rx ||
+        affine_reference_y[0] != ref_end_ry) {
+      fprintf(stderr, "FAIL [%s]: live BG2 affine regs clobbered after flush\n", label);
+      return false;
+    }
+    for (u32 y = 74u; y < 160u; y++) {
+      CHECK((cgba_video_frame_dirty_row_mask[y >> 5] & (1u << (y & 31u))) != 0u);
+      if (memcmp(got_fb + y * 240u, ref_fb + y * 240u, 240u * sizeof(u16)) != 0) {
+        for (u32 x = 0; x < 240u; x++) {
+          if (got_fb[y * 240u + x] != ref_fb[y * 240u + x]) {
+            fprintf(stderr, "FAIL [%s] at (%u,%u): got=0x%04x ref=0x%04x\n",
+                    label, x, y, got_fb[y * 240u + x], ref_fb[y * 240u + x]);
+            return false;
+          }
+        }
+      }
+    }
+    return true;
+  };
+
+  /* Wrapped 1024x1024 Mode 1 with evb=16 horizon blend (Mario Kart Scene 1) */
+  CHECK(run_hblank_mode1_case("m1-wrap-evb16", 0x1701u, 0xF807u, 0x3442u, 0x1008u, 0u, false));
+  /* Same with dy==0 scanlines injected */
+  CHECK(run_hblank_mode1_case("m1-wrap-evb16-dy0", 0x1701u, 0xF807u, 0x3442u, 0x1008u, 0u, true));
+  /* Non-wrapped BG2 with general eva/evb blend */
+  CHECK(run_hblank_mode1_case("m1-nowrap-genblend", 0x1701u, 0xD807u, 0x3442u, 0x0A06u, 0u, false));
+  /* Windowed fallback with BG2 snapshots (must fall back and restore live regs) */
+  CHECK(run_hblank_mode1_case("m1-win0-fallback", 0x3701u, 0xF807u, 0x3442u, 0x1008u, 0u, false));
+  /* Mosaic fallback with BG2 snapshots */
+  CHECK(run_hblank_mode1_case("m1-mosaic-fallback", 0x1701u, 0xF847u, 0x3442u, 0x1008u, 0x0022u, false));
+
+  /* Verify cgba_memeq_u32 helper */
+  u32 a[8] = {1, 2, 3, 4, 5, 6, 7, 8};
+  u32 b[8] = {1, 2, 3, 4, 5, 6, 7, 8};
+  CHECK(cgba_memeq_u32(a, b, 8u) == true);
+  b[0] = 9; CHECK(cgba_memeq_u32(a, b, 8u) == false); b[0] = 1;
+  b[7] = 9; CHECK(cgba_memeq_u32(a, b, 8u) == false);
+
+  return true;
+}
+
 static bool run_tests(void)
 {
   CHECK(test_fast4bpp_standalone());
+  CHECK(test_affine_clip_axis());
+  CHECK(test_mode1_direct_and_fused_blend());
+  CHECK(test_mode1_batch_and_bg2_snaps());
 
   /* 1. Cold frame: all 160 rows render cleanly. */
   init_scene_mode0();
@@ -896,6 +1246,39 @@ static bool run_tests(void)
     write_ioreg(REG_BG2HOFS, 195u);
     cgba_video_io_dirty = 1;
     CHECK(verify_frame("nonblend_8bpp_base"));
+
+    /* 5. Verify CGBA_PALETTE_DIRTY_OBJ_ONLY refreshes folded OBJ palette
+     *    without stale entries when an OBJ-only palette write occurs during
+     *    Mode 0 brightness/blend. */
+    init_scene();
+    write_ioreg(REG_DISPCNT, 0x1140u); /* Mode 0, BG0 + OBJ */
+    write_ioreg(REG_BG0CNT, 0x1C01u);  /* prio 1, 4bpp */
+    write_ioreg(REG_BLDCNT, 0x0090u);  /* BRIGHTEN OBJ (1st=OBJ, mode=2) */
+    write_ioreg(REG_BLDY, 8u);
+    u16 *oam16 = (u16 *)oam_ram;
+    oam16[0] = eswap16(20u);           /* y=20, normal, 4bpp, square */
+    oam16[1] = eswap16(20u);           /* x=20, 8x8 */
+    oam16[2] = eswap16(1u);            /* tile 1, prio 0, pal 0 */
+    memset(&vram[0x10020u], 0x11, 32u);
+    reg[OAM_UPDATED] = 1u;
+    cgba_vram_sb_dirty = 0xFFFFFFFFu;
+    cgba_video_io_dirty = 1u;
+    CHECK(verify_frame("obj_only_folded_pal_init"));
+
+    /* Mutate ONLY OBJ palette entry 1 and mark CGBA_PALETTE_DIRTY_OBJ_ONLY
+     * (exact bits written by gba_memory.c / sh4_fastmem.h for offset >= 0x200). */
+    palette_ram_converted[256u + 1u] = 0x7C1Fu;
+    palette_ram_dirty |= CGBA_PALETTE_DIRTY_OBJ_ONLY;
+    CHECK(verify_frame("obj_only_folded_pal_bright"));
+
+    /* Same check under Mode 0 folded blend (1st=OBJ, 2nd=BG0). */
+    write_ioreg(REG_BLDCNT, 0x0150u);  /* BLEND: 1st=OBJ, 2nd=BG0 */
+    write_ioreg(REG_BLDALPHA, 0x0808u);
+    cgba_video_io_dirty = 1u;
+    CHECK(verify_frame("obj_only_folded_pal_blend_init"));
+    palette_ram_converted[256u + 1u] = 0x03E0u;
+    palette_ram_dirty |= CGBA_PALETTE_DIRTY_OBJ_ONLY;
+    CHECK(verify_frame("obj_only_folded_pal_blend_update"));
   }
 
   return true;

@@ -67,13 +67,16 @@ u8 ws_cyc_seq[16][2], ws_cyc_nseq[16][2];
 u32 cgba_sh4_native_thumb_const_io_count, cgba_sh4_native_thumb_runtime_io_count;
 int cgba_sh4_extra_cycles;
 int cgba_sh4_thumb_ldst(u32 o, u32 p){(void)o;(void)p;return 0;}
+int cgba_sh4_thumb_ldst_run(u32 c, u32 p){(void)c;(void)p;return 0;}
 int cgba_sh4_arm_ldst(u32 o, u32 p){(void)o;(void)p;return 0;}
 int cgba_sh4_arm_psr(u32 o, u32 p){(void)o;(void)p;return 0;}
 void sh4_block_exit(u32 pc){(void)pc;}
 void sh4_helper_exit(u32 pc){(void)pc;}
+void sh4_cycle_gate_exit(void){}
 void sh4_op2_pc_mem_tramp(void){}
 void sh4_fastmem_pc_mem_tramp(void){}
 void sh4_fastmem_compact8_tramp(void){}
+void sh4_fastmem_compact8_load_tramp(void){}
 static struct { u32 ret_pc, pc_flags, opcode, cycle_count; } orc_fm_ool[64];
 static unsigned orc_fm_ool_n;
 int cgba_sh4_fm_ool_can_record(const u8 *tp){(void)tp;return 1;}
@@ -84,9 +87,12 @@ void cgba_sh4_fm_ool_push(u32 r, u32 p, u32 o, u32 c){
 }
 void cgba_sh4_fm_ool_reset_rom(void){ orc_fm_ool_n = 0; }
 void cgba_sh4_fm_ool_reset_ram(void){ orc_fm_ool_n = 0; }
+void cgba_sh4_fm_ool_reset_all(void){ orc_fm_ool_n = 0; }
+void cgba_sh4_fm_ool_set_bios_mode(int on){ (void)on; }
+void cgba_sh4_fm_ool_rewind(const u8 *p, int r){ (void)p; (void)r; }
 u8 *cgba_sh4_fm_ool_rom_limit(u32 t){(void)t;return NULL;}
 struct cgba_sh4_fm_desc;
-const struct cgba_sh4_fm_desc *cgba_sh4_fm_ool_cache[256];
+const struct cgba_sh4_fm_desc *cgba_sh4_fm_ool_cache[512];
 const struct cgba_sh4_fm_desc *cgba_sh4_fastmem_ool_lookup(u32 r){(void)r;return 0;}
 void sh4_op2_pc_tramp(void){}
 void sh4_op2_tramp(void){}
@@ -141,6 +147,12 @@ u32 cgba_sh4_native_thumb_push_iwram_count2;
 
 u8 *cgba_sh4_fastmem_routine[CGBA_FM_TOTAL];
 u8 *cgba_sh4_fastmem_io16_store;
+u8 *cgba_sh4_fastmem_block_cold[4];
+u8 *cgba_sh4_pop1_bx_routine;
+u8 *cgba_sh4_thumb_bx_routine;
+u32 cgba_iwram_code_end = 0x8000u;
+u32 cgba_ewram_code_end = 0x40000u;
+void sh4_pop1_bx_slow(void){}
 u8 *cgba_sh4_psr_rebank_routine;
 u32 cgba_idle_wait;
 static u8 psr_rebank_buf[512];
@@ -225,6 +237,12 @@ static u32 orc_read(u32 addr, int size_log2, int *ok)
   if (size_log2 == 2 &&
       addr == (u32)(uintptr_t)&cgba_gamepak_fragment_blocks)
     return (u32)(uintptr_t)cgba_gamepak_fragment_blocks;
+  if (size_log2 == 2 && addr == (u32)(uintptr_t)&cgba_iwram_code_end)
+    return cgba_iwram_code_end;
+  if (size_log2 == 2 && addr == (u32)(uintptr_t)&cgba_ewram_code_end)
+    return cgba_ewram_code_end;
+  if (size_log2 == 2 && (addr - 0x50000000u) < sizeof(g_reg) && ((addr & 3u) == 0u))
+    return g_reg[(addr - 0x50000000u) >> 2];
 
   int maptab = 0;
   u8 *hp = orc_resolve(addr, &maptab);
@@ -251,6 +269,10 @@ static u32 orc_read(u32 addr, int size_log2, int *ok)
 }
 static void orc_write(u32 addr, u32 v, int size_log2, int *ok)
 {
+  if (size_log2 == 2 && (addr - 0x50000000u) < sizeof(g_reg) && ((addr & 3u) == 0u)) {
+    g_reg[(addr - 0x50000000u) >> 2] = v;
+    return;
+  }
   u8 *hp = orc_resolve(addr, NULL);
   if (!hp) { *ok = 0; return; }
   switch (size_log2) {
@@ -265,13 +287,15 @@ static u32 orc_slow_target;        /* trunc(&sh4_op2_pc_mem_tramp) */
 static u32 orc_slow_target2;       /* trunc(&sh4_op2_pc_tramp) */
 static u32 orc_slow_target3;       /* trunc(&sh4_fastmem_pc_mem_tramp) */
 static u32 orc_slow_target4;       /* trunc(&sh4_fastmem_compact8_tramp) */
+static u32 orc_slow_target5;       /* trunc(&sh4_fastmem_compact8_load_tramp) */
 static int orc_took_slow;
 static u32 orc_final_cycles;
 
 static int orc_is_slow_target(u32 a)
 {
   return a == orc_slow_target || a == orc_slow_target2 ||
-         a == orc_slow_target3 || a == orc_slow_target4;
+         a == orc_slow_target3 || a == orc_slow_target4 ||
+         a == orc_slow_target5;
 }
 
 static int orc_fastmem_io16_direct_store(u32 addr)
@@ -298,7 +322,7 @@ static int run_at(u32 pc, u32 pc_end)
   int T = 0;
   int steps = 0;
 
-  R[SH4_REG_BASE] = 0;
+  R[SH4_REG_BASE] = 0x50000000u;
   R[SH4_REG_CPSR] = g_reg[SH4_GREG_CPSR];
 #if CGBA_SH4_PIN_GUEST_R0
   R[SH4_REG_GUEST_R0] = g_reg[0];
@@ -345,6 +369,22 @@ static int run_at(u32 pc, u32 pc_end)
       if ((u16)slot == 0x0009) {}
       else if ((slot & 0xF000u) == 0xE000u)
         R[(slot >> 8) & 0xFu] = (u32)(s32)(s8)(slot & 0xFFu);
+      else if ((slot & 0xF000u) == 0x7000u)
+        R[(slot >> 8) & 0xFu] += (u32)(s32)(s8)(slot & 0xFFu);
+      else if ((slot & 0xF00Fu) == 0x300Cu)
+        R[(slot >> 8) & 0xFu] += R[(slot >> 4) & 0xFu];
+      else if ((slot & 0xF00Fu) == 0x6003u)
+        R[(slot >> 8) & 0xFu] = R[(slot >> 4) & 0xFu];
+      else if ((slot & 0xF000u) == 0x5000u) {
+        u32 v = orc_read(R[(slot >> 4) & 0xFu] + ((slot & 0xFu) << 2), 2, &okf);
+        if (!okf) { snprintf(unmodeled, sizeof unmodeled, "jsr slot load"); return 0; }
+        R[(slot >> 8) & 0xFu] = v;
+      }
+      else if ((slot & 0xF000u) == 0x1000u) {
+        orc_write(R[(slot >> 8) & 0xFu] + ((slot & 0xFu) << 2),
+                  R[(slot >> 4) & 0xFu], 2, &okf);
+        if (!okf) { snprintf(unmodeled, sizeof unmodeled, "jsr slot store"); return 0; }
+      }
       else { snprintf(unmodeled, sizeof unmodeled, "jsr slot %04x", (unsigned)slot); return 0; }
       if (orc_is_slow_target(target)) {         /* call into a C tramp stub */
         orc_took_slow = 1;
@@ -383,6 +423,16 @@ static int run_at(u32 pc, u32 pc_end)
         snprintf(unmodeled, sizeof unmodeled, "jmp slot %04x", (unsigned)slot);
         return 0;
       }
+      next = target;
+    }
+    else if ((op & 0xF0FF) == 0x0023) {                             /* BRAF Rm */
+      u32 target = pc + 4 + R[nn];
+      u32 slot = orc_read(pc + 2, 1, &okf);
+      if (!okf) { snprintf(unmodeled, sizeof unmodeled, "braf slot"); return 0; }
+      if ((u16)slot == 0x0009) {}
+      else if ((slot & 0xF000u) == 0x7000u)
+        R[(slot >> 8) & 0xFu] += (u32)(s32)(s8)(slot & 0xFFu);
+      else { snprintf(unmodeled, sizeof unmodeled, "braf slot %04x", (unsigned)slot); return 0; }
       next = target;
     }
     else if ((op & 0xF0FF) == 0x002A) R[nn] = PR;                   /* STS PR,Rn */
@@ -463,6 +513,22 @@ static int run_at(u32 pc, u32 pc_end)
       u32 a = ((pc & ~3u) + 4) + (u32)(op & 0xFF) * 4;
       R[nn] = orc_read(a, 2, &okf);
       if (!okf) { snprintf(unmodeled, sizeof unmodeled, "lit @%08X", a); return 0; }
+    }
+    else if ((op & 0xFF00) == 0x8000) {                             /* MOV.B R0,@(d,Rn) */
+      orc_write(R[mm] + (u32)(op & 0xF), R[0], 0, &okf);
+      if (!okf) { snprintf(unmodeled, sizeof unmodeled, "80xx @%08X", R[mm]); return 0; }
+    }
+    else if ((op & 0xFF00) == 0x8100) {                             /* MOV.W R0,@(d*2,Rn) */
+      orc_write(R[mm] + (u32)(op & 0xF) * 2, R[0], 1, &okf);
+      if (!okf) { snprintf(unmodeled, sizeof unmodeled, "81xx @%08X", R[mm]); return 0; }
+    }
+    else if ((op & 0xFF00) == 0x8400) {                             /* MOV.B @(d,Rm),R0 */
+      R[0] = (u32)(s32)(s8)orc_read(R[mm] + (u32)(op & 0xF), 0, &okf);
+      if (!okf) { snprintf(unmodeled, sizeof unmodeled, "84xx @%08X", R[mm]); return 0; }
+    }
+    else if ((op & 0xFF00) == 0x8500) {                             /* MOV.W @(d*2,Rm),R0 */
+      R[0] = (u32)(s32)(int16_t)(u16)orc_read(R[mm] + (u32)(op & 0xF) * 2, 1, &okf);
+      if (!okf) { snprintf(unmodeled, sizeof unmodeled, "85xx @%08X", R[mm]); return 0; }
     }
     else if ((op & 0xF000) == 0x5000) {                             /* MOV.L @(d,Rm) */
       if (mm == SH4_REG_BASE) R[nn] = g_reg[op & 0xF];
@@ -551,7 +617,11 @@ static int run_at(u32 pc, u32 pc_end)
     else if ((op & 0xF000) == 0xA000) {                             /* BRA */
       s32 d = (s32)(op & 0x0FFF); if (d & 0x800) d -= 0x1000;
       u32 slot = orc_read(pc + 2, 1, &okf);
-      if (!okf || (u16)slot != 0x0009) { snprintf(unmodeled, sizeof unmodeled, "bra slot"); return 0; }
+      if (!okf) { snprintf(unmodeled, sizeof unmodeled, "bra slot"); return 0; }
+      if ((u16)slot == 0x0009) {}
+      else if ((slot & 0xF000u) == 0x7000u)
+        R[(slot >> 8) & 0xFu] += (u32)(s32)(s8)(slot & 0xFFu);
+      else { snprintf(unmodeled, sizeof unmodeled, "bra slot %04x", (unsigned)slot); return 0; }
       next = pc + 4 + (u32)(d * 2);
     }
     else {
@@ -587,6 +657,7 @@ static int run_sh4x(const u8 *code, size_t n)
   orc_slow_target = (u32)(uintptr_t)sh4_op2_pc_mem_tramp;
   orc_slow_target3 = (u32)(uintptr_t)sh4_fastmem_pc_mem_tramp;
   orc_slow_target4 = (u32)(uintptr_t)sh4_fastmem_compact8_tramp;
+  orc_slow_target5 = (u32)(uintptr_t)sh4_fastmem_compact8_load_tramp;
   orc_slow_target2 = (u32)(uintptr_t)sh4_op2_pc_tramp;
   return run_at((u32)(uintptr_t)code, (u32)(uintptr_t)code + (u32)n);
 }
@@ -1459,7 +1530,7 @@ int main(void)
 
   /* ---- fastmem: real sites calling real routines over a modeled map ---- */
   {
-    static u8 fm_buf[8192];
+    static u8 fm_buf[10240];
     u8 *giwram = iwram;          /* tags 0..0x7FFF, data 0x8000.. */
     const u32 giwram_size = 0x10000;
     static u8 rom[0x8000];
@@ -1467,10 +1538,27 @@ int main(void)
     const u32 pc = 0x08000100;
 
     cgba_sh4_fastmem_io16_store = sh4g_fastmem_emit_io16_store(&tp);
-    for (int fm = 0; fm < CGBA_FM_COUNT; fm++)
+    memset(cgba_sh4_fastmem_block_cold, 0, sizeof(cgba_sh4_fastmem_block_cold));
+    tp = (u8 *)(((uintptr_t)tp + 3u) & ~(uintptr_t)3u);
+    cgba_sh4_fastmem_block_cold[CGBA_FMB_LDM_WB - CGBA_FMB_LDM] =
+      sh4g_fastmem_emit_block_cold(&tp, CGBA_FMB_LDM_WB);
+    tp = (u8 *)(((uintptr_t)tp + 3u) & ~(uintptr_t)3u);
+    cgba_sh4_fastmem_block_cold[CGBA_FMB_STM_WB - CGBA_FMB_LDM] =
+      sh4g_fastmem_emit_block_cold(&tp, CGBA_FMB_STM_WB);
+    for (int fm = 0; fm < CGBA_FM_COUNT; fm++) {
+      tp = (u8 *)(((uintptr_t)tp + 3u) & ~(uintptr_t)3u);
       cgba_sh4_fastmem_routine[fm] = sh4g_fastmem_emit_routine(&tp, fm);
-    for (int fm = CGBA_FMB_LDM; fm < CGBA_FM_TOTAL; fm++)
+    }
+    for (int fm = CGBA_FMB_LDM; fm < CGBA_FM_TOTAL; fm++) {
+      tp = (u8 *)(((uintptr_t)tp + 3u) & ~(uintptr_t)3u);
       cgba_sh4_fastmem_routine[fm] = sh4g_fastmem_emit_block_routine(&tp, fm);
+    }
+    {
+      size_t bx_off = 0;
+      tp = (u8 *)(((uintptr_t)tp + 3u) & ~(uintptr_t)3u);
+      cgba_sh4_pop1_bx_routine = sh4g_fastmem_emit_pop1_bx(&tp, &bx_off);
+      cgba_sh4_thumb_bx_routine = cgba_sh4_pop1_bx_routine + bx_off;
+    }
     cgba_sh4_psr_rebank_routine = sh4g_psr_emit_rebank_routine(&tp);
     if (tp > fm_buf + sizeof fm_buf) {
       printf("FAIL fastmem resident image uses %zu bytes (budget %zu)\n",
@@ -1849,6 +1937,9 @@ int main(void)
         orc_add_window(orc_vec_table, sizeof orc_vec_table, ORC_WIN_BYTES);
         orc_slow_target = (u32)(uintptr_t)sh4_op2_pc_mem_tramp;
         orc_slow_target2 = (u32)(uintptr_t)sh4_op2_pc_tramp;
+        orc_slow_target3 = (u32)(uintptr_t)sh4_fastmem_pc_mem_tramp;
+        orc_slow_target4 = (u32)(uintptr_t)sh4_fastmem_compact8_tramp;
+        orc_slow_target5 = (u32)(uintptr_t)sh4_fastmem_compact8_load_tramp;
 
         if (!run_at((u32)(uintptr_t)sbuf,
                     (u32)(uintptr_t)sbuf + (u32)(sp - sbuf))) {
@@ -1987,6 +2078,9 @@ int main(void)
         orc_add_window(orc_vec_table, sizeof orc_vec_table, 0);
         orc_slow_target = (u32)(uintptr_t)sh4_op2_pc_mem_tramp;
         orc_slow_target2 = (u32)(uintptr_t)sh4_op2_pc_tramp;
+        orc_slow_target3 = (u32)(uintptr_t)sh4_fastmem_pc_mem_tramp;
+        orc_slow_target4 = (u32)(uintptr_t)sh4_fastmem_compact8_tramp;
+        orc_slow_target5 = (u32)(uintptr_t)sh4_fastmem_compact8_load_tramp;
 
         if (!run_at((u32)(uintptr_t)sbuf, (u32)(uintptr_t)sbuf + (u32)(sp - sbuf))) {
           printf("FAIL pcldr %s: %s%s\n", pcf[fi].nm,
@@ -2236,6 +2330,9 @@ int main(void)
         orc_add_window(orc_vec_table, sizeof orc_vec_table, 0);
         orc_slow_target = (u32)(uintptr_t)sh4_op2_pc_mem_tramp;
         orc_slow_target2 = (u32)(uintptr_t)sh4_op2_pc_tramp;
+        orc_slow_target3 = (u32)(uintptr_t)sh4_fastmem_pc_mem_tramp;
+        orc_slow_target4 = (u32)(uintptr_t)sh4_fastmem_compact8_tramp;
+        orc_slow_target5 = (u32)(uintptr_t)sh4_fastmem_compact8_load_tramp;
 
         int ran = run_at((u32)(uintptr_t)sbuf, (u32)(uintptr_t)sbuf + (u32)(sp - sbuf));
         int slow = (!ran && orc_took_slow);
@@ -2303,8 +2400,15 @@ int main(void)
       { 0x0000C11Cu, 0, 0, "stmia r1!,{r2-r4}"    },
       { 0x0000C91Cu, 0, 0, "ldmia r1!,{r2-r4}"    },
       { 0x0000C916u, 0, 0, "ldmia r1!,{r1,r2,r4}" },
-      { 0x0000C803u, 0, 1, "ldmia r0!,{r0,r1}"    },  /* count<3: inline path,
-                                                         base in rlist (wb skip) */
+      { 0x0000C803u, 0, (2 < CGBA_SH4_FASTMEM_BLOCK_MIN), "ldmia r0!,{r0,r1}" },
+      { 0x0000B500u, 0, (1 < CGBA_SH4_FASTMEM_BLOCK_MIN), "push {lr}"            },
+      { 0x0000B510u, 0, (2 < CGBA_SH4_FASTMEM_BLOCK_MIN), "push {r4,lr}"         },
+      { 0x0000BC01u, 0, (1 < CGBA_SH4_FASTMEM_BLOCK_MIN), "pop  {r0}"            },
+      { 0x0000BC02u, 0, (1 < CGBA_SH4_FASTMEM_BLOCK_MIN), "pop  {r1}"            },
+      { 0x0000B403u, 0, (2 < CGBA_SH4_FASTMEM_BLOCK_MIN), "push {r0,r1}"         },
+      { 0x0000B502u, 0, (2 < CGBA_SH4_FASTMEM_BLOCK_MIN), "push {r1,lr}"         },
+      { 0x0000C203u, 0, (2 < CGBA_SH4_FASTMEM_BLOCK_MIN), "stmia r2!,{r0,r1}"    },
+      { 0x0000CA03u, 0, (2 < CGBA_SH4_FASTMEM_BLOCK_MIN), "ldmia r2!,{r0,r1}"    },
     };
     struct bt2 { u32 base; int slow_ld; int slow_st; const char *nm; } btgts[] = {
       { 0x03000200u, 0, 0, "iwram" },
@@ -2394,6 +2498,9 @@ int main(void)
         orc_add_window(orc_vec_table, sizeof orc_vec_table, 0);
         orc_slow_target = (u32)(uintptr_t)sh4_op2_pc_mem_tramp;
         orc_slow_target2 = (u32)(uintptr_t)sh4_op2_pc_tramp;
+        orc_slow_target3 = (u32)(uintptr_t)sh4_fastmem_pc_mem_tramp;
+        orc_slow_target4 = (u32)(uintptr_t)sh4_fastmem_compact8_tramp;
+        orc_slow_target5 = (u32)(uintptr_t)sh4_fastmem_compact8_load_tramp;
 
         int ran = run_at((u32)(uintptr_t)sbuf, (u32)(uintptr_t)sbuf + (u32)(sp - sbuf));
         int slow = (!ran && orc_took_slow);
@@ -2460,6 +2567,205 @@ int main(void)
         if (page && !is_load && poff + count*4 <= 0x8000)
           memcpy((void *)(page + poff), mem_before, count*4);
       }
+
+    /* Re-run all IWRAM block forms with cgba_iwram_code_end = 0x0100u so BOTH
+     * FMB_LDM_WB and FMB_STM_WB execute the hot ILRAM 8-step BRAF ladder
+     * (verifying R3/R1 ladder math + pinned R11/R12 sync + zero R12 clobber). */
+    cgba_iwram_code_end = 0x0100u;
+    for (unsigned fi = 0; fi < sizeof bforms / sizeof *bforms; fi++) {
+      static u8 sbuf[1024] __attribute__((aligned(4)));
+      u8 *sp = sbuf;
+      u32 op = bforms[fi].op;
+      int is_arm = bforms[fi].is_arm;
+      u32 rlist, base_reg, is_load, wb, pre, up_, count = 0, lrbit = 0;
+      u32 base = 0x03000200u;
+      if (is_arm) {
+        rlist = op & 0xFFFF; base_reg = (op >> 16) & 0xF;
+        is_load = (op >> 20) & 1; wb = (op >> 21) & 1;
+        pre = (op >> 24) & 1; up_ = (op >> 23) & 1;
+      } else {
+        u32 hi2 = (op >> 8) & 0xFF;
+        rlist = op & 0xFF;
+        if (hi2 == 0xB4 || hi2 == 0xB5) { base_reg = 13; is_load = 0; pre = 0; up_ = 0; wb = 1; lrbit = (hi2 == 0xB5); }
+        else if (hi2 == 0xBC) { base_reg = 13; is_load = 1; pre = 0; up_ = 1; wb = 1; }
+        else { base_reg = (op >> 8) & 7; is_load = (op >> 11) & 1; pre = 0; up_ = 1; wb = 1; }
+      }
+      for (int b = 0; b < 16; b++) if (rlist & (1u << b)) count++;
+      if (lrbit) { count++; rlist |= 1u << 14; }
+      u32 A = is_arm ? ((base & ~3u) + (u32)(up_ ? (pre ? 4 : 0) : (pre ? -(int)(count*4) : -(int)(count*4) + 4)))
+                     : ((base_reg == 13 && !is_load) ? (base - count*4) : base);
+      u32 wbv = is_arm ? (up_ ? base + count*4 : base - count*4)
+                       : ((base_reg == 13 && !is_load) ? A : base + count*4);
+      int ldm_base_in_list = is_load && !is_arm && base_reg < 8 && (rlist & (1u << base_reg));
+      int do_wb = wb && !(is_arm && wb && (rlist & (1u << base_reg)) && !is_load)
+                     && !(is_arm && is_load && (rlist & (1u << base_reg)))
+                     && !ldm_base_in_list;
+      memset(g_reg, 0, sizeof g_reg);
+      for (int i = 0; i < 16; i++) g_reg[i] = 0x33000000u + ((u32)i << 8);
+      g_reg[SH4_GREG_CPSR] = 0x2000001Fu;
+      g_reg[base_reg] = base;
+      u8 mem_before[64];
+      u32 poff = A & 0x7FFFu;
+      const u8 *page = giwram + 0x8000;
+      memcpy(mem_before, page + poff, count * 4);
+      int emitted = is_arm ? sh4g_arm_block_native(&sp, op, pc, 0)
+                           : sh4g_thumb_block_native(&sp, op, pc, 0);
+      cases++;
+      orc_reset_windows();
+      orc_add_window(sbuf, sizeof sbuf, 0);
+      orc_add_window(fm_buf, sizeof fm_buf, 0);
+      orc_add_window(giwram, giwram_size, 0);
+      orc_add_window(ws_cyc_seq, sizeof ws_cyc_seq, 0);
+      orc_add_window(ws_cyc_nseq, sizeof ws_cyc_nseq, 0);
+      orc_add_window(orc_vec_table, sizeof orc_vec_table, 0);
+      orc_slow_target = (u32)(uintptr_t)sh4_op2_pc_mem_tramp;
+      orc_slow_target2 = (u32)(uintptr_t)sh4_op2_pc_tramp;
+      orc_slow_target3 = (u32)(uintptr_t)sh4_fastmem_pc_mem_tramp;
+      orc_slow_target4 = (u32)(uintptr_t)sh4_fastmem_compact8_tramp;
+      orc_slow_target5 = (u32)(uintptr_t)sh4_fastmem_compact8_load_tramp;
+      int ran = emitted && run_at((u32)(uintptr_t)sbuf, (u32)(uintptr_t)sp);
+      if (!ran) {
+        printf("FAIL bfm-hot %s: %s\n", bforms[fi].nm, unmodeled);
+        fails++;
+      } else {
+        if (orc_final_cycles != 0u - count) {
+          printf("FAIL bfm-hot %s: cycles=%u want %u\n",
+                 bforms[fi].nm, orc_final_cycles, 0u - count);
+          fails++;
+        }
+        u32 off2 = poff;
+        for (int b = 0; b < 16; b++) {
+          if (!(rlist & (1u << b))) continue;
+          if (is_load) {
+            u32 lev = page[off2] | ((u32)page[off2+1] << 8) |
+                      ((u32)page[off2+2] << 16) | ((u32)page[off2+3] << 24);
+            if (g_reg[b] != lev) {
+              printf("FAIL bfm-hot %s: r%d=%08X want %08X\n",
+                     bforms[fi].nm, b, g_reg[b], lev);
+              fails++; break;
+            }
+          } else {
+            u32 v = (b == (int)base_reg) ? base : 0x33000000u | ((u32)b << 8);
+            u8 want[4] = { (u8)v, (u8)(v>>8), (u8)(v>>16), (u8)(v>>24) };
+            if (memcmp(page + off2, want, 4) != 0) {
+              printf("FAIL bfm-hot %s: mem mismatch at r%d\n", bforms[fi].nm, b);
+              fails++; break;
+            }
+          }
+          off2 += 4;
+        }
+        /* Verify non-transferred pinned r0/r1 were never clobbered. */
+        for (int p = 0; p < 2; p++) {
+          if (!(rlist & (1u << p)) && (u32)p != base_reg &&
+              g_reg[p] != (0x33000000u + ((u32)p << 8))) {
+            printf("FAIL bfm-hot %s: clobbered pinned r%d=%08X\n",
+                   bforms[fi].nm, p, g_reg[p]);
+            fails++;
+          }
+        }
+        u32 want_base = do_wb ? wbv : base;
+        if (is_load && (rlist & (1u << base_reg))) want_base = g_reg[base_reg];
+        if (g_reg[base_reg] != want_base) {
+          printf("FAIL bfm-hot %s: base=%08X want %08X\n",
+                 bforms[fi].nm, g_reg[base_reg], want_base);
+          fails++;
+        }
+      }
+      if (!is_load) memcpy((void *)(page + poff), mem_before, count * 4);
+    }
+
+    /* Verify cgba_sh4_pop1_bx_routine pops target into reg[rX] AND syncs
+     * pinned R11 (r0) and R12 (r1) before entering cgba_sh4_thumb_bx_routine. */
+    for (unsigned rx = 0; rx < 4; rx++) {
+      static u8 sbuf[128] __attribute__((aligned(4)));
+      u8 *sp = sbuf;
+      u32 target_val = 0x08001235u + rx * 4u;
+      u32 sp_addr = 0x03000240u;
+      u8 *slot = giwram + 0x8000u + (sp_addr & 0x7FFFu);
+      slot[0] = (u8)target_val; slot[1] = (u8)(target_val >> 8);
+      slot[2] = (u8)(target_val >> 16); slot[3] = (u8)(target_val >> 24);
+      memset(g_reg, 0, sizeof g_reg);
+      g_reg[0] = 0x11110000u; g_reg[1] = 0x22220001u;
+      g_reg[2] = 0x33330002u; g_reg[3] = 0x44440003u;
+      g_reg[13] = sp_addr;
+      g_reg[SH4_GREG_CPSR] = 0x2000003Fu;
+      sh4g_litseg_begin();
+      sh4g_const(&sp, (u32)(uintptr_t)cgba_sh4_pop1_bx_routine, SH4_REG_RET);
+      if (((uintptr_t)sp + 4u) & 3u) sh4g_u16(&sp, 0x0009u);
+      { sh4_codegen cg = sh4g_open(&sp);
+        sh4_emit_jsr(&cg, SH4_REG_RET);
+        sh4_emit_mov_imm(&cg, (int)(rx * 4u), SH4_REG_ARG1);
+        sh4_emit_u32_be(&cg, pc);
+        sh4g_close(&sp, &cg); }
+      sh4g_litseg_end(&sp);
+      orc_reset_windows();
+      orc_add_window(sbuf, sizeof sbuf, 0);
+      orc_add_window(fm_buf, sizeof fm_buf, 0);
+      orc_add_window(giwram, giwram_size, 0);
+      orc_add_window(ws_cyc_seq, sizeof ws_cyc_seq, 0);
+      orc_add_window(ws_cyc_nseq, sizeof ws_cyc_nseq, 0);
+      orc_add_window(orc_vec_table, sizeof orc_vec_table, 0);
+      /* Run up to cgba_sh4_thumb_bx_routine entry (verifies POP + R11/R12 sync). */
+      int ran = run_at((u32)(uintptr_t)sbuf,
+                       (u32)(uintptr_t)cgba_sh4_thumb_bx_routine);
+      cases++;
+      if (!ran || g_reg[rx] != target_val || g_reg[13] != sp_addr + 4u ||
+          orc_final_cycles != (u32)-1) {
+        printf("FAIL pop1_bx r%u: ran=%d reg=%08X want %08X sp=%08X cyc=%d (%s)\n",
+               rx, ran, g_reg[rx], target_val, g_reg[13], (int)orc_final_cycles, unmodeled);
+        fails++;
+      }
+      if (rx != 0 && g_reg[0] != 0x11110000u) {
+        printf("FAIL pop1_bx r%u clobbered r0=%08X\n", rx, g_reg[0]); fails++;
+      }
+      if (rx != 1 && g_reg[1] != 0x22220001u) {
+        printf("FAIL pop1_bx r%u clobbered r1=%08X\n", rx, g_reg[1]); fails++;
+      }
+    }
+
+    /* Verify sh4g_thumb_base_run_native (mixed LDR/STR/LDRH/STRH/LDRB/STRB +
+     * dead-load elimination + pinned r0/r1). */
+    {
+      static u8 sbuf[512] __attribute__((aligned(4)));
+      u8 *sp = sbuf;
+      const u32 ops[6] = {
+        0x6810u, /* LDR  r0, [r2, #0]  (dead: overwritten by ops[2]) */
+        0x8051u, /* STRH r1, [r2, #2] */
+        0x6850u, /* LDR  r0, [r2, #4] */
+        0x70D0u, /* STRB r0, [r2, #3] */
+        0x8853u, /* LDRH r3, [r2, #2] */
+        0x78D4u, /* LDRB r4, [r2, #3] */
+      };
+      const int ccs[6] = { 1, 2, 3, 4, 5, 6 };
+      u32 base = 0x03000280u;
+      u8 *p = giwram + 0x8000u + (base & 0x7FFFu);
+      p[0]=0xAA; p[1]=0xBB; p[2]=0xCC; p[3]=0xDD;
+      p[4]=0x78; p[5]=0x56; p[6]=0x34; p[7]=0x12;
+      memset(g_reg, 0, sizeof g_reg);
+      g_reg[0] = 0xDEADBEEFu;
+      g_reg[1] = 0x0000BEEFu;
+      g_reg[2] = base;
+      sh4g_litseg_begin();
+      int emitted = sh4g_thumb_base_run_native(&sp, ops, ccs, 6, pc);
+      sh4g_litseg_end(&sp);
+      orc_reset_windows();
+      orc_add_window(sbuf, sizeof sbuf, 0);
+      orc_add_window(fm_buf, sizeof fm_buf, 0);
+      orc_add_window(giwram, giwram_size, 0);
+      orc_add_window(orc_vec_table, sizeof orc_vec_table, 0);
+      int ran = emitted && run_at((u32)(uintptr_t)sbuf, (u32)(uintptr_t)sp);
+      cases++;
+      /* After ops: p[2]=0xEF, p[3]=0x78 (low byte of 0x12345678), so LDRH r3
+       * at #2 reads 0x78EF, LDRB r4 at #3 reads 0x78, r0 = 0x12345678. */
+      if (!ran || g_reg[0] != 0x12345678u || g_reg[1] != 0x0000BEEFu ||
+          g_reg[3] != 0x000078EFu || g_reg[4] != 0x00000078u ||
+          orc_final_cycles != (u32)-6) {
+        printf("FAIL base-run: ran=%d r0=%08X r1=%08X r3=%08X r4=%08X cyc=%d (%s)\n",
+               ran, g_reg[0], g_reg[1], g_reg[3], g_reg[4], (int)orc_final_cycles, unmodeled);
+        fails++;
+      }
+    }
+    cgba_iwram_code_end = 0x8000u;
   }
   }
 

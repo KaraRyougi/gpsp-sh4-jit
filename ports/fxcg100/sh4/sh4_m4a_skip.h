@@ -238,16 +238,22 @@ static inline int cgba_sh4_m4a_skip_mem_decode(uint32_t opcode,
 
 /* Structural loop-level MP2K/m4a matcher (driver-version independent).
  * Rather than relying on a single whole-image hash, each self-contained ARM
- * inner loop (reverb, fixed-rate main/tail, interpolating Flavor A [r9=phase,
- * lr=step] and Flavor B [lr=phase, r9=step]) is matched by its exact opcode
- * sequence with a parameterized stereo PCM buffer stride (e.g. 0x630). */
+ * inner loop (stereo and mono reverb, fixed-rate main/tail, interpolating
+ * Flavor A [r9=phase, lr=step] and Flavor B [lr=phase, r9=step]) is matched
+ * by its exact opcode sequence with a parameterized stereo PCM buffer stride
+ * (e.g. 0x630; stride == 0 denotes a mono channel loop). */
 enum {
-  CGBA_SH4_M4A_KIND_NONE       = 0,
-  CGBA_SH4_M4A_KIND_REVERB     = 1,
-  CGBA_SH4_M4A_KIND_FIXED      = 2,
-  CGBA_SH4_M4A_KIND_FIXED_TAIL = 3,
-  CGBA_SH4_M4A_KIND_INTERP_A   = 4,
-  CGBA_SH4_M4A_KIND_INTERP_B   = 5
+  CGBA_SH4_M4A_KIND_NONE            = 0,
+  CGBA_SH4_M4A_KIND_REVERB          = 1,
+  CGBA_SH4_M4A_KIND_FIXED           = 2,
+  CGBA_SH4_M4A_KIND_FIXED_TAIL      = 3,
+  CGBA_SH4_M4A_KIND_INTERP_A        = 4,
+  CGBA_SH4_M4A_KIND_INTERP_B        = 5,
+  CGBA_SH4_M4A_KIND_MONO_REVERB     = 6,
+  CGBA_SH4_M4A_KIND_MONO_FIXED      = 7,
+  CGBA_SH4_M4A_KIND_MONO_FIXED_TAIL = 8,
+  CGBA_SH4_M4A_KIND_MONO_INTERP_A   = 9,
+  CGBA_SH4_M4A_KIND_MONO_INTERP_B   = 10
 };
 
 #define CGBA_SH4_M4A_MAX_LOOP_WORDS 29u
@@ -289,11 +295,30 @@ static inline int cgba_sh4_m4a_match_loop_words(
     return 1;
   }
 
-  if (avail < 15u || w[0] != 0xE5956000u ||
-      (w[1] & 0xFFFFF000u) != 0xE5957000u)
+  /* Mono reverb (2-tap average, 10 body words + 2-word Thumb return epilogue). */
+  if (avail >= 12u && w[0] == 0xE1D500D0u) {
+    static const uint32_t mrev[10] = {
+      0xE1D500D0u, 0xE0D710D1u, 0xE0800001u, 0xE0010390u, 0xE1A00441u,
+      0xE3100080u, 0x12800001u, 0xE4C50001u, 0xE2544001u, 0xCAFFFFF5u
+    };
+    unsigned i;
+    for (i = 1u; i < 10u; i++) {
+      if (w[i] != mrev[i])
+        return 0;
+    }
+    if ((w[10] & 0xFFFFF000u) != 0xE28F0000u || w[11] != 0xE12FFF10u)
+      return 0;
+    out->head_pc = head_pc;
+    out->body_bytes = 10u * 4u;
+    out->kind = CGBA_SH4_M4A_KIND_MONO_REVERB;
+    return 1;
+  }
+
+  if (avail < 10u || w[0] != 0xE5956000u)
     return 0;
 
-  {
+  /* Stereo fixed-rate and interpolating loops: w[1] = ldr r7, [r5, #stride]. */
+  if (avail >= 15u && (w[1] & 0xFFFFF000u) == 0xE5957000u) {
     uint32_t stride = w[1] & 0xFFFu;
     if (stride == 0u || (stride & 3u) != 0u)
       return 0;
@@ -364,6 +389,64 @@ static inline int cgba_sh4_m4a_match_loop_words(
         return 1;
       }
     }
+    return 0;
+  }
+
+  /* Mono fixed-rate main (10 words) and tail/loop-point (12 words). */
+  if (w[1] == 0xE0D300D1u && w[2] == 0xE001009Au && w[3] == 0xE3C118FFu &&
+      w[4] == 0xE0816466u) {
+    if (w[5] == 0xE2955101u && w[6] == 0x3AFFFFF9u &&
+        w[7] == 0xE4856004u && w[8] == 0xE2588004u &&
+        w[9] == 0xCAFFFFF5u) {
+      out->head_pc = head_pc;
+      out->body_bytes = 10u * 4u;
+      out->kind = CGBA_SH4_M4A_KIND_MONO_FIXED;
+      return 1;
+    }
+    if (avail >= 12u && w[5] == 0xE2522001u &&
+        (w[6] & 0xFF000000u) == 0x0A000000u &&
+        w[7] == 0xE2955101u && w[8] == 0x3AFFFFF7u &&
+        w[9] == 0xE4856004u && w[10] == 0xE2588004u &&
+        (w[11] & 0xFF000000u) == 0xCA000000u) {
+      out->head_pc = head_pc;
+      out->body_bytes = 12u * 4u;
+      out->kind = CGBA_SH4_M4A_KIND_MONO_FIXED_TAIL;
+      return 1;
+    }
+    return 0;
+  }
+
+  /* Mono interpolating 4-sample mix (22 words + 2-word epilogue check). */
+  if (avail >= 24u &&
+      w[4] == 0xE3CCC8FFu && w[5] == 0xE08C6466u &&
+      w[8] == 0x0A000007u && (w[11] & 0xFF000000u) == 0xDA000000u &&
+      w[13] == 0x00800001u && w[15] == 0xE1F310D1u &&
+      w[16] == 0xE0411000u && w[17] == 0xE2955101u &&
+      w[18] == 0x3AFFFFEDu && w[19] == 0xE4856004u &&
+      w[20] == 0xE2588004u && w[21] == 0xCAFFFFE9u &&
+      w[22] == 0xE2433001u && w[23] == 0xE8BD1010u) {
+    if (w[1] == 0xE00E0199u && w[2] == 0xE080EBCEu &&
+        w[3] == 0xE00C0E9Au && w[6] == 0xE0899004u &&
+        w[7] == 0xE1B0EBA9u && w[9] == 0xE3C995FEu &&
+        w[10] == 0xE052200Eu && w[12] == 0xE25EE001u &&
+        w[14] == 0x11B300DEu) {
+      out->head_pc = head_pc;
+      out->pre_bytes = has_interp_pre ? 12u : 0u;
+      out->body_bytes = 22u * 4u;
+      out->kind = CGBA_SH4_M4A_KIND_MONO_INTERP_A;
+      return 1;
+    }
+    if (w[1] == 0xE009019Eu && w[2] == 0xE0809BC9u &&
+        w[3] == 0xE00C099Au && w[6] == 0xE08EE004u &&
+        w[7] == 0xE1B09BAEu && w[9] == 0xE3CEE5FEu &&
+        w[10] == 0xE0522009u && w[12] == 0xE2599001u &&
+        w[14] == 0x11B300D9u) {
+      out->head_pc = head_pc;
+      out->pre_bytes = has_interp_pre ? 12u : 0u;
+      out->body_bytes = 22u * 4u;
+      out->kind = CGBA_SH4_M4A_KIND_MONO_INTERP_B;
+      return 1;
+    }
   }
   return 0;
 }
@@ -424,6 +507,43 @@ static inline unsigned cgba_sh4_m4a_match_class(
       return CGBA_SH4_M4A_SKIP_MEM;
     case 2: case 3: case 4: case 5: case 6: case 7: case 8: case 9:
     case 17: case 20:
+      return CGBA_SH4_M4A_SKIP_DROP;
+    default:
+      return CGBA_SH4_M4A_SKIP_KEEP;
+    }
+  case CGBA_SH4_M4A_KIND_MONO_REVERB:
+    switch (idx) {
+    case 0: case 1: case 7:
+      return CGBA_SH4_M4A_SKIP_MEM;
+    case 2: case 3: case 4: case 5: case 6:
+      return CGBA_SH4_M4A_SKIP_DROP;
+    default:
+      return CGBA_SH4_M4A_SKIP_KEEP;
+    }
+  case CGBA_SH4_M4A_KIND_MONO_FIXED:
+    switch (idx) {
+    case 0: case 1: case 7:
+      return CGBA_SH4_M4A_SKIP_MEM;
+    case 2: case 3: case 4:
+      return CGBA_SH4_M4A_SKIP_DROP;
+    default:
+      return CGBA_SH4_M4A_SKIP_KEEP;
+    }
+  case CGBA_SH4_M4A_KIND_MONO_FIXED_TAIL:
+    switch (idx) {
+    case 0: case 1: case 9:
+      return CGBA_SH4_M4A_SKIP_MEM;
+    case 2: case 3: case 4:
+      return CGBA_SH4_M4A_SKIP_DROP;
+    default:
+      return CGBA_SH4_M4A_SKIP_KEEP;
+    }
+  case CGBA_SH4_M4A_KIND_MONO_INTERP_A:
+  case CGBA_SH4_M4A_KIND_MONO_INTERP_B:
+    switch (idx) {
+    case 0: case 14: case 15: case 19:
+      return CGBA_SH4_M4A_SKIP_MEM;
+    case 1: case 2: case 3: case 4: case 5: case 13: case 16:
       return CGBA_SH4_M4A_SKIP_DROP;
     default:
       return CGBA_SH4_M4A_SKIP_KEEP;
@@ -503,10 +623,59 @@ static inline uint32_t cgba_sh4_m4a_fold_reverb(
   return spent;
 }
 
-/* Fixed-rate mix, four samples per group (15 instructions, 42 sequential
- * fetches + 4 taken branches + 4 word buffer transfers + 4 byte wave loads):
+/* Mono reverb loop, one sample per iteration (10 instructions, 3 byte
+ * transfers: ldrsb [r5], ldrsb [r7],#1, strb [r5],#1). */
+static inline uint32_t cgba_sh4_m4a_fold_reverb_mono(
+  uint32_t *r4, uint32_t *r5, uint32_t *r7, uint32_t *cpsr,
+  int32_t budget, const cgba_sh4_m4a_loop_costs *c)
+{
+  uint32_t n4 = *r4, n5 = *r5, n7 = *r7, spent = 0, last = 0;
+  uint32_t rem, base_cost;
+  const uint8_t (*mem)[2] = c->mem;
+
+  if (budget <= 1 || (int32_t)n4 <= 1)
+    return 0;
+  rem = (uint32_t)(budget - 1);
+  base_cost = 10u * c->seq + c->branch;
+
+  while ((int32_t)n4 > 1) {
+    uint32_t cost, max_k, by_budget, room, r1, step_cost;
+    if ((n5 >> 28) | (n7 >> 28))
+      break;
+    cost = base_cost + 2u * mem[n5 >> 24][0] + mem[n7 >> 24][0];
+    if (cost > rem)
+      break;
+    max_k = n4 - 1u;
+    by_budget = rem / cost;
+    if (by_budget < max_k)
+      max_k = by_budget;
+    room = 0x01000000u - (n5 & 0x00FFFFFFu);
+    r1 = 0x01000000u - (n7 & 0x00FFFFFFu);
+    if (r1 < room) room = r1;
+    if (room < max_k)
+      max_k = room;
+    step_cost = max_k * cost;
+    spent += step_cost;
+    rem -= step_cost;
+    last = n4 - max_k + 1u;
+    n4 -= max_k;
+    n5 += max_k;
+    n7 += max_k;
+  }
+  if (!spent)
+    return 0;
+  *r4 = n4; *r5 = n5; *r7 = n7;
+  *cpsr = (*cpsr & 0x0FFFFFFFu) | cgba_sh4_m4a_subs_flags(last, 1u);
+  return spent;
+}
+
+/* Fixed-rate mix, four samples per group:
+ *   stereo (stride != 0): 15 instructions, 42 sequential fetches + 4 taken
+ *     branches + 4 word buffer transfers + 4 byte wave loads;
+ *   mono   (stride == 0): 10 instructions, 28 sequential fetches + 4 taken
+ *     branches + 2 word buffer transfers + 4 byte wave loads.
  *   r3 = wave cursor, r5 = buffer cursor (top bits clear at group head),
- *   r8 = output samples left, stride = stereo channel offset (e.g. 0x630).
+ *   r8 = output samples left, stride = stereo channel offset (0 for mono).
  * Returns the cycles spent; 0 means nothing was folded and nothing changed. */
 static inline uint32_t cgba_sh4_m4a_fold_fixed(
   uint32_t *r3, uint32_t *r5, uint32_t *r8, uint32_t *cpsr, uint32_t stride,
@@ -519,21 +688,21 @@ static inline uint32_t cgba_sh4_m4a_fold_fixed(
   if (budget <= 1 || (int32_t)n8 <= 4)
     return 0;
   rem = (uint32_t)(budget - 1);       /* strictly positive remaining budget */
-  base_cost = 42u * c->seq + 4u * c->branch;
+  base_cost = (stride ? 42u : 28u) * c->seq + 4u * c->branch;
 
   while ((int32_t)n8 > 4) {           /* keep the final (exiting) group */
     uint32_t n5_b = n5 + stride;
-    uint32_t cost, max_k, by_budget, k_r3, k_r5, k_r5b, step_cost;
+    uint32_t buf_cost, cost, max_k, by_budget, k_r3, k_r5, k_r5b, step_cost;
     if ((n3 >> 28) | (n5 >> 28) | (n5_b >> 28))
       break;
+    buf_cost = 2u * mem[n5 >> 24][1] + (stride ? 2u * mem[n5_b >> 24][1] : 0u);
     k_r3 = (0x01000000u - (n3 & 0x00FFFFFFu)) >> 2;
     if (k_r3 == 0u) {
       /* Wave pointer straddles a 16 MiB region seam within this 4-byte group. */
       uint32_t a1 = n3 + 1u, a2 = n3 + 2u, a3 = n3 + 3u;
       if ((a1 >> 28) | (a2 >> 28) | (a3 >> 28))
         break;
-      cost = base_cost +
-             2u * mem[n5 >> 24][1] + 2u * mem[n5_b >> 24][1] +
+      cost = base_cost + buf_cost +
              mem[n3 >> 24][0] + mem[a1 >> 24][0] +
              mem[a2 >> 24][0] + mem[a3 >> 24][0];
       if (cost > rem)
@@ -545,9 +714,7 @@ static inline uint32_t cgba_sh4_m4a_fold_fixed(
       n8 -= 4u;
       continue;
     }
-    cost = base_cost +
-           2u * mem[n5 >> 24][1] + 2u * mem[n5_b >> 24][1] +
-           4u * mem[n3 >> 24][0];
+    cost = base_cost + buf_cost + 4u * mem[n3 >> 24][0];
     if (cost > rem)
       break;
     max_k = (n8 - 1u) >> 2;
@@ -572,7 +739,14 @@ static inline uint32_t cgba_sh4_m4a_fold_fixed(
   return spent;
 }
 
-/* Interpolating mix, four samples per group:
+static inline uint32_t cgba_sh4_m4a_fold_fixed_mono(
+  uint32_t *r3, uint32_t *r5, uint32_t *r8, uint32_t *cpsr,
+  int32_t budget, const cgba_sh4_m4a_loop_costs *c)
+{
+  return cgba_sh4_m4a_fold_fixed(r3, r5, r8, cpsr, 0u, budget, c);
+}
+
+/* Interpolating mix, four samples per group (stride == 0 selects mono):
  *   r2 = samples left in the wave, r3 = wave cursor, r4 = phase step,
  *   r5 = buffer cursor (sample-in-group counter in its top two bits),
  *   r8 = output samples left, r9 = phase, lr = last integer step. */
@@ -588,7 +762,7 @@ static inline uint32_t cgba_sh4_m4a_fold_interp_stride(
   uint32_t r2 = s->r2, r3 = s->r3, r4 = s->r4, r5 = s->r5;
   uint32_t r8 = s->r8, r9 = s->r9, lr = s->lr;
   uint32_t seq = c->seq, br = c->branch;
-  uint32_t fixed_cost = 58u * seq + 4u * br;
+  uint32_t fixed_cost = (stride ? 58u : 44u) * seq + 4u * br;
   uint32_t step_seq = 8u * seq;
   const uint8_t (*mem)[2] = c->mem;
 
@@ -621,7 +795,8 @@ static inline uint32_t cgba_sh4_m4a_fold_interp_stride(
       if ((r5 >> 24) != r5_reg || (r5_b >> 24) != r5_b_reg) {
         r5_reg = r5 >> 24;
         r5_b_reg = r5_b >> 24;
-        r5_cost = fixed_cost + 2u * mem[r5_reg][1] + 2u * mem[r5_b_reg][1];
+        r5_cost = fixed_cost + 2u * mem[r5_reg][1] +
+                  (stride ? 2u * mem[r5_b_reg][1] : 0u);
       }
       if (q == 0u)
         max_gcost = r5_cost + 4u * (step1 > br ? step1 : br);
@@ -687,7 +862,8 @@ static inline uint32_t cgba_sh4_m4a_fold_interp_stride(
     if ((r5 >> 24) != r5_reg || (r5_b >> 24) != r5_b_reg) {
       r5_reg = r5 >> 24;
       r5_b_reg = r5_b >> 24;
-      r5_cost = fixed_cost + 2u * mem[r5_reg][1] + 2u * mem[r5_b_reg][1];
+      r5_cost = fixed_cost + 2u * mem[r5_reg][1] +
+                (stride ? 2u * mem[r5_b_reg][1] : 0u);
     }
     cost = r5_cost;
     for (i = 0; i < 4u; i++) {
@@ -742,6 +918,13 @@ static inline uint32_t cgba_sh4_m4a_fold_interp(
   const cgba_sh4_m4a_loop_costs *c)
 {
   return cgba_sh4_m4a_fold_interp_stride(s, 0x630u, budget, c);
+}
+
+static inline uint32_t cgba_sh4_m4a_fold_interp_mono(
+  cgba_sh4_m4a_interp_state *s, int32_t budget,
+  const cgba_sh4_m4a_loop_costs *c)
+{
+  return cgba_sh4_m4a_fold_interp_stride(s, 0u, budget, c);
 }
 
 #endif /* CGBA_SH4_M4A_SKIP_H */

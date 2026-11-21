@@ -290,17 +290,21 @@ bool cgba_gamepak_remap_pages(const u8 * const *pages, u32 rom_size);
 extern u32 oam_update;
 extern u32 gbc_sound_wave_update;
 extern dma_transfer_type dma[DMA_CHAN_CNT];
+extern u32 dma_bus_val;
 extern u8 cgba_hblank_dma_mask;
+extern u8 cgba_dma0_bg2_fast;
 
 extern u8 open_gba_bios_rom[1024*16];
 extern u16 palette_ram[512];
 extern u16 oam_ram[512];
 extern u16 palette_ram_converted[512];
-#define CGBA_PALETTE_DIRTY_BLEND    0x01u
-#define CGBA_PALETTE_DIRTY_BACKDROP 0x02u
-#define CGBA_PALETTE_DIRTY_TILE_ROW 0x04u
-#define CGBA_PALETTE_DIRTY_SCANLINE 0x08u
-#define CGBA_PALETTE_DIRTY_FOLDED   0x10u
+#define CGBA_PALETTE_DIRTY_BLEND      0x01u
+#define CGBA_PALETTE_DIRTY_BACKDROP   0x02u
+#define CGBA_PALETTE_DIRTY_TILE_ROW   0x04u
+#define CGBA_PALETTE_DIRTY_SCANLINE   0x08u
+#define CGBA_PALETTE_DIRTY_FOLDED     0x10u
+#define CGBA_PALETTE_DIRTY_SIGNED     0x20u
+#define CGBA_PALETTE_DIRTY_FOLDED_OBJ 0x40u
 #if defined(CGBA_VIDEO_BLEND_PALETTE_CACHE) || \
     (defined(CGBA_VIDEO_DIRTY_SCANLINE) && CGBA_VIDEO_DIRTY_SCANLINE)
 #define CGBA_PALETTE_BLEND_BIT CGBA_PALETTE_DIRTY_BLEND
@@ -329,17 +333,33 @@ extern u16 palette_ram_converted[512];
 #endif
 #if !defined(CGBA_VIDEO_TILE_ROW_CACHE) && defined(CGBA_SH4_ASM_4BPP) && \
     defined(CGBA_VIDEO_BACKDROP_SHADOW_PALETTE) && defined(CGBA_VIDEO_PAIR_PALETTE)
-#define CGBA_PALETTE_FOLDED_BIT CGBA_PALETTE_DIRTY_FOLDED
+#define CGBA_PALETTE_FOLDED_BIT     CGBA_PALETTE_DIRTY_FOLDED
+#define CGBA_PALETTE_FOLDED_OBJ_BIT CGBA_PALETTE_DIRTY_FOLDED_OBJ
 #else
-#define CGBA_PALETTE_FOLDED_BIT 0
+#define CGBA_PALETTE_FOLDED_BIT     0
+#define CGBA_PALETTE_FOLDED_OBJ_BIT 0
+#endif
+#ifdef CGBA_SH4_ASM_4BPP
+#define CGBA_PALETTE_SIGNED_BIT CGBA_PALETTE_DIRTY_SIGNED
+#else
+#define CGBA_PALETTE_SIGNED_BIT 0
 #endif
 #if CGBA_PALETTE_BLEND_BIT || CGBA_PALETTE_BACKDROP_BIT || \
     CGBA_PALETTE_TILE_ROW_BIT || CGBA_PALETTE_SCANLINE_BIT || \
-    CGBA_PALETTE_FOLDED_BIT
+    CGBA_PALETTE_FOLDED_BIT || CGBA_PALETTE_SIGNED_BIT || \
+    CGBA_PALETTE_FOLDED_OBJ_BIT
 #define CGBA_PALETTE_DIRTY_ACTIVE \
   (CGBA_PALETTE_BLEND_BIT | CGBA_PALETTE_BACKDROP_BIT | \
    CGBA_PALETTE_TILE_ROW_BIT | CGBA_PALETTE_SCANLINE_BIT | \
-   CGBA_PALETTE_FOLDED_BIT)
+   CGBA_PALETTE_FOLDED_BIT | CGBA_PALETTE_SIGNED_BIT | \
+   CGBA_PALETTE_FOLDED_OBJ_BIT)
+/* OBJ palette (0x05000200..0x050003FF) cannot affect BG backdrop shadow, BG
+ * tile-row cache, BG folded palettes, or Mode 1/2 BG signed palettes; it does
+ * affect folded OBJ palettes (cgba_folded_pal[256..511]), blend caches, and
+ * scanline change detection. */
+#define CGBA_PALETTE_DIRTY_OBJ_ONLY \
+  (CGBA_PALETTE_BLEND_BIT | CGBA_PALETTE_SCANLINE_BIT | \
+   CGBA_PALETTE_FOLDED_OBJ_BIT)
 #endif
 #ifdef CGBA_PALETTE_DIRTY_ACTIVE
 /* Bitmask set by every path which mutates palette_ram_converted, including
@@ -364,18 +384,27 @@ extern volatile u32 cgba_video_io_dirty;
 extern volatile u32 cgba_pending_sl_count;
 extern u32 cgba_pending_sl_start;
 void cgba_flush_pending_scanlines(void);
+void cgba_snapshot_bg2_affine_pending(void);
+int cgba_try_hblank_bg2_dma0_fast(void);
+int cgba_try_batch_hblank_bg2_dma0_fast(u32 start_y, u32 lines);
 void cgba_discard_pending_scanlines(void);
 void cgba_queue_scanlines(u32 start_y, u32 count);
 static inline void cgba_video_flush_before_write(void) {
   if (__builtin_expect(cgba_pending_sl_count != 0u, 0))
     cgba_flush_pending_scanlines();
 }
+static inline void cgba_video_snapshot_bg2_before_write(void) {
+  if (__builtin_expect(cgba_pending_sl_count != 0u, 0))
+    cgba_snapshot_bg2_affine_pending();
+}
 #else
 static inline void cgba_video_flush_before_write(void) {}
+static inline void cgba_video_snapshot_bg2_before_write(void) {}
 static inline void cgba_discard_pending_scanlines(void) {}
 #endif
 #else
 static inline void cgba_video_flush_before_write(void) {}
+static inline void cgba_video_snapshot_bg2_before_write(void) {}
 static inline void cgba_discard_pending_scanlines(void) {}
 #endif
 extern u16 io_registers[512];

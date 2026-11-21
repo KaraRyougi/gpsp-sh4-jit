@@ -206,9 +206,11 @@ static void cgba_claim_loader_arena(void)
 }
 #endif
 
-/* 4-byte aligned: the scaled presenters read rows as packed u32 pairs. */
+/* 32-byte aligned: every 480-byte (240*2 = 15*32) GBA scanline starts on an
+ * exact SH-4 cache-line boundary, avoiding split-line write-allocate misses
+ * in strip renderers and scaled presenters. */
 static uint16_t cgba_framebuffer[CGBA_GBA_BUFFER_PIXELS] CGBA_HIGH_BSS
-	__attribute__((aligned(4)));
+	__attribute__((aligned(32)));
 
 /* FPS metrics meter (emulated + drawn frame rate), shown when the menu's
  * "SHOW FPS" option is on. Reset on each gameplay entry. */

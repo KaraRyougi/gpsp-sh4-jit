@@ -732,6 +732,29 @@ int cgba_sh4_thumb_ldst(u32 opcode, u32 pc)
   return cgba_store_alert_break(pc + 2);
 }
 
+/* Cold fallback for a fused same-base [rB, #imm] Thumb load/store run (4..8 ops)
+ * when the base is non-IWRAM, unaligned, or hits an SMC-tagged IWRAM address. */
+int cgba_sh4_thumb_ldst_run(u32 count, u32 pc)
+{
+  u32 i;
+  int total_extra = 0;
+  u32 cur_pc = pc;
+  for (i = 0; i < count; i++, cur_pc += 2u) {
+    u32 op = read_memory16(cur_pc);
+    int ret = cgba_sh4_thumb_ldst(op, cur_pc);
+    total_extra += cgba_sh4_extra_cycles;
+    if (ret) {
+      u32 unexec = count - 1u - i;
+      if (unexec)
+        total_extra -= (int)(unexec * ws_cyc_seq[(pc >> 24) & 0x0Fu][0]);
+      cgba_sh4_extra_cycles = total_extra;
+      return ret;
+    }
+  }
+  cgba_sh4_extra_cycles = total_extra;
+  return 0;
+}
+
 /* ===================== Thumb block (PUSH/POP/LDMIA/STMIA) =========== */
 
 int cgba_sh4_thumb_block(u32 opcode, u32 pc)
@@ -1413,43 +1436,16 @@ static u32 cgba_sh4_abs_s32_bits(s32 v)
   return (v < 0) ? (0u - (u32)v) : (u32)v;
 }
 
-static u32 cgba_sh4_hle_div_cycles(u32 divarm, u32 pc, s32 num, s32 den)
+static inline u32 cgba_sh4_bitlen32(u32 v)
 {
-  u32 s0 = (u32)ws_cyc_seq[0][1];
-  u32 n0 = (u32)ws_cyc_nseq[0][1];
-  int thumb = (reg[REG_CPSR] & 0x20u) != 0;
-  u32 lr = pc + (thumb ? 2u : 4u);
-  u32 cycles = cgba_swi_dispatch_cycles(reg[REG_SP] >> 24, lr >> 24, thumb);
-  u32 align = 0;
-  u32 n, d;
-
-  if (divarm)
-    cycles += 4u * s0 + n0;   /* 1798..17A4 operand swap + B Div */
-
-  /* r3 wrapper 3E00..3E08 / 3E0C..3E14: BL into the routine, STR r3 over
-   * the dispatcher's saved r3 slot (a nonsequential stack word), and
-   * B swi_complete. */
-  cycles += 3u * s0 + 2u * n0 +
-            (u32)ws_cyc_nseq[(reg[REG_SP] >> 24) & 0xFu][1];
-
-  if (den == 0)
-    return 64u;               /* legacy undefined-input charge */
-
-  n = cgba_sh4_abs_s32_bits(num);
-  d = cgba_sh4_abs_s32_bits(den);
-  while (d <= n && align < 31u) {
-    d <<= 1;
-    align++;
-  }
-
-  /* Open-BIOS Div body 17A8..17FC. Excludes the body's final BX LR because
-   * cgba_swi_dispatch_cycles() already accounts for the dispatcher return path
-   * around the routine call. The translated HLE SWI keeps its own instruction
-   * fetch charge, and the interpreter's dispatcher/body boundary is one cycle
-   * shorter than the straight instruction sum below. Conditional ALU ops still
-   * fetch; taken BLS/BCC add nseq BIOS refill cycles. */
-  cycles += (22u + 10u * align) * s0 + (2u * align) * n0;
-  return cycles - 1u;
+  static const u8 blen4[16] = {
+    0, 1, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4
+  };
+  u32 n = 0u;
+  if (v >= 0x10000u) { v >>= 16; n += 16u; }
+  if (v >= 0x100u)   { v >>= 8;  n += 8u;  }
+  if (v >= 0x10u)    { v >>= 4;  n += 4u;  }
+  return n + blen4[v];
 }
 
 #ifdef CGBA_SH4_ARM_MIXER_FASTPATH
@@ -1961,7 +1957,14 @@ int cgba_sh4_m4a_loop_try(u32 packed, u32 pc)
     if (spent) {
       reg[4] = r4; reg[5] = r5; reg[7] = r7; reg[REG_CPSR] = cpsr;
     }
-  } else if (kind == CGBA_SH4_M4A_KIND_FIXED) {
+  } else if (kind == CGBA_SH4_M4A_KIND_MONO_REVERB) {
+    uint32_t r4 = reg[4], r5 = reg[5], r7 = reg[7], cpsr = reg[REG_CPSR];
+    spent = cgba_sh4_m4a_fold_reverb_mono(&r4, &r5, &r7, &cpsr, budget, &costs);
+    if (spent) {
+      reg[4] = r4; reg[5] = r5; reg[7] = r7; reg[REG_CPSR] = cpsr;
+    }
+  } else if (kind == CGBA_SH4_M4A_KIND_FIXED ||
+             kind == CGBA_SH4_M4A_KIND_MONO_FIXED) {
     uint32_t r3 = reg[3], r5 = reg[5], r8 = reg[8], cpsr = reg[REG_CPSR];
     spent = cgba_sh4_m4a_fold_fixed(&r3, &r5, &r8, &cpsr, stride, budget,
                                     &costs);
@@ -1969,9 +1972,12 @@ int cgba_sh4_m4a_loop_try(u32 packed, u32 pc)
       reg[3] = r3; reg[5] = r5; reg[8] = r8; reg[REG_CPSR] = cpsr;
     }
   } else if (kind == CGBA_SH4_M4A_KIND_INTERP_A ||
-             kind == CGBA_SH4_M4A_KIND_INTERP_B) {
+             kind == CGBA_SH4_M4A_KIND_INTERP_B ||
+             kind == CGBA_SH4_M4A_KIND_MONO_INTERP_A ||
+             kind == CGBA_SH4_M4A_KIND_MONO_INTERP_B) {
     cgba_sh4_m4a_interp_state s;
-    int swap_r9_lr = (kind == CGBA_SH4_M4A_KIND_INTERP_B);
+    int swap_r9_lr = (kind == CGBA_SH4_M4A_KIND_INTERP_B ||
+                      kind == CGBA_SH4_M4A_KIND_MONO_INTERP_B);
     s.r2 = reg[2]; s.r3 = reg[3]; s.r4 = reg[4]; s.r5 = reg[5];
     s.r8 = reg[8];
     s.r9 = swap_r9_lr ? reg[REG_LR] : reg[9];
@@ -2055,29 +2061,89 @@ void cgba_sh4_hle_div(u32 divarm, u32 pc)
   CGBA_SH4_HELPER_HIT(hle_div);
   s32 num = divarm ? (s32)reg[1] : (s32)reg[0];
   s32 den = divarm ? (s32)reg[0] : (s32)reg[1];
-  cgba_sh4_extra_cycles = (int)cgba_sh4_hle_div_cycles(divarm, pc, num, den);
+
+  if (__builtin_expect(den == 0, 0)) {
 #if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
-  if (den == 0) {
     cgba_sh4_hle_div_zero_count++;
-  } else if (den == 1) {
+#endif
+    cgba_sh4_extra_cycles = 64; /* legacy undefined-input charge */
+    return;
+  }
+
+  u32 n = cgba_sh4_abs_s32_bits(num);
+  u32 d = cgba_sh4_abs_s32_bits(den);
+  u32 aq, ar, align;
+
+#if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
+  if (den == 1) {
     cgba_sh4_hle_div_one_count++;
   } else if (den == -1) {
     cgba_sh4_hle_div_neg_one_count++;
+  } else if ((d & (d - 1u)) == 0u) {
+    cgba_sh4_hle_div_pow2_count++;
   } else {
-    u32 abs_den = (den < 0) ? (u32)(-den) : (u32)den;
-    if ((abs_den & (abs_den - 1u)) == 0)
-      cgba_sh4_hle_div_pow2_count++;
-    else
-      cgba_sh4_hle_div_other_count++;
+    cgba_sh4_hle_div_other_count++;
   }
 #endif
-  if (den != 0) {
-    s32 q = num / den, r = num % den;
-    reg[0] = (u32)q;
-    reg[1] = (u32)r;
+
+  if (n < d) {
+    aq = 0u;
+    ar = n;
+    align = 0u;
+  } else {
+    if ((d & (d - 1u)) == 0u) {
+      if (d == 1u) {
+        aq = n;
+        ar = 0u;
+      } else {
+        u32 sh = cgba_sh4_bitlen32(d) - 1u;
+        aq = n >> sh;
+        ar = n & (d - 1u);
+      }
+    } else {
+      aq = n / d;
+      ar = n - aq * d;
+    }
+    if (__builtin_expect(n == 0x80000000u, 0)) {
+      u32 dt = d;
+      align = 0u;
+      while (dt <= n && align < 31u) {
+        dt <<= 1;
+        align++;
+      }
+    } else {
+      align = cgba_sh4_bitlen32(aq);
+    }
+  }
+
+  /* Open-BIOS SWI dispatcher + r3 wrapper + Div body 17A8..17FC cycle model.
+   * BIOS (region 0) and IWRAM (region 3) waitstates are hardware-fixed at 1:
+   *   dispatch: 19+3+8 = 30 + 6*S(sp) + N16(lr) + (!thumb ? S32(lr) : 0)
+   *   divarm:   +5; r3 wrapper: +5 + N32(sp); Div body: 22 + 12*align - 1. */
+  {
+    int thumb = (reg[REG_CPSR] & 0x20u) != 0;
+    u32 sp_r = (reg[REG_SP] >> 24) & 0xFu;
+    u32 lr_r = ((pc + (thumb ? 2u : 4u)) >> 24) & 0xFu;
+    u32 cycles = 56u + 12u * align + (u32)ws_cyc_nseq[lr_r][0];
+    if (__builtin_expect(sp_r == 3u, 1))
+      cycles += 7u;
+    else
+      cycles += 6u * (u32)ws_cyc_seq[sp_r][1] + (u32)ws_cyc_nseq[sp_r][1];
+    if (__builtin_expect(!thumb, 0))
+      cycles += (u32)ws_cyc_seq[lr_r][1];
+    if (__builtin_expect(divarm != 0u, 0))
+      cycles += 5u;
+    cgba_sh4_extra_cycles = (int)cycles;
+  }
+
+  {
+    u32 q_neg = (u32)(num ^ den) >> 31;
+    u32 r_neg = (u32)num >> 31;
+    reg[0] = q_neg ? (0u - aq) : aq;
+    reg[1] = r_neg ? (0u - ar) : ar;
     /* Like the official BIOS (and the patched open BIOS), r3 = ABS(quotient).
      * Minish Cap's direction helper reads r3 after SWI 6. */
-    reg[3] = cgba_sh4_abs_s32_bits(num) / cgba_sh4_abs_s32_bits(den);
+    reg[3] = aq;
   }
 }
 
@@ -4892,12 +4958,209 @@ static int cgba_hle_bios_swi(u32 budget)
   return handled;
 }
 
+/* Exact open-BIOS ArcTan polynomial (0x04e4..0x0568) & SWI 0x09/0x0A HLE.
+ * Reproduces r0, r1 (Div's unsigned remainder on ArcTan2), and exact GBA
+ * cycle count when the call fits within the current event-slice budget. */
+static s32 cgba_bios_arctan_poly(s32 r0)
+{
+  s32 r3 = (s32)((u32)r0 * (u32)r0) >> 14;
+  r3 = (s32)(0u - (u32)r3);
+  s32 r2 = (s32)((u32)r3 + ((u32)r3 << 1));
+  r2 = (s32)(((u32)r2 << 3) - (u32)r2);
+  r2 = (s32)((u32)r3 + ((u32)r2 << 3));
+  r2 = (s32)((u32)(r2 >> 14) + 0x390u);
+  r2 = (s32)((u32)r3 * (u32)r2) >> 14;
+  r2 = (s32)((u32)r2 + 0x91cu);
+  r2 = (s32)((u32)r3 * (u32)r2) >> 14;
+  r2 = (s32)((u32)r2 + 0xfb6u);
+  r2 = (s32)((u32)r3 * (u32)r2) >> 14;
+  r2 = (s32)((u32)r2 + 0x16aau);
+  r2 = (s32)((u32)r3 * (u32)r2) >> 14;
+  r2 = (s32)((u32)r2 + 0x2080u);
+  r2 = (s32)((u32)r3 * (u32)r2 + (u32)r3) >> 14;
+  r2 = (s32)((u32)r2 + 0x3651u);
+  r3 = (s32)((u32)r2 * (u32)r3) >> 14;
+  r3 = (s32)((u32)r3 + 0xa2f9u);
+  return (s32)((u32)r3 * (u32)r0) >> 16;
+}
+
+static s32 cgba_swi_arctan_rem;
+
+static int cgba_swi_arctan_dma_safe(const dma_transfer_type *d)
+{
+  u32 dreg;
+  if (d->irq)
+    return 0;
+  dreg = d->dest_address >> 24;
+  /* Decline straddle if DMA could trigger RAM SMC or WAITCNT timing alert. */
+  if (dreg == 2u || dreg == 3u)
+    return 0;
+  if (dreg == 4u && (d->dest_address & 0xFFFFu) >= 0x200u)
+    return 0;
+  return 1;
+}
+
+static int cgba_swi_arctan_try(u32 num, u32 budget)
+{
+  u32 spsr_v = REG_SPSR(MODE_SUPERVISOR);
+  u32 lr = reg[REG_LR];
+  int thumb = (spsr_v & 0x20u) != 0u;
+  u32 sp_r = REG_MODE(MODE_SYSTEM)[5] >> 24;
+  u32 lr_r = (lr & ~1u) >> 24;
+  u32 base_c = cgba_swi_dispatch_cycles(sp_r, lr_r, thumb);
+  u32 total_c, out_r0, out_r1;
+  s32 rem;
+
+  if (num == 0x09u) {
+    total_c = base_c + 35u;
+    out_r0 = (u32)cgba_bios_arctan_poly((s32)reg[0]);
+    out_r1 = reg[1];
+  } else {
+    /* SWI 0x0A: ArcTan2 (open_gba_bios.bin 0x056c..0x0610) */
+    u32 sp_s = CGBA_WS_S(sp_r, 1);
+    s32 x = (s32)reg[0];
+    s32 y = (s32)reg[1];
+    if (y == 0) {
+      total_c = base_c + 10u + 8u * sp_s;
+      out_r0 = (u32)((x >> 16) & 0x8000);
+      out_r1 = reg[1];
+    } else if (x == 0) {
+      total_c = base_c + 17u + 8u * sp_s;
+      out_r0 = (u32)(((y >> 16) & 0x8000) + 0x4000);
+      out_r1 = reg[1];
+    } else {
+      u32 mx = (u32)(x >> 31);
+      u32 my = (u32)(y >> 31);
+      s32 ax = (s32)(((u32)x ^ mx) - mx);
+      s32 ay = (s32)(((u32)y ^ my) - my);
+      int use_path3 = (ax < ay) || (ax == ay && x < 0 && y < 0);
+      s32 dnum = use_path3 ? (s32)((u32)x << 14) : (s32)((u32)y << 14);
+      s32 dden = use_path3 ? y : x;
+      u32 un = cgba_sh4_abs_s32_bits(dnum);
+      u32 ud = cgba_sh4_abs_s32_bits(dden);
+      u32 aq, ar, align;
+      s32 q, a;
+      if (__builtin_expect(un == 0x80000000u || ud == 0x80000000u, 0))
+        return 0;
+      if (un < ud) {
+        aq = 0u; ar = un; align = 0u;
+      } else if ((ud & (ud - 1u)) == 0u) {
+        if (ud == 1u) {
+          aq = un; ar = 0u;
+        } else {
+          u32 sh = cgba_sh4_bitlen32(ud) - 1u;
+          aq = un >> sh;
+          ar = un & (ud - 1u);
+        }
+        align = cgba_sh4_bitlen32(aq);
+      } else {
+        aq = un / ud;
+        ar = un - aq * ud;
+        align = cgba_sh4_bitlen32(aq);
+      }
+      total_c = base_c + 8u * sp_s + (24u + 12u * align) + 35u +
+                (use_path3 ? ((ax == ay) ? 33u : 28u)
+                           : ((ax == ay) ? 35u : 31u));
+      q = ((u32)(dnum ^ dden) >> 31) ? (s32)(0u - aq) : (s32)aq;
+      a = cgba_bios_arctan_poly(q);
+      if (use_path3) {
+        s32 r4 = ((y >> 16) & 0x8000) + 0x4000;
+        out_r0 = (u32)(r4 - a);
+      } else if (x >= 0) {
+        out_r0 = (u32)a + (((u32)y >> 15) & 0x10000u);
+      } else {
+        out_r0 = (u32)a + 0x8000u;
+      }
+      out_r1 = ar;
+    }
+  }
+
+  if ((s32)budget > (s32)total_c) {
+    rem = (s32)budget - (s32)total_c;
+  } else {
+    /* Pure-math SWI straddling a single IRQ-free video event boundary:
+     * verify no timer/serial/IRQ/DMA-alert/frame-end can trigger at the
+     * boundary, step update_gba(0) cleanly, and charge remaining cycles. */
+    extern u32 serial_irq_cycles;
+    extern int serial_mode;
+    extern u32 cgba_timer_cap_mask;
+    u32 dispstat, vcount, ie;
+    int irq_en, safe;
+    u32 uret;
+    s32 new_bud;
+    if ((s32)budget <= 0 || cgba_timer_cap_mask != 0u ||
+        serial_irq_cycles != 0u || serial_mode != 0 ||
+        reg[CPU_HALT_STATE] != CPU_ACTIVE)
+      return 0;
+    ie = read_ioreg(REG_IE);
+    irq_en = !(spsr_v & 0x80u) && (read_ioreg(REG_IME) != 0u);
+    if (irq_en && (ie & read_ioreg(REG_IF)) != 0u)
+      return 0;
+    dispstat = read_ioreg(REG_DISPSTAT);
+    vcount = read_ioreg(REG_VCOUNT);
+    if ((dispstat & 0x02u) == 0u) {
+      safe = (!irq_en || !((dispstat & 0x10u) && (ie & IRQ_HBLANK))) &&
+             ((s32)budget + 208 > (s32)total_c);
+      if (safe && vcount < 160u && cgba_hblank_dma_mask != 0u) {
+        u32 m = cgba_hblank_dma_mask;
+        while (m) {
+          u32 ch = (u32)__builtin_ctz(m);
+          m &= m - 1u;
+          if (dma[ch].start_type == DMA_START_HBLANK &&
+              !cgba_swi_arctan_dma_safe(&dma[ch])) {
+            safe = 0;
+            break;
+          }
+        }
+      }
+    } else {
+      u32 next_vc = vcount + 1u;
+      safe = (next_vc != 228u) &&
+             (!irq_en ||
+              (!((next_vc == 160u) && (dispstat & 0x08u) && (ie & IRQ_VBLANK)) &&
+               !((next_vc == (dispstat >> 8)) && (dispstat & 0x20u) && (ie & IRQ_VCOUNT)))) &&
+             ((s32)budget + 896 > (s32)total_c);
+      if (safe && next_vc == 160u) {
+        u32 ch;
+        for (ch = 0u; ch < 4u; ch++) {
+          if (dma[ch].start_type == DMA_START_VBLANK &&
+              !cgba_swi_arctan_dma_safe(&dma[ch])) {
+            safe = 0;
+            break;
+          }
+        }
+      }
+    }
+    if (!safe)
+      return 0;
+    uret = update_gba(0);
+    new_bud = (s32)cycles_to_run(uret);
+    rem = new_bud - ((s32)total_c - (s32)budget);
+    if (completed_frame(uret) || (uret & 0x40000000u) || rem <= 0)
+      return 0;
+  }
+
+  reg[0] = out_r0;
+  reg[1] = out_r1;
+  reg[REG_PC] = lr;
+  reg[REG_CPSR] = spsr_v;
+  set_cpu_mode(cpu_modes[spsr_v & 0xF]);
+  cgba_swi_arctan_rem = rem;
+#ifdef CGBA_GPSP_HEADLESS_TEST
+  cgba_bios_hle_swi_count++;
+#endif
+  return 7;
+}
+
 static int cgba_hle_bios_swi_num(u32 num, u32 budget)
 {
   u32 spsr_v = REG_SPSR(MODE_SUPERVISOR);
   u32 lr = reg[REG_LR];
 
   switch (num) {
+  case 0x09:
+  case 0x0A:
+    return cgba_swi_arctan_try(num, budget);
 #if CGBA_SH4_INTRWAIT_HLE
   case 0x04: case 0x05: {                /* IntrWait / VBlankIntrWait */
     u32 mask = (num == 5) ? 1u : reg[1];
@@ -5174,6 +5437,8 @@ u32 cgba_sh4_bios_fallback(u32 cycles)
       return cgba_swi_objaffine_engine((s32)cycles);
     if (h == 6)
       return cgba_swi_lz77_engine((s32)cycles);
+    if (h == 7)
+      return (u32)cgba_swi_arctan_rem;
     if (h)
       return cycles;                 /* PC/mode restored; stub redispatches */
   }

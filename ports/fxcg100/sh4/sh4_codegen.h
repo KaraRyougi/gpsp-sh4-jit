@@ -272,6 +272,9 @@ static inline void sh4_emit_mov_b_load_disp(sh4_codegen *cg, unsigned rm, unsign
 /* MOV.W @(disp4*2, Rm), R0  (sign-extending word load, disp4 = 0..15 halfwords) */
 static inline void sh4_emit_mov_w_load_disp(sh4_codegen *cg, unsigned rm, unsigned disp4)
 { sh4_emit_u16(cg, (uint16_t)(0x8500u | ((rm & 0xFu) << 4) | (disp4 & 0xFu))); }
+/* MOV.B R0, @(disp4, Rn)  (byte store, disp 0..15) */
+static inline void sh4_emit_mov_b_store_disp(sh4_codegen *cg, unsigned rn, unsigned disp4)
+{ sh4_emit_u16(cg, (uint16_t)(0x8000u | ((rn & 0xFu) << 4) | (disp4 & 0xFu))); }
 /* MOV.W R0, @(disp4*2, Rn)  (halfword store, disp4 = 0..15 halfwords) */
 static inline void sh4_emit_mov_w_store_disp(sh4_codegen *cg, unsigned rn, unsigned disp4)
 { sh4_emit_u16(cg, (uint16_t)(0x8100u | ((rn & 0xFu) << 4) | (disp4 & 0xFu))); }

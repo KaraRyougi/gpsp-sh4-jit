@@ -1014,17 +1014,22 @@ static inline void sh4g_charge_fetch_cell(u8 **tp, uint32_t pc, int is_word)
     sh4g_close(tp, &cg); }
 }
 
+extern void sh4_cycle_gate_exit(void);
+
 static inline void sh4g_cycle_gate(u8 **tp, uint32_t pc, int is_word)
 {
   u8 *bt;
+  sh4g_litseg_reserve_bytes(tp, 2, 24u);
   { sh4_codegen cg = sh4g_open(tp);
     sh4_emit_cmppl(&cg, SH4_REG_CYCLES);       /* T = (cycles > 0) */
     sh4g_close(tp, &cg); }
   bt = *tp;
   sh4g_u16(tp, 0x8900);                        /* BT skip (budget remains) */
-  sh4g_charge_fetch_cell(tp, pc, is_word);
-  sh4g_const(tp, pc, SH4_REG_ARG0);
-  sh4g_block_exit_jmp(tp);
+  sh4g_const(tp, pc, SH4_REG_ARG0);            /* R4 = pc */
+  sh4g_const(tp, (uint32_t)(uintptr_t)sh4_cycle_gate_exit, SH4_REG_RET);
+  sh4g_u16(tp, (uint16_t)(0x402B | (SH4_REG_RET << 8))); /* JMP @R0 */
+  sh4g_u16(tp, (uint16_t)(0xE000 | (SH4_REG_T1 << 8) |
+                          (is_word ? 1u : 0u)));         /* delay: MOV #is_word, R2 */
   { long d = ((long)(*tp) - ((long)bt + 4)) / 2; bt[1] = (uint8_t)(d & 0xFF); }
 }
 
@@ -1111,8 +1116,10 @@ static inline void sh4g_chain_patch(u8 *site, const void *target)
   if (d >= -2048 && d <= 2047 && (form == 0xD0 || form == 0xA0)) {
     site[0] = (uint8_t)(0xA0 | ((d >> 8) & 0x0F));
     site[1] = (uint8_t)(d & 0xFF);
-    site[2] = 0x00;                  /* NOP in the delay slot (replaces JMP) */
-    site[3] = 0x09;
+    if (form == 0xD0) {
+      site[2] = 0x00;                  /* NOP in the delay slot (replaces JMP) */
+      site[3] = 0x09;
+    }
     SH4G_RESYNC(site, 4);
     return;
   }
@@ -1170,14 +1177,45 @@ static inline u8 *sh4g_branch_exit(u8 **tp, uint32_t new_pc,
   return site;
 }
 
-/* Internal intra-block branch exit: always patched to the target's body_offset
- * before the block runs, so R4 = new_pc is only needed on the cold R13 <= 0
- * exit path. Hot budget-remaining path falls straight through BF (1 cyc) into
- * the patched BRA body_offset instead of taking a 3-cycle BT over the cold exit. */
-static inline u8 *sh4g_branch_exit_internal(u8 **tp, uint32_t new_pc)
+/* Internal intra-block branch exit: when `known_target` is already emitted
+ * (backward loop edges), bind directly with a single `BT target` (+-254 B) or
+ * `BF cold; BRA target; NOP` (+-4094 B), eliminating the 10-12 B patch_jump
+ * placeholder and double-taken branch. Returns NULL when already bound. */
+static inline u8 *sh4g_branch_exit_internal_known(u8 **tp, uint32_t new_pc,
+                                                  u8 *known_target)
 {
   u8 *bf, *site;
   sh4g_litseg_reserve_bytes(tp, 1, 32u);
+  if (known_target != NULL) {
+    long d_bt = ((long)(uintptr_t)known_target -
+                 ((long)(uintptr_t)(*tp + 2) + 4)) / 2;
+    if (d_bt >= -128 && d_bt <= 127) {
+      { sh4_codegen cg = sh4g_open(tp);
+        sh4_emit_cmppl(&cg, SH4_REG_CYCLES);    /* T = (cycles > 0) */
+        sh4g_close(tp, &cg); }
+      sh4g_u16(tp, (uint16_t)(0x8900 | (d_bt & 0xFF))); /* BT known_target */
+      sh4g_const(tp, new_pc, SH4_REG_ARG0);     /* cold: R4 = new_pc */
+      sh4g_block_exit_jmp(tp);                  /* exhausted: events + redispatch */
+      return NULL;
+    }
+    {
+      long d_bra = ((long)(uintptr_t)known_target -
+                    ((long)(uintptr_t)(*tp + 4) + 4)) / 2;
+      if (d_bra >= -2048 && d_bra <= 2047) {
+        { sh4_codegen cg = sh4g_open(tp);
+          sh4_emit_cmppl(&cg, SH4_REG_CYCLES);  /* T = (cycles > 0) */
+          sh4g_close(tp, &cg); }
+        bf = *tp;
+        sh4g_u16(tp, 0x8B00);                   /* BF exhausted */
+        sh4g_u16(tp, (uint16_t)(0xA000 | (d_bra & 0x0FFF))); /* BRA target */
+        sh4g_u16(tp, 0x0009);                   /* delay NOP */
+        { long d = ((long)(*tp) - ((long)bf + 4)) / 2; bf[1] = (uint8_t)(d & 0xFF); }
+        sh4g_const(tp, new_pc, SH4_REG_ARG0);   /* cold: R4 = new_pc */
+        sh4g_block_exit_jmp(tp);                /* exhausted: events + redispatch */
+        return NULL;
+      }
+    }
+  }
   { sh4_codegen cg = sh4g_open(tp);
     sh4_emit_cmppl(&cg, SH4_REG_CYCLES);        /* T = (cycles > 0) */
     sh4g_close(tp, &cg); }
@@ -1188,6 +1226,11 @@ static inline u8 *sh4g_branch_exit_internal(u8 **tp, uint32_t new_pc)
   sh4g_const(tp, new_pc, SH4_REG_ARG0);         /* cold: R4 = new_pc */
   sh4g_block_exit_jmp(tp);                      /* exhausted: events + redispatch */
   return site;
+}
+
+static inline u8 *sh4g_branch_exit_internal(u8 **tp, uint32_t new_pc)
+{
+  return sh4g_branch_exit_internal_known(tp, new_pc, NULL);
 }
 
 /* Idle-loop branch exit — the dynarec mirror of the interpreter's idle

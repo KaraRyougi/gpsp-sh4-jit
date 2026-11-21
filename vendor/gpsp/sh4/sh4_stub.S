@@ -302,8 +302,10 @@ ibt_hash:
   or      #1, r0
   mov     r0, r2                  /* key = pc | 1 (Thumb) */
 #if CGBA_SH4_KNOWN_TARGET_CACHE
-  and     #0x7e, r0               /* r0 already == r2; ((r2 >> 1) & 63) * 8 */
+  shlr    r0                      /* bits 1..8 -> bits 0..7 (256 entries) */
+  extu.b  r0, r0
   shll2   r0
+  shll    r0                      /* slot * 8 */
   mov.l   ibh_thot, r1
   add     r0, r1
   mov.l   @r1+, r3
@@ -340,8 +342,10 @@ ibt_hit:
   add     #8, r7
 #if CGBA_SH4_KNOWN_TARGET_CACHE
   mov     r2, r0
-  and     #0x7e, r0
+  shlr    r0
+  extu.b  r0, r0
   shll2   r0
+  shll    r0
   mov.l   ibh_thot, r1
   add     r0, r1
   mov.l   r2, @r1
@@ -370,8 +374,10 @@ defsymbl(sh4_indirect_branch_dual_thumb_current)
   cmp/hs  r1, r2                  /* T = key >= 0x4000 */
   bf      .Libd_to_slow
   mov     r2, r0
-  and     #0x7e, r0
+  shlr    r0
+  extu.b  r0, r0
   shll2   r0
+  shll    r0
   mov.l   ibh_dhot, r1
   add     r0, r1
   mov.l   @r1+, r3
@@ -408,8 +414,10 @@ defsymbl(sh4_indirect_branch_dual_thumb_current)
   INC_COUNTER cgba_dynarec_ibh_dual_thumb_hit_count
   add     #8, r7
   mov     r2, r0
-  and     #0x7e, r0
+  shlr    r0
+  extu.b  r0, r0
   shll2   r0
+  shll    r0
   mov.l   ibh_dhot, r1
   add     r0, r1
   mov.l   r2, @r1
@@ -766,7 +774,9 @@ ibd_arm_hash:
 1:
 
   mov     r2, r0
-  and     #0xfc, r0
+  shlr2   r0
+  extu.b  r0, r0
+  shll2   r0
   shll    r0
   mov.l   txt_ibh_dhot, r1
   add     r0, r1
@@ -806,7 +816,9 @@ ibd_arm_hit:
   INC_COUNTER cgba_dynarec_ibh_dual_arm_hit_count
   add     #8, r7
   mov     r2, r0
-  and     #0xfc, r0
+  shlr2   r0
+  extu.b  r0, r0
+  shll2   r0
   shll    r0
   mov.l   txt_ibh_dhot, r1
   add     r0, r1
@@ -821,8 +833,10 @@ ibd_arm_commit:
 
 ibd_thumb_hash:
   mov     r2, r0
-  and     #0x7e, r0
+  shlr    r0
+  extu.b  r0, r0
   shll2   r0
+  shll    r0
   mov.l   txt_ibh_dhot, r1
   add     r0, r1
   mov.l   @r1+, r3
@@ -858,8 +872,10 @@ ibd_thumb_hit:
   INC_COUNTER cgba_dynarec_ibh_dual_thumb_hit_count
   add     #8, r7
   mov     r2, r0
-  and     #0x7e, r0
+  shlr    r0
+  extu.b  r0, r0
   shll2   r0
+  shll    r0
   mov.l   txt_ibh_dhot, r1
   add     r0, r1
   mov.l   r2, @r1
@@ -1137,21 +1153,29 @@ defsymbl(sh4_fastmem_pc_mem_tramp)
   mov     #1, r7                    /* low-16 cycle descriptor */
 
 #if CGBA_SH4_FASTMEM_OOL_DESC
-/* Out-of-line slow-path trampoline for non-WB single fastmem sites:
- * PR is the exact resume address (no inline descriptor after JSR).
- * First probes the 256-entry direct-mapped cache in ASM (~13 insns on hit);
- * on miss, calls _cgba_sh4_fastmem_ool_lookup(PR) to binary-search & fill. */
+/* Out-of-line slow-path trampoline for fastmem sites (single + WB + block):
+ * PR is the exact resume address (or 2B post-load store for compact8 loads).
+ * First probes the 512-entry direct-mapped cache in ASM (~13 insns on hit);
+ * on miss, calls _cgba_sh4_fastmem_ool_lookup(PR) to binary-search & fill.
+ * Helper tag is encoded in pc_flags bits 31:30 (4-way table). Never touches
+ * R12 (pinned guest ARM r1). */
+defsymbl(sh4_fastmem_compact8_load_tramp)
+  bra     .Lfm8_entry
+  mov     #1, r5                    /* r5 = is_load = 1 */
 defsymbl(sh4_fastmem_compact8_tramp)
+  mov     #0, r5                    /* r5 = is_load = 0 */
+.Lfm8_entry:
   sts     pr, r4                    /* r4 = ret_pc */
   sts.l   pr, @-r15
   CPSR_FLUSH
+  mov.l   r5, @-r15                 /* stack: [is_load, PR] */
+  mov     r4, r1
+  shll    r1                        /* ret_pc << 1 */
   mov     r4, r0
-  shlr    r0                        /* r0 = ret_pc >> 1 */
-  mov     r0, r1
-  shlr8   r1                        /* r1 = ret_pc >> 9 */
+  shlr8   r0                        /* ret_pc >> 8 */
   xor     r1, r0
-  extu.b  r0, r0                    /* 0..255 */
-  shll2   r0                        /* byte offset */
+  mov.w   tram_ool_mask, r1         /* 0x07FC */
+  and     r1, r0                    /* (((ret_pc>>1)^(ret_pc>>10))&511)*4 */
   mov.l   tram_ool_cache, r1
   mov.l   @(r0,r1), r1              /* r1 = cached cgba_sh4_fm_desc * */
   tst     r1, r1
@@ -1160,24 +1184,24 @@ defsymbl(sh4_fastmem_compact8_tramp)
   cmp/eq  r4, r0
   bf      .Lfm8_ool_miss
 .Lfm8_ool_hit:
-  mov.l   @(4,r1), r5               /* r5 = pc_flags (bit31 = is_arm) */
+  mov.l   @(4,r1), r5               /* r5 = pc_flags (bits31:30 = helper tag) */
   mov.l   @(8,r1), r4               /* r4 = opcode */
-  mov.l   @(12,r1), r1              /* r1 = cycle_count */
-  cmp/pz  r5                        /* T = 1 -> Thumb, T = 0 -> ARM */
-  bf      .Lfm8_ool_arm
-  mov.l   tram_ool_thumb_ldst, r0
+  mov.l   @(12,r1), r2              /* r2 = cycle_count */
+  mova    tram_ool_helper_tbl, r0
+  mov     r0, r1                    /* r1 = &tram_ool_helper_tbl[0] */
+  mov     r5, r0
+  shlr16  r0
+  shlr8   r0
+  shlr2   r0
+  shlr2   r0
+  and     #0x0C, r0                 /* r0 = (pc_flags >> 30) * 4 */
+  mov.l   @(r0,r1), r0              /* r0 = helper fn */
+  shll2   r5
+  shlr2   r5                        /* r5 = guest pc (bits 29:0) */
   jsr     @r0
-  mov.l   r1, @-r15                 /* delay slot: save cycle_count */
-  bra     .Lfm8_ool_post
-  nop
-.Lfm8_ool_arm:
-  shll    r5
-  shlr    r5                        /* clear bit 31 -> guest pc */
-  mov.l   tram_ool_arm_ldst, r0
-  jsr     @r0
-  mov.l   r1, @-r15                 /* delay slot: save cycle_count */
-.Lfm8_ool_post:
+  mov.l   r2, @-r15                 /* delay slot: save cycle_count */
   mov.l   @r15+, r3                 /* r3 = cycle_count */
+  mov.l   @r15+, r6                 /* r6 = is_load */
   CPSR_RELOAD_R1
   mov.l   tram_extra, r1
   mov.l   @r1, r1
@@ -1192,6 +1216,23 @@ defsymbl(sh4_fastmem_compact8_tramp)
   lds.l   @r15+, pr                 /* delay slot */
 .Lfm8_cont:
   lds.l   @r15+, pr
+  tst     r6, r6                    /* T = 1 if store/block, 0 if compact8 load */
+  bt      .Lfm8_store_ret
+  sts     pr, r3                    /* r3 = PR (2B post-load store); R12 safe */
+  mov.w   @r3, r1                   /* inspect 0x1E2d or 0x6B23 or 0x6C23 */
+  mov     r1, r0
+  shlr8   r0
+  cmp/eq  #0x1E, r0                 /* MOV.L R2, @(rd*4, R14)? */
+  bf      .Lfm8_load_skip           /* r0/r1 already loaded by CPSR_RELOAD_R1 */
+  mov     r1, r0
+  and     #0x0F, r0                 /* r0 = rd (2..14) */
+  shll2   r0                        /* r0 = rd * 4 */
+  mov.l   @(r0,r14), r2             /* prime R2 = reg[rd] for post-load fwd */
+.Lfm8_load_skip:
+  add     #2, r3                    /* skip the 2B post-load store */
+  jmp     @r3
+  nop
+.Lfm8_store_ret:
   rts
   nop
 .Lfm8_ool_miss:
@@ -1200,15 +1241,18 @@ defsymbl(sh4_fastmem_compact8_tramp)
   nop
   bra     .Lfm8_ool_hit
   mov     r0, r1                    /* delay slot: r1 = found desc */
+tram_ool_mask:
+  .word   0x07FC
 .align 2
 tram_ool_cache:
   .long   _cgba_sh4_fm_ool_cache
 tram_ool_lookup:
   .long   _cgba_sh4_fastmem_ool_lookup
-tram_ool_thumb_ldst:
+tram_ool_helper_tbl:
   .long   _cgba_sh4_thumb_ldst
-tram_ool_arm_ldst:
   .long   _cgba_sh4_arm_ldst
+  .long   _cgba_sh4_thumb_block
+  .long   _cgba_sh4_arm_block
 #else
 /* Ultra-compact non-writeback single fastmem slow-path trampoline.
  * PR points directly to the 4-byte-aligned inline descriptor:
@@ -1222,7 +1266,12 @@ tram_ool_arm_ldst:
  *     PR+8: BRA +2 ; NOP (skipped on slow return)
  *     PR+12: cycle_count
  *     PR+16: continuation */
+defsymbl(sh4_fastmem_compact8_load_tramp)
+  bra     .Lfm8_entry
+  mov     #1, r2                    /* bit 0 = 1 (load: skip 2B post-call store) */
 defsymbl(sh4_fastmem_compact8_tramp)
+  mov     #0, r2                    /* bit 0 = 0 (store) */
+.Lfm8_entry:
   sts     pr, r1
   sts.l   pr, @-r15
   CPSR_FLUSH
@@ -1230,7 +1279,8 @@ defsymbl(sh4_fastmem_compact8_tramp)
   cmp/pz  r5                        /* T = 1 -> Thumb, T = 0 -> ARM */
   bf      .Lfm8_arm
   mov.l   @r1, r4                   /* r4 = (thumb_op << 16) | cycles16 */
-  mov.l   r1, @-r15                 /* save cursor -> cycles16; +4 = PR+8 resume */
+  or      r2, r1                    /* tag bit 0 = is_load */
+  mov.l   r1, @-r15                 /* save tagged cursor -> cycles16; +4 = PR+8 */
   mov.l   tram_thumb_ldst, r0
   jsr     @r0
   shlr16  r4                        /* delay slot: r4 = thumb_opcode */
@@ -1241,16 +1291,20 @@ defsymbl(sh4_fastmem_compact8_tramp)
   shlr    r5                        /* strip bit31 -> real ARM pc */
   mov.l   @r1+, r4                  /* r4 = arm_opcode */
   add     #4, r1                    /* skip BRA +2 ; NOP at PR+8 */
+  or      r2, r1                    /* tag bit 0 = is_load */
   mov.l   tram_arm_ldst, r0
   jsr     @r0
-  mov.l   r1, @-r15                 /* delay slot: save cursor -> cycle_count */
+  mov.l   r1, @-r15                 /* delay slot: save tagged cursor */
   mov     #0, r7                    /* full-32 cycle descriptor */
 .Lfm8_post:
-  mov.l   @r15+, r3                 /* r3 = literal cursor */
+  mov.l   @r15+, r3                 /* r3 = tagged literal cursor */
   CPSR_RELOAD_R1
   mov.l   tram_extra, r1
   mov.l   @r1, r1
   sub     r1, r13
+  mov     r3, r6                    /* r6 bit 0 = is_load */
+  mov     #-2, r1
+  and     r1, r3                    /* restore 4-aligned r3 */
   tst     r0, r0
   bt      .Lfm8_cont
   mov.l   @r3, r1
@@ -1267,6 +1321,21 @@ defsymbl(sh4_fastmem_compact8_tramp)
 .Lfm8_cont:
   lds.l   @r15+, pr
   add     #4, r3
+  mov     r6, r0
+  tst     #1, r0                    /* T = 1 if store, 0 if load */
+  bt      .Lfm8_ret
+  mov.w   @r3, r1                   /* inspect 0x1E2d or 0x6B23 or 0x6C23 */
+  mov     r1, r0
+  shlr8   r0
+  cmp/eq  #0x1E, r0
+  bf      .Lfm8_load_skip
+  mov     r1, r0
+  and     #0x0F, r0
+  shll2   r0
+  mov.l   @(r0,r14), r2
+.Lfm8_load_skip:
+  add     #2, r3
+.Lfm8_ret:
   jmp     @r3
   nop
 .align 2
@@ -1299,6 +1368,64 @@ op2_pc_common:
 .align 2
 tram_extra:
   .long   _cgba_sh4_extra_cycles
+
+/* Cold fallback for fused POP {rX}; BX rX when SP is non-IWRAM or unaligned.
+ * Entered via far JMP from cgba_sh4_pop1_bx_routine:
+ *   R5 = rX * 4 (0..28), PR -> 4-byte aligned `.long pc`.
+ * Runs CPSR_FLUSH first and saves rX*4 on host stack (never clobbers R12). */
+defsymbl(sh4_pop1_bx_slow)
+  CPSR_FLUSH
+  sts     pr, r1
+  mov.l   @r1, r1                   /* r1 = pc */
+  mov.l   r5, @-r15                 /* save rX * 4 across C call */
+  mov     r5, r2
+  shlr2   r2                        /* r2 = rX (0..7) */
+  mov     #1, r4
+  shld    r2, r4                    /* r4 = 1 << rX */
+  mov.w   .Lpop1_opc_base, r0
+  extu.w  r0, r0
+  or      r0, r4                    /* r4 = 0xBC00 | (1 << rX) */
+  mov.l   .Lpop1_thumb_blk, r0
+  jsr     @r0
+  mov     r1, r5                    /* delay slot: arg1 = pc */
+  mov.l   @r15+, r2                 /* r2 = rX * 4 */
+  CPSR_RELOAD_R1
+  mov.l   .Lpop1_extra, r1
+  mov.l   @r1, r1
+  sub     r1, r13                   /* debit memory cycles of POP {rX} */
+  mov     r2, r0                    /* r0 = rX * 4 */
+  mov.l   @(r0,r14), r4             /* r4 = popped target PC */
+  mov.l   .Lpop1_bx_tail, r0
+  mov.l   @r0, r0
+  jmp     @r0
+  nop
+.Lpop1_opc_base:
+  .word   0xBC00
+  .align 2
+.Lpop1_thumb_blk:
+  .long   _cgba_sh4_thumb_block
+.Lpop1_extra:
+  .long   _cgba_sh4_extra_cycles
+.Lpop1_bx_tail:
+  .long   _cgba_sh4_thumb_bx_routine
+
+/* Cold loop-break cycle-gate exit: charge sequential target fetch and exit via
+ * sh4_block_exit (R10). In: R4 = guest pc, R2 = is_word (0=Thumb, 1=ARM). */
+defsymbl(sh4_cycle_gate_exit)
+  mov     r4, r0
+  shlr16  r0
+  shlr8   r0
+  and     #15, r0
+  shll    r0
+  add     r2, r0
+  mov.l   .Lcge_seq, r3
+  mov.b   @(r0, r3), r2
+  extu.b  r2, r2
+  jmp     @r10
+  sub     r2, r13
+  .align 2
+.Lcge_seq:
+  .long   _ws_cyc_seq
 
 #if CGBA_SH4_LAZY_CHAIN
 /* ---- lazy ROM-to-ROM dynamic branch chaining ----------------------------

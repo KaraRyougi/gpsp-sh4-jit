@@ -324,10 +324,12 @@ static __attribute__((noinline)) void cgba_ugba_hblank_dma(int cur_dma_cycles)
 {
   cpu_alert_type alert = CPU_ALERT_NONE;
   int dcyc = cur_dma_cycles;
-  u32 i;
-  for (i = 0; i < 4; i++)
+  u32 mask = cgba_hblank_dma_mask;
+  while (mask)
   {
-    if (dma[i].start_type == DMA_START_HBLANK)
+    u32 i = (u32)__builtin_ctz(mask);
+    mask &= mask - 1u;
+    if (__builtin_expect(dma[i].start_type == DMA_START_HBLANK, 1))
       alert |= dma_transfer(i, &dcyc);
   }
   cgba_ugba_bres.dma_alert = alert;
@@ -415,65 +417,85 @@ static __attribute__((noinline)) void cgba_ugba_timer_cap(void)
 
 #if defined(CGBA_SILENT_TIMERS) && CGBA_SILENT_TIMERS
 static __attribute__((noinline)) unsigned cgba_ugba_idle_fastforward(
-  u32 frame_complete, irq_type irq_raised, int serial_active,
+  u32 frame_complete, int serial_active,
   u32 idle_pass, u32 changed_pc, u32 idle_if_entry)
 {
   cgba_ugba_bres.irq_raised = IRQ_NONE;
-  if (!frame_complete && !irq_raised && !cgba_timer_cap_mask && !serial_active &&
-      (reg[CPU_HALT_STATE] == CPU_HALT ||
-       (reg[CPU_HALT_STATE] == CPU_ACTIVE && idle_pass && !changed_pc &&
-        read_ioreg(REG_IF) == idle_if_entry))) {
-    u32 dispstat = read_ioreg(REG_DISPSTAT);
-    if ((dispstat & 0x10u) == 0u && video_count > 0) {
-      u32 vcount = read_ioreg(REG_VCOUNT);
-      u32 lyc = dispstat >> 8;
-      if ((dispstat & 0x01u) && vcount >= 160u && vcount < 228u &&
-          (!(dispstat & 0x20u) || lyc <= vcount || lyc >= 228u)) {
-        u32 total_to_end = (u32)video_count +
-                           ((dispstat & 0x02u) ? 0u : 272u) +
-                           (227u - vcount) * 1232u;
-        if (total_to_end > 272u) {
-          video_count = 272;
-          execute_cycles = 272;
-          write_ioreg(REG_VCOUNT, 227);
-          dispstat |= 0x02u;
-          if (227u == lyc)
-            dispstat |= 0x04u;
-          else
-            dispstat &= ~0x04u;
-          write_ioreg(REG_DISPSTAT, dispstat);
-          return total_to_end - 272u;
-        }
-      } else if ((dispstat & 0x03u) == 0x02u && vcount < 159u &&
-                 !cgba_hblank_dma_mask &&
-                 (!(dispstat & 0x20u) || (vcount + 1u) != lyc)) {
-        u32 stop_y = 159u;
-        if ((dispstat & 0x20u) && lyc > vcount && lyc <= 159u)
-          stop_y = lyc - 1u;
-        u32 lines = stop_y - vcount;
-        u32 batch_cycles = (u32)video_count + lines * 1232u - 272u;
+  if (!frame_complete && !cgba_timer_cap_mask && !serial_active) {
+    int is_halt = (reg[CPU_HALT_STATE] == CPU_HALT);
+    if (is_halt ||
+        (reg[CPU_HALT_STATE] == CPU_ACTIVE && idle_pass && !changed_pc &&
+         read_ioreg(REG_IF) == idle_if_entry)) {
+      u32 dispstat = read_ioreg(REG_DISPSTAT);
+      u32 hblank_irq_en = dispstat & 0x10u;
+      int hblank_safe = (hblank_irq_en == 0u) ||
+                        (((read_ioreg(REG_IE) & IRQ_HBLANK) == 0u) &&
+                         (is_halt || (idle_if_entry & IRQ_HBLANK) != 0u));
+      if (hblank_safe && video_count > 0) {
+        u32 vcount = read_ioreg(REG_VCOUNT);
+        u32 lyc = dispstat >> 8;
+        if ((dispstat & 0x01u) && vcount >= 160u && vcount < 228u &&
+            (!(dispstat & 0x20u) || lyc <= vcount || lyc >= 228u)) {
+          u32 total_to_end = (u32)video_count +
+                             ((dispstat & 0x02u) ? 0u : 272u) +
+                             (227u - vcount) * 1232u;
+          if (total_to_end > 272u) {
+            if (hblank_irq_en)
+              io_registers[REG_IF] |= eswap16(IRQ_HBLANK);
+            video_count = 272;
+            execute_cycles = 272;
+            write_ioreg(REG_VCOUNT, 227);
+            dispstat |= 0x02u;
+            if (227u == lyc)
+              dispstat |= 0x04u;
+            else
+              dispstat &= ~0x04u;
+            write_ioreg(REG_DISPSTAT, dispstat);
+            return total_to_end - 272u;
+          }
+        } else if ((dispstat & 0x03u) == 0x02u && vcount < 159u &&
+                   (!(dispstat & 0x20u) || (vcount + 1u) != lyc)) {
+          int ok = 0;
+          u32 stop_y = 159u;
+          if ((dispstat & 0x20u) && lyc > vcount && lyc <= 159u)
+            stop_y = lyc - 1u;
+          u32 lines = stop_y - vcount;
+          if (!cgba_hblank_dma_mask) {
 #ifdef CGBA_VIDEO_DEFERRED_ACTIVE
-        cgba_queue_scanlines(vcount + 1u, lines);
-        write_ioreg(REG_VCOUNT, stop_y);
+            cgba_queue_scanlines(vcount + 1u, lines);
+            write_ioreg(REG_VCOUNT, stop_y);
 #else
-        for (u32 y = vcount + 1u; y <= stop_y; y++) {
-          write_ioreg(REG_VCOUNT, y);
-          update_scanline();
-        }
+            for (u32 y = vcount + 1u; y <= stop_y; y++) {
+              write_ioreg(REG_VCOUNT, y);
+              update_scanline();
+            }
 #endif
-        cpu_ticks += batch_cycles;
-        if (cgba_timer_active_mask) {
-          irq_type b_irq = IRQ_NONE;
-          update_timers(&b_irq, batch_cycles);
-          cgba_ugba_bres.irq_raised = b_irq;
+            ok = 1;
+          }
+#if defined(CGBA_BULK_DMA) && CGBA_BULK_DMA && defined(CGBA_VIDEO_DEFERRED_ACTIVE)
+          else if (is_halt && cgba_hblank_dma_mask == 1u &&
+                   cgba_dma0_bg2_fast != 0u &&
+                   cgba_try_batch_hblank_bg2_dma0_fast(vcount + 1u, lines)) {
+            write_ioreg(REG_VCOUNT, stop_y);
+            ok = 1;
+          }
+#endif
+          if (ok) {
+            u32 batch_cycles = (u32)video_count + lines * 1232u - 272u;
+            if (reg[OAM_UPDATED])
+              oam_update_count += lines;
+            if (hblank_irq_en)
+              io_registers[REG_IF] |= eswap16(IRQ_HBLANK);
+            if (stop_y == lyc)
+              dispstat |= 0x04u;
+            else
+              dispstat &= ~0x04u;
+            write_ioreg(REG_DISPSTAT, dispstat);
+            video_count = 272;
+            execute_cycles = 272;
+            return batch_cycles;
+          }
         }
-        if (stop_y == lyc)
-          dispstat |= 0x04u;
-        else
-          dispstat &= ~0x04u;
-        write_ioreg(REG_DISPSTAT, dispstat);
-        video_count = 272;
-        execute_cycles = 272;
       }
     }
   }
@@ -481,7 +503,7 @@ static __attribute__((noinline)) unsigned cgba_ugba_idle_fastforward(
 }
 #endif
 
-CGBA_HOT_TEXT u32 function_cc update_gba(int remaining_cycles)
+static __attribute__((noinline)) u32 cgba_update_gba_slow(int remaining_cycles)
 {
   u32 changed_pc = 0;
   u32 frame_complete = 0;
@@ -503,17 +525,7 @@ CGBA_HOT_TEXT u32 function_cc update_gba(int remaining_cycles)
     else
       idle_if_entry = read_ioreg(REG_IF);
   }
-  trace_update_gba(remaining_cycles);
-  cgba_trace_update_gba(remaining_cycles);
 
-  if (__builtin_expect(remaining_cycles < -64, 0))
-    remaining_cycles = -64;
-
-#if defined(CGBA_GPSP_HEADLESS_TEST) && defined(CGBA_SH4_DIAG_COUNTERS)
-  cgba_update_gba_calls++;
-  if (reg[CPU_HALT_STATE] != CPU_ACTIVE)
-    cgba_update_gba_halt_calls++;
-#endif
   do
   {
     cpu_alert_type dma_alert = CPU_ALERT_NONE;
@@ -555,13 +567,16 @@ CGBA_HOT_TEXT u32 function_cc update_gba(int remaining_cycles)
       dma_cycles = 0;
     }
     int serial_active = 0;
+    u32 s_cyc;
     {
       extern u32 serial_irq_cycles;
       extern int serial_mode;
-      if (__builtin_expect((serial_irq_cycles | (u32)serial_mode) != 0u, 0)) {
+      s_cyc = serial_irq_cycles;
+      if (__builtin_expect((s_cyc | (u32)serial_mode) != 0u, 0)) {
         irq_type s_irq = IRQ_NONE;
         serial_active = cgba_poll_serial(completed_cycles, &s_irq);
         irq_raised |= s_irq;
+        s_cyc = serial_irq_cycles;
       }
     }
 
@@ -606,9 +621,19 @@ CGBA_HOT_TEXT u32 function_cc update_gba(int remaining_cycles)
 
           // Trigger the HBlank DMAs if enabled
           if (__builtin_expect(cgba_hblank_dma_mask != 0, 0)) {
-            cgba_ugba_hblank_dma(dma_cycles);
-            dma_alert |= cgba_ugba_bres.dma_alert;
-            dma_cycles = cgba_ugba_bres.dma_cycles;
+#if defined(CGBA_BULK_DMA) && CGBA_BULK_DMA && defined(CGBA_VIDEO_DEFERRED_ACTIVE)
+            int fcyc = (cgba_hblank_dma_mask == 1u && cgba_dma0_bg2_fast != 0u)
+                         ? cgba_try_hblank_bg2_dma0_fast()
+                         : 0;
+            if (__builtin_expect(fcyc != 0, 1)) {
+              dma_cycles += fcyc;
+            } else
+#endif
+            {
+              cgba_ugba_hblank_dma(dma_cycles);
+              dma_alert |= cgba_ugba_bres.dma_alert;
+              dma_cycles = cgba_ugba_bres.dma_cycles;
+            }
           }
         }
 
@@ -663,12 +688,13 @@ CGBA_HOT_TEXT u32 function_cc update_gba(int remaining_cycles)
 #endif
 
     // Flag any V/H blank interrupts, DMA IRQs, Vcount, etc.
-    if (__builtin_expect(irq_raised != IRQ_NONE, 0))
-      flag_interrupt(irq_raised);
+    if (__builtin_expect(irq_raised != IRQ_NONE, 0)) {
+      io_registers[REG_IF] |= eswap16((u16)irq_raised);
+      irq_raised = IRQ_NONE;
+    }
 
     // Raise any pending interrupts. This changes the CPU mode.
-    if (__builtin_expect(io_registers[REG_IF] != 0 &&
-                         (io_registers[REG_IE] & io_registers[REG_IF]) != 0 &&
+    if (__builtin_expect((io_registers[REG_IE] & io_registers[REG_IF]) != 0 &&
                          io_registers[REG_IME] != 0 &&
                          !(reg[REG_CPSR] & 0x80), 0))
       if (check_and_raise_interrupts())
@@ -680,15 +706,11 @@ CGBA_HOT_TEXT u32 function_cc update_gba(int remaining_cycles)
 #if defined(CGBA_GPSP_HEADLESS_TEST) && defined(CGBA_SH4_DIAG_COUNTERS)
     { extern u32 cgba_cap_src[8]; cgba_cap_src[0]++; }   /* default: video */
 #endif
-    {
-      extern u32 serial_irq_cycles;
-      if (__builtin_expect(serial_irq_cycles != 0, 0)) {
-        u32 cc = serial_irq_cycles;
+    if (__builtin_expect(s_cyc != 0u, 0)) {
 #if defined(CGBA_GPSP_HEADLESS_TEST) && defined(CGBA_SH4_DIAG_COUNTERS)
-        if (cc < execute_cycles) { extern u32 cgba_cap_src[8]; cgba_cap_src[1]++; }
+      if (s_cyc < execute_cycles) { extern u32 cgba_cap_src[8]; cgba_cap_src[1]++; }
 #endif
-        execute_cycles = MIN(execute_cycles, cc);
-      }
+      execute_cycles = MIN(execute_cycles, s_cyc);
     }
 
     // If we are paused due to a DMA, cap the number of cyles to that amount.
@@ -719,7 +741,7 @@ CGBA_HOT_TEXT u32 function_cc update_gba(int remaining_cycles)
     /* Fast-forward halted/idle-waiting video periods when no IRQ, DMA, timer
      * cap, or serial event can interrupt before the next visible boundary. */
     timer_extra = cgba_ugba_idle_fastforward(
-      frame_complete, irq_raised, serial_active,
+      frame_complete, serial_active,
       idle_pass, changed_pc, idle_if_entry);
     irq_raised |= cgba_ugba_bres.irq_raised;
 #endif
@@ -735,6 +757,224 @@ CGBA_HOT_TEXT u32 function_cc update_gba(int remaining_cycles)
   }
 
   return execute_cycles | changed_pc | frame_complete;
+}
+
+#if defined(CGBA_SILENT_TIMERS) && CGBA_SILENT_TIMERS
+static __attribute__((noinline)) u32 cgba_ugba_finish_cold_dma(
+  cpu_alert_type dma_alert, u32 changed_pc, u32 frame_complete,
+  int dma_cycles, unsigned completed_cycles)
+{
+#ifdef HAVE_DYNAREC
+  if (dma_alert != CPU_ALERT_NONE) {
+    if (dma_alert & CPU_ALERT_SMC)
+      flush_translation_cache_ram();
+    if (dma_alert & (CPU_ALERT_SMC | CPU_ALERT_TIMING))
+      changed_pc = 0x40000000;
+  }
+#else
+  (void)dma_alert;
+#endif
+  if ((io_registers[REG_IE] & io_registers[REG_IF]) != 0 &&
+      io_registers[REG_IME] != 0 && !(reg[REG_CPSR] & 0x80))
+    if (check_and_raise_interrupts())
+      changed_pc = 0x40000000;
+
+  execute_cycles = MAX(video_count, 0);
+  if (reg[CPU_HALT_STATE] == CPU_DMA) {
+    u32 dma_cyc = reg[REG_SLEEP_CYCLES];
+    if (dma_cyc & 0x80000000)
+      dma_cyc &= 0x7FFFFFFF;
+    else
+      dma_cyc -= MIN(dma_cyc, completed_cycles);
+    reg[REG_SLEEP_CYCLES] = dma_cyc;
+    if (!dma_cyc)
+      reg[CPU_HALT_STATE] = CPU_ACTIVE;
+    else
+      execute_cycles = MIN(execute_cycles, dma_cyc);
+  }
+  if (cgba_timer_cap_mask != 0)
+    cgba_ugba_timer_cap();
+  if (reg[CPU_HALT_STATE] != CPU_ACTIVE && !frame_complete) {
+    u32 tail = cgba_update_gba_slow(execute_cycles);
+    return tail | changed_pc | frame_complete;
+  }
+  if (dma_cycles != 0) {
+    dma_cycles = MIN(64, dma_cycles);
+    dma_cycles = MIN(execute_cycles, dma_cycles);
+    return (execute_cycles - dma_cycles) | changed_pc | frame_complete;
+  }
+  return execute_cycles | changed_pc | frame_complete;
+}
+#endif
+
+CGBA_HOT_TEXT u32 function_cc update_gba(int remaining_cycles)
+{
+  trace_update_gba(remaining_cycles);
+  cgba_trace_update_gba(remaining_cycles);
+
+  if (__builtin_expect(remaining_cycles < -64, 0))
+    remaining_cycles = -64;
+
+#if defined(CGBA_GPSP_HEADLESS_TEST) && defined(CGBA_SH4_DIAG_COUNTERS)
+  cgba_update_gba_calls++;
+  if (reg[CPU_HALT_STATE] != CPU_ACTIVE)
+    cgba_update_gba_halt_calls++;
+#endif
+
+#if defined(CGBA_SILENT_TIMERS) && CGBA_SILENT_TIMERS
+  {
+    extern u32 serial_irq_cycles;
+    extern int serial_mode;
+    if (__builtin_expect((cgba_idle_wait | reg[CPU_HALT_STATE] |
+                          cgba_timer_cap_mask | serial_irq_cycles |
+                          (u32)serial_mode) != 0u ||
+                         cgba_timer0_fast_only == 0u, 0))
+      return cgba_update_gba_slow(remaining_cycles);
+
+#if defined(CGBA_GPSP_HEADLESS_TEST) && defined(CGBA_SH4_DIAG_COUNTERS)
+    cgba_update_gba_slices++;
+#endif
+    unsigned completed_cycles = execute_cycles - remaining_cycles;
+    cpu_ticks += completed_cycles;
+
+    /* Fast single sound timer (Timer 0, prescale=1, no IRQ/cascade). */
+    {
+      s32 cnt = timer[0].count - (s32)completed_cycles;
+      if (cnt <= 0) {
+        u32 period = timer[0].reload;
+        cnt += (s32)period;
+        if (__builtin_expect(cnt <= 0, 0))
+          cnt = cgba_timer0_refill_slow(cnt, period);
+      }
+      timer[0].count = cnt;
+      write_ioreg(REG_TMXD(0), -cnt);
+    }
+
+    int vc = video_count - (int)completed_cycles;
+    video_count = vc;
+
+    int dma_cycles = 0;
+    u32 changed_pc = 0;
+    u32 irq_raised = 0;
+
+    if (__builtin_expect(vc <= 0, 1)) {
+      u32 vcount = read_ioreg(REG_VCOUNT);
+      u32 dispstat = read_ioreg(REG_DISPSTAT);
+
+      if ((dispstat & 0x02u) == 0u) {
+        dispstat |= 0x02u;
+        vc += 272;
+        video_count = vc;
+
+        if ((dispstat & 0x01u) == 0u) {
+          if (reg[OAM_UPDATED])
+            oam_update_count++;
+
+#ifdef CGBA_VIDEO_DEFERRED_ACTIVE
+          if (__builtin_expect(skip_next_frame == 0, 1)) {
+            u32 pcnt = cgba_pending_sl_count;
+            if (__builtin_expect(pcnt != 0u && vcount == cgba_pending_sl_start + pcnt, 1)) {
+              cgba_pending_sl_count = pcnt + 1u;
+            } else {
+              if (pcnt != 0u)
+                cgba_flush_pending_scanlines();
+              cgba_pending_sl_start = vcount;
+              cgba_pending_sl_count = 1u;
+            }
+          }
+#else
+          update_scanline();
+#endif
+
+          if (__builtin_expect(cgba_hblank_dma_mask != 0, 0)) {
+#if defined(CGBA_BULK_DMA) && CGBA_BULK_DMA && defined(CGBA_VIDEO_DEFERRED_ACTIVE)
+            int fcyc = (cgba_hblank_dma_mask == 1u && cgba_dma0_bg2_fast != 0u)
+                         ? cgba_try_hblank_bg2_dma0_fast()
+                         : 0;
+            if (__builtin_expect(fcyc != 0, 1)) {
+              dma_cycles = fcyc;
+            } else
+#endif
+            {
+              cgba_ugba_hblank_dma(0);
+              if ((dispstat & 0x10u) != 0u)
+                io_registers[REG_IF] |= eswap16(IRQ_HBLANK);
+              write_ioreg(REG_DISPSTAT, dispstat);
+              return cgba_ugba_finish_cold_dma(
+                cgba_ugba_bres.dma_alert, 0u, 0u,
+                cgba_ugba_bres.dma_cycles, completed_cycles);
+            }
+          }
+        }
+
+        if (__builtin_expect((dispstat & 0x10u) != 0u, 0))
+          irq_raised = IRQ_HBLANK;
+        write_ioreg(REG_DISPSTAT, dispstat);
+      } else {
+        vc += 960;
+        video_count = vc;
+        dispstat &= ~0x02u;
+        vcount++;
+
+        if (__builtin_expect(vcount == 160u || vcount == 228u, 0)) {
+          cgba_ugba_vcount_boundary(vcount, dispstat, 0);
+          vcount = cgba_ugba_bres.vcount;
+          dispstat = cgba_ugba_bres.dispstat;
+          irq_raised = cgba_ugba_bres.irq_raised;
+          if (__builtin_expect(vcount == (dispstat >> 8), 0)) {
+            dispstat |= 0x04u;
+            if (dispstat & 0x20u)
+              irq_raised |= IRQ_VCOUNT;
+          } else {
+            dispstat &= ~0x04u;
+          }
+          write_ioreg(REG_VCOUNT, vcount);
+          write_ioreg(REG_DISPSTAT, dispstat);
+          if (irq_raised != 0u)
+            io_registers[REG_IF] |= eswap16((u16)irq_raised);
+          return cgba_ugba_finish_cold_dma(
+            cgba_ugba_bres.dma_alert, 0u, cgba_ugba_bres.frame_complete,
+            cgba_ugba_bres.dma_cycles, completed_cycles);
+        }
+
+        if (__builtin_expect(vcount == (dispstat >> 8), 0)) {
+          dispstat |= 0x04u;
+          if (dispstat & 0x20u)
+            irq_raised = IRQ_VCOUNT;
+        } else {
+          dispstat &= ~0x04u;
+        }
+        write_ioreg(REG_VCOUNT, vcount);
+        write_ioreg(REG_DISPSTAT, dispstat);
+      }
+    }
+
+    if (__builtin_expect(irq_raised != 0u, 0))
+      io_registers[REG_IF] |= eswap16((u16)irq_raised);
+
+    if (__builtin_expect((io_registers[REG_IE] & io_registers[REG_IF]) != 0 &&
+                         io_registers[REG_IME] != 0 &&
+                         !(reg[REG_CPSR] & 0x80), 0))
+      if (check_and_raise_interrupts())
+        changed_pc = 0x40000000;
+
+    u32 ec = (vc > 0) ? (u32)vc : 0u;
+    execute_cycles = ec;
+#if defined(CGBA_GPSP_HEADLESS_TEST) && defined(CGBA_SH4_DIAG_COUNTERS)
+    { extern u32 cgba_cap_src[8]; cgba_cap_src[0]++;
+      cgba_cap_src[6] += ec;
+      if (ec < 192) cgba_cap_src[7]++; }
+#endif
+    if (__builtin_expect(dma_cycles != 0, 0)) {
+      if (dma_cycles > 64) dma_cycles = 64;
+      if ((u32)dma_cycles > ec) dma_cycles = (int)ec;
+      return (ec - (u32)dma_cycles) | changed_pc;
+    }
+    return ec | changed_pc;
+  }
+#else
+  return cgba_update_gba_slow(remaining_cycles);
+#endif
 }
 
 void reset_gba(void)

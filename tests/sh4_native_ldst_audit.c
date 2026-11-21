@@ -53,6 +53,13 @@ int cgba_sh4_thumb_ldst(u32 opcode, u32 pc)
   return 0;
 }
 
+int cgba_sh4_thumb_ldst_run(u32 count, u32 pc)
+{
+  (void)count;
+  (void)pc;
+  return 0;
+}
+
 int cgba_sh4_thumb_block(u32 opcode, u32 pc)
 {
   (void)opcode;
@@ -93,16 +100,33 @@ void sh4_fastmem_pc_mem_tramp(void)
 void sh4_fastmem_compact8_tramp(void)
 {
 }
+
+void sh4_fastmem_compact8_load_tramp(void)
+{
+}
+
+void sh4_cycle_gate_exit(void)
+{
+}
 int cgba_sh4_fm_ool_can_record(const u8 *tp){(void)tp;return 1;}
 void cgba_sh4_fm_ool_push(u32 r, u32 p, u32 o, u32 c){(void)r;(void)p;(void)o;(void)c;}
 void cgba_sh4_fm_ool_reset_rom(void){}
 void cgba_sh4_fm_ool_reset_ram(void){}
+void cgba_sh4_fm_ool_reset_all(void){}
+void cgba_sh4_fm_ool_set_bios_mode(int on){(void)on;}
+void cgba_sh4_fm_ool_rewind(const u8 *p, int r){(void)p;(void)r;}
 u8 *cgba_sh4_fm_ool_rom_limit(u32 t){(void)t;return NULL;}
 struct cgba_sh4_fm_desc;
-const struct cgba_sh4_fm_desc *cgba_sh4_fm_ool_cache[256];
+const struct cgba_sh4_fm_desc *cgba_sh4_fm_ool_cache[512];
 const struct cgba_sh4_fm_desc *cgba_sh4_fastmem_ool_lookup(u32 r){(void)r;return 0;}
 u8 *cgba_sh4_fastmem_routine[CGBA_FM_TOTAL];
 u8 *cgba_sh4_fastmem_io16_store;
+u8 *cgba_sh4_fastmem_block_cold[4];
+u8 *cgba_sh4_pop1_bx_routine;
+u8 *cgba_sh4_thumb_bx_routine;
+u32 cgba_iwram_code_end = 0x8000u;
+u32 cgba_ewram_code_end = 0x40000u;
+void sh4_pop1_bx_slow(void){}
 
 static _Alignas(32) u8 code[4096];
 static int fail;
