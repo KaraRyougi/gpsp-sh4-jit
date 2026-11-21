@@ -258,6 +258,8 @@ u32 cgba_update_gba_halt_calls;   /* entries with the CPU halted */
  * in the idle database whose poll is IRQ-driven (all current entries) are
  * unaffected semantically and save one C round-trip per event slice. */
 u32 cgba_idle_wait;
+static u32 cgba_fwd_idle_armed;
+static u32 cgba_fwd_idle_ticks;
 
 /* Bitmask of timers that must cap the event slice at their next overflow
  * (IRQ-raising or cascade-feeding PRESCALE timers — see update_timers).
@@ -296,6 +298,7 @@ void cgba_recompute_timer_cap_mask(void)
     cgba_fast_timer_idx = fast_idx;
   }
 #endif
+  cgba_fwd_idle_armed = 0u;
 }
 
 static __attribute__((noinline)) int cgba_poll_serial(u32 completed_cycles,
@@ -549,8 +552,10 @@ static inline u32 cgba_check_pending_irq(void)
   if (__builtin_expect((io_registers[REG_IE] & io_registers[REG_IF]) != 0 &&
                        io_registers[REG_IME] != 0 &&
                        !(reg[REG_CPSR] & 0x80), 0))
-    if (check_and_raise_interrupts())
+    if (check_and_raise_interrupts()) {
+      cgba_fwd_idle_armed = 0u;
       return 0x40000000u;
+    }
   return 0u;
 }
 
@@ -576,6 +581,28 @@ static __attribute__((noinline)) u32 cgba_update_gba_slow(int remaining_cycles)
   unsigned timer_extra = 0;
   if (__builtin_expect(idle_pass != 0u, 0)) {
     cgba_idle_wait = 0;
+    if (idle_pass == 3u) {
+      /* Forward registered idle branch (e.g. Advance Wars 1/2 soft-reset
+       * check called from the main VBlank-wait loop). First hit arms a
+       * cycle timestamp without sleeping or dropping cycles; only a second
+       * consecutive hit within 256 GBA cycles (proving an entire main-loop
+       * iteration ran with zero real game work) promotes to idle_pass=2. */
+      u32 now_ticks = cpu_ticks + (u32)(execute_cycles - remaining_cycles);
+      if (cgba_fwd_idle_armed &&
+          (u32)(now_ticks - cgba_fwd_idle_ticks) < 256u &&
+          reg[CPU_HALT_STATE] == CPU_ACTIVE) {
+        cgba_fwd_idle_armed = 0u;
+        if (remaining_cycles > 0)
+          remaining_cycles = 0;
+        idle_pass = 2u;
+      } else {
+        cgba_fwd_idle_armed = 1u;
+        cgba_fwd_idle_ticks = now_ticks;
+        if (remaining_cycles > 0 && reg[CPU_HALT_STATE] == CPU_ACTIVE)
+          return (u32)remaining_cycles;
+        idle_pass = 0u;
+      }
+    }
     /* Registered gba_over.h poll loops (idle_pass == 2) may poll VCOUNT or
      * DISPSTAT directly with IRQs disabled; only batch across event slices
      * when an enabled IRQ can actually wake the loop. Self-loops (1) can only
@@ -584,7 +611,7 @@ static __attribute__((noinline)) u32 cgba_update_gba_slow(int remaining_cycles)
         (!read_ioreg(REG_IME) || (reg[REG_CPSR] & 0x80u) ||
          !read_ioreg(REG_IE)))
       idle_pass = 0u;
-    else
+    else if (idle_pass != 0u)
       idle_if_entry = read_ioreg(REG_IF);
   }
 
@@ -757,6 +784,9 @@ static __attribute__((noinline)) u32 cgba_update_gba_slow(int remaining_cycles)
            (idle_pass && !changed_pc && read_ioreg(REG_IF) == idle_if_entry))
           && !frame_complete);
 
+  if (changed_pc || frame_complete)
+    cgba_fwd_idle_armed = 0u;
+
   return cgba_finish_slice_cycles(
     execute_cycles, dma_cycles, changed_pc | frame_complete);
 }
@@ -768,6 +798,8 @@ static __attribute__((noinline)) u32 cgba_ugba_finish_cold_dma(
 {
   cgba_handle_dma_alert(dma_alert, &changed_pc);
   changed_pc |= cgba_check_pending_irq();
+  if (changed_pc || frame_complete)
+    cgba_fwd_idle_armed = 0u;
 
   execute_cycles = MAX(video_count, 0);
   if (reg[CPU_HALT_STATE] == CPU_DMA) {

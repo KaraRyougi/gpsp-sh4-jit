@@ -1278,6 +1278,116 @@ static bool run_tests(void)
     palette_ram_converted[256u + 1u] = 0x03E0u;
     palette_ram_dirty |= CGBA_PALETTE_DIRTY_OBJ_ONLY;
     CHECK(verify_frame("obj_only_folded_pal_blend_update"));
+
+    /* 7. Mode 1 direct affine BG2 alpha-blend (AW2 Mission Start scene pattern):
+     *    BG1 (prio 3, 4bpp text) 100% opaque covering backdrop, BG2 (prio 2,
+     *    8bpp affine, rotating), BG0 (prio 0, 4bpp text), OBJ (prio 0),
+     *    BLDCNT = 1st=BG2, 2nd=BG1 (backdrop NOT in 2nd target). */
+    init_scene();
+    write_ioreg(REG_DISPCNT, 0x1741u); /* Mode 1, BG0 + BG1 + BG2 + OBJ */
+    write_ioreg(REG_BG0CNT, 0x1C00u);  /* prio 0, cbb 0, sbb 28, 4bpp */
+    write_ioreg(REG_BG1CNT, 0x1E03u);  /* prio 3, cbb 0, sbb 30, 4bpp */
+    write_ioreg(REG_BG2CNT, 0x4F8Au);  /* prio 2, cbb 2, sbb 15, 256x256, wrap=0 */
+    write_ioreg(REG_BG1HOFS, 13u);
+    write_ioreg(REG_BG1VOFS, 29u);
+    /* Populate BG1 (sbb 30, cbb 0) with 100% opaque 4bpp tiles using subpals 1,2. */
+    memset(&vram[0x0020u], 0x23, 32u); /* tile 1: all non-zero nibbles */
+    memset(&vram[0x0040u], 0x45, 32u); /* tile 2: all non-zero nibbles */
+    {
+      u16 *m1 = (u16 *)&vram[30u * 2048u];
+      for (u32 i = 0; i < 1024u; i++) {
+        u16 sub = (u16)(((i & 1u) ? 2u : 1u) << 12);
+        m1[i] = eswap16((u16)(sub | ((i & 3u) ? 1u : 2u)));
+      }
+      /* BG2 (cbb 2, sbb 15): mix of empty, solid, opaque textured, and mixed tiles */
+      memset(&vram[2u * 16384u], 0, 16384u);
+      memset(&vram[2u * 16384u + 1u * 64u], 5, 64u); /* tile 1: solid */
+      for (u32 k = 0u; k < 64u; k++) {
+        vram[2u * 16384u + 2u * 64u + k] = (u8)((k & 7u) ? (1u + (k % 12u)) : 0u); /* mixed */
+        vram[2u * 16384u + 3u * 64u + k] = (u8)(1u + (k % 12u)); /* opaque textured */
+      }
+      u8 *m2 = &vram[15u * 2048u];
+      memset(m2, 0, 1024u);
+      for (u32 ty = 2u; ty < 18u; ty++) {
+        for (u32 tx = 3u; tx < 19u; tx++)
+          m2[ty * 32u + tx] = (u8)(((tx + ty) % 4u));
+      }
+    }
+    /* Non-saturating dark BG1 subpalettes + red BG2 palette */
+    for (u32 i = 1u; i < 16u; i++) {
+      palette_ram_converted[16u + i] = 0x3908u; /* low RGB */
+      palette_ram_converted[32u + i] = 0x4208u;
+      palette_ram_converted[i] = (u16)((((i * 2u) & 31u) << 11) | (i << 5) | (i & 7u));
+    }
+    cgba_blend_caches_invalidate();
+    cgba_vram_dirty = CGBA_VRAM_DIRTY_BG;
+    cgba_vram_sb_dirty = 0xFFFFFFFFu;
+    cgba_video_io_dirty = 1u;
+
+    static const s16 m1_rot[6][4] = {
+      {  256,    0,    0,  256 }, /* 0 deg */
+      {  181, -181,  181,  181 }, /* 45 deg */
+      {    0, -256,  256,    0 }, /* 90 deg */
+      { -181, -181,  181, -181 }, /* 135 deg */
+      { -256,    0,    0, -256 }, /* 180 deg */
+      {  312,  140, -140,  312 }, /* scaled + rotated */
+    };
+    static const u16 m1_alphas[5] = { 0x1008u, 0x1010u, 0x0808u, 0x1000u, 0x0010u };
+    for (u32 ai = 0; ai < 5u; ai++) {
+      write_ioreg(REG_BLDCNT, 0x0244u); /* 1st=BG2, 2nd=BG1 (no backdrop) */
+      write_ioreg(REG_BLDALPHA, m1_alphas[ai]);
+      for (u32 ri = 0; ri < 6u; ri++) {
+        write_ioreg(REG_BG2PA, (u16)m1_rot[ri][0]);
+        write_ioreg(REG_BG2PB, (u16)m1_rot[ri][1]);
+        write_ioreg(REG_BG2PC, (u16)m1_rot[ri][2]);
+        write_ioreg(REG_BG2PD, (u16)m1_rot[ri][3]);
+        write_ioreg(REG_BG2X_L, 0x0000u);
+        write_ioreg(REG_BG2X_H, 0x0040u);
+        write_ioreg(REG_BG2Y_L, 0x0000u);
+        write_ioreg(REG_BG2Y_H, 0x0030u);
+        affine_reference_x[0] = 64 << 8;
+        affine_reference_y[0] = 48 << 8;
+        write_ioreg(REG_BG2CNT, (u16)(0x4F8Au | ((ri & 1u) ? 0x2000u : 0u)));
+        cgba_video_io_dirty = 1u;
+        CHECK(verify_frame("mode1_affine_bg2_blend"));
+      }
+    }
+    /* Force RGB565 channel saturation (bright BG1 + bright BG2, eva=12, evb=16). */
+    for (u32 i = 1u; i < 16u; i++) {
+      palette_ram_converted[16u + i] = 0xFFFFu;
+      palette_ram_converted[i] = 0xFFFFu;
+    }
+    write_ioreg(REG_BLDCNT, 0x0244u);
+    write_ioreg(REG_BLDALPHA, 0x100Cu);
+    write_ioreg(REG_BG2CNT, 0x4F8Au);
+    write_ioreg(REG_BG2PA, (u16)181);
+    write_ioreg(REG_BG2PB, (u16)-181);
+    write_ioreg(REG_BG2PC, (u16)181);
+    write_ioreg(REG_BG2PD, (u16)181);
+    affine_reference_x[0] = 64 << 8;
+    affine_reference_y[0] = 48 << 8;
+    cgba_blend_caches_invalidate();
+    cgba_video_io_dirty = 1u;
+    CHECK(verify_frame("mode1_affine_bg2_blend_saturate"));
+
+    /* Non-opaque BG1 with backdrop NOT in 2nd target must NOT falsely blend
+     * BG2 against backdrop (must match reference pixel-for-pixel). */
+    vram[0x0020u] = 0x00u; /* introduce transparent pixel into BG1 tile 1 */
+    cgba_vram_dirty = CGBA_VRAM_DIRTY_BG;
+    cgba_vram_sb_dirty = 0xFFFFFFFFu;
+    cgba_video_io_dirty = 1u;
+    CHECK(verify_frame("mode1_affine_bg2_blend_nonopaque_bg1_fallback"));
+
+    /* Mode 2 (single affine BG2 with BG3 disabled) alpha-blend over backdrop. */
+    write_ioreg(REG_DISPCNT, 0x1442u); /* Mode 2, BG2 + OBJ (BG3 off) */
+    write_ioreg(REG_BLDCNT, 0x2044u);  /* 1st=BG2, 2nd=backdrop */
+    write_ioreg(REG_BLDALPHA, 0x1008u);
+    write_ioreg(REG_BG2CNT, 0x4F8Au);
+    affine_reference_x[0] = 64 << 8;
+    affine_reference_y[0] = 48 << 8;
+    cgba_blend_caches_invalidate();
+    cgba_video_io_dirty = 1u;
+    CHECK(verify_frame("mode2_affine_bg2_blend_backdrop"));
   }
 
   /* 6. Mode 4 direct 16-bit OBJ_BLEND fast path vs STCKCOLOR + merge_blend<OBJ_BLEND, true>:

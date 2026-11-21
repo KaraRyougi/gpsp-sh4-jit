@@ -740,6 +740,64 @@ static void check_idle_branch_elimination(void)
     if (got.error[0] || !got.reached_fallback || got.update_gba_calls != 0)
       failf("thumb_conditional_branch failed under litseg pool pressure");
   }
+
+  /* 7. Forward registered idle branch (e.g. Advance Wars 2 0x08036e2a:
+   *    bne 0x08036e42 inside the main idle-check subroutine): must NOT match
+   *    SH4_IDLE_BRANCH_CAN_ELIMINATE, MUST match SH4_FWD_IDLE_BRANCH_CAN_ELIMINATE
+   *    only when block_start_pc < pc, and when taken must call update_gba with
+   *    cgba_idle_wait=3 WITHOUT zeroing remaining cycles (so the 2-hit
+   *    zero-work detector in cgba_update_gba_slow() can distinguish busy
+   *    frames from pure idle spinning). */
+  {
+    const u32 fwd_target = poll_branch + 0x18u;
+
+    pc = poll_branch;
+    block_start_pc = poll_head;
+    if (SH4_IDLE_BRANCH_CAN_ELIMINATE(fwd_target))
+      failf("forward idle branch must not match backward predicate");
+    if (!SH4_FWD_IDLE_BRANCH_CAN_ELIMINATE(fwd_target))
+      failf("forward idle branch at idle_loop_target_pc should match fwd predicate");
+    block_start_pc = poll_branch;
+    if (SH4_FWD_IDLE_BRANCH_CAN_ELIMINATE(fwd_target))
+      failf("forward idle branch with block_start_pc == pc must not match");
+    block_start_pc = poll_head;
+    pc = poll_branch + 4u;
+    if (SH4_FWD_IDLE_BRANCH_CAN_ELIMINATE(fwd_target))
+      failf("forward branch at non-registered pc must not match");
+
+    /* Taken forward registered idle branch (Z=1): mode=3, cycles preserved. */
+    got = run_thumb_cond_eq(poll_head, poll_branch, fwd_target, 0x4000003Fu);
+    if (got.error[0]) {
+      fprintf(stderr, "FAIL: fwd idle taken oracle: %s\n", got.error);
+      failures++;
+    } else if (got.reached_fallback || got.update_gba_calls != 1 ||
+               got.update_gba_pc != fwd_target || got.update_gba_cycles == 0u ||
+               got.update_gba_idle_wait != 3u || got.block_exits != 1 ||
+               got.exit_pc != fwd_target) {
+      failf("taken forward idle BEQ did not emit mode=3 preserving cycles");
+    }
+
+    /* Not-taken forward registered idle branch (Z=0): falls through cleanly. */
+    got = run_thumb_cond_eq(poll_head, poll_branch, fwd_target, 0x0000003Fu);
+    if (got.error[0]) {
+      fprintf(stderr, "FAIL: fwd idle fallthrough oracle: %s\n", got.error);
+      failures++;
+    } else if (!got.reached_fallback || got.update_gba_calls != 0 ||
+               got.block_exits != 0 || cgba_idle_wait != 0u) {
+      failf("not-taken forward idle BEQ did not fall through cleanly");
+    }
+
+    /* Direct entry at pc (stale flags): normal branch, no idle probe. */
+    got = run_thumb_cond_eq(poll_branch, poll_branch, fwd_target, 0x4000003Fu);
+    if (got.error[0]) {
+      fprintf(stderr, "FAIL: fwd idle stale-entry oracle: %s\n", got.error);
+      failures++;
+    } else if (got.reached_fallback || got.update_gba_calls != 0 ||
+               cgba_idle_wait != 0u || got.block_exits != 1 ||
+               got.exit_pc != fwd_target) {
+      failf("stale-entry forward idle BEQ emitted idle probe");
+    }
+  }
 }
 
 int main(void)

@@ -947,6 +947,21 @@ static inline int sh4g_registered_idle_signature_ok(const u8 *map,
   (SH4_IDLE_BRANCH(new_pc) &&                                                 \
    ((u32)(new_pc) == (u32)pc || (u32)block_start_pc <= (u32)(new_pc)))
 
+/* Forward registered idle branch (e.g. Advance Wars 1/2 soft-reset check at
+ * 0x0803880a / 0x08036e2a, called inside the main VBlank-wait loop). Emits
+ * idle_mode=3 so cgba_update_gba_slow() only promotes to idle_pass=2 sleep
+ * after two consecutive hits within 256 GBA cycles (zero intervening work). */
+#define SH4_FWD_IDLE_BRANCH_CAN_ELIMINATE(new_pc)                             \
+  ((u32)pc == idle_loop_target_pc &&                                          \
+   (u32)(new_pc) > (u32)pc &&                                                 \
+   (u32)block_start_pc < (u32)pc &&                                           \
+   SH4_REGISTERED_IDLE_SIGNATURE_OK(idle_loop_target_pc))
+
+#define SH4_IDLE_BRANCH_MODE(new_pc)                                          \
+  (SH4_IDLE_BRANCH_CAN_ELIMINATE(new_pc)                                      \
+     ? (((u32)(new_pc) == (u32)pc) ? 1 : 2)                                   \
+     : (SH4_FWD_IDLE_BRANCH_CAN_ELIMINATE(new_pc) ? 3 : 0))
+
 #define generate_branch_idle_eliminate(writeback_location, new_pc)            \
   (writeback_location) = sh4g_branch_exit_idle(&translation_ptr,              \
       (u32)(new_pc), SH4_DEFAULT_BRANCH_EXIT(new_pc),                         \
@@ -1401,13 +1416,15 @@ SH4G_NOINLINE u8 *sh4g_generate_branch_taken(
  * succeeded (dropping a full frame and starving VBlank HBlank-DMA reloads). */
 #define thumb_conditional_branch(condition)                                   \
   do { u32 _cb_target = block_exits[block_exit_position].branch_target;       \
+       int _cb_idle = SH4_IDLE_BRANCH_MODE(_cb_target);                       \
        sh4g_litseg_reserve(&translation_ptr, 6);                              \
        generate_condition_##condition();                                      \
-       if(SH4_IDLE_BRANCH_CAN_ELIMINATE(_cb_target)) {                        \
+       if(_cb_idle) {                                                         \
          sh4g_cycle_debit(&translation_ptr, (int)cycle_count +                \
            (int)ws_cyc_nseq[(_cb_target >> 24) & 0x0F][0]);                   \
-         generate_branch_idle_eliminate(                                      \
-           block_exits[block_exit_position].branch_source, _cb_target);       \
+         block_exits[block_exit_position].branch_source =                     \
+           sh4g_branch_exit_idle(&translation_ptr, _cb_target,                \
+             SH4_DEFAULT_BRANCH_EXIT(_cb_target), _cb_idle);                  \
        } else {                                                               \
          generate_branch_taken(0,                                             \
            block_exits[block_exit_position].branch_source, _cb_target);       \

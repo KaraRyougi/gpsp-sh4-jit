@@ -1213,11 +1213,14 @@ static inline u8 *sh4g_branch_exit_internal_known(u8 **tp, uint32_t new_pc,
  *       or frame end),
  *   2 = registered gba_over.h backward poll loop (batch only when IRQs can
  *       wake it; when IME/IE/CPSR.I mask IRQs, run a single event slice so
- *       VCOUNT/DISPSTAT polls never skip past their target scanline).
+ *       VCOUNT/DISPSTAT polls never skip past their target scanline),
+ *   3 = registered gba_over.h forward idle branch (preserve remaining cycles
+ *       and let cgba_update_gba_slow() promote to mode 2 only on a second
+ *       consecutive hit within 256 GBA cycles).
  * Returns the patch site. */
 extern u32 cgba_idle_wait;   /* main.c: one-shot idle event batching */
 
-static inline u8 *sh4g_branch_exit_idle(u8 **tp, uint32_t new_pc,
+SH4G_NOINLINE u8 *sh4g_branch_exit_idle(u8 **tp, uint32_t new_pc,
                                         const void *block_exit_fn,
                                         int idle_mode)
 {
@@ -1228,11 +1231,13 @@ static inline u8 *sh4g_branch_exit_idle(u8 **tp, uint32_t new_pc,
     sh4_emit_mov_imm(&cg, idle_mode, SH4_REG_T2);
     sh4_emit_mov_l_store(&cg, SH4_REG_T2, SH4_REG_T1);
     sh4g_close(tp, &cg); }
-  { sh4_codegen cg = sh4g_open(tp);
-    sh4_emit_cmppl(&cg, SH4_REG_CYCLES);             /* T = (budget > 0) */
-    sh4g_close(tp, &cg); }
-  sh4g_u16(tp, 0x8B00);                              /* BF +0: keep <=0 budget */
-  sh4g_u16(tp, (uint16_t)(0xE000 | (SH4_REG_CYCLES << 8))); /* MOV #0,R13 */
+  if (idle_mode != 3) {
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_cmppl(&cg, SH4_REG_CYCLES);             /* T = (budget > 0) */
+      sh4g_close(tp, &cg); }
+    sh4g_u16(tp, 0x8B00);                              /* BF +0: keep <=0 budget */
+    sh4g_u16(tp, (uint16_t)(0xE000 | (SH4_REG_CYCLES << 8))); /* MOV #0,R13 */
+  }
   sh4g_vec_call(tp, SH4G_VEC_update_gba);            /* fast-forward events */
   sh4g_const(tp, new_pc, SH4_REG_ARG0);              /* R4 clobbered by C call */
 #if CGBA_SH4_LAZY_CHAIN

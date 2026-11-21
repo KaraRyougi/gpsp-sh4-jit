@@ -10431,3 +10431,832 @@ _cgba_blend_mode4_st4bpp_sh4:
 .Lbs_ovf_all:
 	.long   0x08010020
 	.size   _cgba_blend_mode4_st4bpp_sh4, .-_cgba_blend_mode4_st4bpp_sh4
+
+/* ============================================================================
+ * 8-bpp rotated/scaled affine BG direct alpha-blend overlay kernel:
+ *   void cgba_render_affine_rot_blend_sh4(const cgba_aff_rot_blend_params *p)
+ *
+ * Blends non-zero texels directly onto existing 16-bit RGB565 pixels in dst,
+ * walking backward from dst_end.  Uses per-CBB tile_kind[256] (0=empty,
+ * 1=solid, 2/3=textured) to skip empty tiles in 12 insns/px with zero memory
+ * traffic and hoist solid-tile term_a loads out of the pixel loop.
+ *
+ * Struct layout (cgba_aff_rot_blend_params):
+ *   +0  dst_end    (u16 *)
+ *   +4  map_base   (const u8 *)
+ *   +8  tile_base  (const u8 *)
+ *   +12 term_a     (const u32 *: term_a_s4 if flags&1, else p1e*eva)
+ *   +16 ux         (u32)
+ *   +20 uy         (u32)
+ *   +24 step_x     (u32)
+ *   +28 step_y     (u32)
+ *   +32 cnt        (u32)
+ *   +36 pix_shift  (s32: -(25 - map_size))
+ *   +40 row_shift  (s32: map_size + 4)
+ *   +44 evb        (u32: 0..16)
+ *   +48 tile_kind  (const u8 *)
+ *   +52 flags      (u32: bit0=(evb==16), bit1=can_saturate)
+ * ============================================================================ */
+	.section .text._cgba_render_affine_rot_blend_sh4,"ax",@progbits
+	.balign 4
+	.global _cgba_render_affine_rot_blend_sh4
+	.type   _cgba_render_affine_rot_blend_sh4, @function
+_cgba_render_affine_rot_blend_sh4:
+	mov.l   r8, @-r15
+	mov.l   r9, @-r15
+	mov.l   r10, @-r15
+	mov.l   r11, @-r15
+	mov.l   r12, @-r15
+	mov.l   r13, @-r15
+	mov.l   r14, @-r15
+	sts.l   pr, @-r15
+	add     #-24, r15
+
+	/* Stack layout:
+	 *   @(0,  r15) = tile_kind
+	 *   @(4,  r15) = tile_shift = pix_shift - 3 = -(28 - map_size)
+	 *   @(8,  r15) = BLND_MSK   = 0x07E0F81F
+	 *   @(12, r15) = sat_mask   = 0x08010020 (if evb==16 or saturate) else 0
+	 *   @(16, r15) = row_shift  = map_size + 4
+	 *   @(20, r15) = evb */
+	mov     r4, r3                      /* r3 = params ptr */
+	mov.l   @(48, r3), r1               /* tile_kind */
+	mov.l   r1, @(0, r15)
+	mov.l   @(36, r3), r12              /* r12 = pix_shift */
+	mov     r12, r1
+	add     #-3, r1                     /* tile_shift */
+	mov.l   r1, @(4, r15)
+	mov.l   .Lafbl_blnd_msk, r1
+	mov.l   r1, @(8, r15)
+	mov.l   @(40, r3), r1               /* row_shift */
+	mov.l   r1, @(16, r15)
+	lds     r1, macl
+	mov.l   @(44, r3), r1               /* evb */
+	mov.l   r1, @(20, r15)
+	mov.l   @(52, r3), r0               /* r0 = flags */
+	tst     #3, r0                      /* sat_mask nonzero if bit0 (evb16) or bit1 (sat) */
+	bt.s    1f
+	mov     #0, r1
+	mov.l   .Lafbl_ovf_msk, r1
+1:	mov.l   r1, @(12, r15)
+
+	mov     r12, r13
+	add     #3, r13                     /* r13 = sub_y_shift = -(22 - map_size) */
+	mov     #3, r1
+	sub     r12, r1                     /* 28 - map_size */
+	mov     #-1, r2
+	shld    r1, r2                      /* r2 = tile_mask */
+	lds     r2, mach
+
+	mov.l   @(0, r3), r4                /* dst_end */
+	mov.l   @(4, r3), r5                /* map_base */
+	mov.l   @(8, r3), r6                /* tile_base */
+	mov.l   @(12, r3), r7               /* term_a / term_a_s4 */
+	mov.l   @(16, r3), r8               /* ux */
+	mov.l   @(20, r3), r9               /* uy */
+	mov.l   @(24, r3), r10              /* step_x */
+	mov.l   @(28, r3), r11              /* step_y */
+	mov.l   @(32, r3), r14              /* cnt */
+
+	tst     #1, r0                      /* flags bit0: evb == 16? */
+	bf      .Lafbl16_miss
+	bra     .Lafblg_miss
+	nop
+
+	.balign 4
+.Lafbl_blnd_msk:
+	.long   0x07E0F81F
+.Lafbl_ovf_msk:
+	.long   0x08010020
+
+	.balign 4
+.Lafbl_done:
+	add     #24, r15
+	lds.l   @r15+, pr
+	mov.l   @r15+, r14
+	mov.l   @r15+, r13
+	mov.l   @r15+, r12
+	mov.l   @r15+, r11
+	mov.l   @r15+, r10
+	mov.l   @r15+, r9
+	rts
+	mov.l   @r15+, r8
+
+	/* Rare per-channel saturation helper:
+	 *   in:  r0 = pfe (with overflow bit set), @(8,r15)=BLND_MSK, @(12,r15)=OVF_MSK
+	 *   out: r0 = clamped expanded pfe, r2 = swap.w(r0), r1 = mach (tile_mask)
+	 *   preserves: r3..r14, mach, macl */
+	.balign 4
+.Lafbl_sat:
+	mov.l   @(12, r15), r2              /* OVF_MSK = 0x08010020 */
+	and     r0, r2                      /* ovf */
+	mov     r2, r1
+	shlr2   r1
+	shlr2   r1
+	shlr    r1                          /* ovf >> 5 */
+	sub     r1, r2                      /* ovf - (ovf >> 5) */
+	shlr    r1                          /* ovf >> 6 */
+	or      r1, r2
+	or      r2, r0
+	mov.l   @(8, r15), r1               /* BLND_MSK */
+	and     r1, r0
+	sts     mach, r1                    /* restore r1 = tile_mask */
+	rts
+	swap.w  r0, r2
+
+/* ---- Fast path: evb == 16 (zero multiplies: pfe = term_a_s4[pix] + p2e) ---- */
+	.balign 4
+.Lafbl16_empty_step:
+	sts     mach, r1                    /* r1 = tile_mask */
+	add     #-2, r4
+	dt      r14
+	bt      .Lafbl_done
+.Lafbl16_empty_next:
+	mov     r8, r2
+	add     r10, r8
+	xor     r8, r2
+	mov     r9, r0
+	add     r11, r9
+	xor     r9, r0
+	or      r0, r2
+	tst     r1, r2                      /* same empty 8x8 tile? */
+	bf      .Lafbl16_miss
+	dt      r14
+	bf.s    .Lafbl16_empty_next
+	add     #-2, r4
+	bra     .Lafbl_done
+	nop
+
+	.balign 4
+.Lafbl16_miss:
+	mov.l   @(4, r15), r2               /* tile_shift */
+	mov     r8, r0
+	shld    r2, r0                      /* tx */
+	mov     r0, r1
+	mov     r9, r0
+	shld    r2, r0                      /* ty */
+	sts     macl, r2                    /* row_shift */
+	shld    r2, r0                      /* ty << (map_size + 4) */
+	or      r1, r0                      /* map_idx */
+	mov.b   @(r0, r5), r0               /* tile_id */
+	extu.b  r0, r0
+	mov     r0, r1
+	mov.l   @(0, r15), r3               /* tile_kind */
+	mov.b   @(r0, r3), r0               /* 0=empty, 1=solid, 2/3=textured */
+	tst     r0, r0
+	bt.s    .Lafbl16_empty_step
+	shll8   r1
+	shlr2   r1                          /* tile_id << 6 */
+	mov     r6, r3
+	add     r1, r3                      /* r3 = cur_tile_ptr */
+	sts     mach, r1                    /* r1 = tile_mask */
+	cmp/eq  #1, r0
+	bt      .Lafbl16_solid_enter
+	bra     .Lafbl16_mix_draw
+	nop
+
+	.balign 4
+.Lafbl16_mix_next:
+	mov     r8, r2
+	add     r10, r8
+	xor     r8, r2
+	mov     r9, r0
+	add     r11, r9
+	xor     r9, r0
+	or      r0, r2
+	tst     r1, r2                      /* same 8x8 tile? */
+	bf      .Lafbl16_miss
+.Lafbl16_mix_draw:
+	mov     r8, r0
+	shld    r12, r0
+	and     #7, r0
+	mov     r0, r2
+	mov     r9, r0
+	shld    r13, r0
+	and     #0x38, r0
+	or      r2, r0
+	mov.b   @(r0, r3), r0
+	tst     r0, r0
+	bt.s    2f
+	add     #-2, r4
+	extu.b  r0, r0
+	shll2   r0
+	mov.l   @(r0, r7), r2               /* term_a_s4[pix] */
+	mov.w   @r4, r0
+	extu.w  r0, r0
+	swap.w  r0, r1
+	or      r1, r0
+	mov.l   @(8, r15), r1               /* BLND_MSK */
+	and     r1, r0
+	add     r2, r0
+	mov.l   @(12, r15), r1              /* OVF_MSK */
+	tst     r1, r0
+	bt.s    1f
+	swap.w  r0, r2
+	bsr     .Lafbl_sat
+	nop
+1:	or      r2, r0
+	mov.w   r0, @r4
+	sts     mach, r1
+2:	dt      r14
+	bf      .Lafbl16_mix_next
+	bra     .Lafbl_done
+	nop
+
+	.balign 4
+.Lafbl16_solid_enter:
+	mov.b   @r3, r0
+	extu.b  r0, r0
+	shll2   r0
+	bra     .Lafbl16_solid_blend
+	mov.l   @(r0, r7), r3               /* r3 = solid term_a_s4 */
+	.balign 4
+.Lafbl16_solid_next:
+	mov     r8, r2
+	add     r10, r8
+	xor     r8, r2
+	mov     r9, r0
+	add     r11, r9
+	xor     r9, r0
+	or      r0, r2
+	tst     r1, r2                      /* same solid 8x8 tile? */
+	bf      .Lafbl16_miss
+.Lafbl16_solid_blend:
+	add     #-2, r4
+	mov.w   @r4, r0
+	extu.w  r0, r0
+	swap.w  r0, r2
+	or      r2, r0
+	mov.l   @(8, r15), r2               /* BLND_MSK */
+	and     r2, r0
+	add     r3, r0
+	mov.l   @(12, r15), r2              /* OVF_MSK */
+	tst     r2, r0
+	bt.s    1f
+	swap.w  r0, r2
+	bsr     .Lafbl_sat
+	nop
+1:	or      r2, r0
+	dt      r14
+	bf.s    .Lafbl16_solid_next
+	mov.w   r0, @r4
+	bra     .Lafbl_done
+	nop
+
+/* ---- General path: 0 <= evb < 16 (pfe = (term_a[pix] + p2e * evb) >> 4) ---- */
+	.balign 4
+.Lafblg_empty_step:
+	sts     mach, r1                    /* r1 = tile_mask */
+	add     #-2, r4
+	dt      r14
+	bf      .Lafblg_empty_next
+	bra     .Lafbl_done
+	nop
+.Lafblg_empty_next:
+	mov     r8, r2
+	add     r10, r8
+	xor     r8, r2
+	mov     r9, r0
+	add     r11, r9
+	xor     r9, r0
+	or      r0, r2
+	tst     r1, r2                      /* same empty 8x8 tile? */
+	bf      .Lafblg_miss
+	dt      r14
+	bf.s    .Lafblg_empty_next
+	add     #-2, r4
+	bra     .Lafbl_done
+	nop
+
+	.balign 4
+.Lafblg_miss:
+	mov.l   @(4, r15), r2               /* tile_shift */
+	mov     r8, r0
+	shld    r2, r0                      /* tx */
+	mov     r0, r1
+	mov     r9, r0
+	shld    r2, r0                      /* ty */
+	mov.l   @(16, r15), r2              /* row_shift */
+	shld    r2, r0
+	or      r1, r0                      /* map_idx */
+	mov.b   @(r0, r5), r0               /* tile_id */
+	extu.b  r0, r0
+	mov     r0, r1
+	mov.l   @(0, r15), r3               /* tile_kind */
+	mov.b   @(r0, r3), r0               /* 0=empty, 1=solid, 2/3=textured */
+	tst     r0, r0
+	bt.s    .Lafblg_empty_step
+	shll8   r1
+	shlr2   r1                          /* tile_id << 6 */
+	mov     r6, r3
+	add     r1, r3                      /* r3 = cur_tile_ptr */
+	sts     mach, r1                    /* r1 = tile_mask */
+	cmp/eq  #1, r0
+	bt      .Lafblg_solid_enter
+	bra     .Lafblg_mix_draw
+	nop
+
+	.balign 4
+.Lafblg_mix_next:
+	mov     r8, r2
+	add     r10, r8
+	xor     r8, r2
+	mov     r9, r0
+	add     r11, r9
+	xor     r9, r0
+	or      r0, r2
+	tst     r1, r2                      /* same 8x8 tile? */
+	bf      .Lafblg_miss
+.Lafblg_mix_draw:
+	mov     r8, r0
+	shld    r12, r0
+	and     #7, r0
+	mov     r0, r2
+	mov     r9, r0
+	shld    r13, r0
+	and     #0x38, r0
+	or      r2, r0
+	mov.b   @(r0, r3), r0
+	tst     r0, r0
+	bt.s    3f
+	add     #-2, r4
+	extu.b  r0, r0
+	shll2   r0
+	mov.l   @(r0, r7), r2               /* term_a[pix] */
+	mov.w   @r4, r0
+	extu.w  r0, r0
+	swap.w  r0, r1
+	or      r1, r0
+	mov.l   @(8, r15), r1               /* BLND_MSK */
+	and     r1, r0
+	mov.l   @(20, r15), r1              /* evb */
+	mul.l   r1, r0
+	sts     macl, r0
+	add     r2, r0
+	shlr2   r0
+	shlr2   r0
+	mov.l   @(12, r15), r1              /* sat_mask */
+	tst     r1, r0
+	bt      1f
+	bsr     .Lafbl_sat
+	nop
+	bra     2f
+	nop
+1:	mov.l   @(8, r15), r1               /* BLND_MSK */
+	and     r1, r0
+	swap.w  r0, r2
+2:	or      r2, r0
+	mov.w   r0, @r4
+	sts     mach, r1
+3:	dt      r14
+	bf      .Lafblg_mix_next
+	bra     .Lafbl_done
+	nop
+
+	.balign 4
+.Lafblg_solid_enter:
+	mov.b   @r3, r0
+	extu.b  r0, r0
+	shll2   r0
+	bra     .Lafblg_solid_blend
+	mov.l   @(r0, r7), r3               /* r3 = solid term_a */
+	.balign 4
+.Lafblg_solid_next:
+	mov     r8, r2
+	add     r10, r8
+	xor     r8, r2
+	mov     r9, r0
+	add     r11, r9
+	xor     r9, r0
+	or      r0, r2
+	tst     r1, r2                      /* same solid 8x8 tile? */
+	bf      .Lafblg_miss
+.Lafblg_solid_blend:
+	add     #-2, r4
+	mov.w   @r4, r0
+	extu.w  r0, r0
+	swap.w  r0, r2
+	or      r2, r0
+	mov.l   @(8, r15), r2               /* BLND_MSK */
+	and     r2, r0
+	mov.l   @(20, r15), r2              /* evb */
+	mul.l   r2, r0
+	sts     macl, r0
+	add     r3, r0
+	shlr2   r0
+	shlr2   r0
+	mov.l   @(12, r15), r2              /* sat_mask */
+	tst     r2, r0
+	bt      1f
+	bsr     .Lafbl_sat
+	nop
+	bra     2f
+	nop
+1:	mov.l   @(8, r15), r2               /* BLND_MSK */
+	and     r2, r0
+	swap.w  r0, r2
+2:	or      r2, r0
+	dt      r14
+	bf.s    .Lafblg_solid_next
+	mov.w   r0, @r4
+	bra     .Lafbl_done
+	nop
+	.size   _cgba_render_affine_rot_blend_sh4, .-_cgba_render_affine_rot_blend_sh4
+
+/* ============================================================================
+ * 8-bpp rotated/scaled affine BG direct alpha-blend kernel for evb == 16,
+ * wrap == false (clipped to non-empty bbox), and |dx| < 2048 && |dy| < 2048:
+ *   void cgba_render_affine_rot_blend_evb16_329_sh4(
+ *     const cgba_aff_t329_blend_params *p)
+ *
+ * Uses 3.29 unsigned intra-tile stepping (`addc`) so carries fire ONLY on
+ * 8-pixel tile boundaries (not on every pixel), handling all 4 step quadrants
+ * via qflip (0, 7, 56, 63) and all |dx|, |dy| < 2048 (including |dx| == 256
+ * and |dy| == 256).  Provides:
+ *   - no_sat == 1 path (when palette bounds prove no RGB565 channel can
+ *     overflow): blends in 3 instructions (mov.w / add / mov.w) with r5 = qflip,
+ *     7-insn empty tiles, 10-insn solid tiles, 20-insn opaque textured tiles,
+ *     and 22-insn mixed tiles.
+ *   - no_sat == 0 path: 16-bit SWAR carry-detect addition (r5 = 0x00010820)
+ *     with cold .Lb3_sat16 clamping on overflow.
+ *
+ * Struct layout (cgba_aff_t329_blend_params):
+ *   +0  dst_end        (u16 *)
+ *   +4  map_ptr        (const u8 *: map_base + (ty << (map_size+4)) + tx)
+ *   +8  tile_base      (const u8 *)
+ *   +12 signed_term_a  (const u16 *, pointing to +128; RGB565 term_a_s4)
+ *   +16 lx_dir         (u32: 3.29 unsigned intra-tile x)
+ *   +20 ly_dir         (u32: 3.29 unsigned intra-tile y)
+ *   +24 step_lx        (u32: |dx| << 21)
+ *   +28 step_ly        (u32: |dy| << 21)
+ *   +32 cnt            (u32: > 0)
+ *   +36 step_map_x     (s32: +1 or -1)
+ *   +40 step_map_y     (s32: +(16<<map_size) or -(16<<map_size))
+ *   +44 qflip          (u32: 0, 7, 56, or 63)
+ *   +48 tile_kind      (const u8 *: 0=empty, 1=solid, 2=mixed, 3=opaque)
+ *   +52 no_sat         (u32: 1 if proven no saturation, 0 otherwise)
+ * ============================================================================ */
+	.section .text._cgba_render_affine_rot_blend_evb16_329_sh4,"ax",@progbits
+	.balign 4
+	.global _cgba_render_affine_rot_blend_evb16_329_sh4
+	.type   _cgba_render_affine_rot_blend_evb16_329_sh4, @function
+_cgba_render_affine_rot_blend_evb16_329_sh4:
+	mov.l   r8, @-r15
+	mov.l   r9, @-r15
+	mov.l   r10, @-r15
+	mov.l   r11, @-r15
+	mov.l   r12, @-r15
+	mov.l   r13, @-r15
+	mov.l   r14, @-r15
+	sts.l   pr, @-r15
+
+	mov     r4, r3
+	mov.l   @(44, r3), r5               /* r5 = qflip */
+	mov.l   r5, @-r15                   /* @(8, r15) = qflip */
+	mov.l   @(8, r3), r1                /* tile_base */
+	mov.l   r1, @-r15                   /* @(4, r15) = tile_base */
+	mov.l   @(48, r3), r1               /* tile_kind */
+	mov.l   r1, @-r15                   /* @(0, r15) = tile_kind */
+
+	mov.l   @(36, r3), r1               /* step_map_x (+1 or -1) */
+	lds     r1, mach                    /* mach = step_map_x */
+	mov.l   @(40, r3), r1               /* step_map_y (+dim or -dim) */
+	lds     r1, macl                    /* macl = step_map_y */
+
+	mov.l   @(52, r3), r0               /* no_sat */
+	mov.l   @(0, r3), r4                /* r4  = dst_end */
+	mov.l   @(4, r3), r6                /* r6  = map_ptr */
+	mov.l   @(12, r3), r7               /* r7  = signed_term_a (+128) */
+	mov.l   @(16, r3), r8               /* r8  = lx_dir (3.29) */
+	mov.l   @(20, r3), r9               /* r9  = ly_dir (3.29) */
+	mov.l   @(24, r3), r10              /* r10 = step_lx */
+	mov.l   @(28, r3), r11              /* r11 = step_ly */
+	mov.l   @(32, r3), r14              /* r14 = cnt */
+	mov     #-29, r12
+	mov     #-26, r13
+
+	tst     r0, r0
+	bt      .Lb3_to_sat
+	bra     .Lb3_ns_miss
+	nop
+.Lb3_to_sat:
+	mov.l   .Lb3_carry_msk, r5          /* r5 = 0x00010820 */
+	bra     .Lb3_s_miss
+	nop
+
+	.balign 4
+.Lb3_carry_msk:
+	.long   0x00010820
+
+	.balign 4
+.Lb3_done:
+	add     #12, r15
+	lds.l   @r15+, pr
+	mov.l   @r15+, r14
+	mov.l   @r15+, r13
+	mov.l   @r15+, r12
+	mov.l   @r15+, r11
+	mov.l   @r15+, r10
+	mov.l   @r15+, r9
+	rts
+	mov.l   @r15+, r8
+
+	/* Cold per-channel saturation helper for 16-bit SWAR add:
+	 *   in:  r0 = a + b, r2 = a (0..0xFFFF), r4 = &dst_pix
+	 *   out: writes exact saturated RGB565 to @r4; preserves r2..r14, mach, macl */
+	.balign 4
+.Lb3_sat16:
+	mov.l   r3, @-r15
+	mov.l   r5, @-r15
+	sub     r2, r0                      /* r0 = b (original dst_pix) */
+	mov.l   .Lb3_blnd_msk, r5           /* 0x07E0F81F */
+	swap.w  r0, r1
+	or      r1, r0
+	and     r5, r0                      /* p2e */
+	mov     r2, r3
+	swap.w  r3, r1
+	or      r1, r3
+	and     r5, r3                      /* p1e */
+	add     r3, r0                      /* pfe = p1e + p2e */
+	mov.l   .Lb3_ovf_msk, r3            /* 0x08010020 */
+	and     r0, r3                      /* ovf */
+	mov     r3, r1
+	shlr2   r1
+	shlr2   r1
+	shlr    r1                          /* ovf >> 5 */
+	sub     r1, r3                      /* ovf - (ovf >> 5): R/B fill, G 5 bits */
+	shlr    r1                          /* ovf >> 6 */
+	or      r1, r3                      /* G 6th bit filled (R/B bit 0 already 1) */
+	or      r3, r0
+	and     r5, r0
+	swap.w  r0, r1
+	or      r1, r0
+	mov.w   r0, @r4
+	mov.l   @r15+, r5
+	rts
+	mov.l   @r15+, r3
+
+	.balign 4
+.Lb3_blnd_msk:
+	.long   0x07E0F81F
+.Lb3_ovf_msk:
+	.long   0x08010020
+
+	/* Shared tile-miss dispatch + empty-tile fast loop for both no_sat paths. */
+.macro AFBL329_MISS pfx, is_sat
+	.balign 4
+.Lb3_\pfx\()_miss_x:
+	clrt
+	addc    r11, r9
+	bf      1f
+	sts     macl, r0
+	add     r0, r6
+1:	sts     mach, r0
+	bra     .Lb3_\pfx\()_miss
+	add     r0, r6
+
+	.balign 4
+.Lb3_\pfx\()_miss_y:
+	sts     macl, r0
+	add     r0, r6
+
+	.balign 4
+.Lb3_\pfx\()_miss:
+	mov.b   @r6, r0                     /* tile_id */
+	extu.b  r0, r0
+	mov     r0, r1
+	mov.l   @(0, r15), r2               /* tile_kind */
+	mov.b   @(r0, r2), r0               /* 0=empty, 1=solid, 2=mixed, 3=opaque */
+	tst     r0, r0
+	bt.s    .Lb3_\pfx\()_empty_first
+	shll8   r1
+	shlr2   r1                          /* tile_id << 6 */
+	mov.l   @(4, r15), r3               /* tile_base */
+	add     r1, r3                      /* r3 = cur_tile_ptr */
+	cmp/eq  #2, r0
+	bt      .Lb3_\pfx\()_mix_draw
+	cmp/eq  #3, r0
+	bt      .Lb3_\pfx\()_opaq_draw
+	/* tile_kind == 1: solid non-zero tile */
+	mov.b   @r3, r0
+	add     r0, r0
+.if \is_sat
+	mov.w   @(r0, r7), r2
+	bra     .Lb3_\pfx\()_solid_draw
+	extu.w  r2, r2
+.else
+	bra     .Lb3_\pfx\()_solid_draw
+	mov.w   @(r0, r7), r2
+.endif
+.endm
+
+.macro AFBL329_EMPTY pfx
+	/* Empty tile (tile_kind == 0): 7 insns per pixel, 0 memory reads */
+	.balign 4
+.Lb3_\pfx\()_empty_first:
+	add     #-2, r4
+	dt      r14
+	bt      .Lb3_\pfx\()_done_br
+.Lb3_\pfx\()_empty_next:
+	addc    r10, r8
+	bt      .Lb3_\pfx\()_miss_x
+	addc    r11, r9
+	bt      .Lb3_\pfx\()_miss_y
+	dt      r14
+	bf.s    .Lb3_\pfx\()_empty_next
+	add     #-2, r4
+.Lb3_\pfx\()_done_br:
+	bra     .Lb3_done
+	nop
+.endm
+
+	/* ==================== no_sat == 1 fast path (r5 = qflip) ==================== */
+	AFBL329_MISS ns, 0
+
+	/* Mixed tile (tile_kind == 2): 22 insns blended, 17 insns transparent */
+	.balign 4
+.Lb3_ns_mix_next:
+	addc    r10, r8
+	bt      .Lb3_ns_miss_x
+	addc    r11, r9
+	bt      .Lb3_ns_miss_y
+.Lb3_ns_mix_draw:
+	mov     r9, r0
+	shld    r13, r0
+	mov     r8, r1
+	and     #0x38, r0
+	shld    r12, r1
+	or      r1, r0
+	xor     r5, r0
+	mov.b   @(r0, r3), r0
+	tst     r0, r0
+	bt.s    .Lb3_ns_mix_trans
+	add     #-2, r4
+	add     r0, r0
+	mov.w   @(r0, r7), r2
+	mov.w   @r4, r0
+	add     r2, r0
+	dt      r14
+	bf.s    .Lb3_ns_mix_next
+	mov.w   r0, @r4
+	bra     .Lb3_done
+	nop
+.Lb3_ns_mix_trans:
+	dt      r14
+	bf      .Lb3_ns_mix_next
+	bra     .Lb3_done
+	nop
+
+	/* Opaque textured tile (tile_kind == 3): 20 insns per pixel */
+	.balign 4
+.Lb3_ns_opaq_next:
+	addc    r10, r8
+	bt      .Lb3_ns_miss_x
+	addc    r11, r9
+	bt      .Lb3_ns_miss_y
+.Lb3_ns_opaq_draw:
+	mov     r9, r0
+	shld    r13, r0
+	mov     r8, r1
+	and     #0x38, r0
+	shld    r12, r1
+	or      r1, r0
+	xor     r5, r0
+	mov.b   @(r0, r3), r0
+	add     #-2, r4
+	add     r0, r0
+	mov.w   @(r0, r7), r2
+	mov.w   @r4, r0
+	add     r2, r0
+	dt      r14
+	bf.s    .Lb3_ns_opaq_next
+	mov.w   r0, @r4
+	bra     .Lb3_done
+	nop
+
+	AFBL329_EMPTY ns
+
+	/* Solid non-zero tile (tile_kind == 1): 10 insns per pixel */
+	.balign 4
+.Lb3_ns_solid_next:
+	addc    r10, r8
+	bt      .Lb3_ns_miss_x
+	addc    r11, r9
+	bt      .Lb3_ns_miss_y
+.Lb3_ns_solid_draw:
+	add     #-2, r4
+	mov.w   @r4, r0
+	add     r2, r0
+	dt      r14
+	bf.s    .Lb3_ns_solid_next
+	mov.w   r0, @r4
+	bra     .Lb3_done
+	nop
+
+	/* ==================== no_sat == 0 path (r5 = 0x00010820) ==================== */
+	AFBL329_MISS s, 1
+
+	.balign 4
+.Lb3_s_mix_next:
+	addc    r10, r8
+	bt      .Lb3_s_miss_x
+	addc    r11, r9
+	bt      .Lb3_s_miss_y
+.Lb3_s_mix_draw:
+	mov     r9, r0
+	shld    r13, r0
+	mov     r8, r1
+	and     #0x38, r0
+	shld    r12, r1
+	or      r1, r0
+	mov.l   @(8, r15), r1               /* qflip */
+	xor     r1, r0
+	mov.b   @(r0, r3), r0
+	tst     r0, r0
+	bt.s    .Lb3_s_mix_trans
+	add     #-2, r4
+	add     r0, r0
+	mov.w   @(r0, r7), r2
+	extu.w  r2, r2
+	mov.w   @r4, r0
+	extu.w  r0, r0
+	mov     r0, r1
+	add     r2, r0
+	xor     r2, r1
+	xor     r0, r1
+	tst     r5, r1
+	bt.s    .Lb3_s_mix_trans
+	mov.w   r0, @r4
+	bsr     .Lb3_sat16
+	nop
+.Lb3_s_mix_trans:
+	dt      r14
+	bf      .Lb3_s_mix_next
+	bra     .Lb3_done
+	nop
+
+	.balign 4
+.Lb3_s_opaq_next:
+	addc    r10, r8
+	bt      .Lb3_s_miss_x
+	addc    r11, r9
+	bt      .Lb3_s_miss_y
+.Lb3_s_opaq_draw:
+	mov     r9, r0
+	shld    r13, r0
+	mov     r8, r1
+	and     #0x38, r0
+	shld    r12, r1
+	or      r1, r0
+	mov.l   @(8, r15), r1               /* qflip */
+	xor     r1, r0
+	mov.b   @(r0, r3), r0
+	add     #-2, r4
+	add     r0, r0
+	mov.w   @(r0, r7), r2
+	extu.w  r2, r2
+	mov.w   @r4, r0
+	extu.w  r0, r0
+	mov     r0, r1
+	add     r2, r0
+	xor     r2, r1
+	xor     r0, r1
+	tst     r5, r1
+	bt.s    1f
+	mov.w   r0, @r4
+	bsr     .Lb3_sat16
+	nop
+1:	dt      r14
+	bf      .Lb3_s_opaq_next
+	bra     .Lb3_done
+	nop
+
+	AFBL329_EMPTY s
+
+	.balign 4
+.Lb3_s_solid_next:
+	addc    r10, r8
+	bt      .Lb3_s_miss_x
+	addc    r11, r9
+	bt      .Lb3_s_miss_y
+.Lb3_s_solid_draw:
+	add     #-2, r4
+	mov.w   @r4, r0
+	extu.w  r0, r0
+	mov     r0, r1
+	add     r2, r0
+	xor     r2, r1
+	xor     r0, r1
+	tst     r5, r1
+	bt.s    1f
+	mov.w   r0, @r4
+	bsr     .Lb3_sat16
+	nop
+1:	dt      r14
+	bf      .Lb3_s_solid_next
+	bra     .Lb3_done
+	nop
+
+	.purgem AFBL329_MISS
+	.purgem AFBL329_EMPTY
+	.size   _cgba_render_affine_rot_blend_evb16_329_sh4, .-_cgba_render_affine_rot_blend_evb16_329_sh4
