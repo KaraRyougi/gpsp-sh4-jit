@@ -625,15 +625,15 @@ static void test_settings(void)
 	CHECK(st.backlight == 0, "backlight defaults to System");
 	bl_calls = 0;
 	press(FXCG100_APPKEY_LEFT);
-	CHECK(st.backlight == 0 && bl_calls == 0, "backlight clamps at 0");
+	CHECK(st.backlight == 16 && bl_calls == 1 && last_bl_level == 16,
+		"backlight wraps from System to 16");
 	press(FXCG100_APPKEY_RIGHT);
-	CHECK(st.backlight == 1 && bl_calls == 1 && last_bl_level == 1,
+	CHECK(st.backlight == 0 && bl_calls == 2 && last_bl_level == 0,
+		"backlight wraps from 16 back to System");
+	press(FXCG100_APPKEY_RIGHT);
+	CHECK(st.backlight == 1 && bl_calls == 3 && last_bl_level == 1,
 		"backlight applies live on change");
-	for (i = 0; i < 20; i++)
-		press(FXCG100_APPKEY_RIGHT);
-	CHECK(st.backlight == 16 && last_bl_level == 16, "backlight clamps at 16");
-	for (i = 0; i < 16; i++)
-		press(FXCG100_APPKEY_LEFT);
+	press(FXCG100_APPKEY_LEFT);
 	CHECK(st.backlight == 0 && last_bl_level == 0, "backlight returns to System");
 	press(FXCG100_APPKEY_DOWN);
 	press(FXCG100_APPKEY_RIGHT);
@@ -799,11 +799,11 @@ static void test_keys(void)
 	CHECK(ui_main.dialog == DIALOG_CAPTURE, "capture box");
 	snap("capture");
 
-	/* The key B uses: A and B swap. */
+	/* The key B uses: A takes it and B is cleared to None (0). */
 	capture(K_B);
 	CHECK(ui_main.dialog == DIALOG_NONE, "capture box stayed");
 	CHECK(st.keymap[FXCG100_GBA_KEY_A] == K_B &&
-		st.keymap[FXCG100_GBA_KEY_B] == K_A, "A and B did not swap");
+		st.keymap[FXCG100_GBA_KEY_B] == 0, "B was not cleared to None");
 	snap("keys-swapped");
 
 	/* AC/ON cancels. */
@@ -812,15 +812,15 @@ static void test_keys(void)
 	CHECK(ui_main.dialog == DIALOG_NONE &&
 		st.keymap[FXCG100_GBA_KEY_A] == K_B, "cancel changed the key");
 
-	/* A shortcut with no key may not take a GBA button's key. */
+	/* A shortcut taking a GBA button's key clears that GBA button to None. */
 	for (i = 0; i < 7; i++)
 		press(FXCG100_APPKEY_DOWN);
 	CHECK(selected_row(&ui_main)->id == ID_BIND0 + 11, "row Save state");
 	press(FXCG100_APPKEY_EXE);
-	capture(K_A);
-	CHECK(st.hotkey_map[FXCG100_HOTKEY_SAVE_STATE] == 0 &&
-		st.keymap[FXCG100_GBA_KEY_B] == K_A, "a GBA button lost its key");
-	CHECK(ui_main.message_error, "no reason given");
+	capture(K_B);
+	CHECK(st.hotkey_map[FXCG100_HOTKEY_SAVE_STATE] == K_B &&
+		st.keymap[FXCG100_GBA_KEY_A] == 0, "shortcut did not clear A");
+	CHECK(!ui_main.message_error, "unexpected error message");
 	snap("keys-refused");
 
 	/* A free key is fine, and DEL takes it away again. */
@@ -830,7 +830,7 @@ static void test_keys(void)
 	press(FXCG100_APPKEY_DEL);
 	CHECK(st.hotkey_map[FXCG100_HOTKEY_SAVE_STATE] == 0, "DEL");
 
-	/* Two shortcuts swap, even with no key on one side. */
+	/* Two shortcuts: reusing a key clears the previous shortcut to None. */
 	press(FXCG100_APPKEY_EXE);
 	capture(K_FREE);
 	press(FXCG100_APPKEY_DOWN);
@@ -841,12 +841,12 @@ static void test_keys(void)
 	press(FXCG100_APPKEY_EXE);
 	capture(K_FREE2);
 
-	/* DEL does nothing to a GBA button. */
+	/* DEL also clears a GBA button to None (0), keeping the map valid. */
 	press(FXCG100_APPKEY_UP);
 	press(FXCG100_APPKEY_UP);
 	press(FXCG100_APPKEY_UP);
 	press(FXCG100_APPKEY_DEL);
-	CHECK(st.keymap[FXCG100_GBA_KEY_SELECT] != 0, "DEL cleared a GBA button");
+	CHECK(st.keymap[FXCG100_GBA_KEY_SELECT] == 0, "DEL did not clear GBA button");
 	CHECK(fxcg100_input_maps_valid(st.keymap, st.hotkey_map),
 		"the key map went invalid");
 
@@ -951,8 +951,8 @@ static void test_txt_reader(void)
 	press(FXCG100_APPKEY_DOWN);
 	press(FXCG100_APPKEY_DOWN);
 	CHECK(selected_row(&ui_main)->id == ID_READER &&
-		strcmp(selected_row(&ui_main)->label, "TXT Reader") == 0,
-		"TXT Reader row in pause menu");
+		strcmp(selected_row(&ui_main)->label, "TXT reader") == 0,
+		"TXT reader row in pause menu");
 
 	/* Opening with no doc goes to file browser at root (\fls0\). */
 	press(FXCG100_APPKEY_EXE);

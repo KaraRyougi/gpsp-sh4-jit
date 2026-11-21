@@ -481,6 +481,74 @@ static int os_bfile_ensure_parent_dir(const uint16_t *path)
   return 1;
 }
 
+static int create_file_with_dir(const uint16_t *path, int initial_size,
+                                int *dir_ensured)
+{
+  int create_size = initial_size;
+
+  if (os_bfile_create(path, CGBA_BFILE_FILE, &create_size) >= 0)
+    return 1;
+  if (!*dir_ensured) {
+    *dir_ensured = 1;
+    if (os_bfile_ensure_parent_dir(path)) {
+      create_size = initial_size;
+      if (os_bfile_create(path, CGBA_BFILE_FILE, &create_size) >= 0)
+        return 1;
+    }
+  }
+  return 0;
+}
+
+/* On Fugue (fx-CG50 / fx-CG100), BFile_Create with the full file size
+ * zero-fills every cluster on NOR flash, and the immediate BFile_Write then
+ * rewrites every 4 KiB block a second time (doubling flash programming and
+ * triggering early GC / sector erases). Create a 0-byte (or 1-byte) file first
+ * so BFile_Write allocates and writes the real payload in a single pass; fall
+ * back to full pre-allocation if an OS version rejects size-0 creation or
+ * refuses to grow the file on write. */
+static int create_and_write_blob(storage_request *request)
+{
+  int dir_ensured = 0;
+  int full_size = (int)request->size;
+  int sizes[3];
+  unsigned count = 0;
+
+  if (full_size > 0)
+    sizes[count++] = 0;
+  if (full_size > 1)
+    sizes[count++] = 1;
+  sizes[count++] = full_size;
+
+  storage_will_mutate(request);
+  for (unsigned i = 0; i < count; i++) {
+    int initial_size = sizes[i];
+    if (!create_file_with_dir(request->path, initial_size, &dir_ensured))
+      continue;
+    int fd = os_bfile_open(request->path, CGBA_BFILE_WRITE_ONLY);
+    if (fd < 0) {
+      if (initial_size < full_size)
+        (void)os_bfile_remove(request->path);
+      return 0;
+    }
+    int ok = os_bfile_write(fd, request->src, full_size) == full_size;
+    int closed = os_bfile_close(fd);
+    if (ok) {
+      if (closed >= 0)
+        return 1;
+      if (initial_size < full_size)
+        (void)os_bfile_remove(request->path);
+      return 0;
+    }
+    if (initial_size < full_size) {
+      if (os_bfile_remove(request->path) < 0)
+        return 0;
+      continue;
+    }
+    return 0;
+  }
+  return 0;
+}
+
 /* The entire operation runs in one OS-world visit, including all changed
  * ranges. Absolute reads remain correct after a preceding range write. */
 static int storage_transaction(void *opaque)
@@ -523,20 +591,7 @@ static int storage_transaction(void *opaque)
     return 0;
   }
 
-  int create_size = (int)request->size;
-  storage_will_mutate(request);
-  if (os_bfile_create(request->path, CGBA_BFILE_FILE, &create_size) < 0) {
-    if (!os_bfile_ensure_parent_dir(request->path) ||
-        os_bfile_create(request->path, CGBA_BFILE_FILE, &create_size) < 0)
-      return 0;
-  }
-  fd = os_bfile_open(request->path, CGBA_BFILE_WRITE_ONLY);
-  if (fd < 0)
-    return 0;
-  int ok = os_bfile_write(fd, request->src, (int)request->size)
-    == (int)request->size;
-  int closed = os_bfile_close(fd);
-  return ok && closed >= 0;
+  return create_and_write_blob(request);
 }
 
 static int run_storage_request(storage_request *request)

@@ -46,9 +46,10 @@ static const uint16_t saves_dir[] = {
 };
 static int exists, dir_exists = 1, length, position, opened, mode, in_os;
 static int switches, notes, reads, writes, bytes_written, creates, dir_creates, removes;
+static int last_create_size, create_zero_bytes;
 static int offsets[128], lengths[128];
 static int fail_open, missing_dir_open_err, fail_size, fail_read, fail_seek, fail_write, fail_close;
-static int fail_create, fail_remove;
+static int fail_create, fail_remove, reject_zero_create, forbid_write_grow;
 static int short_read, short_write;
 
 static int fc_eq(const uint16_t *a, const uint16_t *b)
@@ -93,10 +94,17 @@ static int fake_create(const uint16_t *p, int type, int *size)
   }
   assert(type == CGBA_BFILE_FILE && size != NULL);
   creates++;
+  last_create_size = *size;
   if (fail_create) return -4;
   if (fc_eq(p, subdir_path) && !dir_exists) return -1;
-  assert(!exists && *size <= CAPACITY);
-  exists = 1; length = *size; memset(disk, 0, length); return 0;
+  if (reject_zero_create && *size == 0) return -3;
+  assert(!exists && *size >= 0 && *size <= CAPACITY);
+  exists = 1; length = *size;
+  if (length > 0) {
+    memset(disk, 0, length);
+    create_zero_bytes += length;
+  }
+  return 0;
 }
 static int fake_remove(const uint16_t *p)
 {
@@ -117,11 +125,13 @@ static int fake_read(int fd, void *dst, int size, int offset)
 static int fake_write(int fd, const void *src, int size)
 {
   assert(in_os && opened && fd == 7 && (mode & 2));
-  assert(position + size <= length && writes < 128);
+  assert(position + size <= CAPACITY && writes < 128);
   offsets[writes] = position; lengths[writes] = size; writes++;
   if (fail_write) return -5;
+  if (forbid_write_grow && position + size > length) return -5;
   int actual = short_write ? size / 2 : size;
   memcpy(disk + position, src, actual); position += actual;
+  if (position > length) length = position;
   bytes_written += actual; return actual;
 }
 static int fake_seek(int fd, int offset)
@@ -140,8 +150,10 @@ static int fake_close(int fd)
 static void counters(void)
 {
   switches = notes = reads = writes = bytes_written = creates = dir_creates = removes = 0;
+  last_create_size = -1; create_zero_bytes = 0;
   fail_open = missing_dir_open_err = fail_size = fail_read = fail_seek = fail_write = fail_close = 0;
-  fail_create = fail_remove = short_read = short_write = 0;
+  fail_create = fail_remove = reject_zero_create = forbid_write_grow = 0;
+  short_read = short_write = 0;
 }
 static void reset(int size)
 {
@@ -179,11 +191,30 @@ int main(void)
   reset(4098); source[4097] ^= 1;
   assert(save(length)); assert(bytes_written == 2 && offsets[0] == 4096);
 
+  /* Fast-path file creation: creates with size 0 (no zero-fill) and lets
+   * BFile_Write grow the file in one pass. */
   reset(8192); exists = 0;
-  assert(save(8192)); assert(creates == 1 && removes == 0 && bytes_written == 8192);
+  assert(save(8192));
+  assert(creates == 1 && last_create_size == 0 && create_zero_bytes == 0 &&
+         removes == 0 && length == 8192 && bytes_written == 8192 &&
+         !memcmp(disk, source, 8192));
+  /* Fallback 1: OS rejects size 0 -> retries with size 1 (no full zero-fill). */
+  reset(8192); exists = 0; reject_zero_create = 1;
+  assert(save(8192));
+  assert(creates == 2 && last_create_size == 1 && create_zero_bytes == 1 &&
+         removes == 0 && length == 8192 && bytes_written == 8192 &&
+         !memcmp(disk, source, 8192));
+  /* Fallback 2: OS refuses to grow past create size -> cleans up and falls back
+   * to full pre-allocation. */
+  reset(8192); exists = 0; forbid_write_grow = 1;
+  assert(save(8192));
+  assert(creates == 3 && last_create_size == 8192 && removes == 2 &&
+         length == 8192 && !memcmp(disk, source, 8192));
   reset(4096); assert(save(8192));
-  assert(creates == 1 && removes == 1 && !memcmp(disk, source, 8192));
-  reset(8192); assert(save(4096)); assert(length == 4096 && bytes_written == 4096);
+  assert(creates == 1 && last_create_size == 0 && removes == 1 &&
+         length == 8192 && !memcmp(disk, source, 8192));
+  reset(8192); assert(save(4096));
+  assert(length == 4096 && last_create_size == 0 && bytes_written == 4096);
 
   reset(8192); fail_open = -8;
   assert(!save(length)); assert(!creates && !removes && !storage_mutation_generation);

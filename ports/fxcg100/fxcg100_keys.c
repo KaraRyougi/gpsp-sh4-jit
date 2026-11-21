@@ -105,7 +105,7 @@ static const fxcg100_key_choice bindable_keys[] = {
   { 38, "RIGHT" },    { 49, "UP" },
   { 47, "DOWN" },     { 37, "CAT" },
   { 27, "TOOLS" },
-  { 59, "BEGIN" },    { 39, "END" },
+  { 59, "|<" },       { 39, ">|" },
   { 29, "PGUP" },     { 28, "PGDN" },
   { 36, "X^2" },      { 46, "^" },
   { 76, "X,T" },      { 56, "SQRT" },
@@ -239,12 +239,10 @@ int fxcg100_keymap_valid(const uint16_t *keymap)
   if (!keymap)
     return 0;
   for (i = 0; i < FXCG100_GBA_KEY_COUNT; i++) {
-#ifdef CGBA_CLASSPAD
-    /* On the ClassPad II a GBA button may have no key: it is still on the
-     * touch screen, and giving its key to something else leaves it so. */
+    /* A GBA button may be left unbound (0 / None), e.g. when its key is
+     * reassigned to another binding. */
     if (keymap[i] == 0)
       continue;
-#endif
     if (!fxcg100_key_bindable(keymap[i]))
       return 0;
     for (j = i + 1; j < FXCG100_GBA_KEY_COUNT; j++) {

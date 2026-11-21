@@ -659,7 +659,7 @@ static void rows_pause(cg_ui *ui)
 	add_row(ui, RK_PLAIN, ID_RESUME, "Resume");
 	add_value(ui, ID_SAVE, "Save state", slot);
 	add_value(ui, ID_LOAD, "Load state", slot)->rule = 1;
-	add_row(ui, RK_SUB, ID_READER, "TXT Reader");
+	add_row(ui, RK_SUB, ID_READER, "TXT reader");
 	add_row(ui, RK_SUB, ID_SETTINGS, "Settings");
 	add_row(ui, RK_SUB, ID_GAMES, "Games")->rule = 1;
 	add_row(ui, RK_PLAIN, ID_RESTART, "Restart");
@@ -757,7 +757,7 @@ static const struct {
 	{ "Save state", 1, FXCG100_HOTKEY_SAVE_STATE },
 	{ "Load state", 1, FXCG100_HOTKEY_LOAD_STATE },
 	{ "Show frame rate", 1, FXCG100_HOTKEY_DISPLAY_FPS },
-	{ "TXT Reader", 1, FXCG100_HOTKEY_TXT_READER },
+	{ "TXT reader", 1, FXCG100_HOTKEY_TXT_READER },
 	{ "Save & exit", 1, FXCG100_HOTKEY_SAVE_EXIT },
 };
 
@@ -999,7 +999,7 @@ static void draw_txt_browser(cg_ui *ui)
 
 	cp_fill(&ui->s, -SCR_X, -SCR_Y, DWIDTH, DHEIGHT, ui->t.surface);
 	txt_reader_display_dir(r, dir_label, sizeof(dir_label));
-	header(ui, "TXT Files", dir_label);
+	header(ui, "TXT files", dir_label);
 	if (total == 0) {
 		text_mid(ui, F_TITLE, (W - text_w(F_TITLE, "No .TXT files")) / 2, 96,
 			"No .TXT files", ui->t.on_surface);
@@ -1286,7 +1286,7 @@ static void draw_confirm(cg_ui *ui)
 
 	if (ui->dialog == DIALOG_EXIT) {
 		title = "Exit gpSP?";
-		line = ui->in_game ? "In-game saves are written first."
+		line = ui->in_game ? "In-game save will be written to storage."
 			: "Back to the calculator's menu.";
 		go = "Exit";
 	} else if (ui->dialog == DIALOG_RESTART) {
@@ -1336,8 +1336,8 @@ static void draw_capture(cg_ui *ui)
 	char title[48], line[64];
 	int w, x, y = 62, kw;
 
-	snprintf(title, sizeof(title), "Press a key for %s", name);
-	snprintf(line, sizeof(line), "A key in use swaps with %s.", name);
+	snprintf(title, sizeof(title), "Press key for [%s]", name);
+	snprintf(line, sizeof(line), "Existing binding with the same key will be cleared.");
 	w = text_w(F_TITLE, title) + 24;
 	if (w < text_w(F_SMALL, line) + 24)
 		w = text_w(F_SMALL, line) + 24;
@@ -1625,6 +1625,8 @@ static void read_keys(cg_ui *ui)
 static void goto_page(cg_ui *ui, int page)
 {
 	ui->page = page;
+	ui->sel[page] = ID_NONE;
+	ui->scroll[page] = 0;
 	if (page == PAGE_LIBRARY && ui->in_game) {
 		uint32_t order[FXCG100_ROM_SORT_MAX];
 		uint32_t count = library_order(ui, order);
@@ -1656,12 +1658,19 @@ static void save_settings(cg_ui *ui)
 		message(ui, 0, "Settings saved", NULL, NULL);
 	else
 		message(ui, 1, "Could not save the settings", NULL, NULL);
+	ui->keys = fxcg100_poll_app_keys();
+	ui->edge = 0;
+	ui->rep_key = 0;
 }
 
 static void leave_settings(cg_ui *ui)
 {
+	int dest = ui->settings_from;
+
 	save_settings(ui);
-	goto_page(ui, ui->settings_from);
+	if (dest == PAGE_SETTINGS || dest == PAGE_KEYS || dest == PAGE_DEBUG)
+		dest = ui->in_game ? PAGE_PAUSE : PAGE_LIBRARY;
+	goto_page(ui, dest);
 }
 
 static void open_dialog(cg_ui *ui, int dialog)
@@ -1726,14 +1735,7 @@ static void change_setting(cg_ui *ui, int id, int delta)
 		st->lcd_refresh = cycle(st->lcd_refresh, 7, delta);
 		break;
 	case ID_BACKLIGHT:
-		if (delta < 0 && st->backlight > 0)
-			st->backlight--;
-		else if (delta > 0 && st->backlight < 16)
-			st->backlight++;
-		else if (st->backlight > 16)
-			st->backlight = 16;
-		else
-			return;
+		st->backlight = cycle(st->backlight, 17, delta);
 		fxcg100_lcd_set_backlight(st->backlight, st->backlight_pwm);
 		break;
 	case ID_COLOUR:
@@ -2255,25 +2257,18 @@ static int key_user(cg_ui *ui, int except, uint16_t key)
 	return -1;
 }
 
-/* Give binding i the key. A key that something else uses is swapped: that
- * one gets i's old key. A GBA button is never left without a key, so the
- * swap is refused when i is a shortcut that had none. */
+/* Give binding i the key. If another binding already uses that key, clear
+ * the previous binding to None (0). */
 static void bind(cg_ui *ui, int i, uint16_t key)
 {
-	uint16_t *slot = binding_slot(ui, i), old = *slot;
+	uint16_t *slot = binding_slot(ui, i);
 	int other = key_user(ui, i, key);
 
-	if (key == old)
+	if (key == *slot)
 		return;
 	if (other >= 0) {
-		if (!old && other < GBA_BINDINGS) {
-			message(ui, 1, "%s stays on %s: GBA buttons need a key",
-				fxcg100_key_label(key), bindings[other].name);
-			return;
-		}
-		*binding_slot(ui, other) = old;
-		message(ui, 0, "%s now uses %s", bindings[other].name,
-			old ? fxcg100_key_label(old) : "no key");
+		*binding_slot(ui, other) = 0;
+		message(ui, 0, "%s cleared (None)", bindings[other].name, NULL);
 	}
 	*slot = key;
 	ui->settings_dirty = 1;
@@ -2306,7 +2301,7 @@ static void input_keys(cg_ui *ui)
 			ui->capture_armed = 0;
 			open_dialog(ui, DIALOG_CAPTURE);
 		}
-	} else if ((e & FXCG100_APPKEY_DEL) && r->id >= ID_BIND0 + GBA_BINDINGS &&
+	} else if ((e & FXCG100_APPKEY_DEL) && r->id >= ID_BIND0 &&
 			r->id < ID_BIND0 + BINDING_COUNT && r->key) {
 		*binding_slot(ui, r->id - ID_BIND0) = 0;
 		ui->settings_dirty = 1;
@@ -2349,11 +2344,8 @@ static fxcg100_menu_result input_dialog(cg_ui *ui)
 	if (e & FXCG100_APPKEY_BACK) {
 		ui->dialog = DIALOG_NONE;
 		want(ui, REDRAW_FULL);
-	} else if ((e & FXCG100_APPKEY_UP) && ui->dialog_sel) {
-		ui->dialog_sel = 0;
-		want(ui, REDRAW_FULL);
-	} else if ((e & FXCG100_APPKEY_DOWN) && !ui->dialog_sel) {
-		ui->dialog_sel = 1;
+	} else if ((e & (FXCG100_APPKEY_UP | FXCG100_APPKEY_DOWN)) && !ui->repeat) {
+		ui->dialog_sel = !ui->dialog_sel;
 		want(ui, REDRAW_FULL);
 	} else if (e & FXCG100_APPKEY_EXE) {
 		int dialog = ui->dialog;
