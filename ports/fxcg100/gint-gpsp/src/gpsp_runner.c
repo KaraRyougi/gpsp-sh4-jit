@@ -12,6 +12,7 @@
 #include "nor_rom.h"
 #include "rom_meta.h"
 #include "save_path.h"
+#include "state_codec.h"
 #include "vendor/gpsp/common.h"
 #include "vendor/gpsp/gba_memory.h"
 #include "vendor/gpsp/savestate.h"
@@ -991,98 +992,36 @@ int cgba_gpsp_storage_sync(void)
 #ifdef CGBA_DYNAREC
 void flush_translation_cache_rom(void);
 void flush_translation_cache_ram(void);
+#endif
 
 static u8 *cgba_state_comp_buffer(u8 *raw)
 {
 	return raw + GBA_STATE_MEM_SIZE;
 }
 
+static uint32_t *cgba_state_hash_buffer(u8 *raw)
+{
+	return (uint32_t *)(void *)(raw + GBA_STATE_MEM_SIZE +
+		CGBA_STATE_COMP_FILE_MAX);
+}
+
 static unsigned cgba_state_comp_capacity(void)
 {
 	return CGBA_STATE_COMP_FILE_MAX;
 }
-#endif
 
-/* ---- savestate compression (word-RLE) -------------------------------------
- * GBA state images are dominated by zero/constant runs (EWRAM, VRAM, OAM),
- * and BFile flash writes cost time proportional to bytes, so a trivial
- * 32-bit-word RLE cuts save/load time ~3-5x. Stream format:
- *   u32 CGBA_STATE_COMP_MAGIC, u32 raw_size, then tokens:
- *     hdr with bit31 set  -> run:     (hdr & 0x7FFFFFFF) copies of next u32
- *     hdr with bit31 clear-> literal: hdr words follow verbatim
- * Raw-size files (== GBA_STATE_MEM_SIZE) are still written/accepted, so old
- * saves and the emulator-harness CGBACHK.SAV workflow keep working. */
-#define CGBA_STATE_COMP_MAGIC 0x435A5331u              /* 'CZS1' */
+_Static_assert(CGBA_STATE_LZ4_HASH_LEN * sizeof(uint32_t) == CGBA_STATE_HASH_SIZE,
+	"LZ4 hash scratch size must match CGBA_STATE_HASH_SIZE");
 
 unsigned cgba_state_compress(const u8 *raw, unsigned rawsz, u8 *out,
-			     unsigned cap)
+			     unsigned cap, uint32_t *hash_tab)
 {
-	const u32 *w = (const u32 *)(const void *)raw;
-	u32 *o = (u32 *)(void *)out;
-	unsigned n = rawsz / 4, i = 0, ow = 0, ocap = cap / 4;
-
-	if (ocap < 4)
-		return 0;
-	o[ow++] = CGBA_STATE_COMP_MAGIC;
-	o[ow++] = rawsz;
-	while (i < n) {
-		unsigned run = 1;
-		while (i + run < n && w[i + run] == w[i] && run < 0x7FFFFFFFu)
-			run++;
-		if (run >= 3) {
-			if (ow + 2 > ocap)
-				return 0;
-			o[ow++] = 0x80000000u | run;
-			o[ow++] = w[i];
-			i += run;
-		} else {
-			unsigned lit = i, litn = 0;
-			while (i < n) {           /* literals until the next run */
-				unsigned r = 1;
-				while (i + r < n && w[i + r] == w[i] && r < 3)
-					r++;
-				if (r >= 3 && i + r < n && w[i + r] == w[i])
-					break;
-				if (r >= 3)
-					break;
-				i += r; litn += r;
-			}
-			if (ow + 1 + litn > ocap)
-				return 0;
-			o[ow++] = litn;
-			while (litn--)
-				o[ow++] = w[lit++];
-		}
-	}
-	return ow * 4;
+	return cgba_state_compress_lz4(raw, rawsz, out, cap, hash_tab);
 }
 
 int cgba_state_decompress(const u8 *in, unsigned insz, u8 *raw, unsigned rawsz)
 {
-	const u32 *o = (const u32 *)(const void *)in;
-	u32 *w = (u32 *)(void *)raw;
-	unsigned iw = 0, icap = insz / 4, n = rawsz / 4, i = 0;
-
-	if (icap < 2 || o[0] != CGBA_STATE_COMP_MAGIC || o[1] != rawsz)
-		return 0;
-	iw = 2;
-	while (i < n && iw < icap) {
-		u32 hdr = o[iw++];
-		if (hdr & 0x80000000u) {
-			u32 run = hdr & 0x7FFFFFFFu, v;
-			if (iw >= icap || i + run > n)
-				return 0;
-			v = o[iw++];
-			while (run--)
-				w[i++] = v;
-		} else {
-			if (iw + hdr > icap || i + hdr > n)
-				return 0;
-			while (hdr--)
-				w[i++] = o[iw++];
-		}
-	}
-	return i == n;
+	return cgba_state_decompress_any(in, insz, raw, rawsz);
 }
 
 static size_t cgba_current_rom_header_len(void)
@@ -1158,11 +1097,11 @@ int fxcg100_savestate_exists(uint32_t slot)
 	return fxcg100_storage_blob_size(path) >= 0;
 }
 
-int cgba_gpsp_state_save(unsigned slot)
+static int cgba_gpsp_state_save_impl(unsigned slot, int sync_rom)
 {
 	u8 *buf = cgba_state_buffer();
 	uint16_t path[CGBA_SAVE_PATH_MAX];
-	int ok = 0, synced;
+	int ok = 0, synced = 1;
 	uint32_t t0 = fxcg100_ticks(), t1;
 
 	memset(&cgba_last_save_timing, 0, sizeof(cgba_last_save_timing));
@@ -1175,25 +1114,20 @@ int cgba_gpsp_state_save(unsigned slot)
 	cgba_last_save_timing.snap = t1 - t0;
 	t0 = t1;
 	cgba_last_save_timing.bytes = GBA_STATE_MEM_SIZE;
-#ifdef CGBA_DYNAREC
 	{
 		u8 *comp = cgba_state_comp_buffer(buf);
+		uint32_t *hash = cgba_state_hash_buffer(buf);
 		unsigned cap = cgba_state_comp_capacity();
 		unsigned csz = cgba_state_compress(buf, GBA_STATE_MEM_SIZE,
-			comp, cap);
+			comp, cap, hash);
 		t1 = fxcg100_ticks();
 		cgba_last_save_timing.pack = t1 - t0;
 		t0 = t1;
 		if (csz && csz < GBA_STATE_MEM_SIZE) {
-			/* Round the FILE up to 64KB buckets: repeat saves of
-			 * similar size hit write_blob's fast overwrite path
-			 * instead of delete+create; the decoder stops at
-			 * raw_size so the slack tail is ignored. */
-			unsigned fsz = (csz + CGBA_STATE_FILE_BUCKET - 1u) &
-				~(CGBA_STATE_FILE_BUCKET - 1u);
-			/* Rounding can make a nominally compressed stream larger
-			 * than the raw state. Store raw in that case. */
-			if (fsz <= cap && fsz < GBA_STATE_MEM_SIZE) {
+			int existing = fxcg100_storage_blob_size(path);
+			unsigned fsz = cgba_state_choose_file_size(csz, existing,
+				GBA_STATE_MEM_SIZE, cap, CGBA_STATE_FILE_BUCKET);
+			if (fsz < GBA_STATE_MEM_SIZE) {
 				memset(comp + csz, 0, fsz - csz);
 				cgba_last_save_timing.bytes = fsz;
 				ok = fxcg100_storage_write_blob(path, comp, fsz);
@@ -1206,18 +1140,27 @@ int cgba_gpsp_state_save(unsigned slot)
 				GBA_STATE_MEM_SIZE);
 		}
 	}
-#else
-	ok = fxcg100_storage_write_blob(path, buf, GBA_STATE_MEM_SIZE);
-#endif
 	t1 = fxcg100_ticks();
 	cgba_last_save_timing.write = t1 - t0;
 	t0 = t1;
 	cgba_state_buffer_release();
-	/* Refresh after any attempted mutation, even a failed write. An identical
-	 * file causes no mutation and needs no ROM block-address query. */
-	synced = cgba_gpsp_storage_sync();
-	cgba_last_save_timing.remap = fxcg100_ticks() - t0;
+	/* Refresh after any attempted mutation, even a failed write, unless the
+	 * caller is exiting immediately without resuming guest execution. */
+	if (sync_rom) {
+		synced = cgba_gpsp_storage_sync();
+		cgba_last_save_timing.remap = fxcg100_ticks() - t0;
+	}
 	return synced && ok;
+}
+
+int cgba_gpsp_state_save(unsigned slot)
+{
+	return cgba_gpsp_state_save_impl(slot, 1);
+}
+
+int cgba_gpsp_state_save_for_exit(unsigned slot)
+{
+	return cgba_gpsp_state_save_impl(slot, 0);
 }
 
 static int cgba_state_load_from(const uint16_t *path)
@@ -1232,9 +1175,7 @@ static int cgba_state_load_from(const uint16_t *path)
 	if (fsz == (int)GBA_STATE_MEM_SIZE) {   /* raw (legacy / harness) */
 		ok = fxcg100_storage_read_blob(path, buf,
 			GBA_STATE_MEM_SIZE) && gba_load_state(buf);
-	}
-#ifdef CGBA_DYNAREC
-	else if (fsz > 8 && fsz <= (int)CGBA_STATE_COMP_FILE_MAX) {
+	} else if (fsz > 8 && fsz <= (int)CGBA_STATE_COMP_FILE_MAX) {
 		u8 *comp = cgba_state_comp_buffer(buf);
 		unsigned cap = cgba_state_comp_capacity();
 		if ((unsigned)fsz <= cap) {
@@ -1244,7 +1185,6 @@ static int cgba_state_load_from(const uint16_t *path)
 				gba_load_state(buf);
 		}
 	}
-#endif
 	cgba_state_buffer_release();
 	return ok;
 }

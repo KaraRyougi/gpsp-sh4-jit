@@ -295,11 +295,11 @@ static void apply_display_options(const fxcg100_menu_state *state)
 	fxcg100_lcd_set_filter(state->screen_filter);
 	fxcg100_lcd_set_sync(state->lcd_sync, state->lcd_sync_offset);
 	fxcg100_lcd_set_refresh(state->lcd_refresh);
+	fxcg100_lcd_set_backlight(state->backlight, state->backlight_pwm);
 #ifdef CGBA_CLASSPAD
 	fxcg100_lcd_set_rotation(state->rotation);
 	fxcg100_lcd_set_touch_keys(state->touch_keys);
 	fxcg100_lcd_set_transfer(state->lcd_cpu);
-	fxcg100_lcd_set_backlight(state->backlight, state->backlight_pwm);
 	fxcg100_lcd_set_theme(state->theme);
 	{
 		/* Clear is the menu key only while nothing else is mapped to it. */
@@ -2279,6 +2279,9 @@ static int gpsp_main(void)
 	fxcg100_menu_state menu_state;
 	uint32_t previous_app_keys = 0;
 	uint32_t previous_hotkeys = 0;
+	int ff_toggled = 0;
+	int previous_fast_forward = 0;
+	int ff_overlay_clear_pending = 0;
 #ifdef CGBA_CLASSPAD
 	uint32_t previous_strip = 0;
 #endif
@@ -2298,6 +2301,7 @@ static int gpsp_main(void)
 	cgba_gpsp_refresh_roms();
 	fxcg100_menu_init(&menu_state);
 	status_state = &menu_state;
+	fxcg100_lcd_set_backlight(menu_state.backlight, menu_state.backlight_pwm);
 #ifdef CGBA_CLASSPAD
 	cp_ui_apply_saved_clock();
 #endif
@@ -2439,10 +2443,15 @@ static int gpsp_main(void)
 				fxcg100_poll_hotkeys_mapped(menu_state.hotkey_map);
 			if(result == FXCG100_MENU_QUIT)
 				break;
+			if(menu_state.fast_forward_mode != FXCG100_FF_MODE_TOGGLE)
+				ff_toggled = 0;
 			if(result == FXCG100_MENU_RESET) {
 				cgba_gpsp_shutdown();
 				if(start_gpsp(framebuffer, current_rom) != 0)
 					return exit_to_os(1);
+				ff_toggled = 0;
+				previous_fast_forward = 0;
+				ff_overlay_clear_pending = 0;
 				frame = 1;
 				enter_gameplay_display(framebuffer, frame);
 				continue;
@@ -2452,6 +2461,9 @@ static int gpsp_main(void)
 				cgba_gpsp_shutdown();
 				if(start_gpsp(framebuffer, current_rom) != 0)
 					return exit_to_os(1);
+				ff_toggled = 0;
+				previous_fast_forward = 0;
+				ff_overlay_clear_pending = 0;
 				frame = 1;
 				enter_gameplay_display(framebuffer, frame);
 				continue;
@@ -2502,15 +2514,37 @@ static int gpsp_main(void)
 		classpad_strip_shortcuts(&menu_state, &previous_strip);
 #endif
 
-		if((previous_hotkeys &
-				FXCG100_HOTKEY_BIT(FXCG100_HOTKEY_FAST_FORWARD)) &&
-				!(hotkeys &
-				FXCG100_HOTKEY_BIT(FXCG100_HOTKEY_FAST_FORWARD)))
-			cgba_pacer_reset(&pacer);
-
 		if(hotkey_edge &
 				FXCG100_HOTKEY_BIT(FXCG100_HOTKEY_DISPLAY_FPS))
 			menu_state.show_fps = menu_state.show_fps ? 0 : 1;
+
+		if(hotkey_edge & FXCG100_HOTKEY_BIT(FXCG100_HOTKEY_SAVE_EXIT)) {
+			char slot_line[16];
+			int ok, storage_ok;
+
+			cgba_frame_limiter_stop();
+			snprintf(slot_line, sizeof slot_line, "Slot %u",
+				(unsigned)menu_state.savestate_slot);
+			draw_status("Saving & exiting", slot_line);
+			wait_for_keys_released();
+			ok = cgba_gpsp_state_save_for_exit(menu_state.savestate_slot);
+			if(ok)
+				break;
+			storage_ok = cgba_gpsp_storage_sync();
+			draw_status(storage_ok ? "Could not save the state"
+					: "ROM remap FAILED",
+				storage_ok ? slot_line : "restart or reset required");
+			wait_status();
+			if(!storage_ok) {
+				wait_status();
+				break;
+			}
+			previous_app_keys = fxcg100_poll_app_keys();
+			previous_hotkeys =
+				fxcg100_poll_hotkeys_mapped(menu_state.hotkey_map);
+			enter_gameplay_display(framebuffer, frame);
+			continue;
+		}
 
 		if(hotkey_edge & FXCG100_HOTKEY_BIT(FXCG100_HOTKEY_LOAD_STATE)) {
 #if !(defined(CGBA_DYNAREC) && defined(CGBA_SH4_PROFILE_COUNTERS))
@@ -2595,58 +2629,93 @@ static int gpsp_main(void)
 #endif
 		}
 
-		int fast_forward = hotkeys &
-			FXCG100_HOTKEY_BIT(FXCG100_HOTKEY_FAST_FORWARD);
+		int fast_forward;
+		if(menu_state.fast_forward_mode == FXCG100_FF_MODE_TOGGLE) {
+			if(hotkey_edge & FXCG100_HOTKEY_BIT(FXCG100_HOTKEY_FAST_FORWARD))
+				ff_toggled = !ff_toggled;
+			fast_forward = ff_toggled;
+		} else {
+			ff_toggled = 0;
+			fast_forward = (hotkeys &
+				FXCG100_HOTKEY_BIT(FXCG100_HOTKEY_FAST_FORWARD)) != 0;
+		}
+		if(previous_fast_forward && !fast_forward) {
+			cgba_pacer_reset(&pacer);
+			ff_overlay_clear_pending = 1;
+		}
 		int limit_on = menu_state.frame_limit && !fast_forward;
 		int vsync_paced = limit_on && fxcg100_lcd_sync_is_paced();
 		if(!vsync_paced)
 			fxcg100_lcd_sync_pace_reset();
-		cgba_frame_limiter_begin(&frame_limiter, limit_on && !vsync_paced);
+		{
+			uint32_t limit_us = 0u;
+
+			if(fast_forward)
+				limit_us = cgba_fast_forward_period_us(
+					menu_state.fast_forward_speed);
+			else if(limit_on && !vsync_paced)
+				limit_us = CGBA_FRAME_LIMIT_US;
+			cgba_frame_limiter_begin_period(&frame_limiter, limit_us);
+		}
 		gba_buttons = fxcg100_poll_gba_buttons_mapped(menu_state.keymap);
 
 		int render_video;
-		if(fast_forward)
-			render_video = frame == 1 ||
-				(frame % CGBA_FAST_FORWARD_RENDER_PERIOD) == 0;
-		else if(frame == 1)
+		if(fast_forward) {
+			uint32_t period = cgba_fast_forward_render_period(
+				menu_state.fast_forward_speed);
+			render_video = frame == 1 || !previous_fast_forward ||
+				(frame % period) == 0;
+		} else if(frame == 1 || ff_overlay_clear_pending) {
 			render_video = 1;
-		else if(menu_state.frameskip_type == CGBA_FRAMESKIP_AUTOMATIC)
+		} else if(menu_state.frameskip_type == CGBA_FRAMESKIP_AUTOMATIC) {
 			render_video = cgba_pacer_should_render(&pacer);
-		else
+		} else {
 			render_video = fxcg100_menu_should_blit(&menu_state, frame);
+		}
 
-		int streamed = render_video && !menu_state.show_fps
+		int overlay_active = menu_state.show_fps || fast_forward;
+		int streamed = render_video && !overlay_active &&
+				!ff_overlay_clear_pending
 			? fxcg100_lcd_stream_begin() : 0;
 		cgba_gpsp_run_frame(gba_buttons, render_video);
 		cgba_fps_tick(&cgba_fps, render_video);
 		if(render_video) {
 			if(!streamed || !fxcg100_lcd_stream_end()) {
-				if(menu_state.show_fps) {
-					fxcg100_lcd_overlay_fps(framebuffer,
-						cgba_fps.emu_fps, cgba_fps.draw_fps);
+				if(overlay_active) {
+					if(menu_state.show_fps)
+						fxcg100_lcd_overlay_fps(framebuffer,
+							cgba_fps.emu_fps, cgba_fps.draw_fps);
+					if(fast_forward)
+						fxcg100_lcd_overlay_fast_forward(framebuffer,
+							menu_state.fast_forward_speed);
 					blit_gba_frame(framebuffer, frame, gba_buttons);
+					ff_overlay_clear_pending = 0;
 				}
 #if defined(CGBA_VIDEO_DIRTY_SCANLINE) && CGBA_VIDEO_DIRTY_SCANLINE
-				else if(cgba_video_frame_dirty_rows != 0 ||
+				else if(ff_overlay_clear_pending ||
+					cgba_video_frame_dirty_rows != 0 ||
 					!fxcg100_lcd_is_synced()) {
 					blit_gba_frame(framebuffer, frame, gba_buttons);
+					ff_overlay_clear_pending = 0;
 				}
 #else
 				else {
 					blit_gba_frame(framebuffer, frame, gba_buttons);
+					ff_overlay_clear_pending = 0;
 				}
 #endif
 			}
 		}
 		previous_app_keys = app_keys;
 		previous_hotkeys = hotkeys;
+		previous_fast_forward = fast_forward;
 		if(vsync_paced) {
 			int late = -1;
 			if(fxcg100_lcd_sync_pace_wait(CGBA_LIMITER_MAX_LATE, &late))
 				cgba_pacer_feedback(&pacer, late);
 		} else {
 			cgba_frame_limiter_wait(&frame_limiter);
-			cgba_pacer_feedback(&pacer, frame_limiter.late);
+			cgba_pacer_feedback(&pacer, fast_forward ? -1 : frame_limiter.late);
 		}
 	}
 

@@ -23,10 +23,11 @@ uint32_t fxcg100_ticks(void);
 /* One native GBA frame is about 16743 us (59.7275 Hz).  TIMER_ANY normally
  * selects a 32768 Hz ETMU for this delay; timer quantization plus loop overhead
  * therefore keeps normal play below, rather than just above, 60 fps. */
-#define FRAME_LIMIT_US 16743u
+#define FRAME_LIMIT_US CGBA_FRAME_LIMIT_US
 
 /* The frame clock: ticks since the timer was started. */
 static int limiter_timer = -1;
+static uint32_t limiter_period_us;
 static volatile uint32_t limiter_due;
 
 static int limiter_tick(void)
@@ -40,34 +41,71 @@ void cgba_frame_limiter_stop(void)
 	if(limiter_timer >= 0)
 		timer_stop(limiter_timer);
 	limiter_timer = -1;
+	limiter_period_us = 0;
 }
 
 void cgba_frame_limiter_init(cgba_frame_limiter *limiter)
 {
 	limiter->enabled = 0;
+	limiter->period_us = 0;
 	limiter->done = 0;
 	limiter->late = -1;
 }
 
-void cgba_frame_limiter_begin(cgba_frame_limiter *limiter, int enabled)
+void cgba_frame_limiter_begin_period(cgba_frame_limiter *limiter,
+                                     uint32_t period_us)
 {
 	limiter->enabled = 0;
-	if(!enabled) {
+	if(period_us == 0u) {
 		cgba_frame_limiter_stop();
+		limiter->period_us = 0;
 		return;
 	}
+	if(limiter_timer >= 0 && limiter_period_us != period_us)
+		cgba_frame_limiter_stop();
 	if(limiter_timer < 0) {
 		limiter_due = 0;
 		limiter->done = 0;
-		limiter_timer = timer_configure(TIMER_ANY, FRAME_LIMIT_US,
+		limiter_timer = timer_configure(TIMER_ANY, period_us,
 			GINT_CALL(limiter_tick));
 		/* No timer is available.  Running uncapped is safer than stalling
 		 * the emulator; the next frame will try to acquire one again. */
-		if(limiter_timer < 0)
+		if(limiter_timer < 0) {
+			limiter->period_us = 0;
 			return;
+		}
+		limiter_period_us = period_us;
 		timer_start(limiter_timer);
 	}
+	limiter->period_us = period_us;
 	limiter->enabled = 1;
+}
+
+void cgba_frame_limiter_begin(cgba_frame_limiter *limiter, int enabled)
+{
+	cgba_frame_limiter_begin_period(limiter, enabled ? FRAME_LIMIT_US : 0u);
+}
+
+uint32_t cgba_fast_forward_period_us(uint32_t speed_mode)
+{
+	switch(speed_mode) {
+	case 1u: return 11162u; /* 1.5x (~89.6 fps) */
+	case 2u: return 8372u;  /* 2x   (~119.5 fps) */
+	case 3u: return 5581u;  /* 3x   (~179.2 fps) */
+	case 4u: return 4186u;  /* 4x   (~238.9 fps) */
+	default: return 0u;     /* Unlimited */
+	}
+}
+
+uint32_t cgba_fast_forward_render_period(uint32_t speed_mode)
+{
+	switch(speed_mode) {
+	case 1u: return 2u; /* 1.5x -> ~45 drawn fps */
+	case 2u: return 2u; /* 2x   -> ~60 drawn fps */
+	case 3u: return 3u; /* 3x   -> ~60 drawn fps */
+	case 4u: return 4u; /* 4x   -> ~60 drawn fps */
+	default: return 8u; /* Unlimited: maximize throughput */
+	}
 }
 
 void cgba_frame_limiter_wait(cgba_frame_limiter *limiter)

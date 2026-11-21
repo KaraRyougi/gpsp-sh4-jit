@@ -49,8 +49,10 @@ int fxcg100_storage_write_blob(const uint16_t *path, const void *src, unsigned s
 #endif
 
 #define CGBA_CONFIG_MAGIC 0x43474241u
-#define CGBA_CONFIG_VERSION 3u
+#define CGBA_CONFIG_VERSION 4u
+#define CGBA_CONFIG_VERSION_V3 3u
 #define CGBA_CONFIG_VERSION_LEGACY 2u
+#define CGBA_CONFIG_LEGACY_HOTKEY_COUNT 5u
 
 #define CGBA_BFILE_FILE 1
 #define CGBA_BFILE_FOLDER 5
@@ -92,7 +94,7 @@ typedef struct fxcg100_config_file {
   uint16_t version;
   uint16_t size;
   uint16_t keymap[FXCG100_GBA_KEY_COUNT];
-  uint16_t hotkey_map[FXCG100_HOTKEY_COUNT];
+  uint16_t hotkey_map[CGBA_CONFIG_LEGACY_HOTKEY_COUNT];
   uint32_t screen_scale;
   uint32_t screen_filter;
   uint32_t frameskip_type;
@@ -100,9 +102,10 @@ typedef struct fxcg100_config_file {
   uint32_t frameskip_variation;
   uint32_t savestate_slot;
   uint32_t quick_save_slot;
-  /* Version-2 compatibility slot. Older builds stored the removed automatic
-   * backup policy here; keep the word so existing CGBA.CFG files still load. */
-  uint32_t reserved_backup_update;
+  /* Version-2/3 compatibility slot. Version 2 stored the removed automatic
+   * backup policy here; version 3 zeroed it; version 4 stores the 6th hotkey
+   * (FXCG100_HOTKEY_SAVE_EXIT) in bits 0..15 while keeping sizeof unchanged. */
+  uint32_t hotkey_extra;
   uint32_t show_fps;
   uint32_t frame_limit;
   /* ClassPad II display options, carved out of the reserved words so the file
@@ -124,9 +127,13 @@ typedef struct fxcg100_config_file {
    * preset (0 = Auto 59.73 Hz w/ VSync, 1 = System, 2 = 59.73 Hz (GBA),
    * 3..9 = platform high-refresh presets), bits 24-25 the library sort mode
    * (FXCG100_GAME_SORT_*, 0 = Name), bit 26 light mode (stored inverted from
-   * dark_mode so that zero keeps dark mode on). */
+   * dark_mode so that zero keeps dark mode on), bit 27 fast-forward mode
+   * (0 = Hold, 1 = Toggle), bits 28-30 fast-forward speed (0..4). */
   uint32_t lcd_extra;
 } fxcg100_config_file;
+
+_Static_assert(FXCG100_HOTKEY_COUNT == CGBA_CONFIG_LEGACY_HOTKEY_COUNT + 1u,
+               "update fxcg100_config_file for extra hotkeys");
 
 static const uint16_t config_path[] = {
   '\\', '\\', 'f', 'l', 's', '0', '\\',
@@ -209,6 +216,14 @@ static int os_bfile_close(int fd)
 #endif
 }
 
+static void config_extract_hotkeys(uint16_t out[FXCG100_HOTKEY_COUNT],
+                                   const fxcg100_config_file *config)
+{
+  memcpy(out, config->hotkey_map, sizeof(config->hotkey_map));
+  out[FXCG100_HOTKEY_SAVE_EXIT] = config->version >= CGBA_CONFIG_VERSION
+    ? (uint16_t)(config->hotkey_extra & 0xffffu) : 0u;
+}
+
 static int config_options_valid(const fxcg100_config_file *config)
 {
   return config->screen_scale < 5 &&
@@ -223,27 +238,34 @@ static int config_options_valid(const fxcg100_config_file *config)
     config->touch_keys_hidden < 2 &&
     config->lcd_cpu < 2 &&
     config->lcd_sync < 2 &&
-    (config->lcd_extra & ~0x07ff1f0fu) == 0 &&
+    (config->lcd_extra & ~0x7fff1f0fu) == 0 &&
     ((config->lcd_extra >> 8) & 31u) <= 16u &&
     ((config->lcd_extra >> 16) & 15u) <= 9u &&
     ((config->lcd_extra >> 20) & 15u) <= 9u &&
     ((config->lcd_extra >> 24) & 3u) < FXCG100_GAME_SORT_COUNT &&
+    ((config->lcd_extra >> 28) & 7u) < FXCG100_FF_SPEED_COUNT &&
     config->theme < 16 &&
     config->animations_off < 2 &&
+    (config->version < CGBA_CONFIG_VERSION ||
+      (config->hotkey_extra >> 16) == 0u) &&
     (config->version == CGBA_CONFIG_VERSION_LEGACY ||
       config->frame_limit < 2);
 }
 
 static int config_valid(const fxcg100_config_file *config)
 {
+  uint16_t full_hotkeys[FXCG100_HOTKEY_COUNT];
+
   if (!config)
     return 0;
   if (config->magic != CGBA_CONFIG_MAGIC ||
       (config->version != CGBA_CONFIG_VERSION &&
+       config->version != CGBA_CONFIG_VERSION_V3 &&
        config->version != CGBA_CONFIG_VERSION_LEGACY) ||
       config->size != sizeof(*config))
     return 0;
-  return fxcg100_input_maps_valid(config->keymap, config->hotkey_map) &&
+  config_extract_hotkeys(full_hotkeys, config);
+  return fxcg100_input_maps_valid(config->keymap, full_hotkeys) &&
     config_options_valid(config);
 }
 
@@ -255,8 +277,8 @@ static void config_from_state(fxcg100_config_file *config,
   config->version = CGBA_CONFIG_VERSION;
   config->size = sizeof(*config);
   memcpy(config->keymap, state->keymap, sizeof(config->keymap));
-  memcpy(config->hotkey_map, state->hotkey_map,
-         sizeof(config->hotkey_map));
+  memcpy(config->hotkey_map, state->hotkey_map, sizeof(config->hotkey_map));
+  config->hotkey_extra = state->hotkey_map[FXCG100_HOTKEY_SAVE_EXIT];
   config->screen_scale = state->screen_scale;
   config->screen_filter = state->screen_filter;
   config->frameskip_type = state->frameskip_type;
@@ -273,7 +295,9 @@ static void config_from_state(fxcg100_config_file *config,
   config->lcd_extra = (state->lcd_sync_offset & 15u) |
     ((state->backlight & 31u) << 8) | ((state->backlight_pwm & 15u) << 16) |
     ((state->lcd_refresh & 15u) << 20) |
-    ((state->game_sort & 3u) << 24) | ((state->dark_mode ? 0u : 1u) << 26);
+    ((state->game_sort & 3u) << 24) | ((state->dark_mode ? 0u : 1u) << 26) |
+    ((state->fast_forward_mode & 1u) << 27) |
+    ((state->fast_forward_speed & 7u) << 28);
   config->theme = state->theme;
   config->animations_off = state->animations ? 0 : 1;
 }
@@ -282,8 +306,7 @@ static void state_from_config(fxcg100_menu_state *state,
                               const fxcg100_config_file *config)
 {
   memcpy(state->keymap, config->keymap, sizeof(state->keymap));
-  memcpy(state->hotkey_map, config->hotkey_map,
-         sizeof(state->hotkey_map));
+  config_extract_hotkeys(state->hotkey_map, config);
   state->screen_scale = config->screen_scale;
   state->screen_filter = config->screen_filter;
   state->frameskip_type = config->frameskip_type;
@@ -302,11 +325,13 @@ static void state_from_config(fxcg100_menu_state *state,
   state->lcd_refresh = (config->lcd_extra >> 20) & 15u;
   state->game_sort = (config->lcd_extra >> 24) & 3u;
   state->dark_mode = (config->lcd_extra & (1u << 26)) ? 0u : 1u;
+  state->fast_forward_mode = (config->lcd_extra >> 27) & 1u;
+  state->fast_forward_speed = (config->lcd_extra >> 28) & 7u;
   state->theme = config->theme;
   state->animations = config->animations_off ? 0 : 1;
   /* Version 2 used this word as zeroed reserved space.  Preserve the new
    * normal-play default when loading an existing configuration. */
-  state->frame_limit = config->version >= CGBA_CONFIG_VERSION
+  state->frame_limit = config->version >= CGBA_CONFIG_VERSION_V3
     ? config->frame_limit : 1;
 }
 

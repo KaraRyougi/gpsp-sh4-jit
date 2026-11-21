@@ -19,18 +19,28 @@
  * Fast-forward bypasses the limiter at the call site.
  */
 #define CGBA_LIMITER_MAX_LATE 3
+/* Native GBA frame interval in microseconds (~59.7275 Hz). */
+#define CGBA_FRAME_LIMIT_US   16743u
 
 typedef struct cgba_frame_limiter {
 	int enabled;
+	uint32_t period_us;  /* active timer period in microseconds (0 = off) */
 	uint32_t done;       /* frames finished since the timer was started */
 	int late;            /* whole frames behind after the last one; <0: n/a */
 } cgba_frame_limiter;
 
 void cgba_frame_limiter_init(cgba_frame_limiter *limiter);
 void cgba_frame_limiter_begin(cgba_frame_limiter *limiter, int enabled);
+void cgba_frame_limiter_begin_period(cgba_frame_limiter *limiter,
+                                     uint32_t period_us);
 void cgba_frame_limiter_wait(cgba_frame_limiter *limiter);
 /* Stop the timer (leaving the game loop, or the program). */
 void cgba_frame_limiter_stop(void);
+
+/* Fast-forward speed preset (FXCG100_FF_SPEED_*) -> target frame period in us
+ * (0 = uncapped) and video render cadence (render 1 of every N frames). */
+uint32_t cgba_fast_forward_period_us(uint32_t speed_mode);
+uint32_t cgba_fast_forward_render_period(uint32_t speed_mode);
 
 /*
  * Adaptive ("automatic") frameskip controller for the gint gpSP port.

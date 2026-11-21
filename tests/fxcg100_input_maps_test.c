@@ -162,6 +162,25 @@ int main(void)
   hotkeys[FXCG100_HOTKEY_FAST_FORWARD] = FXCG100_PHYSKEY_ON;
   check(!fxcg100_hotkey_map_valid(hotkeys),
         "ON cannot be bound as a hotkey");
+  fxcg100_hotkey_defaults(hotkeys);
+
+  check(FXCG100_HOTKEY_SAVE_EXIT != FXCG100_HOTKEY_TXT_READER,
+        "SAVE_EXIT has its own hotkey slot");
+  check(strcmp(fxcg100_hotkey_label(FXCG100_HOTKEY_SAVE_EXIT),
+               "SAVE & EXIT") == 0,
+        "SAVE_EXIT hotkey label");
+  hotkeys[FXCG100_HOTKEY_SAVE_EXIT] = standalone_hotkey;
+  check(fxcg100_input_maps_valid(keymap, hotkeys),
+        "SAVE_EXIT standalone hotkey is valid");
+  pressed_key = standalone_hotkey;
+  check(fxcg100_poll_hotkeys_mapped(hotkeys) ==
+          FXCG100_HOTKEY_BIT(FXCG100_HOTKEY_SAVE_EXIT),
+        "SAVE_EXIT hotkey bit polls cleanly");
+  pressed_key = 0;
+  hotkeys[FXCG100_HOTKEY_TXT_READER] = standalone_hotkey;
+  check(!fxcg100_hotkey_map_valid(hotkeys),
+        "SAVE_EXIT overlapping TXT_READER is invalid");
+  fxcg100_hotkey_defaults(hotkeys);
 
 #ifdef CGBA_FXCG50
   check_cg50_matrix();

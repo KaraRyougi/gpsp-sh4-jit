@@ -39,11 +39,13 @@ int main(void)
   assert(!config_valid(&config));
 
   /* Version 2 had the same file size and zeroed reserved storage in the words
-   * now used by frame_limit and lcd_extra. It must migrate to the enabled
-   * defaults (frame_limit = 1, dark_mode = 1). */
+   * now used by frame_limit and lcd_extra, and could hold legacy backup policy
+   * values in hotkey_extra. It must migrate cleanly to enabled defaults and an
+   * unbound Save & exit shortcut. */
   config_from_state(&config, &state);
   config.version = CGBA_CONFIG_VERSION_LEGACY;
   config.frame_limit = 0;
+  config.hotkey_extra = 1;
   config.lcd_extra = 0;
   assert(config_valid(&config));
   memset(&state, 0, sizeof(state));
@@ -51,27 +53,67 @@ int main(void)
   assert(state.frame_limit == 1);
   assert(state.game_sort == FXCG100_GAME_SORT_NAME);
   assert(state.dark_mode == 1);
+  assert(state.fast_forward_mode == FXCG100_FF_MODE_HOLD);
+  assert(state.fast_forward_speed == FXCG100_FF_SPEED_UNLIMITED);
+  assert(state.hotkey_map[FXCG100_HOTKEY_SAVE_EXIT] == 0);
 
-  /* Library sort mode (bits 24..25) and dark mode (bit 26 inverted) round-trip
-   * in lcd_extra without changing file size or version. */
+  /* Version 3 preserved frame_limit=0 and did not populate Save & exit. */
+  config_from_state(&config, &state);
+  config.version = CGBA_CONFIG_VERSION_V3;
+  config.frame_limit = 0;
+  config.hotkey_extra = 0;
+  assert(config_valid(&config));
+  memset(&state, 0, sizeof(state));
+  state_from_config(&state, &config);
+  assert(state.frame_limit == 0);
+  assert(state.hotkey_map[FXCG100_HOTKEY_SAVE_EXIT] == 0);
+
+  /* Library sort mode (bits 24..25), dark mode (bit 26 inverted), fast-forward
+   * mode (bit 27), fast-forward speed (bits 28..30), backlight (bits 8..12),
+   * and the Save & exit hotkey (hotkey_extra) round-trip in version 4. */
   for (uint32_t s = 0; s < FXCG100_GAME_SORT_COUNT; s++) {
     for (uint32_t dark = 0; dark < 2; dark++) {
-      memset(&state, 0, sizeof(state));
-      state.frame_limit = 1;
-      state.game_sort = s;
-      state.dark_mode = dark;
-      config_from_state(&config, &state);
-      assert(config_valid(&config));
-      assert(((config.lcd_extra >> 26) & 1u) == (dark ? 0u : 1u));
-      memset(&state, 0, sizeof(state));
-      state_from_config(&state, &config);
-      assert(state.game_sort == s);
-      assert(state.dark_mode == dark);
+      for (uint32_t ffm = 0; ffm < FXCG100_FF_MODE_COUNT; ffm++) {
+        for (uint32_t ffs = 0; ffs < FXCG100_FF_SPEED_COUNT; ffs++) {
+          memset(&state, 0, sizeof(state));
+          state.frame_limit = 1;
+          state.game_sort = s;
+          state.dark_mode = dark;
+          state.backlight = 12;
+          state.fast_forward_mode = ffm;
+          state.fast_forward_speed = ffs;
+          state.hotkey_map[FXCG100_HOTKEY_SAVE_EXIT] = 65;
+          config_from_state(&config, &state);
+          assert(config.version == CGBA_CONFIG_VERSION);
+          assert(config_valid(&config));
+          assert(((config.lcd_extra >> 26) & 1u) == (dark ? 0u : 1u));
+          assert(((config.lcd_extra >> 27) & 1u) == ffm);
+          assert(((config.lcd_extra >> 28) & 7u) == ffs);
+          assert(config.hotkey_extra == 65u);
+          memset(&state, 0, sizeof(state));
+          state_from_config(&state, &config);
+          assert(state.game_sort == s);
+          assert(state.dark_mode == dark);
+          assert(state.backlight == 12);
+          assert(state.fast_forward_mode == ffm);
+          assert(state.fast_forward_speed == ffs);
+          assert(state.hotkey_map[FXCG100_HOTKEY_SAVE_EXIT] == 65);
+        }
+      }
     }
   }
+  config_from_state(&config, &state);
   config.lcd_extra |= (3u << 24);
   assert(!config_valid(&config));
-  config.lcd_extra = (1u << 27);
+  config_from_state(&config, &state);
+  config.lcd_extra = (config.lcd_extra & ~(7u << 28)) |
+    ((uint32_t)FXCG100_FF_SPEED_COUNT << 28);
+  assert(!config_valid(&config));
+  config_from_state(&config, &state);
+  config.lcd_extra = (1u << 31);
+  assert(!config_valid(&config));
+  config_from_state(&config, &state);
+  config.hotkey_extra |= (1u << 16);
   assert(!config_valid(&config));
 
   /* Unified panel refresh rate preset (bits 20..23, 0..9) round-trips in
@@ -91,6 +133,6 @@ int main(void)
   config.lcd_extra = (10u << 20);
   assert(!config_valid(&config));
 
-  puts("fx-CG config frame-limit migration passed");
+  puts("fx-CG config migration and v4 fields passed");
   return 0;
 }

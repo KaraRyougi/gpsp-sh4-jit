@@ -12,20 +12,23 @@
 #define CGBA_GBA_BUFFER_PIXELS (CGBA_GBA_PITCH * (CGBA_GBA_HEIGHT + 1))
 
 /* Calculator savestates use a fixed 416 KiB raw BSON image. Compressed files
- * are rounded to 64 KiB buckets, so the largest legacy bucket is 448 KiB.
- * Keep raw and compressed staging adjacent in the non-JIT GamePak
- * scratch arena; a save must never perturb the JIT cache or its heat state. */
-#define CGBA_STATE_RAW_SIZE       (416u * 1024u)
-#define CGBA_STATE_FILE_BUCKET    0x10000u
+ * are bucketed in 16 KiB steps (and repeat saves reuse the existing slot size
+ * within 64 KiB slack to hit the in-place diff overwrite path). Keep the max
+ * accepted file size at 448 KiB so legacy 64 KiB-bucketed CZS1 files still
+ * load. Raw, compressed, and LZ4 hash staging live adjacent in the non-JIT
+ * GamePak scratch arena; a save never perturbs the JIT cache or its heat. */
+#define CGBA_STATE_RAW_SIZE        (416u * 1024u)
+#define CGBA_STATE_FILE_BUCKET     0x4000u
 #define CGBA_STATE_COMP_STREAM_MAX (CGBA_STATE_RAW_SIZE + 12u)
-#define CGBA_STATE_COMP_FILE_MAX  \
-	((CGBA_STATE_COMP_STREAM_MAX + CGBA_STATE_FILE_BUCKET - 1u) & \
-	 ~(CGBA_STATE_FILE_BUCKET - 1u))
+#define CGBA_STATE_COMP_FILE_MAX   (448u * 1024u)
+#define CGBA_STATE_HASH_SIZE       (8u * 1024u)
 #define CGBA_STATE_WORK_SIZE \
-	(CGBA_STATE_RAW_SIZE + CGBA_STATE_COMP_FILE_MAX)
+	(CGBA_STATE_RAW_SIZE + CGBA_STATE_COMP_FILE_MAX + CGBA_STATE_HASH_SIZE)
 
 _Static_assert((CGBA_STATE_FILE_BUCKET & (CGBA_STATE_FILE_BUCKET - 1u)) == 0,
 	"savestate file bucket must be a power of two");
+_Static_assert(CGBA_STATE_COMP_FILE_MAX >= CGBA_STATE_COMP_STREAM_MAX,
+	"compressed staging buffer must cover worst-case stream");
 _Static_assert(CGBA_STATE_WORK_SIZE <= 1024u * 1024u,
 	"savestate work area must fit one contiguous GamePak cache block");
 
@@ -69,11 +72,15 @@ uint32_t cgba_gpsp_jit_ram_full(void);
  * or exiting gpSP. */
 void cgba_gpsp_backup_load(void);
 
-/* Savestates: compressed or raw gba_save_state image at
+/* Savestates: compressed (CZS2 LZ4) or legacy (CZS1 word-RLE / raw) image at
  * \\fls0\SAVES\<TITLE>_<slot>.SVS (also loadable by the emulator harness as its
  * checkpoint blob; unambiguous legacy root ROM-stem .SVS and CGBAST<slot>.SAV
- * are still accepted on load). 1 = ok. */
+ * are still accepted on load). 1 = ok. _for_exit skips the post-write NOR ROM
+ * remap because the caller exits gpSP immediately without resuming guest
+ * execution (on failure, caller must call cgba_gpsp_storage_sync() before
+ * resuming). */
 int cgba_gpsp_state_save(unsigned slot);
+int cgba_gpsp_state_save_for_exit(unsigned slot);
 int cgba_gpsp_state_load(unsigned slot);
 
 /* Fill up to max_lines short strings with a pipeline snapshot (ROM load result,

@@ -70,13 +70,26 @@ typedef enum fxcg100_hotkey {
   FXCG100_HOTKEY_SAVE_STATE,
   FXCG100_HOTKEY_TXT_READER,
   FXCG100_HOTKEY_DISPLAY_FPS,
+  FXCG100_HOTKEY_SAVE_EXIT,
   FXCG100_HOTKEY_COUNT
 } fxcg100_hotkey;
 
-/* Legacy alias kept for old bare-metal menu/tests; slot 3 is now TXT READER. */
-#define FXCG100_HOTKEY_SAVE_EXIT FXCG100_HOTKEY_TXT_READER
-
 #define FXCG100_HOTKEY_BIT(index) (1u << (index))
+
+typedef enum fxcg100_ff_mode {
+  FXCG100_FF_MODE_HOLD = 0,
+  FXCG100_FF_MODE_TOGGLE,
+  FXCG100_FF_MODE_COUNT
+} fxcg100_ff_mode;
+
+typedef enum fxcg100_ff_speed {
+  FXCG100_FF_SPEED_UNLIMITED = 0,
+  FXCG100_FF_SPEED_1_5X,
+  FXCG100_FF_SPEED_2X,
+  FXCG100_FF_SPEED_3X,
+  FXCG100_FF_SPEED_4X,
+  FXCG100_FF_SPEED_COUNT
+} fxcg100_ff_speed;
 
 typedef enum fxcg100_menu_result {
   FXCG100_MENU_CONTINUE = 0,
@@ -116,6 +129,8 @@ typedef struct fxcg100_menu_state {
   uint32_t quick_save_slot;
   uint32_t show_fps;
   uint32_t frame_limit;
+  uint32_t fast_forward_mode;
+  uint32_t fast_forward_speed;
   /* ClassPad II only: landscape direction (CP_ROTATION_*) and whether the
    * on-screen touch keys are shown. Unused on the fx-CG models. */
   uint32_t rotation;
@@ -127,8 +142,8 @@ typedef struct fxcg100_menu_state {
   uint32_t lcd_sync;
   /* ClassPad II: where the picture is in the panel's row count, 0..15. */
   uint32_t lcd_sync_offset;
-  /* ClassPad II only: backlight level 1..16 and PWM rate 1..9; 0 leaves what
-   * the system set. */
+  /* Backlight level 1..16 (all models) and PWM rate 1..9 (ClassPad II);
+   * 0 leaves, or restores, what the system set. */
   uint32_t backlight;
   uint32_t backlight_pwm;
   /* Panel refresh rate preset (shared 0..2 prefix):
@@ -254,6 +269,9 @@ int fxcg100_lcd_sync_is_paced(void);
 int fxcg100_lcd_sync_pace_wait(int max_late, int *late_out);
 /* Reset the 1:1 panel pacer deadline (menu open, state load/save, FF off). */
 void fxcg100_lcd_sync_pace_reset(void);
+/* Backlight level (1..16, 16 = full) and PWM rate (ClassPad II: 1..9, 9 the
+ * fastest); 0 for either leaves, or puts back, what the system had set. */
+void fxcg100_lcd_set_backlight(uint32_t level, uint32_t pwm);
 #ifdef CGBA_CLASSPAD
 /* ClassPad II: on that model fxcg100_lcd_set_scale() takes a CP_VIEW_* layout
  * (classpad_layout.h) instead of the fx-CG scale modes above. */
@@ -282,9 +300,6 @@ int fxcg100_lcd_sync_fits(void);
 /* Compact diagnostic text shown on the calibration page when scan_probe()
  * fails to recognise a row counter (panel ID, max row, Hz, believed/samples). */
 void fxcg100_lcd_sync_diag(char *buf, size_t size);
-/* ClassPad II: backlight level (1..16, 16 = full) and PWM rate (1..9, 9 the
- * fastest); 0 for either leaves, or puts back, what the system had set. */
-void fxcg100_lcd_set_backlight(uint32_t level, uint32_t pwm);
 /* GBA buttons currently held on the touch keys (FXCG100_GBA_BUTTON_* bits),
  * as sampled by the last fxcg100_poll_app_keys(). */
 uint32_t fxcg100_touch_gba_buttons(void);
@@ -409,6 +424,10 @@ uint32_t fxcg100_frame_hash(const uint16_t *pixels);
  * draw_fps = drawn/blitted frame rate after frameskip. */
 void fxcg100_lcd_overlay_fps(uint16_t *pixels, unsigned emu_fps,
                              unsigned draw_fps);
+
+/* Draw a fast-forward status badge into the top-right of a 240x160 GBA frame
+ * buffer (FXCG100_FF_SPEED_*). */
+void fxcg100_lcd_overlay_fast_forward(uint16_t *pixels, uint32_t speed_mode);
 
 int cgba_run_jit_probe(void);
 

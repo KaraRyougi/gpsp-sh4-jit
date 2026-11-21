@@ -1,9 +1,11 @@
 #include "fxcg100_platform.h"
+#include "../../fxcg_backlight.h"
 #include "../../fxcg100_scale.h"
 #include "../../fxcg100_lcd_cleanup.h"
 #include "../../fxcg_sync.h"
 
 #include <gint/clock.h>
+#include <gint/defs/util.h>
 #include <gint/dma.h>
 #include <gint/display.h>
 #include <gint/drivers/r61524.h>
@@ -807,6 +809,182 @@ void fxcg100_wait_keys_released(void)
 #endif
 }
 
+/* ---- Backlight control (R61524 & 2025-2026 MIPI-DCS panels) --------------- */
+#if !defined(CGBA_HOST_TEST) && !defined(CGBA_GPSP_HEADLESS_TEST)
+static volatile uint16_t *const LCD_BUS_DATA = (volatile uint16_t *)0xb4000000u;
+static volatile uint8_t  *const LCD_BUS_PRDR = (volatile uint8_t  *)0xa405013cu;
+static volatile uint8_t  *const LCD_BUS_PNDR = (volatile uint8_t  *)0xa4050138u;
+
+enum {
+	BL_MODE_NONE = 0,
+	BL_MODE_R61524,
+	BL_MODE_DCS8,
+	BL_MODE_DCS12,
+};
+
+static int bl_saved;
+static int bl_mode;
+static uint32_t bl_level;
+static fxcg_r61524_bl bl_sys_r61524;
+static uint8_t bl_sys_dcs8;
+static uint16_t bl_sys_dcs12;
+static int bl_need_ctrl;
+static int bl_ctrl_active;
+static uint8_t bl_sys_ctrl;
+
+static void lcd_select_cmd(uint16_t cmd)
+{
+	*LCD_BUS_PRDR &= (uint8_t)~0x10u;
+	synco();
+	*LCD_BUS_DATA = cmd;
+	synco();
+	*LCD_BUS_PRDR |= 0x10u;
+	synco();
+}
+
+static uint16_t lcd_r61524_read(uint16_t reg)
+{
+	lcd_select_cmd(reg);
+	return *LCD_BUS_DATA;
+}
+
+static void lcd_r61524_write(uint16_t reg, uint16_t val)
+{
+	lcd_select_cmd(reg);
+	*LCD_BUS_DATA = val;
+	synco();
+}
+
+static uint8_t lcd_dcs_read1(uint16_t cmd)
+{
+	lcd_select_cmd(cmd);
+	(void)*LCD_BUS_DATA;
+	return (uint8_t)(*LCD_BUS_DATA & 0xffu);
+}
+
+static void lcd_dcs_write1(uint16_t cmd, uint8_t p0)
+{
+	lcd_select_cmd(cmd);
+	*LCD_BUS_DATA = p0;
+	synco();
+}
+
+static void lcd_dcs_write2(uint16_t cmd, uint8_t p0, uint8_t p1)
+{
+	lcd_select_cmd(cmd);
+	*LCD_BUS_DATA = p0;
+	synco();
+	*LCD_BUS_DATA = p1;
+	synco();
+}
+
+static void backlight_apply(uint32_t level)
+{
+	wait_lcd_dma();
+	if(bl_mode == BL_MODE_DCS8) {
+		uint8_t val = fxcg_dcs8_level(level, bl_sys_dcs8);
+		if(level != 0u && bl_need_ctrl && !bl_ctrl_active) {
+			lcd_dcs_write1(0x0053u, (uint8_t)(bl_sys_ctrl | 0x24u));
+			bl_ctrl_active = 1;
+		}
+		lcd_dcs_write1(0x0051u, val);
+		if(level == 0u && bl_ctrl_active) {
+			lcd_dcs_write1(0x0053u, bl_sys_ctrl);
+			bl_ctrl_active = 0;
+		}
+	} else if(bl_mode == BL_MODE_DCS12) {
+		uint16_t val = fxcg_dcs12_level(level, bl_sys_dcs12);
+		if(level != 0u && bl_need_ctrl && !bl_ctrl_active) {
+			lcd_dcs_write1(0x0053u, (uint8_t)(bl_sys_ctrl | 0x24u));
+			bl_ctrl_active = 1;
+		}
+		lcd_dcs_write2(0x0051u, (uint8_t)((val >> 8) & 0x0fu),
+			(uint8_t)(val & 0xffu));
+		if(level == 0u && bl_ctrl_active) {
+			lcd_dcs_write1(0x0053u, bl_sys_ctrl);
+			bl_ctrl_active = 0;
+		}
+	} else if(bl_mode == BL_MODE_R61524) {
+		fxcg_r61524_bl st = fxcg_r61524_level(level, bl_sys_r61524);
+		if(st.high_bit)
+			*LCD_BUS_PNDR |= 0x10u;
+		else
+			*LCD_BUS_PNDR &= (uint8_t)~0x10u;
+		synco();
+		lcd_r61524_write(0x05a2u, st.divider);
+		lcd_r61524_write(0x05a1u, st.duty);
+	}
+}
+#endif
+
+void fxcg100_lcd_set_backlight(uint32_t level, uint32_t pwm)
+{
+	(void)pwm;
+#if !defined(CGBA_HOST_TEST) && !defined(CGBA_GPSP_HEADLESS_TEST)
+	if(level > FXCG_BACKLIGHT_MAX_LEVEL)
+		level = 0u;
+	if(!bl_saved) {
+		uint16_t ver;
+
+		if(level == 0u)
+			return; /* nothing requested: leave OS backlight untouched */
+		wait_lcd_dma();
+		lcd_select_cmd(0x00dau);
+		(void)*LCD_BUS_DATA;
+		ver = *LCD_BUS_DATA;
+		if(fxcg_panel_is_dcs(ver)) {
+			uint8_t b0, b1, id2, ctrl;
+			int cls;
+
+			lcd_select_cmd(0x0052u);
+			(void)*LCD_BUS_DATA;
+			b0 = (uint8_t)(*LCD_BUS_DATA & 0xffu);
+			b1 = (uint8_t)(*LCD_BUS_DATA & 0xffu);
+			id2 = lcd_dcs_read1(0x00dbu);
+			ctrl = lcd_dcs_read1(0x0054u);
+			if(b0 == 0u && b1 == 0u && (ctrl & 0x24u) == 0x04u) {
+				bl_sys_ctrl = ctrl;
+				bl_need_ctrl = 1;
+				bl_ctrl_active = 1;
+				lcd_dcs_write1(0x0053u, (uint8_t)(ctrl | 0x24u));
+			}
+			cls = fxcg_dcs_classify_initial(id2, b0, b1);
+			if(cls == 0) {
+				uint8_t probe = level >= 2u
+					? fxcg_dcs8_level(level, 0x50u) : 0x20u;
+				uint8_t r0;
+
+				lcd_dcs_write1(0x0051u, probe);
+				r0 = lcd_dcs_read1(0x0052u);
+				cls = fxcg_dcs_classify_probe(probe, r0);
+			}
+			if(cls == 2) {
+				bl_mode = BL_MODE_DCS12;
+				bl_sys_dcs12 = fxcg_dcs12_sanitize_saved(b0, b1);
+			} else {
+				bl_mode = BL_MODE_DCS8;
+				bl_sys_dcs8 = fxcg_dcs8_sanitize_saved(b0);
+			}
+		} else {
+			uint8_t orig_high = (*LCD_BUS_PNDR & 0x10u) ? 1u : 0u;
+			uint16_t orig_duty = lcd_r61524_read(0x05a1u);
+			uint16_t orig_div = lcd_r61524_read(0x05a2u);
+
+			bl_mode = BL_MODE_R61524;
+			bl_sys_r61524 = fxcg_r61524_sanitize_saved(
+				orig_high, orig_duty, orig_div);
+		}
+		bl_saved = 1;
+	} else if(level == bl_level) {
+		return;
+	}
+	bl_level = level;
+	backlight_apply(level);
+#else
+	(void)level;
+#endif
+}
+
 void fxcg100_lcd_init(void)
 {
 	lcd_os_overlay_dirty = 0;
@@ -833,6 +1011,12 @@ void fxcg100_lcd_shutdown(void)
 	cg_sync_failed_mhz = 0u;
 	cg_sync.anchor_valid = 0;
 	cg_sync.pace_valid = 0;
+#if !defined(CGBA_HOST_TEST) && !defined(CGBA_GPSP_HEADLESS_TEST)
+	if(bl_saved && (bl_level != 0u || bl_ctrl_active)) {
+		bl_level = 0u;
+		backlight_apply(0u);
+	}
+#endif
 	lcd_frame_synced = 0;
 }
 

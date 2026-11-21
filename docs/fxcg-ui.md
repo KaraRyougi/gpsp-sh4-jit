@@ -106,12 +106,16 @@ from `fxcg100_poll_app_keys()`: `FXCG100_APPKEY_SETTINGS`, `_DEL` and
   (`cg_ui_show_progress()`, `cg_ui_set_result()`). Loading returns to the
   game, or reports in the footer if it fails.
 - **Settings**: Display (Picture size Original / Full Height / Full Screen,
-  Scaling filter, which is hidden for Original since nothing is scaled),
-  Appearance (Colour: the eight schemes), Speed (Frame skipping; Frames to
-  skip and Skip pattern only when it is Manual; Limit to 60 fps; Show frame
-  rate), Keys (Key mapping), and Debug info in `CGBA_DEBUG_MENU=1` builds.
+  Scaling filter, which is hidden for Original since nothing is scaled, and
+  Backlight: System or 1–16, applied live and restored on exit across both
+  R61524 and 2025–2026 MIPI-DCS panels), Appearance (Colour: the eight
+  schemes, Dark mode), Speed (Frame skipping; Frames to skip and Skip pattern
+  only when it is Manual; Limit to 60 fps; Show frame rate; Fast forward mode
+  Hold / Toggle; Fast forward speed Unlimited / 1.5x / 2x / 3x / 4x), Keys
+  (Key mapping), and Debug info in `CGBA_DEBUG_MENU=1` builds.
 - **Key mapping**: the ten GBA buttons, then the shortcuts (Fast forward,
-  Save state, Load state, Show frame rate), then Reset to defaults. The
+  Save state, Load state, Show frame rate, TXT Reader, Save & exit), then
+  Reset to defaults. The
   confirm key opens "Press a key"; the next key pressed is taken, and the
   menu key cancels. A key that another function uses is **swapped**: that
   function gets the old key. Since every GBA button must have a key (there
@@ -122,8 +126,7 @@ from `fxcg100_poll_app_keys()`: `FXCG100_APPKEY_SETTINGS`, `_DEL` and
 
 Removed from the old menu: ROM SOURCE + LOAD NEW GAME (the library), the
 cheats placeholder page, SAVE CONFIG / LOAD CONFIG (saved on leaving
-Settings), the Save+Exit shortcut (never implemented; a saved binding is
-cleared at start-up) and the Animations switch (nothing moves).
+Settings), and the Animations switch (nothing moves).
 
 ## Drawing and refresh
 

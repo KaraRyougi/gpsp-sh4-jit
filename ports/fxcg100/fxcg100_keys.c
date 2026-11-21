@@ -134,7 +134,7 @@ static const uint16_t default_keymap[FXCG100_GBA_KEY_COUNT] = {
 #endif
 
 static const uint16_t default_hotkey_map[FXCG100_HOTKEY_COUNT] = {
-  0, 0, 0, 0, 0
+  0, 0, 0, 0, 0, 0
 };
 
 static const uint32_t gba_button_bits[FXCG100_GBA_KEY_COUNT] = {
@@ -169,6 +169,7 @@ static const char * const hotkey_labels[FXCG100_HOTKEY_COUNT] = {
   "SAVE STATE",
   "TXT READER",
   "DISPLAY FPS",
+  "SAVE & EXIT",
 };
 
 int fxcg100_key_bindable(uint16_t key)

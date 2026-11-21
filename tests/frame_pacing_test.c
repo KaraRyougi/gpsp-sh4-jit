@@ -134,6 +134,53 @@ int main(void)
 	CHECK(r.skip == 9 && r.changes == 0, "too slow: skip %d, %d changes",
 		r.skip, r.changes);
 
+	/* Fast-forward speed presets: capped multipliers hold their target fps
+	 * and switching periods dynamically reconfigures the timer cleanly. */
+	{
+		static const struct {
+			uint32_t speed_mode;
+			double min_fps, max_fps;
+			uint32_t render_period;
+		} ff_cases[] = {
+			{ 1u,  88.0,  91.0, 2u }, /* 1.5x (~89.6 fps) */
+			{ 2u, 118.0, 121.0, 2u }, /* 2x   (~119.5 fps) */
+			{ 3u, 177.0, 181.0, 3u }, /* 3x   (~179.2 fps) */
+			{ 4u, 236.0, 241.0, 4u }, /* 4x   (~238.9 fps) */
+		};
+		cgba_frame_limiter lim;
+
+		CHECK(cgba_fast_forward_period_us(0u) == 0u &&
+			cgba_fast_forward_render_period(0u) == 8u,
+			"unlimited FF preset");
+		now_us = 0;
+		timer_running = 0;
+		cgba_frame_limiter_init(&lim);
+		for(c = 0; c < sizeof(ff_cases) / sizeof(ff_cases[0]); c++) {
+			uint32_t period = cgba_fast_forward_period_us(
+				ff_cases[c].speed_mode);
+			uint64_t t0 = now_us;
+			int f;
+
+			CHECK(cgba_fast_forward_render_period(ff_cases[c].speed_mode) ==
+				ff_cases[c].render_period, "FF render period %u", c);
+			for(f = 0; f < 120; f++) {
+				cgba_frame_limiter_begin_period(&lim, period);
+				advance(now_us + 2000u);
+				cgba_frame_limiter_wait(&lim);
+			}
+			double fps = 120.0 * 1e6 / (double)(now_us - t0);
+			CHECK(fps >= ff_cases[c].min_fps && fps <= ff_cases[c].max_fps,
+				"FF mode %u: %.1f fps", ff_cases[c].speed_mode, fps);
+		}
+		/* Unlimited disables the timer; returning to 1x re-enables it. */
+		cgba_frame_limiter_begin_period(&lim, 0u);
+		CHECK(!lim.enabled && !timer_running, "unlimited stops timer");
+		cgba_frame_limiter_begin(&lim, 1);
+		CHECK(lim.enabled && timer_running &&
+			lim.period_us == CGBA_FRAME_LIMIT_US, "back to 1x limiter");
+		cgba_frame_limiter_stop();
+	}
+
 	if(failures)
 		return 1;
 	printf("frame_pacing_test: all checks passed\n");

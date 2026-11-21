@@ -61,6 +61,10 @@ static const uint8_t *fps_glyph(char c)
 	static const uint8_t V[FPS_GLYPH_H]  = {0x11,0x11,0x11,0x11,0x11,0x0A,0x04};
 	static const uint8_t D[FPS_GLYPH_H]  = {0x1E,0x11,0x11,0x11,0x11,0x11,0x1E};
 	static const uint8_t M[FPS_GLYPH_H]  = {0x11,0x1B,0x15,0x15,0x11,0x11,0x11};
+	static const uint8_t A[FPS_GLYPH_H]  = {0x0E,0x11,0x11,0x1F,0x11,0x11,0x11};
+	static const uint8_t X[FPS_GLYPH_H]  = {0x11,0x11,0x0A,0x04,0x0A,0x11,0x11};
+	static const uint8_t GT[FPS_GLYPH_H] = {0x10,0x08,0x04,0x02,0x04,0x08,0x10};
+	static const uint8_t DT[FPS_GLYPH_H] = {0x00,0x00,0x00,0x00,0x00,0x0C,0x0C};
 	static const uint8_t CO[FPS_GLYPH_H] = {0x00,0x04,0x00,0x00,0x04,0x00,0x00};
 	static const uint8_t PCT[FPS_GLYPH_H]= {0x19,0x1A,0x04,0x0B,0x13,0x03,0x00};
 	static const uint8_t SP[FPS_GLYPH_H] = {0,0,0,0,0,0,0};
@@ -75,6 +79,10 @@ static const uint8_t *fps_glyph(char c)
 	case 'V': return V;
 	case 'D': return D;
 	case 'M': return M;
+	case 'A': return A;
+	case 'X': return X;
+	case '>': return GT;
+	case '.': return DT;
 	case ':': return CO;
 	case '%': return PCT;
 	default:  return SP;
@@ -176,5 +184,65 @@ void fxcg100_lcd_overlay_fps(uint16_t *pixels, unsigned emu_fps,
 			(size_t)fps_cached_w * sizeof(uint16_t));
 #if defined(CGBA_VIDEO_DIRTY_SCANLINE) && CGBA_VIDEO_DIRTY_SCANLINE && !defined(CGBA_HOST_TEST)
 	video_invalidate_scanline_cache(0, (uint32_t)FPS_BOX_H);
+#endif
+}
+
+/*
+ * Fast-forward status badge drawn into the top-right of the 240x160 GBA frame
+ * buffer so it never collides with the top-left FPS readout. Cached and
+ * rebuilt only when the configured speed label changes.
+ */
+#define FF_BOX_H       (FPS_GLYPH_H + 4)
+#define FF_BADGE_MAX_W 52
+
+static uint16_t ff_badge[FF_BOX_H][FF_BADGE_MAX_W];
+static uint32_t ff_cached_speed;
+static int ff_cached_w;
+static int ff_badge_valid;
+
+static const char *ff_speed_badge_label(uint32_t speed_mode)
+{
+	switch(speed_mode) {
+	case FXCG100_FF_SPEED_1_5X: return ">> 1.5X";
+	case FXCG100_FF_SPEED_2X:   return ">> 2X";
+	case FXCG100_FF_SPEED_3X:   return ">> 3X";
+	case FXCG100_FF_SPEED_4X:   return ">> 4X";
+	default:                    return ">> MAX";
+	}
+}
+
+void fxcg100_lcd_overlay_fast_forward(uint16_t *pixels, uint32_t speed_mode)
+{
+	const uint16_t fg = 0xFFFF;
+	int r, x0;
+
+	if(!pixels)
+		return;
+	if(speed_mode >= FXCG100_FF_SPEED_COUNT)
+		speed_mode = FXCG100_FF_SPEED_UNLIMITED;
+
+	if(!ff_badge_valid || speed_mode != ff_cached_speed) {
+		const char *label = ff_speed_badge_label(speed_mode);
+		int box_w = (int)strlen(label) * FPS_ADVANCE + 3;
+
+		if(box_w > FF_BADGE_MAX_W)
+			box_w = FF_BADGE_MAX_W;
+		if(box_w > GBA_W)
+			box_w = GBA_W;
+
+		memset(ff_badge, 0, sizeof(ff_badge));
+		fps_draw_text_stride(&ff_badge[0][0], FF_BADGE_MAX_W,
+			box_w, FF_BOX_H, 2, 2, label, fg);
+		ff_cached_speed = speed_mode;
+		ff_cached_w = box_w;
+		ff_badge_valid = 1;
+	}
+
+	x0 = GBA_W - ff_cached_w;
+	for(r = 0; r < FF_BOX_H && r < GBA_H; r++)
+		memcpy(&pixels[r * GBA_W + x0], ff_badge[r],
+			(size_t)ff_cached_w * sizeof(uint16_t));
+#if defined(CGBA_VIDEO_DIRTY_SCANLINE) && CGBA_VIDEO_DIRTY_SCANLINE && !defined(CGBA_HOST_TEST)
+	video_invalidate_scanline_cache(0, (uint32_t)FF_BOX_H);
 #endif
 }

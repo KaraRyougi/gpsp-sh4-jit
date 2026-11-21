@@ -1936,6 +1936,8 @@ static fxcg100_menu_result screen_settings(cp_ui *ui)
 	static const char *const filter[] = { "Smooth", "Sharp", "Crisp" };
 	static const char *const transfer[] = { "DMA", "CPU" };
 	static const char *const frameskip[] = { "Auto", "Manual", "Off" };
+	static const char *const ff_mode[] = { "Hold", "Toggle" };
+	static const char *const ff_speed[] = { "Max", "1.5x", "2x", "3x", "4x" };
 	enum { HELD_UPRIGHT, HELD_CW, HELD_CCW, HELD_UPSIDE_DOWN };
 	fxcg100_menu_state *st = ui->state;
 	uint32_t landscape = (uint32_t)cp_view_is_landscape(st->screen_scale);
@@ -2058,6 +2060,10 @@ static fxcg100_menu_result screen_settings(cp_ui *ui)
 	changed |= row_switch(ui, &y, "Limit to 60 fps",
 		"Never run faster than a real GBA", &st->frame_limit);
 	changed |= row_switch(ui, &y, "Show frame rate", NULL, &st->show_fps);
+	changed |= ui_segments(ui, setting_row(ui, &y, "Fast forward mode"),
+		ff_mode, ff_mode, FXCG100_FF_MODE_COUNT, &st->fast_forward_mode);
+	changed |= ui_segments(ui, setting_row(ui, &y, "Fast forward speed"),
+		ff_speed, ff_speed, FXCG100_FF_SPEED_COUNT, &st->fast_forward_speed);
 	fxcg100_clock_read(&clock);
 	megahertz(text, sizeof(text), "CPU", cp_clock_hz(&clock, CP_CLK_CPU));
 	if(row_nav(ui, &y, "Clock speed", text))
@@ -2093,7 +2099,7 @@ static fxcg100_menu_result screen_settings(cp_ui *ui)
 
 /* ---- key mapping ---------------------------------------------------------- */
 
-#define BINDING_COUNT 15
+#define BINDING_COUNT 16
 
 static const struct {
 	const char *name;
@@ -2111,6 +2117,7 @@ static const struct {
 	{ "Load state", 1, FXCG100_HOTKEY_LOAD_STATE },
 	{ "Show frame rate", 1, FXCG100_HOTKEY_DISPLAY_FPS },
 	{ "TXT Reader", 1, FXCG100_HOTKEY_TXT_READER },
+	{ "Save & exit", 1, FXCG100_HOTKEY_SAVE_EXIT },
 };
 
 static uint16_t *binding_slot(cp_ui *ui, int i)
@@ -3698,6 +3705,10 @@ void fxcg100_menu_init(fxcg100_menu_state *state)
 		state->screen_scale = CP_VIEW_PORTRAIT_43;
 	if(state->game_sort >= FXCG100_GAME_SORT_COUNT)
 		state->game_sort = FXCG100_GAME_SORT_NAME;
+	if(state->fast_forward_mode >= FXCG100_FF_MODE_COUNT)
+		state->fast_forward_mode = FXCG100_FF_MODE_HOLD;
+	if(state->fast_forward_speed >= FXCG100_FF_SPEED_COUNT)
+		state->fast_forward_speed = FXCG100_FF_SPEED_UNLIMITED;
 	ui_start_upright = 1;
 	cp_open_reader_direct = 0;
 	txt_reader_init(txt_reader_global());

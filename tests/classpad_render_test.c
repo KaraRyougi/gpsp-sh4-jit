@@ -1769,6 +1769,35 @@ static void test_ui(const char *dir)
 	CHECK(ui.capture < 0 &&
 		ui_state.hotkey_map[FXCG100_HOTKEY_DISPLAY_FPS] == 0,
 		"No key did not clear the shortcut");
+	/* Save & exit is a distinct shortcut binding at index 15. */
+	ui_settle(FXCG100_MENU_CONTINUE);
+	ui_tap_on("Save & exit", 0);
+	CHECK(ui.capture == 15, "capture for Save & exit (%d)", ui.capture);
+	ui_frame();
+	key_held[KEY_9] = 1;
+	ui_frame();
+	key_held[KEY_9] = 0;
+	ui_frame();
+	CHECK(ui.capture < 0 &&
+		ui_state.hotkey_map[FXCG100_HOTKEY_SAVE_EXIT] == KEY_9,
+		"Save & exit was not bound");
+	ui_shot(dir, "ui-keys-shortcuts");
+	/* Fast forward mode & speed settings in Settings -> Speed. */
+	ui_open(1, CP_VIEW_PORTRAIT_43);
+	ui_goto(&ui, SCREEN_SETTINGS);
+	ui_scroll_to_end();
+	ui_tap_on("Toggle", 0);
+	CHECK(ui_state.fast_forward_mode == FXCG100_FF_MODE_TOGGLE,
+		"ClassPad FF mode Toggle");
+	ui_tap_on("2x", 0);
+	CHECK(ui_state.fast_forward_speed == FXCG100_FF_SPEED_2X,
+		"ClassPad FF speed 2x");
+	ui_shot(dir, "ui-settings-ff");
+	ui_tap_on("Hold", 0);
+	ui_tap_on("Max", 0);
+	CHECK(ui_state.fast_forward_mode == FXCG100_FF_MODE_HOLD &&
+		ui_state.fast_forward_speed == FXCG100_FF_SPEED_UNLIMITED,
+		"ClassPad FF reset to Hold / Max");
 
 	/* Icon strip: Rotate turns the interface from any screen. */
 	ui_open(1, CP_VIEW_PORTRAIT_43);

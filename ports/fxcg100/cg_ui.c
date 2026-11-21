@@ -120,12 +120,12 @@ enum {
 	ID_NONE = 0,
 	ID_RESUME, ID_SAVE, ID_LOAD, ID_READER, ID_SETTINGS, ID_GAMES, ID_RESTART,
 	ID_EXIT,
-	ID_SIZE, ID_FILTER, ID_VSYNC, ID_REFRESH, ID_COLOUR, ID_DARK_MODE, ID_FRAMESKIP, ID_SKIP_N,
-	ID_SKIP_PATTERN,
-	ID_LIMIT, ID_SHOW_FPS, ID_KEYMAP, ID_DEBUG,
+	ID_SIZE, ID_FILTER, ID_VSYNC, ID_REFRESH, ID_BACKLIGHT, ID_COLOUR, ID_DARK_MODE,
+	ID_FRAMESKIP, ID_SKIP_N, ID_SKIP_PATTERN,
+	ID_LIMIT, ID_SHOW_FPS, ID_FF_MODE, ID_FF_SPEED, ID_KEYMAP, ID_DEBUG,
 	ID_RESET_KEYS,
 	ID_BIND0,                  /* + binding index */
-	ID_LINE0 = ID_BIND0 + 16   /* + debug line */
+	ID_LINE0 = ID_BIND0 + 20   /* + debug line */
 };
 
 typedef struct ui_row {
@@ -674,6 +674,12 @@ static const char *const refresh_names[] = { "Auto", "System",
 	"59.73 Hz (GBA)", "75 Hz", "90 Hz", "120 Hz", "150 Hz" };
 static const char *const frameskip_names[] = { "Auto", "Manual", "Off" };
 static const char *const pattern_names[] = { "Uniform", "Random" };
+static const char *const ff_mode_names[FXCG100_FF_MODE_COUNT] = {
+	"Hold", "Toggle"
+};
+static const char *const ff_speed_names[FXCG100_FF_SPEED_COUNT] = {
+	"Unlimited", "1.5x", "2x", "3x", "4x"
+};
 
 static const char *pick(const char *const *names, uint32_t count,
 	uint32_t value)
@@ -684,7 +690,7 @@ static const char *pick(const char *const *names, uint32_t count,
 static void rows_settings(cg_ui *ui)
 {
 	fxcg100_menu_state *st = ui->state;
-	char n[8];
+	char n[12];
 	ui_row *r;
 
 	add_row(ui, RK_SECTION, ID_NONE, "Display");
@@ -697,6 +703,12 @@ static void rows_settings(cg_ui *ui)
 	add_value(ui, ID_VSYNC, "VSync", st->lcd_sync ? "On" : "Off");
 	add_value(ui, ID_REFRESH, "Refresh rate", pick(refresh_names, 7,
 		st->lcd_refresh));
+	if (st->backlight == 0) {
+		add_value(ui, ID_BACKLIGHT, "Backlight", "System");
+	} else {
+		snprintf(n, sizeof(n), "%u", (unsigned)st->backlight);
+		add_value(ui, ID_BACKLIGHT, "Backlight", n);
+	}
 	add_row(ui, RK_SECTION, ID_NONE, "Appearance");
 	r = add_value(ui, ID_COLOUR, "Colour", cp_theme_names[st->theme <
 		CP_THEME_COUNT ? st->theme : 0]);
@@ -713,6 +725,10 @@ static void rows_settings(cg_ui *ui)
 	}
 	add_value(ui, ID_LIMIT, "Limit to 60 fps", st->frame_limit ? "On" : "Off");
 	add_value(ui, ID_SHOW_FPS, "Show frame rate", st->show_fps ? "On" : "Off");
+	add_value(ui, ID_FF_MODE, "Fast forward mode", pick(ff_mode_names,
+		FXCG100_FF_MODE_COUNT, st->fast_forward_mode));
+	add_value(ui, ID_FF_SPEED, "Fast forward speed", pick(ff_speed_names,
+		FXCG100_FF_SPEED_COUNT, st->fast_forward_speed));
 	add_row(ui, RK_SECTION, ID_NONE, "Keys");
 	add_row(ui, RK_SUB, ID_KEYMAP, "Key mapping");
 #if CGBA_DEBUG_MENU
@@ -723,7 +739,7 @@ static void rows_settings(cg_ui *ui)
 
 /* The functions a key can be given, in the order of the key-mapping page:
  * the GBA buttons, which must all have a key, then the shortcuts. */
-#define BINDING_COUNT 15
+#define BINDING_COUNT 16
 #define GBA_BINDINGS 10
 
 static const struct {
@@ -742,6 +758,7 @@ static const struct {
 	{ "Load state", 1, FXCG100_HOTKEY_LOAD_STATE },
 	{ "Show frame rate", 1, FXCG100_HOTKEY_DISPLAY_FPS },
 	{ "TXT Reader", 1, FXCG100_HOTKEY_TXT_READER },
+	{ "Save & exit", 1, FXCG100_HOTKEY_SAVE_EXIT },
 };
 
 static uint16_t *binding_slot(cg_ui *ui, int i)
@@ -1215,8 +1232,8 @@ static void page_hints(cg_ui *ui)
 		static const hint open[] = { { TK_OK, 0, "Open" }, { TK_UD, 0, "Move" } };
 		static const hint right[] = { { TK_BACK, 0, "Done" } };
 
-		hint_bar(ui, id == ID_SKIP_N ? number : r && r->kind == RK_SUB ? open
-			: value, 2, HINTS(right));
+		hint_bar(ui, (id == ID_SKIP_N || id == ID_BACKLIGHT) ? number
+			: r && r->kind == RK_SUB ? open : value, 2, HINTS(right));
 		break;
 	}
 	case PAGE_KEYS: {
@@ -1708,6 +1725,17 @@ static void change_setting(cg_ui *ui, int id, int delta)
 	case ID_REFRESH:
 		st->lcd_refresh = cycle(st->lcd_refresh, 7, delta);
 		break;
+	case ID_BACKLIGHT:
+		if (delta < 0 && st->backlight > 0)
+			st->backlight--;
+		else if (delta > 0 && st->backlight < 16)
+			st->backlight++;
+		else if (st->backlight > 16)
+			st->backlight = 16;
+		else
+			return;
+		fxcg100_lcd_set_backlight(st->backlight, st->backlight_pwm);
+		break;
 	case ID_COLOUR:
 		st->theme = cycle(st->theme, CP_THEME_COUNT, delta);
 		break;
@@ -1735,6 +1763,14 @@ static void change_setting(cg_ui *ui, int id, int delta)
 		break;
 	case ID_SHOW_FPS:
 		st->show_fps = !st->show_fps;
+		break;
+	case ID_FF_MODE:
+		st->fast_forward_mode = cycle(st->fast_forward_mode,
+			FXCG100_FF_MODE_COUNT, delta);
+		break;
+	case ID_FF_SPEED:
+		st->fast_forward_speed = cycle(st->fast_forward_speed,
+			FXCG100_FF_SPEED_COUNT, delta);
 		break;
 	default:
 		return;
@@ -2203,7 +2239,7 @@ static void input_settings(cg_ui *ui)
 		else if (r->id == ID_DEBUG)
 			goto_page(ui, PAGE_DEBUG);
 		else if (r->id == ID_VSYNC || r->id == ID_DARK_MODE ||
-				r->id == ID_LIMIT || r->id == ID_SHOW_FPS)
+				r->id == ID_LIMIT || r->id == ID_SHOW_FPS || r->id == ID_FF_MODE)
 			change_setting(ui, r->id, 1);
 	}
 }
@@ -2394,6 +2430,12 @@ static void cg_ui_begin(cg_ui *ui, fxcg100_menu_state *state, int in_game,
 	ui->txt_hotkey_armed = 0;
 	if (state->game_sort >= FXCG100_GAME_SORT_COUNT)
 		state->game_sort = FXCG100_GAME_SORT_NAME;
+	if (state->backlight > 16)
+		state->backlight = 0;
+	if (state->fast_forward_mode >= FXCG100_FF_MODE_COUNT)
+		state->fast_forward_mode = FXCG100_FF_MODE_HOLD;
+	if (state->fast_forward_speed >= FXCG100_FF_SPEED_COUNT)
+		state->fast_forward_speed = FXCG100_FF_SPEED_UNLIMITED;
 	if (resume) {
 		ui->message_t0 = rtc_ticks();
 	} else {
@@ -2411,6 +2453,12 @@ static void cg_ui_begin(cg_ui *ui, fxcg100_menu_state *state, int in_game,
 		state->theme = 0;
 	if (state->game_sort >= FXCG100_GAME_SORT_COUNT)
 		state->game_sort = FXCG100_GAME_SORT_NAME;
+	if (state->backlight > 16)
+		state->backlight = 0;
+	if (state->fast_forward_mode >= FXCG100_FF_MODE_COUNT)
+		state->fast_forward_mode = FXCG100_FF_MODE_HOLD;
+	if (state->fast_forward_speed >= FXCG100_FF_SPEED_COUNT)
+		state->fast_forward_speed = FXCG100_FF_SPEED_UNLIMITED;
 	if (ui->txt_direct)
 		open_txt_reader_page(ui);
 	/* Whatever opened the menu is still held: do not let it act here. */
@@ -2611,6 +2659,12 @@ void fxcg100_menu_init(fxcg100_menu_state *state)
 		state->theme = 0;
 	if (state->game_sort >= FXCG100_GAME_SORT_COUNT)
 		state->game_sort = FXCG100_GAME_SORT_NAME;
+	if (state->backlight > 16)
+		state->backlight = 0;
+	if (state->fast_forward_mode >= FXCG100_FF_MODE_COUNT)
+		state->fast_forward_mode = FXCG100_FF_MODE_HOLD;
+	if (state->fast_forward_speed >= FXCG100_FF_SPEED_COUNT)
+		state->fast_forward_speed = FXCG100_FF_SPEED_UNLIMITED;
 	memset(&ui_main, 0, sizeof(ui_main));
 	open_reader_direct = 0;
 	txt_reader_init(txt_reader_global());

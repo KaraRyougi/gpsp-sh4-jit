@@ -17,11 +17,11 @@ comma   := ,
 DEAD_STRIP := $(if $(filter Darwin,$(shell uname -s)),\
 	-Wl$(comma)-dead_strip,-Wl$(comma)--gc-sections)
 
-.PHONY: all smoke audit core litpool thumb cond native-ldst input config-version storage lcd-cleanup scale classpad fxcg-ui fxcg-sync txt-reader rtc backup-dirty nor-world-switch rom-library save-path overclock cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc \
+.PHONY: all smoke audit core litpool thumb cond native-ldst input config-version storage lcd-cleanup backlight-overlay state-codec scale classpad fxcg-ui fxcg-sync txt-reader rtc backup-dirty nor-world-switch rom-library save-path overclock cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc \
 	swi-overlap swi-oam udiv udiv-emitter idle-signature video-opaque \
 	video-blend-cache video-backdrop-shadow video-sprite-decode video-tile-row-cache video-text-fastpaths video-dirty-scanline arm-mixer m4a-skip clean
 
-all: smoke core litpool thumb cond native-ldst rtc pacing backup-dirty nor-world-switch rom-library save-path overclock input config-version storage lcd-cleanup scale classpad fxcg-ui fxcg-sync txt-reader cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc swi-overlap swi-oam udiv \
+all: smoke core litpool thumb cond native-ldst rtc pacing backup-dirty nor-world-switch rom-library save-path overclock input config-version storage lcd-cleanup backlight-overlay state-codec scale classpad fxcg-ui fxcg-sync txt-reader cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc swi-overlap swi-oam udiv \
 	udiv-emitter idle-signature video-opaque video-blend-cache \
 	video-backdrop-shadow video-sprite-decode video-tile-row-cache video-text-fastpaths video-dirty-scanline arm-mixer m4a-skip audit
 
@@ -86,6 +86,22 @@ lcd-cleanup: $(ROOT)/tests/fxcg100_lcd_cleanup_test.c \
 	$(CC) $(CFLAGS) -I$(ROOT) $(ROOT)/tests/fxcg100_lcd_cleanup_test.c \
 	  -o $(BIN)-lcd-cleanup
 	$(BIN)-lcd-cleanup
+
+backlight-overlay: $(ROOT)/tests/fxcg_backlight_overlay_test.c \
+		   $(ROOT)/ports/fxcg100/fxcg_backlight.h \
+		   $(ROOT)/ports/fxcg100/gint-gpsp/src/frame_overlay.c \
+		   $(ROOT)/ports/fxcg100/fxcg100_platform.h
+	$(CC) $(CFLAGS) -DCGBA_HOST_TEST=1 -I$(ROOT)/ports/fxcg100 -I$(ROOT) \
+	  $(ROOT)/tests/fxcg_backlight_overlay_test.c \
+	  $(ROOT)/ports/fxcg100/gint-gpsp/src/frame_overlay.c \
+	  -o $(BIN)-backlight-overlay
+	$(BIN)-backlight-overlay
+
+state-codec: $(ROOT)/tests/state_codec_test.c \
+	     $(ROOT)/ports/fxcg100/state_codec.h
+	$(CC) $(CFLAGS) -O2 -I$(ROOT) $(ROOT)/tests/state_codec_test.c \
+	  -o $(BIN)-state-codec
+	$(BIN)-state-codec
 
 scale: $(ROOT)/tests/scale_test.c $(ROOT)/ports/fxcg100/fxcg100_scale.h
 	$(CC) $(CFLAGS) -O2 -I$(ROOT)/ports/fxcg100 \

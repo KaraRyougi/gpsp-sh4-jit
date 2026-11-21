@@ -57,6 +57,15 @@ static uint32_t now_ticks = 1000;
 static uint32_t held_app;      /* FXCG100_APPKEY_* held */
 static int held_phys;          /* physical key held, for the capture box */
 static int full_pushes, band_pushes, config_saves;
+static uint32_t last_bl_level, last_bl_pwm;
+static int bl_calls;
+
+void fxcg100_lcd_set_backlight(uint32_t level, uint32_t pwm)
+{
+	last_bl_level = level;
+	last_bl_pwm = pwm;
+	bl_calls++;
+}
 
 uint32_t rtc_ticks(void)
 {
@@ -610,6 +619,22 @@ static void test_settings(void)
 	press(FXCG100_APPKEY_LEFT);
 	press(FXCG100_APPKEY_LEFT);
 	CHECK(st.lcd_refresh == 0, "refresh back to auto");
+	press(FXCG100_APPKEY_DOWN); /* Backlight */
+	CHECK(selected_row(&ui_main)->id == ID_BACKLIGHT, "backlight row: %d",
+		selected_row(&ui_main)->id);
+	CHECK(st.backlight == 0, "backlight defaults to System");
+	bl_calls = 0;
+	press(FXCG100_APPKEY_LEFT);
+	CHECK(st.backlight == 0 && bl_calls == 0, "backlight clamps at 0");
+	press(FXCG100_APPKEY_RIGHT);
+	CHECK(st.backlight == 1 && bl_calls == 1 && last_bl_level == 1,
+		"backlight applies live on change");
+	for (i = 0; i < 20; i++)
+		press(FXCG100_APPKEY_RIGHT);
+	CHECK(st.backlight == 16 && last_bl_level == 16, "backlight clamps at 16");
+	for (i = 0; i < 16; i++)
+		press(FXCG100_APPKEY_LEFT);
+	CHECK(st.backlight == 0 && last_bl_level == 0, "backlight returns to System");
 	press(FXCG100_APPKEY_DOWN);
 	press(FXCG100_APPKEY_RIGHT);
 	CHECK(st.theme == 1, "colour");
@@ -645,15 +670,29 @@ static void test_settings(void)
 	CHECK(selected_row(&ui_main)->id == ID_LIMIT, "next row after Off");
 	press(FXCG100_APPKEY_EXE);
 	CHECK(st.frame_limit == 0, "EXE toggles");
+	press(FXCG100_APPKEY_DOWN); /* Show frame rate */
+	press(FXCG100_APPKEY_DOWN); /* Fast forward mode */
+	CHECK(selected_row(&ui_main)->id == ID_FF_MODE, "fast forward mode row");
+	CHECK(st.fast_forward_mode == FXCG100_FF_MODE_HOLD, "FF mode default Hold");
+	press(FXCG100_APPKEY_EXE);
+	CHECK(st.fast_forward_mode == FXCG100_FF_MODE_TOGGLE, "EXE toggles FF mode");
+	press(FXCG100_APPKEY_LEFT);
+	CHECK(st.fast_forward_mode == FXCG100_FF_MODE_HOLD, "Left cycles FF mode");
+	press(FXCG100_APPKEY_DOWN); /* Fast forward speed */
+	CHECK(selected_row(&ui_main)->id == ID_FF_SPEED, "fast forward speed row");
+	CHECK(st.fast_forward_speed == FXCG100_FF_SPEED_UNLIMITED, "FF speed default");
+	press(FXCG100_APPKEY_RIGHT);
+	CHECK(st.fast_forward_speed == FXCG100_FF_SPEED_1_5X, "FF speed 1.5x");
+	press(FXCG100_APPKEY_RIGHT);
+	CHECK(st.fast_forward_speed == FXCG100_FF_SPEED_2X, "FF speed 2x");
+	snap("settings-ff");
+	press(FXCG100_APPKEY_LEFT);
+	press(FXCG100_APPKEY_LEFT);
+	CHECK(st.fast_forward_speed == FXCG100_FF_SPEED_UNLIMITED, "FF speed back");
 
 	/* Held down: one move, then repeats after 400 ms every 80 ms. */
-	press(FXCG100_APPKEY_UP);
-	press(FXCG100_APPKEY_UP);
-	press(FXCG100_APPKEY_UP);
-	press(FXCG100_APPKEY_UP);
-	press(FXCG100_APPKEY_UP);
-	press(FXCG100_APPKEY_UP);
-	press(FXCG100_APPKEY_UP);
+	for (i = 0; i < 11; i++)
+		press(FXCG100_APPKEY_UP);
 	CHECK(selected_row(&ui_main)->id == ID_SIZE, "back at the top");
 	held_app = FXCG100_APPKEY_DOWN;
 	step();
@@ -676,7 +715,7 @@ static void test_settings(void)
 		selected_row(&ui_main)->id);
 	held_app = 0;
 	step();
-	for (i = 0; i < 9; i++)
+	for (i = 0; i < 12; i++)
 		press(FXCG100_APPKEY_UP);
 	CHECK(selected_row(&ui_main)->id == ID_SIZE, "back up: %d",
 		selected_row(&ui_main)->id);
@@ -811,12 +850,27 @@ static void test_keys(void)
 	CHECK(fxcg100_input_maps_valid(st.keymap, st.hotkey_map),
 		"the key map went invalid");
 
+	/* Save & exit is its own shortcut row (index 15). */
+	for (i = 0; i < 20 && selected_row(&ui_main)->id != ID_BIND0 + 15; i++)
+		press(FXCG100_APPKEY_DOWN);
+	CHECK(selected_row(&ui_main)->id == ID_BIND0 + 15 &&
+		strcmp(selected_row(&ui_main)->label, "Save & exit") == 0,
+		"Save & exit shortcut row");
+	press(FXCG100_APPKEY_EXE);
+	capture(K_FREE);
+	CHECK(st.hotkey_map[FXCG100_HOTKEY_SAVE_EXIT] == K_FREE,
+		"bind Save & exit");
+	press(FXCG100_APPKEY_DEL);
+	CHECK(st.hotkey_map[FXCG100_HOTKEY_SAVE_EXIT] == 0,
+		"DEL clears Save & exit");
+
 	for (i = 0; i < 20 && selected_row(&ui_main)->id != ID_RESET_KEYS; i++)
 		press(FXCG100_APPKEY_DOWN);
 	CHECK(selected_row(&ui_main)->id == ID_RESET_KEYS, "reset row");
 	press(FXCG100_APPKEY_EXE);
 	CHECK(st.keymap[FXCG100_GBA_KEY_A] == K_A &&
-		st.hotkey_map[FXCG100_HOTKEY_LOAD_STATE] == 0, "reset");
+		st.hotkey_map[FXCG100_HOTKEY_LOAD_STATE] == 0 &&
+		st.hotkey_map[FXCG100_HOTKEY_SAVE_EXIT] == 0, "reset");
 	snap("keys-bottom");
 	press(FXCG100_APPKEY_BACK);
 	CHECK(ui_main.page == PAGE_SETTINGS, "back to settings");
