@@ -22,6 +22,7 @@ typedef int64_t  s64;
 #define CGBA_SH4_THUMB_LDST_NATIVE 1
 #define CGBA_SH4_THUMB_BLOCK_NATIVE 1
 #include "ports/fxcg100/sh4/sh4_thumb_dp_emit.h"
+#include "ports/fxcg100/sh4/sh4_fastmem_emit.h"
 #include "ports/fxcg100/sh4/sh4_thumb_block_emit.h"
 #include "ports/fxcg100/sh4/sh4_arm_ldst_emit.h"
 #include "ports/fxcg100/sh4/sh4_arm_block_emit.h"

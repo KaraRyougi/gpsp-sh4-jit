@@ -1380,6 +1380,20 @@ static inline u8 *sh4g_emit_bra_placeholder(u8 **tp)
   return site;
 }
 
+/* Emit a forward BRA placeholder with `ADD #-debit, R13` packed into its
+ * delay slot when debit is in 1..128 (otherwise delay NOP). */
+static inline u8 *sh4g_emit_bra_debit(u8 **tp, int debit)
+{
+  u8 *site = *tp;
+  sh4g_u16(tp, 0xA000);            /* BRA disp12 (patched) */
+  if (debit > 0 && debit <= 128)
+    sh4g_u16(tp, (uint16_t)(0x7000u | (SH4_REG_CYCLES << 8) |
+                            ((-debit) & 0xFF)));
+  else
+    sh4g_u16(tp, 0x0009);
+  return site;
+}
+
 /* Patch a BRA disp12 at `site` to branch to `target`. */
 static inline void sh4g_patch_bra(u8 *site, const void *target)
 {
@@ -1387,6 +1401,84 @@ static inline void sh4g_patch_bra(u8 *site, const void *target)
   site[0] = (uint8_t)(0xA0 | ((d >> 8) & 0x0F));
   site[1] = (uint8_t)(d & 0xFF);
   SH4G_RESYNC(site, 2);
+}
+
+/* Fast RAM SMC bypass: branch (BT placeholder returned) when
+ * `off_reg >= *(const u32 *)code_end_ptr`, proving all SMC tags at/above
+ * `off_reg` are zero without touching the tag mirror. Clobbers tmp_ptr & tmp_val. */
+static inline u8 *sh4g_emit_smc_bypass(u8 **tp, const void *code_end_ptr,
+                                       unsigned off_reg, unsigned tmp_ptr,
+                                       unsigned tmp_val)
+{
+  sh4g_const(tp, (u32)(uintptr_t)code_end_ptr, tmp_ptr);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_l_load(&cg, tmp_ptr, tmp_val);
+    sh4_emit_cmphs(&cg, tmp_val, off_reg); /* T = (off_reg >= *code_end_ptr) */
+    sh4g_close(tp, &cg); }
+  return sh4g_emit_bt_placeholder(tp);
+}
+
+/* Unrolled OR-reduction of `count` (1..16) 32-bit RAM SMC tag words at
+ * `tag_base + off_reg`, guarded by `code_end_ptr` bypass. Returns a BF
+ * placeholder taken when any tag word is non-zero; fast-bypass jumps cleanly
+ * over the tag check. Clobbers tmp_ptr, tmp_acc, tmp_val (tmp_val may alias
+ * tmp_ptr only when count == 1). */
+static inline u8 *sh4g_emit_smc_words_guard(u8 **tp, const void *code_end_ptr,
+                                            const void *tag_base,
+                                            unsigned off_reg, unsigned count,
+                                            unsigned tmp_ptr, unsigned tmp_acc,
+                                            unsigned tmp_val)
+{
+  u8 *smc_ok = sh4g_emit_smc_bypass(tp, code_end_ptr, off_reg, tmp_ptr, tmp_acc);
+  u8 *fail;
+  unsigned w;
+  sh4g_const(tp, (u32)(uintptr_t)tag_base, tmp_ptr);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_add_reg(&cg, off_reg, tmp_ptr);
+    sh4_emit_mov_l_load(&cg, tmp_ptr, tmp_acc);
+    for (w = 1; w < count; w++) {
+      sh4_emit_mov_l_load_disp(&cg, tmp_ptr, tmp_val, w);
+      sh4_emit_or(&cg, tmp_val, tmp_acc);
+    }
+    sh4_emit_tst(&cg, tmp_acc, tmp_acc); /* T = all tag words clear */
+    sh4g_close(tp, &cg); }
+  fail = sh4g_emit_bf_placeholder(tp);
+  sh4g_patch_cond(smc_ok, *tp);
+  return fail;
+}
+
+/* Fragmented ROM8 (0x08008000..0x08008000+rom8_limit) 4 KiB page lookup.
+ * In:  addr_reg (typically SH4_REG_T0) holds guest address.
+ * Out: SH4_REG_T2 (R3) = non-NULL host 4 KiB page pointer; addr_reg preserved.
+ * Clobbers SH4_REG_RET (R0) and SH4_REG_T1 (R2).
+ * Appends 2 BT miss placeholders (out-of-range, NULL page) to miss_out[*nmiss]. */
+static inline void sh4g_emit_rom8_page_lookup(u8 **tp, u32 rom8_limit,
+                                              const void *frag_blocks_p8,
+                                              unsigned addr_reg,
+                                              u8 **miss_out, int *nmiss)
+{
+  sh4g_const(tp, 0x08008000u, SH4_REG_T1);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_reg(&cg, addr_reg, SH4_REG_RET);
+    sh4_emit_sub(&cg, SH4_REG_T1, SH4_REG_RET);       /* R0 = addr - 0x08008000 */
+    sh4g_close(tp, &cg); }
+  sh4g_const(tp, rom8_limit, SH4_REG_T1);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_cmphs(&cg, SH4_REG_T1, SH4_REG_RET);     /* T = block<8 or >=size */
+    sh4g_close(tp, &cg); }
+  miss_out[(*nmiss)++] = sh4g_emit_bt_placeholder(tp);
+
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_imm(&cg, -12, SH4_REG_T1);
+    sh4_emit_shld(&cg, SH4_REG_T1, SH4_REG_RET);      /* R0 = block_idx - 8 */
+    sh4_emit_shll2(&cg, SH4_REG_RET);
+    sh4g_close(tp, &cg); }
+  sh4g_const(tp, (u32)(uintptr_t)frag_blocks_p8, SH4_REG_T2);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_l_load_r0(&cg, SH4_REG_T2, SH4_REG_T2);
+    sh4_emit_tst(&cg, SH4_REG_T2, SH4_REG_T2);        /* T = block == NULL */
+    sh4g_close(tp, &cg); }
+  miss_out[(*nmiss)++] = sh4g_emit_bt_placeholder(tp);
 }
 
 #endif /* CGBA_SH4_EMIT_GLUE_H */

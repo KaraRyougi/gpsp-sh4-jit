@@ -228,79 +228,39 @@ static void test_timing_alert_redispatch(void)
   write_alert = CPU_ALERT_NONE;
 }
 
-static void test_dma_disable_clears_hblank_mask(void)
+static void test_io16_routes_through_canonical_write(void)
 {
-  const char *name = "Thumb DMA0CNT_H disable clears cgba_hblank_dma_mask";
+  const char *name = "Thumb STRH to IO routes through canonical write_memory16";
   const u32 pc = 0x0807ab66u;
-  int result;
+  static const u32 addrs[] = { 0x04000000u, 0x040000BAu, 0x04000208u,
+                               0x040004BAu, 0x04000800u };
+  unsigned i;
 
-  memset(reg, 0, sizeof(reg));
-  memset(dma, 0, sizeof(dma));
-  dma[0].start_type = DMA_START_HBLANK;
-  dma[0].direct_sound_channel = DMA_DIRECT_SOUND_A;
-  cgba_hblank_dma_mask = 0x05u; /* DMA0 + DMA2 active */
-  cgba_dma0_bg2_fast = 1u;
-  reg[1] = 0u;
-  reg[2] = 0x040000BAu;
-  write_calls = 0;
+  for (i = 0; i < sizeof(addrs) / sizeof(addrs[0]); i++) {
+    int result;
+    memset(reg, 0, sizeof(reg));
+    memset(io_registers, 0, sizeof(io_registers));
+    memset(dma, 0, sizeof(dma));
+    dma[0].start_type = DMA_START_HBLANK;
+    cgba_hblank_dma_mask = 0x01u;
+    cgba_dma0_bg2_fast = 1u;
+    address16(io_registers, 0x000u) = eswap16(0x0403u);
+    reg[1] = 0u;
+    reg[2] = addrs[i];
+    write_calls = 0;
 
-  /* STRH r1, [r2, #0] (0x8011): fast-path disable of DMA0. */
-  result = cgba_sh4_thumb_ldst(0x00008011u, pc);
-
-  CHECK(name, result == 0, "helper returned %d (expected 0)", result);
-  CHECK(name, write_calls == 0, "fast path called generic write %u times",
-        write_calls);
-  CHECK(name, dma[0].start_type == DMA_INACTIVE,
-        "dma[0].start_type=%u (expected DMA_INACTIVE)", dma[0].start_type);
-  CHECK(name, cgba_hblank_dma_mask == 0x04u,
-        "cgba_hblank_dma_mask=0x%02X (expected 0x04)", cgba_hblank_dma_mask);
-  CHECK(name, cgba_dma0_bg2_fast == 0u,
-        "cgba_dma0_bg2_fast=%u (expected 0)", cgba_dma0_bg2_fast);
-}
-
-static void test_io_fast_store_ignores_above_0x400(void)
-{
-  const char *name = "Thumb STRH to 0x04000400+ must not mirror IO fast path";
-  const u32 pc = 0x0807ab70u;
-  int result;
-
-  /* 1. 0x04000800 aliases 0x000 (DISPCNT) under & 0x3FEu; must fall back to
-   *    generic write_memory16() instead of overwriting DISPCNT. */
-  memset(reg, 0, sizeof(reg));
-  memset(io_registers, 0, sizeof(io_registers));
-  address16(io_registers, 0x000u) = eswap16(0x0403u);
-  reg[1] = 0x0080u;
-  reg[2] = 0x04000800u;
-  write_calls = 0;
-
-  result = cgba_sh4_thumb_ldst(0x00008011u, pc);
-  CHECK(name, result == 0, "helper returned %d for 0x04000800 (expected 0)",
-        result);
-  CHECK(name, write_calls == 1, "0x04000800 write_calls=%u (expected 1)",
-        write_calls);
-  CHECK(name, address16(io_registers, 0x000u) == eswap16(0x0403u),
-        "DISPCNT overwritten by 0x04000800 store (got 0x%04X)",
-        (unsigned)eswap16(address16(io_registers, 0x000u)));
-
-  /* 2. 0x040004BA aliases 0x0BA (DMA0CNT_H) under & 0x3FEu; must not disable
-   *    active HBlank DMA0. */
-  memset(dma, 0, sizeof(dma));
-  dma[0].start_type = DMA_START_HBLANK;
-  cgba_hblank_dma_mask = 0x01u;
-  reg[1] = 0u;
-  reg[2] = 0x040004BAu;
-  write_calls = 0;
-
-  result = cgba_sh4_thumb_ldst(0x00008011u, pc);
-  CHECK(name, result == 0, "helper returned %d for 0x040004BA (expected 0)",
-        result);
-  CHECK(name, write_calls == 1, "0x040004BA write_calls=%u (expected 1)",
-        write_calls);
-  CHECK(name, dma[0].start_type == DMA_START_HBLANK,
-        "dma[0].start_type=%u changed by 0x040004BA store", dma[0].start_type);
-  CHECK(name, cgba_hblank_dma_mask == 0x01u,
-        "cgba_hblank_dma_mask=0x%02X changed by 0x040004BA store",
-        cgba_hblank_dma_mask);
+    /* STRH r1, [r2, #0] (0x8011): must always reach write_memory16(). */
+    result = cgba_sh4_thumb_ldst(0x00008011u, pc);
+    CHECK(name, result == 0, "helper returned %d for %08X (expected 0)",
+          result, addrs[i]);
+    CHECK(name, write_calls == 1, "%08X write_calls=%u (expected 1)",
+          addrs[i], write_calls);
+    CHECK(name, address16(io_registers, 0x000u) == eswap16(0x0403u),
+          "DISPCNT mutated by shadow path on %08X", addrs[i]);
+    CHECK(name, dma[0].start_type == DMA_START_HBLANK &&
+          cgba_hblank_dma_mask == 0x01u && cgba_dma0_bg2_fast == 1u,
+          "DMA0 state mutated by shadow path on %08X", addrs[i]);
+  }
 }
 
 int main(void)
@@ -324,8 +284,7 @@ int main(void)
     run_case(&cases[i], MEMORY_OPEN_BUS);
   }
   test_timing_alert_redispatch();
-  test_dma_disable_clears_hblank_mask();
-  test_io_fast_store_ignores_above_0x400();
+  test_io16_routes_through_canonical_write();
 
   if (failures)
     return 1;

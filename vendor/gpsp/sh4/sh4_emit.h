@@ -144,6 +144,58 @@ extern void *tmemst[4][16];
  * real instruction. */
 #define block_prologue_size 0
 
+#if defined(CGBA_SH4_THUMB_UDIV_FASTPATH) || \
+    defined(CGBA_SH4_ARM_MIXER_FASTPATH) || \
+    defined(CGBA_SH4_M4A_LOOP_FOLD)
+static inline int sh4g_range_has_observer(u32 start, u32 end)
+{
+  u32 i;
+  if ((cheat_master_hook >= start && cheat_master_hook < end) ||
+      (idle_loop_target_pc >= start && idle_loop_target_pc < end))
+    return 1;
+  for (i = 0; i < translation_gate_targets; i++) {
+    if (translation_gate_target_pc[i] >= start &&
+        translation_gate_target_pc[i] < end)
+      return 1;
+  }
+  return 0;
+}
+#endif
+
+#if defined(CGBA_SH4_THUMB_UDIV_FASTPATH) || defined(CGBA_SH4_ARM_MIXER_FASTPATH)
+/* Entry-only speculative loop prefix shared by udiv / ARM mixer / PCM clamp.
+ * On decline the helper committed nothing and BT falls through into the
+ * normal block body; on hit R13 remains positive by construction, we debit
+ * cgba_sh4_extra_cycles, and redispatch at `resume_pc`. */
+static inline void sh4g_emit_speculative_loop_entry(u8 **tp,
+                                                    volatile s32 *budget_var,
+                                                    const void *try_fn,
+                                                    u32 first_word, u32 pc,
+                                                    u32 resume_pc)
+{
+  u8 *fallback;
+  sh4g_const(tp, (u32)(uintptr_t)budget_var, SH4_REG_T0);
+  {
+    sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_l_store(&cg, SH4_REG_CYCLES, SH4_REG_T0);
+    sh4g_close(tp, &cg);
+  }
+  sh4g_op2_tramp_call(tp, (const void *)sh4_op2_tramp,
+                      try_fn, first_word, pc, 0, 0);
+  sh4g_litseg_reserve(tp, 8);
+  {
+    sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_tst(&cg, SH4_REG_RET, SH4_REG_RET); /* T = helper declined */
+    sh4g_close(tp, &cg);
+  }
+  fallback = sh4g_emit_bt_placeholder(tp);
+  sh4g_cycle_debit_from_global(tp, &cgba_sh4_extra_cycles);
+  sh4g_const(tp, resume_pc, SH4_REG_ARG0);
+  sh4g_vec_jmp(tp, SH4G_VEC_pc_redispatch);
+  sh4g_patch_cond_skip(fallback, *tp);
+}
+#endif
+
 #ifdef CGBA_SH4_THUMB_UDIV_FASTPATH
 /* Match guest opcodes through readaddress16(): the ROM mapping is host-endian
  * and may be NOR-backed, so raw memcmp would be wrong on big-endian SH4. */
@@ -161,53 +213,15 @@ static inline int sh4g_thumb_udiv_loop_match_map(const u8 *map, u32 pc)
   return 1;
 }
 
-static inline int sh4g_thumb_udiv_loop_has_observer(u32 pc)
-{
-  u32 end = pc + CGBA_SH4_THUMB_UDIV_LOOP_BYTES;
-  u32 i;
-  if ((cheat_master_hook >= pc && cheat_master_hook < end) ||
-      (idle_loop_target_pc >= pc && idle_loop_target_pc < end))
-    return 1;
-  for (i = 0; i < translation_gate_targets; i++) {
-    if (translation_gate_target_pc[i] >= pc &&
-        translation_gate_target_pc[i] < end)
-      return 1;
-  }
-  return 0;
-}
-
-/* Emit an entry-only speculative prefix.  The ROM block's published host
- * pointer includes this prefix, while block_data[0].block_offset is assigned
- * later and therefore makes internal loop-backs skip it.  On a budget miss the
- * helper has committed nothing and BT falls directly into the normal block.
- * On a hit R13 remains positive by construction; debit the exact dynamic cost
- * and redispatch at the untouched mov/pop/return tail. */
 static inline void sh4g_thumb_udiv_loop_entry(u8 **tp, const u8 *map, u32 pc)
 {
-  u8 *fallback;
   if (!sh4g_thumb_udiv_loop_match_map(map, pc) ||
-      sh4g_thumb_udiv_loop_has_observer(pc))
+      sh4g_range_has_observer(pc, pc + CGBA_SH4_THUMB_UDIV_LOOP_BYTES))
     return;
-
-  sh4g_const(tp, (u32)(uintptr_t)&cgba_sh4_thumb_udiv_budget, SH4_REG_T0);
-  {
-    sh4_codegen cg = sh4g_open(tp);
-    sh4_emit_mov_l_store(&cg, SH4_REG_CYCLES, SH4_REG_T0);
-    sh4g_close(tp, &cg);
-  }
-  sh4g_op2_tramp_call(tp, (const void *)sh4_op2_tramp,
-                      (const void *)cgba_sh4_thumb_udiv_loop_try,
-                      (u32)cgba_sh4_thumb_udiv_loop_pattern[0], pc, 0, 0);
-  {
-    sh4_codegen cg = sh4g_open(tp);
-    sh4_emit_tst(&cg, SH4_REG_RET, SH4_REG_RET); /* T = helper declined */
-    sh4g_close(tp, &cg);
-  }
-  fallback = sh4g_emit_bt_placeholder(tp);
-  sh4g_cycle_debit_from_global(tp, &cgba_sh4_extra_cycles);
-  sh4g_const(tp, pc + CGBA_SH4_THUMB_UDIV_LOOP_BYTES, SH4_REG_ARG0);
-  sh4g_vec_jmp(tp, SH4G_VEC_pc_redispatch);
-  sh4g_patch_cond_skip(fallback, *tp);
+  sh4g_emit_speculative_loop_entry(tp, &cgba_sh4_thumb_udiv_budget,
+                                   (const void *)cgba_sh4_thumb_udiv_loop_try,
+                                   (u32)cgba_sh4_thumb_udiv_loop_pattern[0],
+                                   pc, pc + CGBA_SH4_THUMB_UDIV_LOOP_BYTES);
 }
 
 #endif /* CGBA_SH4_THUMB_UDIV_FASTPATH */
@@ -229,52 +243,15 @@ static inline int sh4g_arm_mixer_match_map(const u8 *map, u32 pc)
   return 1;
 }
 
-static inline int sh4g_arm_mixer_has_observer(u32 pc)
-{
-  u32 end = pc + CGBA_SH4_ARM_MIXER_BYTES;
-  u32 i;
-  if ((cheat_master_hook >= pc && cheat_master_hook < end) ||
-      (idle_loop_target_pc >= pc && idle_loop_target_pc < end))
-    return 1;
-  for (i = 0; i < translation_gate_targets; i++) {
-    if (translation_gate_target_pc[i] >= pc &&
-        translation_gate_target_pc[i] < end)
-      return 1;
-  }
-  return 0;
-}
-
-/* Entry-only speculative prefix.  A declined helper has committed nothing and
- * falls into the ordinary generated body.  A hit debits its exact dynamic
- * body/folded-tail cost and redispatches at the untouched CMP/BCC tail, whose
- * separately translated block starts with a fresh compile-time cycle count. */
 static inline void sh4g_arm_mixer_entry(u8 **tp, const u8 *map, u32 pc)
 {
-  u8 *fallback;
   if (!sh4g_arm_mixer_match_map(map, pc) ||
-      sh4g_arm_mixer_has_observer(pc))
+      sh4g_range_has_observer(pc, pc + CGBA_SH4_ARM_MIXER_BYTES))
     return;
-
-  sh4g_const(tp, (u32)(uintptr_t)&cgba_sh4_arm_mixer_budget, SH4_REG_T0);
-  {
-    sh4_codegen cg = sh4g_open(tp);
-    sh4_emit_mov_l_store(&cg, SH4_REG_CYCLES, SH4_REG_T0);
-    sh4g_close(tp, &cg);
-  }
-  sh4g_op2_tramp_call(tp, (const void *)sh4_op2_tramp,
-                      (const void *)cgba_sh4_arm_mixer_loop_try,
-                      cgba_sh4_arm_mixer_pattern[0], pc, 0, 0);
-  sh4g_litseg_reserve(tp, 8);
-  {
-    sh4_codegen cg = sh4g_open(tp);
-    sh4_emit_tst(&cg, SH4_REG_RET, SH4_REG_RET); /* T = helper declined */
-    sh4g_close(tp, &cg);
-  }
-  fallback = sh4g_emit_bt_placeholder(tp);
-  sh4g_cycle_debit_from_global(tp, &cgba_sh4_extra_cycles);
-  sh4g_const(tp, pc + CGBA_SH4_ARM_MIXER_BODY_BYTES, SH4_REG_ARG0);
-  sh4g_vec_jmp(tp, SH4G_VEC_pc_redispatch);
-  sh4g_patch_cond_skip(fallback, *tp);
+  sh4g_emit_speculative_loop_entry(tp, &cgba_sh4_arm_mixer_budget,
+                                   (const void *)cgba_sh4_arm_mixer_loop_try,
+                                   cgba_sh4_arm_mixer_pattern[0],
+                                   pc, pc + CGBA_SH4_ARM_MIXER_BODY_BYTES);
 }
 
 static inline int sh4g_arm_pcm_clamp_match_map(const u8 *map, u32 pc)
@@ -292,48 +269,15 @@ static inline int sh4g_arm_pcm_clamp_match_map(const u8 *map, u32 pc)
   return 1;
 }
 
-static inline int sh4g_arm_pcm_clamp_has_observer(u32 pc)
-{
-  u32 end = pc + CGBA_SH4_ARM_PCM_CLAMP_BYTES;
-  u32 i;
-  if ((cheat_master_hook >= pc && cheat_master_hook < end) ||
-      (idle_loop_target_pc >= pc && idle_loop_target_pc < end))
-    return 1;
-  for (i = 0; i < translation_gate_targets; i++) {
-    if (translation_gate_target_pc[i] >= pc &&
-        translation_gate_target_pc[i] < end)
-      return 1;
-  }
-  return 0;
-}
-
 static inline void sh4g_arm_pcm_clamp_entry(u8 **tp, const u8 *map, u32 pc)
 {
-  u8 *fallback;
   if (!sh4g_arm_pcm_clamp_match_map(map, pc) ||
-      sh4g_arm_pcm_clamp_has_observer(pc))
+      sh4g_range_has_observer(pc, pc + CGBA_SH4_ARM_PCM_CLAMP_BYTES))
     return;
-
-  sh4g_const(tp, (u32)(uintptr_t)&cgba_sh4_arm_mixer_budget, SH4_REG_T0);
-  {
-    sh4_codegen cg = sh4g_open(tp);
-    sh4_emit_mov_l_store(&cg, SH4_REG_CYCLES, SH4_REG_T0);
-    sh4g_close(tp, &cg);
-  }
-  sh4g_op2_tramp_call(tp, (const void *)sh4_op2_tramp,
-                      (const void *)cgba_sh4_arm_pcm_clamp_loop_try,
-                      cgba_sh4_arm_pcm_clamp_step_pattern[0], pc, 0, 0);
-  sh4g_litseg_reserve(tp, 8);
-  {
-    sh4_codegen cg = sh4g_open(tp);
-    sh4_emit_tst(&cg, SH4_REG_RET, SH4_REG_RET); /* T = helper declined */
-    sh4g_close(tp, &cg);
-  }
-  fallback = sh4g_emit_bt_placeholder(tp);
-  sh4g_cycle_debit_from_global(tp, &cgba_sh4_extra_cycles);
-  sh4g_const(tp, pc + CGBA_SH4_ARM_PCM_CLAMP_BODY_BYTES, SH4_REG_ARG0);
-  sh4g_vec_jmp(tp, SH4G_VEC_pc_redispatch);
-  sh4g_patch_cond_skip(fallback, *tp);
+  sh4g_emit_speculative_loop_entry(tp, &cgba_sh4_arm_mixer_budget,
+                                   (const void *)cgba_sh4_arm_pcm_clamp_loop_try,
+                                   cgba_sh4_arm_pcm_clamp_step_pattern[0],
+                                   pc, pc + CGBA_SH4_ARM_PCM_CLAMP_BODY_BYTES);
 }
 #endif /* CGBA_SH4_ARM_MIXER_FASTPATH */
 
@@ -570,20 +514,6 @@ static inline int sh4g_m4a_skip_emit(u8 **tp, const cgba_sh4_m4a_match *match,
 extern volatile s32 cgba_sh4_m4a_loop_budget;
 int cgba_sh4_m4a_loop_try(u32 packed, u32 pc);
 
-static inline int sh4g_m4a_loop_has_observer(u32 start, u32 end)
-{
-  u32 i;
-  if ((cheat_master_hook >= start && cheat_master_hook < end) ||
-      (idle_loop_target_pc >= start && idle_loop_target_pc < end))
-    return 1;
-  for (i = 0; i < translation_gate_targets; i++) {
-    if (translation_gate_target_pc[i] >= start &&
-        translation_gate_target_pc[i] < end)
-      return 1;
-  }
-  return 0;
-}
-
 /* Prefix at a verified loop head.  `at_seam` is the translator's guarantee
  * that every earlier instruction's cycles have been debited (block start or a
  * branch-target flush), so R13 is the true budget.  The helper leaves guest
@@ -604,7 +534,7 @@ static inline void sh4g_m4a_loop_entry(u8 **tp, const cgba_sh4_m4a_match *m,
       m->kind != CGBA_SH4_M4A_KIND_MONO_INTERP_A &&
       m->kind != CGBA_SH4_M4A_KIND_MONO_INTERP_B)
     return;
-  if (sh4g_m4a_loop_has_observer(m->head_pc, m->head_pc + m->body_bytes))
+  if (sh4g_range_has_observer(m->head_pc, m->head_pc + m->body_bytes))
     return;
   packed = (u32)m->kind | ((u32)m->stride << 8);
   sh4g_const(tp, (u32)(uintptr_t)&cgba_sh4_m4a_loop_budget, SH4_REG_T0);
@@ -977,33 +907,6 @@ static inline int sh4g_registered_idle_signature_ok(const u8 *map,
        cycle_count = 0;                                                       \
        generate_branch_no_cycle_update(writeback_location, new_pc); } while(0)
 
-#define generate_branch_cycle_update(cycle_type, writeback_location, new_pc)  \
-  do { u32 _gbc_tgt = (u32)(new_pc);                                          \
-       int _gbc_deb = (int)cycle_count +                                      \
-         (int)ws_cyc_nseq[(_gbc_tgt >> 24) & 0x0F][cycle_type];               \
-       cycle_count = 0;                                                       \
-       if (!cgba_dynarec_single_block && (cycle_type) == 0 &&                 \
-           _gbc_tgt > (u32)pc && _gbc_tgt < block_end_pc) {                   \
-         if ((_gbc_tgt - (u32)pc) <= 56u && _gbc_deb > 0 && _gbc_deb <= 128) {\
-           (writeback_location) = translation_ptr;                            \
-           sh4g_u16(&translation_ptr, 0xA000);                                \
-           sh4g_u16(&translation_ptr, (uint16_t)(0x7000 |                     \
-                    (SH4_REG_CYCLES << 8) | ((-_gbc_deb) & 0xFF)));           \
-         } else {                                                             \
-           sh4g_cycle_debit(&translation_ptr, _gbc_deb);                      \
-           if ((_gbc_tgt - (u32)pc) <= 56u) {                                 \
-             (writeback_location) = translation_ptr;                          \
-             sh4g_u16(&translation_ptr, 0xA000);                              \
-             sh4g_u16(&translation_ptr, 0x0009);                              \
-           } else {                                                           \
-             (writeback_location) = sh4g_emit_patch_jump(&translation_ptr);   \
-           }                                                                  \
-         }                                                                    \
-       } else {                                                               \
-         sh4g_cycle_debit(&translation_ptr, _gbc_deb);                        \
-         generate_branch_no_cycle_update(writeback_location, _gbc_tgt);       \
-       } } while(0)
-
 /* A CONDITIONAL branch's exit sequence is emitted INSIDE the condition guard
  * (the not-taken path skips it). So it must NOT reset the translate-time
  * cycle_count: the not-taken fall-through keeps accumulating those fetch cycles
@@ -1018,24 +921,23 @@ static inline int sh4g_registered_idle_signature_ok(const u8 *map,
        if (!cgba_dynarec_single_block && (cycle_type) == 0 &&                 \
            _gbt_tgt > (u32)pc && _gbt_tgt < block_end_pc) {                   \
          if ((_gbt_tgt - (u32)pc) <= 56u && _gbt_deb > 0 && _gbt_deb <= 128) {\
-           (writeback_location) = translation_ptr;                            \
-           sh4g_u16(&translation_ptr, 0xA000);                                \
-           sh4g_u16(&translation_ptr, (uint16_t)(0x7000 |                     \
-                    (SH4_REG_CYCLES << 8) | ((-_gbt_deb) & 0xFF)));           \
+           (writeback_location) =                                             \
+             sh4g_emit_bra_debit(&translation_ptr, _gbt_deb);                 \
          } else {                                                             \
            sh4g_cycle_debit(&translation_ptr, _gbt_deb);                      \
-           if ((_gbt_tgt - (u32)pc) <= 56u) {                                 \
-             (writeback_location) = translation_ptr;                          \
-             sh4g_u16(&translation_ptr, 0xA000);                              \
-             sh4g_u16(&translation_ptr, 0x0009);                              \
-           } else {                                                           \
+           if ((_gbt_tgt - (u32)pc) <= 56u)                                   \
+             (writeback_location) = sh4g_emit_bra_placeholder(&translation_ptr);\
+           else                                                               \
              (writeback_location) = sh4g_emit_patch_jump(&translation_ptr);   \
-           }                                                                  \
          }                                                                    \
        } else {                                                               \
          sh4g_cycle_debit(&translation_ptr, _gbt_deb);                        \
          generate_branch_no_cycle_update(writeback_location, _gbt_tgt);       \
        } } while(0)
+
+#define generate_branch_cycle_update(cycle_type, writeback_location, new_pc)  \
+  do { generate_branch_taken(cycle_type, writeback_location, new_pc);         \
+       cycle_count = 0; } while(0)
 
 #define generate_arm_branch()                                                 \
   do {                                                                        \

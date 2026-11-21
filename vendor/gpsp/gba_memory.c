@@ -1200,15 +1200,6 @@ cpu_alert_type function_cc write_io_register32(u32 address, u32 value)
 
 #ifdef CGBA_PALETTE_DIRTY_ACTIVE
 volatile u32 palette_ram_dirty = CGBA_PALETTE_DIRTY_ACTIVE;
-#define mark_palette_ram_dirty() \
-  (palette_ram_dirty = CGBA_PALETTE_DIRTY_ACTIVE)
-#define mark_palette_ram_addr_dirty(off) do {                                 \
-  if ((off) < 0x200u) palette_ram_dirty = CGBA_PALETTE_DIRTY_ACTIVE;          \
-  else                palette_ram_dirty |= CGBA_PALETTE_DIRTY_OBJ_ONLY;       \
-} while (0)
-#else
-#define mark_palette_ram_dirty() ((void)0)
-#define mark_palette_ram_addr_dirty(off) ((void)(off))
 #endif
 
 #define write_palette8(address, value)                                        \
@@ -1400,39 +1391,6 @@ void function_cc write_backup(u32 address, u32 value)
 volatile u32 cgba_vram_dirty = CGBA_VRAM_DIRTY_ALL;
 volatile u32 cgba_vram_sb_dirty = 0xFFFFFFFFu;
 volatile u32 cgba_video_io_dirty = 1;
-#define mark_vram_dirty_off(off)                                              \
-  do {                                                                        \
-    u32 _vo = (u32)(off);                                                     \
-    if (_vo < 0x10000u) {                                                     \
-      cgba_vram_dirty |= CGBA_VRAM_DIRTY_BG;                                  \
-      cgba_vram_sb_dirty |= (1u << (_vo >> 11));                              \
-    } else {                                                                  \
-      cgba_vram_dirty |= CGBA_VRAM_DIRTY_OBJ;                                 \
-    }                                                                         \
-  } while (0)
-#define mark_vram_dirty_span(off, bytes)                                      \
-  do {                                                                        \
-    u32 _vo = (u32)(off), _vb = (u32)(bytes);                                 \
-    if (_vo < 0x10000u && _vb > 0u) {                                         \
-      u32 _hi = _vo + _vb - 1u;                                               \
-      if (_hi >= 0x10000u) _hi = 0xFFFFu;                                     \
-      u32 _s0 = _vo >> 11, _s1 = _hi >> 11;                                   \
-      u32 _m = (_s1 - _s0 >= 31u) ? 0xFFFFFFFFu                               \
-                                  : (((2u << (_s1 - _s0)) - 1u) << _s0);      \
-      cgba_vram_dirty |= CGBA_VRAM_DIRTY_BG;                                  \
-      cgba_vram_sb_dirty |= _m;                                               \
-    }                                                                         \
-    if (_vo + _vb > 0x10000u) cgba_vram_dirty |= CGBA_VRAM_DIRTY_OBJ;         \
-  } while (0)
-#define mark_vram_dirty_all()                                                 \
-  do {                                                                        \
-    cgba_vram_dirty = CGBA_VRAM_DIRTY_ALL;                                    \
-    cgba_vram_sb_dirty = 0xFFFFFFFFu;                                         \
-  } while (0)
-#else
-#define mark_vram_dirty_off(off) ((void)(off))
-#define mark_vram_dirty_span(off, bytes) do { (void)(off); (void)(bytes); } while (0)
-#define mark_vram_dirty_all() ((void)0)
 #endif
 
 #define write_vram8()                                                         \
@@ -2515,14 +2473,7 @@ static bool dma_bulk_copy(dma_transfer_type *dmach, u32 src, u32 dst,
           dp[i] = raw32;
       }
     }
-    *alert = CPU_ALERT_NONE;
-    if (dt) {
-      for (u32 off = 0; off < bytes; off += 2)
-        if (address16(dt, off)) {
-          *alert |= CPU_ALERT_SMC;
-          break;
-        }
-    }
+    *alert = cgba_smc_tags_nonzero(dt, bytes) ? CPU_ALERT_SMC : CPU_ALERT_NONE;
     if ((dst >> 24) == 6) {
       u32 voff = dst & 0x1FFFFu;
       if (voff >= 0x18000u) voff -= 0x8000u;
@@ -2614,14 +2565,7 @@ static bool dma_bulk_copy(dma_transfer_type *dmach, u32 src, u32 dst,
     }
   }
 
-  *alert = CPU_ALERT_NONE;
-  if (dt) {
-    for (u32 off = 0; off < bytes; off += 2)
-      if (address16(dt, off)) {
-        *alert |= CPU_ALERT_SMC;
-        break;
-      }
-  }
+  *alert = cgba_smc_tags_nonzero(dt, bytes) ? CPU_ALERT_SMC : CPU_ALERT_NONE;
   if ((dst >> 24) == 6) {
     u32 voff = dst & 0x1FFFFu;
     if (voff >= 0x18000u) voff -= 0x8000u;

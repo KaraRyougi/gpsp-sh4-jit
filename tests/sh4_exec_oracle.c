@@ -134,6 +134,7 @@ volatile u32 cgba_vram_dirty;
 volatile u32 cgba_video_io_dirty;
 #define CGBA_SH4_REG_FORWARD 1
 #include "ports/fxcg100/sh4/sh4_thumb_dp_emit.h"
+#include "ports/fxcg100/sh4/sh4_fastmem_emit.h"
 #include "ports/fxcg100/sh4/sh4_arm_ldst_emit.h"
 int cgba_sh4_arm_block(u32 o, u32 p);
 int cgba_sh4_thumb_block(u32 o, u32 p);
@@ -297,19 +298,16 @@ static int orc_is_slow_target(u32 a)
 
 static int orc_fastmem_io16_direct_store(u32 addr)
 {
-  if ((addr & 0xFF000000u) != 0x04000000u)
+  u32 off;
+  if ((addr & 0xFFFFFC00u) != 0x04000000u || (addr & 1u))
     return 0;
 
-  switch (addr & 0x3FEu) {
-  case 0x000u: case 0x004u:
-  case 0x010u: case 0x012u: case 0x014u: case 0x016u:
-  case 0x018u: case 0x01Au: case 0x01Cu: case 0x01Eu:
-  case 0x040u: case 0x044u: case 0x048u: case 0x04Au:
-  case 0x04Cu: case 0x050u: case 0x052u: case 0x054u:
+  off = addr & 0x3FEu;
+  if (off == 0x000u || off == 0x004u)
     return 1;
-  default:
-    return 0;
-  }
+  return (off >= 0x008u && off <= 0x026u) ||
+         (off >= 0x030u && off <= 0x036u) ||
+         (off >= 0x040u && off <= 0x054u);
 }
 
 static int run_at(u32 pc, u32 pc_end)

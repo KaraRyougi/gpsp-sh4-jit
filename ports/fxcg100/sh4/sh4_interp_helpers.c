@@ -404,7 +404,6 @@ u32 function_cc execute_load_s8(u32 address)  { cgba_sh4_charge_mem(address, 0);
 u32 function_cc execute_load_s16(u32 address) { cgba_sh4_charge_mem(address, 0); return read_memory16s(address); }
 
 static u8 *cgba_bulk_ram_host(u32 addr, u32 len, u8 **tags);
-static int cgba_bulk_tags_smc(const u8 *tags, u32 len);
 static int cgba_swi_bulk_video_copy(u32 dst, const u8 *sh, u32 bytes);
 
 static inline u32 cgba_le32_read(const u8 *p)
@@ -419,67 +418,6 @@ static inline void cgba_le32_write(u8 *p, u32 v)
 static u32 cgba_sh4_align_store_address(u32 address, unsigned bytes)
 {
   return address & ~(u32)(bytes - 1);
-}
-
-static int cgba_sh4_store_u16_io_fast(u32 address, u32 source)
-{
-  if ((address & 0xFFFFFC00u) != 0x04000000u)
-    return 0;
-
-  switch (address & 0x3FEu) {
-  case 0x000u: { /* DISPCNT */
-    u32 value = source & 0xFFFFu;
-    cgba_video_flush_before_write();
-#ifdef CGBA_VRAM_DIRTY_ACTIVE
-    cgba_video_io_dirty = 1;
-#endif
-    reg[OAM_UPDATED] |= ((value & 0x07u) != (read_ioreg(REG_DISPCNT) & 0x07u));
-    address16(io_registers, 0x000u) = eswap16((u16)value);
-    return 1;
-  }
-  case 0x004u: { /* DISPSTAT */
-    u32 value = (read_ioreg(REG_DISPSTAT) & 0x07u) | (source & ~0x07u);
-    address16(io_registers, 0x004u) = eswap16((u16)value);
-    return 1;
-  }
-  case 0x016u:  /* BG1VOFS */
-  case 0x01Cu:  /* BG3HOFS */
-  case 0x01Eu:  /* BG3VOFS */
-  case 0x048u:  /* WININ */
-  case 0x04Au:  /* WINOUT */
-  case 0x04Cu:  /* MOSAIC */
-  case 0x052u:  /* BLDALPHA */
-    cgba_video_flush_before_write();
-#ifdef CGBA_VRAM_DIRTY_ACTIVE
-    cgba_video_io_dirty = 1;
-#endif
-    address16(io_registers, address & 0x3FEu) = eswap16((u16)source);
-    return 1;
-  case 0x208u:  /* IME */
-    address16(io_registers, 0x208u) = eswap16((u16)source);
-    if ((source & 0xFFFFu) && (read_ioreg(REG_IE) & read_ioreg(REG_IF)) &&
-        ((reg[REG_CPSR] & 0x80u) == 0))
-      cgba_store_alert |= CPU_ALERT_IRQ;
-    return 1;
-  case 0x0BAu:  /* DMA0CNT_H */
-  case 0x0C6u:  /* DMA1CNT_H */
-  case 0x0D2u:  /* DMA2CNT_H */
-  case 0x0DEu: { /* DMA3CNT_H */
-    u32 dma_number;
-    if (source & 0x8000u)
-      return 0;
-    dma_number = ((address & 0x3FEu) - 0x0BAu) / 12u;
-    dma[dma_number].start_type = DMA_INACTIVE;
-    cgba_hblank_dma_mask &= (u8)~(1u << dma_number);
-    if (dma_number == 0u)
-      cgba_dma0_bg2_fast = 0u;
-    dma[dma_number].direct_sound_channel = DMA_NO_DIRECT_SOUND;
-    address16(io_registers, address & 0x3FEu) = eswap16((u16)source);
-    return 1;
-  }
-  default:
-    return 0;
-  }
 }
 
 /* Self-modifying-code detection for RAM stores. gpSP marks every byte that
@@ -503,10 +441,7 @@ static cpu_alert_type cgba_sh4_smc_check(u32 address, unsigned bytes)
   case 0x02: tag = ewram + (address & 0x3FFFF) + 0x40000; break;   /* 256 KB */
   default:   return CPU_ALERT_NONE;
   }
-  u32 hit = 0;
-  for (unsigned k = 0; k < bytes; k++)
-    hit |= tag[k];
-  return hit ? CPU_ALERT_SMC : CPU_ALERT_NONE;
+  return cgba_smc_tags_nonzero(tag, bytes) ? CPU_ALERT_SMC : CPU_ALERT_NONE;
 }
 
 void function_cc execute_store_u8(u32 address, u32 source)
@@ -521,8 +456,6 @@ void function_cc execute_store_u16(u32 address, u32 source)
   u32 aligned = cgba_sh4_align_store_address(address, 2);
   cgba_sh4_charge_mem(aligned, 0);
   cgba_sh4_note_dma_ctl16(aligned, source);
-  if (cgba_sh4_store_u16_io_fast(aligned, source))
-    return;
   cgba_store_alert |= write_memory16(aligned, (u16)source);
   cgba_store_alert |= cgba_sh4_smc_check(aligned, 2);
 }
@@ -2212,7 +2145,7 @@ u32 cgba_hle_bios_irq_entry(void)
       cgba_sh4_extra_cycles += 6 *
         (cgba_sh4_mem_cycle_seq ? ws_cyc_seq[sp >> 24][1]
                                 : ws_cyc_nseq[sp >> 24][1]);
-      if (cgba_bulk_tags_smc(tags, 24))
+      if (cgba_smc_tags_nonzero(tags, 24))
         flush_translation_cache_ram();
     } else {
       execute_store_u32(sp +  0, reg[0]);
@@ -2336,19 +2269,7 @@ static u8 *cgba_bulk_ram_host(u32 addr, u32 len, u8 **tags)
     if (tags) {
       cgba_video_flush_before_write();
       *tags = NULL;                 /* VRAM: no tag mirror */
-#ifdef CGBA_VRAM_DIRTY_ACTIVE
-      if (off < 0x10000u && len > 0u) {
-        cgba_vram_dirty |= CGBA_VRAM_DIRTY_BG;
-#ifdef CGBA_VRAM_SB_DIRTY_ACTIVE
-        { u32 hi = off + len - 1u;
-          if (hi >= 0x10000u) hi = 0xFFFFu;
-          u32 s0 = off >> 11, s1 = hi >> 11;
-          cgba_vram_sb_dirty |= (s1 - s0 >= 31u) ? 0xFFFFFFFFu
-                                                 : (((2u << (s1 - s0)) - 1u) << s0); }
-#endif
-      }
-      if (off + len > 0x10000u) cgba_vram_dirty |= CGBA_VRAM_DIRTY_OBJ;
-#endif
+      mark_vram_dirty_span(off, len);
     }
     return vram + off;
   default:
@@ -2382,25 +2303,6 @@ static const u8 *cgba_bulk_src_host(u32 addr, u32 len)
     return NULL;
   }
   return cgba_bulk_ram_host(addr, len, NULL);
-}
-
-static int cgba_bulk_tags_smc(const u8 *tags, u32 len)
-{
-  u32 i = 0;
-  if (!tags) return 0;
-  /* SH-4 raises an address error (EXC 0x0E0) on misaligned longword loads,
-   * and the tag pointer inherits the guest destination's alignment — a
-   * halfword-aligned CpuSet dest (AW unit-select copies to 0x03001FF2)
-   * made the u32 scan read at +2 and hard-crashed on hardware. calcemu
-   * never caught it: host CPUs tolerate misaligned loads. Align the head
-   * byte-wise before the longword scan. */
-  for (; i < len && (((uintptr_t)tags + i) & 3); i++)
-    if (tags[i]) return 1;
-  for (; i + 4 <= len; i += 4)
-    if (*(const u32 *)(const void *)(tags + i)) return 1;
-  for (; i < len; i++)
-    if (tags[i]) return 1;
-  return 0;
 }
 
 static int cgba_bulk_ranges_overlap(const u8 *a, const u8 *b, u32 len)
@@ -2731,49 +2633,132 @@ extern u32 cgba_bios_hle_swi_count;
 #define CGBA_FS_FILL_LOOP 0x00000770u
 #define CGBA_FS_DECLINE   0xFFFFFFFFu
 
+/* Shared prologue for all parked SWI engines (FastSet/CpuSet/ObjAffine/LZ77):
+ * mirrors open-BIOS dispatcher 0x64..0x90 (SVC push {spsr,r11,r12,lr}, switch
+ * to SYSTEM mode, user push {r2,r3,lr_usr}, then routine push {r4..r(3+n_extra)}).
+ * Preserves cgba_sh4_extra_cycles and returns sp_usr >> 24. */
+static u32 cgba_parked_swi_enter(u32 n_extra, u32 *sp_svc_r_out, u32 *lr_r_out)
+{
+  u32 spsr_v = REG_SPSR(MODE_SUPERVISOR);
+  u32 sp_svc = reg[REG_SP];
+  u32 sp_usr, i;
+  int saved_extra = cgba_sh4_extra_cycles;
+
+  if (sp_svc_r_out)
+    *sp_svc_r_out = sp_svc >> 24;
+  if (lr_r_out)
+    *lr_r_out = (reg[REG_LR] & ~1u) >> 24;
+
+  /* Dispatcher pushes on the SVC stack */
+  execute_store_u32(sp_svc - 4, reg[REG_LR]);
+  execute_store_u32(sp_svc - 8, reg[12]);
+  execute_store_u32(sp_svc - 12, reg[11]);
+  execute_store_u32(sp_svc - 16, spsr_v);
+  reg[REG_SP] = sp_svc - 16;
+
+  /* Switch to SYSTEM mode exactly like MSR CPSR_9 at 0x84 (NZCV cleared,
+   * caller's I bit kept, F cleared). Set dispatcher's r11 before routine
+   * pushes so routines pushing r11 (e.g. LZ77UnCompVram) save the exact value. */
+  reg[REG_CPSR] = (spsr_v & 0x80u) | 0x1Fu;
+  set_cpu_mode(MODE_SYSTEM);
+  reg[11] = (spsr_v & 0x80u) | 0x1Fu;
+
+  sp_usr = reg[REG_SP];
+  execute_store_u32(sp_usr - 4, reg[REG_LR]);
+  execute_store_u32(sp_usr - 8, reg[3]);
+  execute_store_u32(sp_usr - 12, reg[2]);
+  for (i = 0; i < n_extra; i++) {
+    u32 r = 4u + (n_extra - 1u - i);
+    execute_store_u32(sp_usr - 16u - i * 4u, reg[r]);
+  }
+  reg[REG_SP] = sp_usr - (12u + n_extra * 4u);
+  cgba_sh4_extra_cycles = saved_extra;
+  reg[REG_LR] = 0x00000094u;
+  return sp_usr >> 24;
+}
+
+/* Shared epilogue for all parked SWI engines: pops routine {r4..r(3+n_extra)}
+ * and dispatcher {r2,r3,lr_usr} from sp_usr, switches back to SVC, pops
+ * {spsr,r11,r12,lr} from sp_svc, restores caller CPSR/mode/PC. Returns sp_usr >> 24. */
+static u32 cgba_parked_swi_leave(u32 n_extra)
+{
+  u32 sp_usr = reg[REG_SP];
+  u32 sp_r = sp_usr >> 24;
+  u32 sp_svc, spsr_pop, i;
+  int saved_extra = cgba_sh4_extra_cycles;
+
+  for (i = 0; i < n_extra; i++)
+    reg[4u + i] = execute_load_u32(sp_usr + i * 4u);
+  reg[2]      = execute_load_u32(sp_usr + n_extra * 4u);
+  reg[3]      = execute_load_u32(sp_usr + n_extra * 4u + 4u);
+  reg[REG_LR] = execute_load_u32(sp_usr + n_extra * 4u + 8u);
+  reg[REG_SP] = sp_usr + 12u + n_extra * 4u;
+
+  reg[12] = 0x000000D3u;
+  reg[REG_CPSR] = 0x000000D3u;
+  set_cpu_mode(MODE_SUPERVISOR);
+  sp_svc = reg[REG_SP];
+  spsr_pop = execute_load_u32(sp_svc);
+  reg[11] = execute_load_u32(sp_svc + 4);
+  reg[12] = execute_load_u32(sp_svc + 8);
+  reg[REG_LR] = execute_load_u32(sp_svc + 12);
+  reg[REG_SP] = sp_svc + 16;
+  cgba_sh4_extra_cycles = saved_extra;
+
+  REG_SPSR(MODE_SUPERVISOR) = spsr_pop;
+  reg[REG_PC] = reg[REG_LR] & ~1u;
+  reg[REG_CPSR] = spsr_pop;
+  set_cpu_mode(cpu_modes[spsr_pop & 0xF]);
+#ifdef CGBA_GPSP_HEADLESS_TEST
+  cgba_bios_hle_swi_count++;
+#endif
+  return sp_r;
+}
+
+/* Shared IRQ-entry exit for parked SWI engines: mirrors execute_arm's
+ * 0x18..0x2C cycle cost so IRQs firing inside a parked SWI stay cycle-locked
+ * to the interpreter. */
+static u32 cgba_parked_swi_irq_exit(s32 remaining, u32 S0, u32 N0)
+{
+  if (reg[REG_PC] == 0x00000018u && reg[CPU_MODE] == MODE_IRQ) {
+    int saved_extra = cgba_sh4_extra_cycles;
+    u32 irq_sp_r = reg[REG_SP] >> 24;
+    u32 handler = cgba_hle_bios_irq_entry();
+    cgba_sh4_extra_cycles = saved_extra;
+    if (handler != 0u) {
+      remaining -= (s32)(4 * S0 + N0 + 6 * CGBA_WS_S(irq_sp_r, 1)
+                         + CGBA_WS_N(3, 1)
+                         + CGBA_WS_S(handler >> 24, 1));
+      if (remaining <= 0) {
+        u32 ret2 = update_gba(remaining);
+        return completed_frame(ret2) ? ret2 : cycles_to_run(ret2);
+      }
+    }
+  }
+  return (u32)remaining;
+}
+
 static u32 cgba_fs_entry_cost;    /* handoff: dispatch+prologue cycles */
 
 /* Materialize the canonical loop-top state for a dispatched oversized
  * FastSet (pc==8, SVC, predict-ok). Mirrors dispatcher + routine prologue. */
 static void cgba_swi_fastset_materialize(u32 fill)
 {
-  u32 spsr_v = REG_SPSR(MODE_SUPERVISOR);
-  u32 sp_svc = reg[REG_SP];
   u32 S0 = CGBA_WS_S(0, 1), N0 = CGBA_WS_N(0, 1);
   u32 wsrc = reg[0] & ~3u;
-  u32 sp_r = sp_svc >> 24, lr_r = (reg[REG_LR] & ~1u) >> 24;
+  u32 sp_r, lr_r;
 
-  /* dispatcher pushes on the SVC stack */
-  execute_store_u32(sp_svc - 4, reg[REG_LR]);            /* return address */
-  execute_store_u32(sp_svc - 8, reg[12]);
-  execute_store_u32(sp_svc - 12, reg[11]);
-  execute_store_u32(sp_svc - 16, spsr_v);
-  reg[REG_SP] = sp_svc - 16;
-
-  /* switch to SYSTEM mode exactly like MSR CPSR_9 at 0x84 (NZCV cleared,
-   * caller's I bit kept, F cleared) */
-  reg[REG_CPSR] = (spsr_v & 0x80u) | 0x1Fu;
-  set_cpu_mode(MODE_SYSTEM);
-
-  /* dispatcher + routine pushes on the caller's stack */
-  {
-    u32 sp_usr = reg[REG_SP];
-    execute_store_u32(sp_usr - 4, reg[REG_LR]);          /* caller lr_usr */
-    execute_store_u32(sp_usr - 8, reg[3]);
-    execute_store_u32(sp_usr - 12, reg[2]);
-    execute_store_u32(sp_usr - 16, reg[4]);              /* 0x724 STR r4 */
-    reg[REG_SP] = sp_usr - 16;
-  }
-  reg[REG_LR] = 0x00000094u;
-  reg[11] = (spsr_v & 0x80u) | 0x1Fu;                    /* dispatcher scratch */
+  cgba_parked_swi_enter(1u, &sp_r, &lr_r);
 
   /* routine entry effects + loop registers; charge dispatch + prologue */
   cgba_fs_entry_cost = cgba_swi_dispatch_cycles(sp_r, lr_r, 1)
                      + CGBA_WS_N(sp_r, 1);               /* 724 STR r4 */
   reg[4] = reg[2] & 0x1FFFFFu;                           /* words left (raw) */
   if (fill) {
+    int saved_extra = cgba_sh4_extra_cycles;
     reg[3] = wsrc;
     reg[2] = execute_load_u32(wsrc);                     /* 760 LDR value */
+    cgba_sh4_extra_cycles = saved_extra;
     reg[1] = reg[1] & ~3u;                               /* dst cursor */
     reg[12] = 0x00000720u;                               /* table leftover */
     cgba_fs_entry_cost += 20 * S0 + CGBA_WS_N(wsrc >> 24, 1);
@@ -2823,35 +2808,10 @@ static u32 cgba_swi_fastset_engine(s32 remaining)
 
   while (1) {
     if (words <= 0) {
-      /* routine + dispatcher epilogue, analytically (pops read back the
-       * words we stored, so caller values reappear even if an ISR ran) */
-      u32 sp_usr = reg[REG_SP];
-      u32 sp_svc, spsr_pop;
-      u32 sp_r = sp_usr >> 24;
-      reg[4] = execute_load_u32(sp_usr);
-      reg[2] = execute_load_u32(sp_usr + 4);
-      reg[3] = execute_load_u32(sp_usr + 8);
-      reg[REG_LR] = execute_load_u32(sp_usr + 12);
-      reg[REG_SP] = sp_usr + 16;
+      u32 sp_r = cgba_parked_swi_leave(1u);
       remaining -= (s32)(2 * S0 + CGBA_WS_S(sp_r, 1) + N0);  /* 78C+790 */
       if (fill)
         remaining += (s32)N0;             /* last fill chunk has no BGT */
-      reg[12] = 0x000000D3u;
-      reg[REG_CPSR] = 0x000000D3u;
-      set_cpu_mode(MODE_SUPERVISOR);
-      sp_svc = reg[REG_SP];
-      spsr_pop = execute_load_u32(sp_svc);
-      reg[11] = execute_load_u32(sp_svc + 4);
-      reg[12] = execute_load_u32(sp_svc + 8);
-      reg[REG_LR] = execute_load_u32(sp_svc + 12);
-      reg[REG_SP] = sp_svc + 16;
-      REG_SPSR(MODE_SUPERVISOR) = spsr_pop;
-      reg[REG_PC] = reg[REG_LR] & ~1u;
-      reg[REG_CPSR] = spsr_pop;
-      set_cpu_mode(cpu_modes[spsr_pop & 0xF]);
-#ifdef CGBA_GPSP_HEADLESS_TEST
-      cgba_bios_hle_swi_count++;
-#endif
       break;                                   /* leave via common return */
     }
     if (remaining <= 0) {
@@ -2861,14 +2821,8 @@ static u32 cgba_swi_fastset_engine(s32 remaining)
       if (completed_frame(ret))
         return 0x80000000u;
       remaining = (s32)cycles_to_run(ret);
-      if (reg[REG_PC] != (fill ? CGBA_FS_FILL_LOOP : CGBA_FS_COPY_LOOP)) {
-        /* IRQ vectored (pc=0x18, IRQ mode): run the wrapper HLE the same
-         * way the fallback entry path would, then hand back to the stub.
-         * The ISR's return lands on the loop-top PC and resumes here. */
-        if (reg[REG_PC] == 0x00000018u && reg[CPU_MODE] == MODE_IRQ)
-          (void)cgba_hle_bios_irq_entry();
-        return (u32)remaining;
-      }
+      if (reg[REG_PC] != (fill ? CGBA_FS_FILL_LOOP : CGBA_FS_COPY_LOOP))
+        return cgba_parked_swi_irq_exit(remaining, S0, N0);
       continue;
     }
     {
@@ -2884,12 +2838,14 @@ static u32 cgba_swi_fastset_engine(s32 remaining)
           u32 i;
           for (i = 0; i < bytes; i += 4)
             cgba_le32_write(dh + i, reg[2]);
-          if (cgba_bulk_tags_smc(tags, bytes))
+          if (cgba_smc_tags_nonzero(tags, bytes))
             flush_translation_cache_ram();     /* SMC: see note at copy site */
         } else {
+          int saved = cgba_sh4_extra_cycles;
           u32 i;
           for (i = 0; i < bytes; i += 4)
             execute_store_u32(dst + i, reg[2]);
+          cgba_sh4_extra_cycles = saved;
         }
         dst += bytes;
         reg[1] = dst;
@@ -2911,12 +2867,14 @@ static u32 cgba_swi_fastset_engine(s32 remaining)
              at the next park (ISR) or on completion. Safe mid-copy: the
              engine's state lives in guest memory + registers, not the cache,
              and dh/tags point into the GBA RAM arrays, not the cache. */
-          if (cgba_bulk_tags_smc(tags, bytes))
+          if (cgba_smc_tags_nonzero(tags, bytes))
             flush_translation_cache_ram();
         } else if (!cgba_swi_bulk_video_copy(dst, sh, bytes)) {
+          int saved = cgba_sh4_extra_cycles;
           u32 i;
           for (i = 0; i < bytes; i += 4)
             execute_store_u32(dst + i, cgba_le32_read(sh + i));
+          cgba_sh4_extra_cycles = saved;
         }
         src += bytes;
         dst += bytes;
@@ -2961,13 +2919,10 @@ static u32 cgba_cs_entry_cost;
 
 static void cgba_swi_cpuset_materialize(int half, int fill)
 {
-  u32 spsr_v = REG_SPSR(MODE_SUPERVISOR);
-  u32 sp_svc = reg[REG_SP];
   u32 S0 = CGBA_WS_S(0, 1), N0 = CGBA_WS_N(0, 1);
-  u32 sp_r = sp_svc >> 24, lr_r = (reg[REG_LR] & ~1u) >> 24;
+  u32 sp_r, lr_r;
   u32 src0 = reg[0], dst0 = reg[1], count = reg[2] & 0x1FFFFFu;
   u32 fval = 0;
-  int saved_extra = cgba_sh4_extra_cycles;
 
   if (fill) {
     u32 esrc = half ? src0 : (src0 & ~3u);
@@ -2975,25 +2930,7 @@ static void cgba_swi_cpuset_materialize(int half, int fill)
     fval = half ? ((u32)vp[0] | ((u32)vp[1] << 8)) : cgba_le32_read(vp);
   }
 
-  /* dispatcher SVC-stack pushes (identical to FastSet) */
-  execute_store_u32(sp_svc - 4, reg[REG_LR]);
-  execute_store_u32(sp_svc - 8, reg[12]);
-  execute_store_u32(sp_svc - 12, reg[11]);
-  execute_store_u32(sp_svc - 16, spsr_v);
-  reg[REG_SP] = sp_svc - 16;
-  reg[REG_CPSR] = (spsr_v & 0x80u) | 0x1Fu;
-  set_cpu_mode(MODE_SYSTEM);
-  {
-    u32 sp_usr = reg[REG_SP];
-    execute_store_u32(sp_usr - 4, reg[REG_LR]);
-    execute_store_u32(sp_usr - 8, reg[3]);
-    execute_store_u32(sp_usr - 12, reg[2]);
-    execute_store_u32(sp_usr - 16, reg[4]);         /* 0x618 STR r4 */
-    reg[REG_SP] = sp_usr - 16;
-  }
-  cgba_sh4_extra_cycles = saved_extra;
-  reg[REG_LR] = 0x00000094u;
-  reg[11] = (spsr_v & 0x80u) | 0x1Fu;
+  cgba_parked_swi_enter(1u, &sp_r, &lr_r);
 
   if (fill) {
     /* Entry-only dispatcher cycles; return-half is charged in the epilogue. */
@@ -3073,9 +3010,7 @@ static int cgba_swi_bulk_video_copy(u32 dst, const u8 *sh, u32 bytes)
           u16 v = eswap16(pr[i]);
           pc[i] = convert_palette(v);
         }
-#ifdef CGBA_PALETTE_DIRTY_ACTIVE
-        palette_ram_dirty = CGBA_PALETTE_DIRTY_ACTIVE;
-#endif
+        mark_palette_ram_addr_dirty(off);
       }
     }
     return 1;
@@ -3139,9 +3074,7 @@ static int cgba_swi_bulk_video_fill(u32 dst, const u8 *vp, u32 width, u32 bytes)
             pc[i + 1u] = c1;
           }
         }
-#ifdef CGBA_PALETTE_DIRTY_ACTIVE
-        palette_ram_dirty = CGBA_PALETTE_DIRTY_ACTIVE;
-#endif
+        mark_palette_ram_addr_dirty(off);
       }
       return 1;
     }
@@ -3205,15 +3138,7 @@ static u32 cgba_swi_cpuset_engine(s32 remaining)
 
   while (1) {
     if (count <= 0) {
-      /* routine + dispatcher epilogue (shared shape with FastSet) */
-      u32 sp_usr = reg[REG_SP];
-      u32 sp_svc, spsr_pop, sp_r = sp_usr >> 24;
-      int saved_extra = cgba_sh4_extra_cycles;
-      reg[4] = execute_load_u32(sp_usr);
-      reg[2] = execute_load_u32(sp_usr + 4);
-      reg[3] = execute_load_u32(sp_usr + 8);
-      reg[REG_LR] = execute_load_u32(sp_usr + 12);
-      reg[REG_SP] = sp_usr + 16;
+      u32 sp_r = cgba_parked_swi_leave(1u);
       if (fill) {
         remaining -= (s32)(9 * S0 + 2 * N0
                            + 4 * CGBA_WS_S(3, 1) + 4 * CGBA_WS_S(sp_r, 1));
@@ -3222,23 +3147,6 @@ static u32 cgba_swi_cpuset_engine(s32 remaining)
         if (half)
           remaining += (s32)N0;       /* half copy exits via fall-through */
       }
-      reg[12] = 0x000000D3u;
-      reg[REG_CPSR] = 0x000000D3u;
-      set_cpu_mode(MODE_SUPERVISOR);
-      sp_svc = reg[REG_SP];
-      spsr_pop = execute_load_u32(sp_svc);
-      reg[11] = execute_load_u32(sp_svc + 4);
-      reg[12] = execute_load_u32(sp_svc + 8);
-      reg[REG_LR] = execute_load_u32(sp_svc + 12);
-      reg[REG_SP] = sp_svc + 16;
-      cgba_sh4_extra_cycles = saved_extra;
-      REG_SPSR(MODE_SUPERVISOR) = spsr_pop;
-      reg[REG_PC] = reg[REG_LR] & ~1u;
-      reg[REG_CPSR] = spsr_pop;
-      set_cpu_mode(cpu_modes[spsr_pop & 0xF]);
-#ifdef CGBA_GPSP_HEADLESS_TEST
-      cgba_bios_hle_swi_count++;
-#endif
       break;
     }
     if (remaining <= 0) {
@@ -3246,28 +3154,8 @@ static u32 cgba_swi_cpuset_engine(s32 remaining)
       if (completed_frame(ret))
         return 0x80000000u;
       remaining = (s32)cycles_to_run(ret);
-      if (reg[REG_PC] != loop_pc) {
-        if (reg[REG_PC] == 0x00000018u && reg[CPU_MODE] == MODE_IRQ) {
-          if (fill) {
-            int saved_extra = cgba_sh4_extra_cycles;
-            u32 irq_sp_r = reg[REG_SP] >> 24;
-            u32 handler = cgba_hle_bios_irq_entry();
-            cgba_sh4_extra_cycles = saved_extra;
-            if (handler != 0u) {
-              remaining -= (s32)(4 * S0 + N0 + 6 * CGBA_WS_S(irq_sp_r, 1)
-                                 + CGBA_WS_N(3, 1)
-                                 + CGBA_WS_S(handler >> 24, 1));
-              if (remaining <= 0) {
-                u32 ret2 = update_gba(remaining);
-                return completed_frame(ret2) ? ret2 : cycles_to_run(ret2);
-              }
-            }
-          } else {
-            (void)cgba_hle_bios_irq_entry();
-          }
-        }
-        return (u32)remaining;
-      }
+      if (reg[REG_PC] != loop_pc)
+        return cgba_parked_swi_irq_exit(remaining, S0, N0);
       continue;
     }
     {
@@ -3295,7 +3183,7 @@ static u32 cgba_swi_cpuset_engine(s32 remaining)
               dh[i + 1] = b1;
             }
           }
-          if (cgba_bulk_tags_smc(tags, bytes))
+          if (cgba_smc_tags_nonzero(tags, bytes))
             flush_translation_cache_ram();
         } else {
           int saved = cgba_sh4_extra_cycles;
@@ -3328,16 +3216,19 @@ static u32 cgba_swi_cpuset_engine(s32 remaining)
           else
 #endif
             memmove(dh, sh, bytes);
-          if (cgba_bulk_tags_smc(tags, bytes))
+          if (cgba_smc_tags_nonzero(tags, bytes))
             flush_translation_cache_ram();
         }
 #ifdef CGBA_SH4_SWI_OAM_BULK
-        else if (!((dst >> 24) == 7u && half &&
+        /* Try cgba_swi_bulk_video_copy first so non-wrapping OAM copies keep
+         * the memcmp no-op skip; fall back to cgba_sh4_swi_copy_u16_to_oam
+         * only for wrapping OAM copies (off + bytes > 0x400). */
+        else if (!cgba_swi_bulk_video_copy(dst, sh, bytes) &&
+                 !((dst >> 24) == 7u && half &&
                    (cgba_video_flush_before_write(),
                     cgba_sh4_swi_copy_u16_to_oam(
                       (u8 *)(void *)oam_ram, sh, dst, k,
-                      &reg[OAM_UPDATED]))) &&
-                 !cgba_swi_bulk_video_copy(dst, sh, bytes)) {
+                      &reg[OAM_UPDATED])))) {
 #else
         else if (!cgba_swi_bulk_video_copy(dst, sh, bytes)) {
 #endif
@@ -3369,29 +3260,6 @@ static u32 cgba_swi_cpuset_engine(s32 remaining)
   if (remaining <= 0) {
     u32 ret = update_gba(remaining);
     return completed_frame(ret) ? ret : cycles_to_run(ret);
-  }
-  return (u32)remaining;
-}
-
-/* Shared IRQ-entry exit for parked SWI engines: mirrors execute_arm's
- * 0x18..0x2C cycle cost so IRQs firing inside a parked SWI stay cycle-locked
- * to the interpreter. */
-static u32 cgba_parked_swi_irq_exit(s32 remaining, u32 S0, u32 N0)
-{
-  if (reg[REG_PC] == 0x00000018u && reg[CPU_MODE] == MODE_IRQ) {
-    int saved_extra = cgba_sh4_extra_cycles;
-    u32 irq_sp_r = reg[REG_SP] >> 24;
-    u32 handler = cgba_hle_bios_irq_entry();
-    cgba_sh4_extra_cycles = saved_extra;
-    if (handler != 0u) {
-      remaining -= (s32)(4 * S0 + N0 + 6 * CGBA_WS_S(irq_sp_r, 1)
-                         + CGBA_WS_N(3, 1)
-                         + CGBA_WS_S(handler >> 24, 1));
-      if (remaining <= 0) {
-        u32 ret2 = update_gba(remaining);
-        return completed_frame(ret2) ? ret2 : cycles_to_run(ret2);
-      }
-    }
   }
   return (u32)remaining;
 }
@@ -3428,38 +3296,12 @@ static int cgba_swi_objaffine_can_enter(u32 src, u32 dst, u32 count, u32 offset)
 
 static void cgba_swi_objaffine_materialize(void)
 {
-  u32 spsr_v = REG_SPSR(MODE_SUPERVISOR);
-  u32 sp_svc = reg[REG_SP];
   u32 S0 = CGBA_WS_S(0, 1), N0 = CGBA_WS_N(0, 1);
-  u32 lr_r = (reg[REG_LR] & ~1u) >> 24;
   u32 src0 = reg[0], dst0 = reg[1], count = reg[2], offset = reg[3];
-  u32 sp_usr, sp_r;
-  int saved_extra = cgba_sh4_extra_cycles;
+  u32 lr_r, sp_r;
 
-  execute_store_u32(sp_svc - 4, reg[REG_LR]);
-  execute_store_u32(sp_svc - 8, reg[12]);
-  execute_store_u32(sp_svc - 12, reg[11]);
-  execute_store_u32(sp_svc - 16, spsr_v);
-  reg[REG_SP] = sp_svc - 16;
-
-  reg[REG_CPSR] = (spsr_v & 0x80u) | 0x1Fu;
-  set_cpu_mode(MODE_SYSTEM);
-
-  sp_usr = reg[REG_SP];
-  sp_r = sp_usr >> 24;
-  execute_store_u32(sp_usr - 4, reg[REG_LR]);
-  execute_store_u32(sp_usr - 8, reg[3]);
-  execute_store_u32(sp_usr - 12, reg[2]);
-  /* 0x08E4: push {r4, r5, r6, r7, r8, r9, r10} */
-  execute_store_u32(sp_usr - 16, reg[10]);
-  execute_store_u32(sp_usr - 20, reg[9]);
-  execute_store_u32(sp_usr - 24, reg[8]);
-  execute_store_u32(sp_usr - 28, reg[7]);
-  execute_store_u32(sp_usr - 32, reg[6]);
-  execute_store_u32(sp_usr - 36, reg[5]);
-  execute_store_u32(sp_usr - 40, reg[4]);
-  reg[REG_SP] = sp_usr - 40;
-  cgba_sh4_extra_cycles = saved_extra;
+  /* 0x08E4: push {r4..r10} (7 words) */
+  sp_r = cgba_parked_swi_enter(7u, NULL, &lr_r);
 
   reg[0] = src0 + 8u;
   reg[1] = dst0;
@@ -3468,9 +3310,7 @@ static void cgba_swi_objaffine_materialize(void)
   reg[7] = offset << 1;
   reg[8] = offset << 2;
   reg[10] = 0x00002150u;
-  reg[11] = (spsr_v & 0x80u) | 0x1Fu;
   reg[12] = 0x000008E0u;
-  reg[REG_LR] = 0x00000094u;
   reg[REG_PC] = CGBA_OA_LOOP;
 
   /* Dispatcher entry + 0x08E0..0x0900 (9 insns, PUSH 7 words, LDR literal). */
@@ -3520,40 +3360,10 @@ static u32 cgba_swi_objaffine_engine(s32 remaining)
 
   while (1) {
     if (rem_count == 0u) {
-      u32 sp_usr = reg[REG_SP];
-      u32 sp_svc, spsr_pop, sp_r = sp_usr >> 24;
-      int saved_extra = cgba_sh4_extra_cycles;
-      reg[4]      = execute_load_u32(sp_usr + 0);
-      reg[5]      = execute_load_u32(sp_usr + 4);
-      reg[6]      = execute_load_u32(sp_usr + 8);
-      reg[7]      = execute_load_u32(sp_usr + 12);
-      reg[8]      = execute_load_u32(sp_usr + 16);
-      reg[9]      = execute_load_u32(sp_usr + 20);
-      reg[10]     = execute_load_u32(sp_usr + 24);
-      reg[2]      = execute_load_u32(sp_usr + 28);
-      reg[3]      = execute_load_u32(sp_usr + 32);
-      reg[REG_LR] = execute_load_u32(sp_usr + 36);
-      reg[REG_SP] = sp_usr + 40;
+      u32 sp_r = cgba_parked_swi_leave(7u);
       /* 0x0978 POP {r4-r10} + 0x097C BX lr + dispatcher return - 1*N0 (last BNE nt). */
       remaining -= (s32)(8 * S0 + N0
                          + 4 * CGBA_WS_S(3, 1) + 10 * CGBA_WS_S(sp_r, 1));
-      reg[12] = 0x000000D3u;
-      reg[REG_CPSR] = 0x000000D3u;
-      set_cpu_mode(MODE_SUPERVISOR);
-      sp_svc = reg[REG_SP];
-      spsr_pop = execute_load_u32(sp_svc);
-      reg[11] = execute_load_u32(sp_svc + 4);
-      reg[12] = execute_load_u32(sp_svc + 8);
-      reg[REG_LR] = execute_load_u32(sp_svc + 12);
-      reg[REG_SP] = sp_svc + 16;
-      cgba_sh4_extra_cycles = saved_extra;
-      REG_SPSR(MODE_SUPERVISOR) = spsr_pop;
-      reg[REG_PC] = reg[REG_LR] & ~1u;
-      reg[REG_CPSR] = spsr_pop;
-      set_cpu_mode(cpu_modes[spsr_pop & 0xF]);
-#ifdef CGBA_GPSP_HEADLESS_TEST
-      cgba_bios_hle_swi_count++;
-#endif
       break;
     }
     if (remaining <= 0) {
@@ -3608,7 +3418,7 @@ static u32 cgba_swi_objaffine_engine(s32 remaining)
           sh += 8;
           out += offset * 4u;
         }
-        if (dh && cgba_bulk_tags_smc(tags, span))
+        if (dh && cgba_smc_tags_nonzero(tags, span))
           flush_translation_cache_ram();
       } else {
         int saved_extra = cgba_sh4_extra_cycles;
@@ -3731,30 +3541,6 @@ static inline u8 *cgba_lz_dst_region(u32 dst, u32 *off_out, u32 *size_out,
   }
 }
 
-static inline void cgba_lz_mark_vram_dirty(u32 off, u32 len)
-{
-  if (len == 0u)
-    return;
-#ifdef CGBA_VRAM_DIRTY_ACTIVE
-  if (off < 0x10000u) {
-    cgba_vram_dirty |= CGBA_VRAM_DIRTY_BG;
-#ifdef CGBA_VRAM_SB_DIRTY_ACTIVE
-    {
-      u32 hi = off + len - 1u;
-      if (hi >= 0x10000u) hi = 0xFFFFu;
-      u32 s0 = off >> 11, s1 = hi >> 11;
-      cgba_vram_sb_dirty |= (s1 - s0 >= 31u) ? 0xFFFFFFFFu
-                                             : (((2u << (s1 - s0)) - 1u) << s0);
-    }
-#endif
-  }
-  if (off + len > 0x10000u)
-    cgba_vram_dirty |= CGBA_VRAM_DIRTY_OBJ;
-#else
-  (void)off;
-#endif
-}
-
 static int cgba_swi_lz77_can_enter(int vram_mode, u32 *len_out)
 {
   u32 spsr_v = REG_SPSR(MODE_SUPERVISOR);
@@ -3793,50 +3579,21 @@ static int cgba_swi_lz77_can_enter(int vram_mode, u32 *len_out)
 
 static void cgba_swi_lz77_materialize(int vram_mode, u32 len)
 {
-  u32 spsr_v = REG_SPSR(MODE_SUPERVISOR);
-  u32 sp_svc = reg[REG_SP];
   u32 S0 = CGBA_WS_S(0, 1), N0 = CGBA_WS_N(0, 1);
-  u32 lr_r = (reg[REG_LR] & ~1u) >> 24;
   u32 src0 = reg[0], dst0 = reg[1];
-  u32 sp_usr, sp_r;
-  int saved_extra = cgba_sh4_extra_cycles;
+  u32 lr_r, sp_r;
 
-  execute_store_u32(sp_svc - 4, reg[REG_LR]);
-  execute_store_u32(sp_svc - 8, reg[12]);
-  execute_store_u32(sp_svc - 12, reg[11]);
-  execute_store_u32(sp_svc - 16, spsr_v);
-  reg[REG_SP] = sp_svc - 16;
+  /* 0x0B5C pushes {r4..r11} (8 words); 0x0A4C pushes {r4..r8} (5 words). */
+  sp_r = cgba_parked_swi_enter(vram_mode ? 8u : 5u, NULL, &lr_r);
 
-  reg[REG_CPSR] = (spsr_v & 0x80u) | 0x1Fu;
-  set_cpu_mode(MODE_SYSTEM);
-
-  sp_usr = reg[REG_SP];
-  sp_r = sp_usr >> 24;
-  execute_store_u32(sp_usr - 4, reg[REG_LR]);
-  execute_store_u32(sp_usr - 8, reg[3]);
-  execute_store_u32(sp_usr - 12, reg[2]);
   if (vram_mode) {
-    /* 0x0B5C: push {r4, r5, r6, r7, r8, r9, r10, r11} */
-    execute_store_u32(sp_usr - 16, (spsr_v & 0x80u) | 0x1Fu); /* r11 from dispatcher */
-    execute_store_u32(sp_usr - 20, reg[10]);
-    execute_store_u32(sp_usr - 24, reg[9]);
-    execute_store_u32(sp_usr - 28, reg[8]);
-    execute_store_u32(sp_usr - 32, reg[7]);
-    execute_store_u32(sp_usr - 36, reg[6]);
-    execute_store_u32(sp_usr - 40, reg[5]);
-    execute_store_u32(sp_usr - 44, reg[4]);
-    reg[REG_SP] = sp_usr - 44;
-    cgba_sh4_extra_cycles = saved_extra;
-
     reg[0] = src0 + 4u;
     reg[1] = dst0;
     reg[2] = 1u;
     reg[3] = 0u;
     reg[4] = 0u;
     reg[5] = len;
-    reg[11] = (spsr_v & 0x80u) | 0x1Fu;
     reg[12] = 0u;
-    reg[REG_LR] = 0x00000094u;
     reg[REG_PC] = CGBA_LZ16_LOOP;
     /* Dispatcher entry + 0x0CDC..0x0CE0 (2*S0+N0) + 0x0B5C..0x0BA0 (18*S0 + 8*S(sp) + N(src,1)). */
     cgba_lz_entry_cost = 13 * S0 + 2 * N0
@@ -3845,22 +3602,11 @@ static void cgba_swi_lz77_materialize(int vram_mode, u32 len)
                        + 20 * S0 + N0 + 8 * CGBA_WS_S(sp_r, 1)
                        + CGBA_WS_N(src0 >> 24, 1);
   } else {
-    /* 0x0A4C: push {r4, r5, r6, r7, r8} */
-    execute_store_u32(sp_usr - 16, reg[8]);
-    execute_store_u32(sp_usr - 20, reg[7]);
-    execute_store_u32(sp_usr - 24, reg[6]);
-    execute_store_u32(sp_usr - 28, reg[5]);
-    execute_store_u32(sp_usr - 32, reg[4]);
-    reg[REG_SP] = sp_usr - 32;
-    cgba_sh4_extra_cycles = saved_extra;
-
     reg[0] = src0 + 4u;
     reg[1] = dst0;
     reg[2] = len;
     reg[3] = (src0 + 4u) + (len & 0x1FFFFFu);
-    reg[11] = (spsr_v & 0x80u) | 0x1Fu;
     reg[12] = 0x00000A44u;
-    reg[REG_LR] = 0x00000094u;
     reg[REG_PC] = CGBA_LZ8_LOOP;
     /* Dispatcher entry + 0x0A44..0x0A70 (12*S0 + 5*S(sp) + N(src,1)). */
     cgba_lz_entry_cost = 13 * S0 + 2 * N0
@@ -3922,56 +3668,17 @@ static u32 cgba_swi_lz77_engine(s32 remaining)
       u32 written = dst_off - slice_dst_start;
       if (written > 0u) {
         if (dst_r == 6u)
-          cgba_lz_mark_vram_dirty(slice_dst_start, written);
-        else if (tags_base && cgba_bulk_tags_smc(tags_base + slice_dst_start, written))
+          mark_vram_dirty_span(slice_dst_start, written);
+        else if (tags_base && cgba_smc_tags_nonzero(tags_base + slice_dst_start, written))
           flush_translation_cache_ram();
       }
       {
-        u32 sp_usr = reg[REG_SP];
-        u32 sp_svc, spsr_pop, sp_r = sp_usr >> 24;
-        int saved_extra = cgba_sh4_extra_cycles;
+        u32 sp_r;
         reg[0] = exit_r0;
         reg[1] = exit_r1;
-        reg[4] = execute_load_u32(sp_usr + 0);
-        reg[5] = execute_load_u32(sp_usr + 4);
-        reg[6] = execute_load_u32(sp_usr + 8);
-        reg[7] = execute_load_u32(sp_usr + 12);
-        reg[8] = execute_load_u32(sp_usr + 16);
-        if (vram_mode) {
-          reg[9]      = execute_load_u32(sp_usr + 20);
-          reg[10]     = execute_load_u32(sp_usr + 24);
-          reg[11]     = execute_load_u32(sp_usr + 28);
-          reg[2]      = execute_load_u32(sp_usr + 32);
-          reg[3]      = execute_load_u32(sp_usr + 36);
-          reg[REG_LR] = execute_load_u32(sp_usr + 40);
-          reg[REG_SP] = sp_usr + 44;
-          remaining -= (s32)(8 * S0 + 2 * N0
-                             + 4 * CGBA_WS_S(3, 1) + 11 * CGBA_WS_S(sp_r, 1));
-        } else {
-          reg[2]      = execute_load_u32(sp_usr + 20);
-          reg[3]      = execute_load_u32(sp_usr + 24);
-          reg[REG_LR] = execute_load_u32(sp_usr + 28);
-          reg[REG_SP] = sp_usr + 32;
-          remaining -= (s32)(8 * S0 + 2 * N0
-                             + 4 * CGBA_WS_S(3, 1) + 8 * CGBA_WS_S(sp_r, 1));
-        }
-        reg[12] = 0x000000D3u;
-        reg[REG_CPSR] = 0x000000D3u;
-        set_cpu_mode(MODE_SUPERVISOR);
-        sp_svc = reg[REG_SP];
-        spsr_pop = execute_load_u32(sp_svc);
-        reg[11] = execute_load_u32(sp_svc + 4);
-        reg[12] = execute_load_u32(sp_svc + 8);
-        reg[REG_LR] = execute_load_u32(sp_svc + 12);
-        reg[REG_SP] = sp_svc + 16;
-        cgba_sh4_extra_cycles = saved_extra;
-        REG_SPSR(MODE_SUPERVISOR) = spsr_pop;
-        reg[REG_PC] = reg[REG_LR] & ~1u;
-        reg[REG_CPSR] = spsr_pop;
-        set_cpu_mode(cpu_modes[spsr_pop & 0xF]);
-#ifdef CGBA_GPSP_HEADLESS_TEST
-        cgba_bios_hle_swi_count++;
-#endif
+        sp_r = cgba_parked_swi_leave(vram_mode ? 8u : 5u);
+        remaining -= (s32)(8 * S0 + 2 * N0 + 4 * CGBA_WS_S(3, 1) +
+                           (vram_mode ? 11u : 8u) * CGBA_WS_S(sp_r, 1));
       }
       break;
     }
@@ -3981,8 +3688,8 @@ static u32 cgba_swi_lz77_engine(s32 remaining)
       u32 written = dst_off - slice_dst_start;
       if (written > 0u) {
         if (dst_r == 6u)
-          cgba_lz_mark_vram_dirty(slice_dst_start, written);
-        else if (tags_base && cgba_bulk_tags_smc(tags_base + slice_dst_start, written))
+          mark_vram_dirty_span(slice_dst_start, written);
+        else if (tags_base && cgba_smc_tags_nonzero(tags_base + slice_dst_start, written))
           flush_translation_cache_ram();
         slice_dst_start = dst_off;
       }
@@ -4409,7 +4116,7 @@ static int cgba_swi_apply_faithful(u32 src, u32 dst, u32 cnt, int fastset,
         for (i = 0; i < len; i += width)
           memcpy(d + i, b, width);
       }
-      if (cgba_bulk_tags_smc(tags, len))
+      if (cgba_smc_tags_nonzero(tags, len))
         cgba_store_alert |= CPU_ALERT_SMC;
       if (pred->r0_from_last_word)
         reg[0] = cgba_le32_read(d + len - 4);

@@ -1918,15 +1918,13 @@ _cgba_render_4bpp_span_over_pair_sh4:
  * Zero callee-saved registers, zero stack traffic, and 32-byte subpal stays
  * pinned in a single D-cache line.
  * ========================================================================== */
-	.section .text._cgba_render_obj_4bpp_tiles_sh4,"ax",@progbits
-	.balign 4
-	.global _cgba_render_obj_4bpp_tiles_sh4
-	.type   _cgba_render_obj_4bpp_tiles_sh4, @function
-_cgba_render_obj_4bpp_tiles_sh4:
-.Lobj_loop:
+/* Shared 8-pixel 4bpp OBJ tile row unpacker (hf=0 normal, hf=1 hflip).
+ * Expects r4=tile_row_ptr, r6=dst, r7=subpal; skips transparent pixels (0)
+ * and branches to \next_lbl when the entire 8-pixel word is zero or done. */
+.macro CGBA_OBJ_4BPP_ROW hf, next_lbl
 	mov.l   @r4, r2
 	tst     r2, r2
-	bt      .Lobj_next
+	bt      \next_lbl
 	mov     r2, r1
 	shlr2   r1
 	shlr    r1
@@ -1938,54 +1936,95 @@ _cgba_render_obj_4bpp_tiles_sh4:
 	shlr8   r2
 	and     #0x1e, r0
 	mov.w   @(r0, r7), r0
-	mov.w   r0, @(12, r6)               /* dst[6] = p6 */
+	.if \hf
+	mov.w   r0, @(2, r6)
+	.else
+	mov.w   r0, @(12, r6)
+	.endif
 1:	mov     r2, r0
 	tst     #0x1e, r0
 	bt.s    2f
 	shlr8   r2
 	and     #0x1e, r0
 	mov.w   @(r0, r7), r0
-	mov.w   r0, @(8, r6)                /* dst[4] = p4 */
+	.if \hf
+	mov.w   r0, @(6, r6)
+	.else
+	mov.w   r0, @(8, r6)
+	.endif
 2:	mov     r2, r0
 	tst     #0x1e, r0
 	bt.s    3f
 	shlr8   r2
 	and     #0x1e, r0
 	mov.w   @(r0, r7), r0
-	mov.w   r0, @(4, r6)                /* dst[2] = p2 */
+	.if \hf
+	mov.w   r0, @(10, r6)
+	.else
+	mov.w   r0, @(4, r6)
+	.endif
 3:	mov     r2, r0
 	tst     #0x1e, r0
 	bt      4f
 	and     #0x1e, r0
 	mov.w   @(r0, r7), r0
-	mov.w   r0, @r6                     /* dst[0] = p0 */
+	.if \hf
+	mov.w   r0, @(14, r6)
+	.else
+	mov.w   r0, @r6
+	.endif
 4:	mov     r1, r0
 	tst     #0x1e, r0
 	bt.s    5f
 	shlr8   r1
 	and     #0x1e, r0
 	mov.w   @(r0, r7), r0
-	mov.w   r0, @(14, r6)               /* dst[7] = p7 */
+	.if \hf
+	mov.w   r0, @r6
+	.else
+	mov.w   r0, @(14, r6)
+	.endif
 5:	mov     r1, r0
 	tst     #0x1e, r0
 	bt.s    6f
 	shlr8   r1
 	and     #0x1e, r0
 	mov.w   @(r0, r7), r0
-	mov.w   r0, @(10, r6)               /* dst[5] = p5 */
+	.if \hf
+	mov.w   r0, @(4, r6)
+	.else
+	mov.w   r0, @(10, r6)
+	.endif
 6:	mov     r1, r0
 	tst     #0x1e, r0
 	bt.s    7f
 	shlr8   r1
 	and     #0x1e, r0
 	mov.w   @(r0, r7), r0
-	mov.w   r0, @(6, r6)                /* dst[3] = p3 */
+	.if \hf
+	mov.w   r0, @(8, r6)
+	.else
+	mov.w   r0, @(6, r6)
+	.endif
 7:	mov     r1, r0
 	tst     #0x1e, r0
-	bt      .Lobj_next
+	bt      \next_lbl
 	and     #0x1e, r0
 	mov.w   @(r0, r7), r0
-	mov.w   r0, @(2, r6)                /* dst[1] = p1 */
+	.if \hf
+	mov.w   r0, @(12, r6)
+	.else
+	mov.w   r0, @(2, r6)
+	.endif
+.endm
+
+	.section .text._cgba_render_obj_4bpp_tiles_sh4,"ax",@progbits
+	.balign 4
+	.global _cgba_render_obj_4bpp_tiles_sh4
+	.type   _cgba_render_obj_4bpp_tiles_sh4, @function
+_cgba_render_obj_4bpp_tiles_sh4:
+.Lobj_loop:
+	CGBA_OBJ_4BPP_ROW 0, .Lobj_next
 .Lobj_next:
 	add     #32, r4
 	dt      r5
@@ -2001,68 +2040,7 @@ _cgba_render_obj_4bpp_tiles_sh4:
 	.type   _cgba_render_obj_4bpp_tiles_hf_sh4, @function
 _cgba_render_obj_4bpp_tiles_hf_sh4:
 .Lobj_hf_loop:
-	mov.l   @r4, r2
-	tst     r2, r2
-	bt      .Lobj_hf_next
-	mov     r2, r1
-	shlr2   r1
-	shlr    r1
-	add     r2, r2
-
-	mov     r2, r0
-	tst     #0x1e, r0
-	bt.s    1f
-	shlr8   r2
-	and     #0x1e, r0
-	mov.w   @(r0, r7), r0
-	mov.w   r0, @(2, r6)                /* dst[1] = p6 */
-1:	mov     r2, r0
-	tst     #0x1e, r0
-	bt.s    2f
-	shlr8   r2
-	and     #0x1e, r0
-	mov.w   @(r0, r7), r0
-	mov.w   r0, @(6, r6)                /* dst[3] = p4 */
-2:	mov     r2, r0
-	tst     #0x1e, r0
-	bt.s    3f
-	shlr8   r2
-	and     #0x1e, r0
-	mov.w   @(r0, r7), r0
-	mov.w   r0, @(10, r6)               /* dst[5] = p2 */
-3:	mov     r2, r0
-	tst     #0x1e, r0
-	bt      4f
-	and     #0x1e, r0
-	mov.w   @(r0, r7), r0
-	mov.w   r0, @(14, r6)               /* dst[7] = p0 */
-4:	mov     r1, r0
-	tst     #0x1e, r0
-	bt.s    5f
-	shlr8   r1
-	and     #0x1e, r0
-	mov.w   @(r0, r7), r0
-	mov.w   r0, @r6                     /* dst[0] = p7 */
-5:	mov     r1, r0
-	tst     #0x1e, r0
-	bt.s    6f
-	shlr8   r1
-	and     #0x1e, r0
-	mov.w   @(r0, r7), r0
-	mov.w   r0, @(4, r6)                /* dst[2] = p5 */
-6:	mov     r1, r0
-	tst     #0x1e, r0
-	bt.s    7f
-	shlr8   r1
-	and     #0x1e, r0
-	mov.w   @(r0, r7), r0
-	mov.w   r0, @(8, r6)                /* dst[4] = p3 */
-7:	mov     r1, r0
-	tst     #0x1e, r0
-	bt      .Lobj_hf_next
-	and     #0x1e, r0
-	mov.w   @(r0, r7), r0
-	mov.w   r0, @(12, r6)               /* dst[6] = p1 */
+	CGBA_OBJ_4BPP_ROW 1, .Lobj_hf_next
 .Lobj_hf_next:
 	add     #-32, r4
 	dt      r5
@@ -2108,68 +2086,7 @@ _cgba_render_obj_4bpp_tiles_strip_sh4:
 	mov     r8, r4
 	mov     r12, r5
 .Lobjs_loop:
-	mov.l   @r4, r2
-	tst     r2, r2
-	bt      .Lobjs_next
-	mov     r2, r1
-	shlr2   r1
-	shlr    r1
-	add     r2, r2
-
-	mov     r2, r0
-	tst     #0x1e, r0
-	bt.s    1f
-	shlr8   r2
-	and     #0x1e, r0
-	mov.w   @(r0, r7), r0
-	mov.w   r0, @(12, r6)
-1:	mov     r2, r0
-	tst     #0x1e, r0
-	bt.s    2f
-	shlr8   r2
-	and     #0x1e, r0
-	mov.w   @(r0, r7), r0
-	mov.w   r0, @(8, r6)
-2:	mov     r2, r0
-	tst     #0x1e, r0
-	bt.s    3f
-	shlr8   r2
-	and     #0x1e, r0
-	mov.w   @(r0, r7), r0
-	mov.w   r0, @(4, r6)
-3:	mov     r2, r0
-	tst     #0x1e, r0
-	bt      4f
-	and     #0x1e, r0
-	mov.w   @(r0, r7), r0
-	mov.w   r0, @r6
-4:	mov     r1, r0
-	tst     #0x1e, r0
-	bt.s    5f
-	shlr8   r1
-	and     #0x1e, r0
-	mov.w   @(r0, r7), r0
-	mov.w   r0, @(14, r6)
-5:	mov     r1, r0
-	tst     #0x1e, r0
-	bt.s    6f
-	shlr8   r1
-	and     #0x1e, r0
-	mov.w   @(r0, r7), r0
-	mov.w   r0, @(10, r6)
-6:	mov     r1, r0
-	tst     #0x1e, r0
-	bt.s    7f
-	shlr8   r1
-	and     #0x1e, r0
-	mov.w   @(r0, r7), r0
-	mov.w   r0, @(6, r6)
-7:	mov     r1, r0
-	tst     #0x1e, r0
-	bt      .Lobjs_next
-	and     #0x1e, r0
-	mov.w   @(r0, r7), r0
-	mov.w   r0, @(2, r6)
+	CGBA_OBJ_4BPP_ROW 0, .Lobjs_next
 .Lobjs_next:
 	add     #32, r4
 	dt      r5
@@ -2220,68 +2137,7 @@ _cgba_render_obj_4bpp_tiles_strip_hf_sh4:
 	mov     r8, r4
 	mov     r12, r5
 .Lobjsh_loop:
-	mov.l   @r4, r2
-	tst     r2, r2
-	bt      .Lobjsh_next
-	mov     r2, r1
-	shlr2   r1
-	shlr    r1
-	add     r2, r2
-
-	mov     r2, r0
-	tst     #0x1e, r0
-	bt.s    1f
-	shlr8   r2
-	and     #0x1e, r0
-	mov.w   @(r0, r7), r0
-	mov.w   r0, @(2, r6)
-1:	mov     r2, r0
-	tst     #0x1e, r0
-	bt.s    2f
-	shlr8   r2
-	and     #0x1e, r0
-	mov.w   @(r0, r7), r0
-	mov.w   r0, @(6, r6)
-2:	mov     r2, r0
-	tst     #0x1e, r0
-	bt.s    3f
-	shlr8   r2
-	and     #0x1e, r0
-	mov.w   @(r0, r7), r0
-	mov.w   r0, @(10, r6)
-3:	mov     r2, r0
-	tst     #0x1e, r0
-	bt      4f
-	and     #0x1e, r0
-	mov.w   @(r0, r7), r0
-	mov.w   r0, @(14, r6)
-4:	mov     r1, r0
-	tst     #0x1e, r0
-	bt.s    5f
-	shlr8   r1
-	and     #0x1e, r0
-	mov.w   @(r0, r7), r0
-	mov.w   r0, @r6
-5:	mov     r1, r0
-	tst     #0x1e, r0
-	bt.s    6f
-	shlr8   r1
-	and     #0x1e, r0
-	mov.w   @(r0, r7), r0
-	mov.w   r0, @(4, r6)
-6:	mov     r1, r0
-	tst     #0x1e, r0
-	bt.s    7f
-	shlr8   r1
-	and     #0x1e, r0
-	mov.w   @(r0, r7), r0
-	mov.w   r0, @(8, r6)
-7:	mov     r1, r0
-	tst     #0x1e, r0
-	bt      .Lobjsh_next
-	and     #0x1e, r0
-	mov.w   @(r0, r7), r0
-	mov.w   r0, @(12, r6)
+	CGBA_OBJ_4BPP_ROW 1, .Lobjsh_next
 .Lobjsh_next:
 	add     #-32, r4
 	dt      r5
@@ -2427,6 +2283,8 @@ _cgba_render_4bpp_strip_base_sh4:
 	add     r0, r0
 	mov     #28, r1
 	sub     r0, r1
+	mov     #4, r0
+	mov.l   r0, @-r15                   /* @(4, r15) = row_step (+4 or -4) */
 	mov.l   r1, @-r15                   /* @(0, r15) = vflip_off = 28 - 2*start_r*4 */
 
 	mov.w   .Lsb_480, r11               /* r11 = 480 (row pitch in bytes) */
@@ -2453,21 +2311,28 @@ _cgba_render_4bpp_strip_base_sh4:
 	shld    r2, r1
 	mov.w   .Lsb_7fe0, r2
 	and     r2, r1                      /* r1 = tile_id << 5 */
+	add     r7, r1                      /* r1 = tile_ptr (top row) */
 	tst     #0x08, r0                   /* T = !vflip */
-	bf      .Lsb_to_vflip
-	add     r7, r1                      /* r1 = tile_ptr (step +4/row) */
+	mov     #4, r2
+	bt      1f
+	mov.l   @(0, r15), r2               /* vflip_off */
+	add     r2, r1
+	mov     #-4, r2
+1:	mov.l   r2, @(4, r15)               /* row_step = +4 or -4 */
 
 	tst     #0x04, r0                   /* T = !hflip */
 	and     #0xF0, r0
 	shlr2   r0
 	shll8   r0
 	mov     r10, r5
-	bf.s    .Lsb_to_nv_hf
+	bf.s    .Lsb_to_hf
 	add     r0, r5                      /* r5 = &pair_lut[pal][0] */
 
 	mov     r13, r9                     /* r9 = k rows */
-.Lsb_nv_nhf_row:
-	mov.l   @r1+, r2
+.Lsb_nhf_row:
+	mov.l   @r1, r2
+	mov.l   @(4, r15), r0
+	add     r0, r1
 	extu.b  r2, r0
 	shll2   r0
 	mov.l   @(r0, r5), r3
@@ -2491,7 +2356,7 @@ _cgba_render_4bpp_strip_base_sh4:
 	mov.l   @(r0, r5), r3
 	dt      r9
 	mov.l   r3, @r6
-	bf.s    .Lsb_nv_nhf_row
+	bf.s    .Lsb_nhf_row
 	add     r11, r6
 
 	dt      r8
@@ -2502,7 +2367,7 @@ _cgba_render_4bpp_strip_base_sh4:
 	sts     mach, r8
 	tst     r8, r8
 	bf      .Lsb_span2
-	add     #4, r15                     /* pop vflip_off */
+	add     #8, r15                     /* pop vflip_off + row_step */
 	mov.l   @r15+, r14
 	mov.l   @r15+, r13
 	mov.l   @r15+, r12
@@ -2518,11 +2383,8 @@ _cgba_render_4bpp_strip_base_sh4:
 	bra     .Lsb_tile
 	lds     r0, mach
 
-.Lsb_to_nv_hf:
-	bra     .Lsb_nv_hf
-	nop
-.Lsb_to_vflip:
-	bra     .Lsb_vflip
+.Lsb_to_hf:
+	bra     .Lsb_hf
 	nop
 
 	.balign 4
@@ -2635,101 +2497,13 @@ _cgba_render_4bpp_strip_base_sh4:
 	bra     .Lsb_done
 	nop
 
-	/* !vflip, hflip */
-.Lsb_nv_hf:
+	/* hflip (!vflip & vflip via row_step in @(4, r15)) */
+.Lsb_hf:
 	mov     r13, r9
-.Lsb_nv_hf_row:
-	mov.l   @r1+, r2
-	extu.b  r2, r0
-	shll2   r0
-	mov.l   @(r0, r5), r3
-	shlr8   r2
-	swap.w  r3, r3
-	mov.l   r3, @r6
-
-	extu.b  r2, r0
-	shll2   r0
-	mov.l   @(r0, r5), r3
-	shlr8   r2
-	swap.w  r3, r3
-	mov.l   r3, @(4, r6)
-
-	extu.b  r2, r0
-	shll2   r0
-	mov.l   @(r0, r5), r3
-	shlr8   r2
-	swap.w  r3, r3
-	mov.l   r3, @(8, r6)
-
-	extu.b  r2, r0
-	shll2   r0
-	mov.l   @(r0, r5), r3
-	dt      r9
-	swap.w  r3, r3
-	mov.l   r3, @(12, r6)
-	bf.s    .Lsb_nv_hf_row
-	add     r11, r6
-
-	dt      r8
-	bt.s    .Lsb_done_bra
-	add     r14, r6
-	bra     .Lsb_tile
-	nop
-
-	/* vflip (!hflip & hflip) */
-.Lsb_vflip:
-	mov.l   @r15, r2                    /* vflip_off = 28 - 2*start_r*4 */
-	add     r7, r1
-	add     r2, r1                      /* r1 = tile_ptr for row (7-start_r) */
-	tst     #0x04, r0                   /* T = !hflip */
-	and     #0xF0, r0
-	shlr2   r0
-	shll8   r0
-	mov     r10, r5
-	bf.s    .Lsb_vf_hf
-	add     r0, r5
-
-	mov     r13, r9
-.Lsb_vf_nhf_row:
+.Lsb_hf_row:
 	mov.l   @r1, r2
-	add     #-4, r1
-	extu.b  r2, r0
-	shll2   r0
-	mov.l   @(r0, r5), r3
-	shlr8   r2
-	mov.l   r3, @(12, r6)
-
-	extu.b  r2, r0
-	shll2   r0
-	mov.l   @(r0, r5), r3
-	shlr8   r2
-	mov.l   r3, @(8, r6)
-
-	extu.b  r2, r0
-	shll2   r0
-	mov.l   @(r0, r5), r3
-	shlr8   r2
-	mov.l   r3, @(4, r6)
-
-	extu.b  r2, r0
-	shll2   r0
-	mov.l   @(r0, r5), r3
-	dt      r9
-	mov.l   r3, @r6
-	bf.s    .Lsb_vf_nhf_row
-	add     r11, r6
-
-	dt      r8
-	bt.s    .Lsb_done_bra
-	add     r14, r6
-	bra     .Lsb_tile
-	nop
-
-.Lsb_vf_hf:
-	mov     r13, r9
-.Lsb_vf_hf_row:
-	mov.l   @r1, r2
-	add     #-4, r1
+	mov.l   @(4, r15), r0
+	add     r0, r1
 	extu.b  r2, r0
 	shll2   r0
 	mov.l   @(r0, r5), r3
@@ -2757,7 +2531,7 @@ _cgba_render_4bpp_strip_base_sh4:
 	dt      r9
 	swap.w  r3, r3
 	mov.l   r3, @(12, r6)
-	bf.s    .Lsb_vf_hf_row
+	bf.s    .Lsb_hf_row
 	add     r11, r6
 
 	dt      r8
@@ -2831,6 +2605,71 @@ _cgba_render_4bpp_strip_base_sh4:
 1:
 .endm
 
+/* Shared 2-tile-at-a-time known-empty run skip for strip_over[_u16]_sh4. */
+.macro CGBA_STRIP_OVER_KE_RUN pfx
+\pfx\()_ke_run:
+	dt      r8
+	bt.s    \pfx\()_ke_done
+	add     #16, r6
+	mov     r4, r0
+	tst     #2, r0
+	bt      \pfx\()_ke_aligned
+	mov.w   @r4+, r0
+	cmp/eq  r12, r0
+	bf      \pfx\()_ke_have_r0
+	dt      r8
+	bt.s    \pfx\()_ke_done
+	add     #16, r6
+\pfx\()_ke_aligned:
+	mov     r8, r5
+	shlr    r5
+	tst     r5, r5
+	bt      \pfx\()_ke_tail1
+	extu.w  r12, r2
+	swap.w  r2, r1
+	or      r1, r2                      /* r2 = [r12 | r12] */
+\pfx\()_ke_pair:
+	mov.l   @r4+, r0
+	cmp/eq  r2, r0
+	bf      \pfx\()_ke_pmiss
+	dt      r5
+	bf.s    \pfx\()_ke_pair
+	add     #32, r6
+\pfx\()_ke_tail1:
+	mov     r8, r0
+	tst     #1, r0
+	bt      \pfx\()_ke_done
+	mov.w   @r4+, r0
+	cmp/eq  r12, r0
+	bf.s    \pfx\()_ke_have_r0
+	mov     #1, r8
+	bra     \pfx\()_done
+	add     #16, r6
+\pfx\()_ke_pmiss:
+	shll    r5
+	mov     #1, r1
+	and     r8, r1
+	mov     r5, r8
+	add     r1, r8
+	swap.w  r0, r1
+	exts.w  r1, r1
+	cmp/eq  r12, r1
+	bt.s    1f
+	exts.w  r0, r0
+	add     #-2, r4
+	bra     \pfx\()_tile_have_r0
+	mov     r1, r0
+1:	add     #16, r6
+	bra     \pfx\()_tile_have_r0
+	add     #-1, r8
+\pfx\()_ke_have_r0:
+	bra     \pfx\()_tile_have_r0
+	nop
+\pfx\()_ke_done:
+	bra     \pfx\()_done
+	nop
+.endm
+
 	.section .text._cgba_render_4bpp_strip_over_sh4,"ax",@progbits
 	.balign 4
 	.global _cgba_render_4bpp_strip_over_sh4
@@ -2872,9 +2711,11 @@ _cgba_render_4bpp_strip_over_sh4:
 	sub     r1, r0                      /* k * 480 */
 	mov     #16, r1
 	sub     r0, r1                      /* r1  = 16 - k * 480 */
-	mov.l   r1, @-r15                   /* @(8, r15) = dst_next_delta */
-	mov.l   r2, @-r15                   /* @(4, r15) = k */
-	mov.l   r3, @-r15                   /* @(0, r15) = vflip_off */
+	mov     #4, r0
+	mov.l   r0, @-r15                   /* @(12, r15) = row_step (+4 or -4) */
+	mov.l   r1, @-r15                   /* @(8,  r15) = dst_next_delta */
+	mov.l   r2, @-r15                   /* @(4,  r15) = k */
+	mov.l   r3, @-r15                   /* @(0,  r15) = vflip_off */
 
 	mov.w   .Lso_480, r11               /* r11 = 480 */
 	mov.l   .Lso_eeeef, r13             /* r13 = 0xEEEEEEEF (also empty sentinel!) */
@@ -2893,17 +2734,23 @@ _cgba_render_4bpp_strip_over_sh4:
 	shld    r2, r1
 	mov.w   .Lso_7fe0, r2
 	and     r2, r1                      /* r1 = tile_id << 5 */
+	add     r7, r1                      /* r1 = tile_ptr (top row) */
 	tst     #0x08, r0                   /* T = !vflip */
-	bf      .Lso_to_vflip
-	add     r7, r1                      /* r1 = tile_ptr (step +4/row) */
+	mov     #4, r5
+	bt      1f
+	mov.l   @(0, r15), r2               /* vflip_off */
+	add     r2, r1
+	mov     #-4, r5
+1:	mov.l   r5, @(12, r15)              /* row_step = +4 or -4 */
 
 	mov.l   @(4, r15), r9               /* r9 = k */
-.Lso_nv_scan:
-	mov.l   @r1+, r2
+.Lso_scan:
+	mov.l   @r1, r2
+	add     r5, r1
 	tst     r2, r2
-	bf      .Lso_nv_nz0
+	bf      .Lso_nz0
 	dt      r9
-	bf.s    .Lso_nv_scan
+	bf.s    .Lso_scan
 	add     r11, r6
 
 	/* All k rows empty: cache raw_map in r12 and advance to next tile */
@@ -2921,23 +2768,23 @@ _cgba_render_4bpp_strip_over_sh4:
 	bra     .Lso_ke_run
 	nop
 
-.Lso_nv_nz0:
+.Lso_nz0:
 	mov     r3, r0
 	tst     #0x04, r0                   /* T = !hflip */
 	and     #0xF0, r0
 	shlr2   r0
 	shll8   r0
 	mov     r10, r5
-	bf.s    .Lso_to_nv_hf
+	bf.s    .Lso_to_hf
 	add     r0, r5                      /* r5 = &pair_lut[pal][0] */
 
 	mov     r13, r0
-.Lso_nv_nhf_r0:
+.Lso_nhf_r0:
 	not     r2, r3
 	add     r2, r0
 	and     r3, r0
 	tst     r14, r0
-	bf      .Lso_nv_nhf_part
+	bf      .Lso_nhf_part
 
 	/* Aligned opaque !hflip row */
 	extu.b  r2, r0
@@ -2962,15 +2809,17 @@ _cgba_render_4bpp_strip_over_sh4:
 	shll2   r0
 	mov.l   @(r0, r5), r3
 	mov.l   r3, @r6
-.Lso_nv_nhf_next:
+.Lso_nhf_next:
 	dt      r9
 	bt.s    .Lso_tile_next
 	add     r11, r6
-	mov.l   @r1+, r2
+	mov.l   @r1, r2
+	mov.l   @(12, r15), r0
+	add     r0, r1
 	mov     r13, r0
 	tst     r2, r2
-	bf      .Lso_nv_nhf_r0
-	bra     .Lso_nv_nhf_next
+	bf      .Lso_nhf_r0
+	bra     .Lso_nhf_next
 	nop
 
 .Lso_tile_next:
@@ -2983,7 +2832,7 @@ _cgba_render_4bpp_strip_over_sh4:
 	sts     macl, r8
 	tst     r8, r8
 	bf      .Lso_span2
-	add     #12, r15                    /* pop vflip_off, k, dst_next_delta */
+	add     #16, r15                    /* pop vflip_off, k, dst_next_delta, row_step */
 	mov.l   @r15+, r14
 	mov.l   @r15+, r13
 	mov.l   @r15+, r12
@@ -2999,11 +2848,8 @@ _cgba_render_4bpp_strip_over_sh4:
 	bra     .Lso_tile
 	lds     r0, macl
 
-.Lso_to_nv_hf:
-	bra     .Lso_nv_hf_entry
-	nop
-.Lso_to_vflip:
-	bra     .Lso_vflip
+.Lso_to_hf:
+	bra     .Lso_hf_entry
 	nop
 
 	.balign 4
@@ -3017,87 +2863,26 @@ _cgba_render_4bpp_strip_over_sh4:
 	.word   0x7FE0
 	.balign 4
 
-	/* !vflip !hflip partial row (direct disp8 target from .Lso_nv_nhf_r0) */
-.Lso_nv_nhf_part:
+	/* !hflip partial row (direct disp8 target from .Lso_nhf_r0) */
+.Lso_nhf_part:
 	SO_PART_BYTE_NHF 12, 14, 1
 	SO_PART_BYTE_NHF  8, 10, 1
 	SO_PART_BYTE_NHF  4,  6, 1
 	SO_PART_BYTE_NHF  0,  2, 0
-	bra     .Lso_nv_nhf_next
+	bra     .Lso_nhf_next
 	nop
 
-	/* Out-of-line 2-tile-at-a-time known-empty run skip (keeps hot loop compact) */
-.Lso_ke_run:
-	dt      r8
-	bt.s    .Lso_ke_done
-	add     #16, r6
-	mov     r4, r0
-	tst     #2, r0
-	bt      .Lso_ke_aligned
-	mov.w   @r4+, r0
-	cmp/eq  r12, r0
-	bf      .Lso_ke_have_r0
-	dt      r8
-	bt.s    .Lso_ke_done
-	add     #16, r6
-.Lso_ke_aligned:
-	mov     r8, r5
-	shlr    r5
-	tst     r5, r5
-	bt      .Lso_ke_tail1
-	extu.w  r12, r2
-	swap.w  r2, r1
-	or      r1, r2                      /* r2 = [r12 | r12] */
-.Lso_ke_pair:
-	mov.l   @r4+, r0
-	cmp/eq  r2, r0
-	bf      .Lso_ke_pmiss
-	dt      r5
-	bf.s    .Lso_ke_pair
-	add     #32, r6
-.Lso_ke_tail1:
-	mov     r8, r0
-	tst     #1, r0
-	bt      .Lso_ke_done
-	mov.w   @r4+, r0
-	cmp/eq  r12, r0
-	bf.s    .Lso_ke_have_r0
-	mov     #1, r8
-	bra     .Lso_done
-	add     #16, r6
-.Lso_ke_pmiss:
-	shll    r5
-	mov     #1, r1
-	and     r8, r1
-	mov     r5, r8
-	add     r1, r8
-	swap.w  r0, r1
-	exts.w  r1, r1
-	cmp/eq  r12, r1
-	bt.s    1f
-	exts.w  r0, r0
-	add     #-2, r4
-	bra     .Lso_tile_have_r0
-	mov     r1, r0
-1:	add     #16, r6
-	bra     .Lso_tile_have_r0
-	add     #-1, r8
-.Lso_ke_have_r0:
-	bra     .Lso_tile_have_r0
-	nop
-.Lso_ke_done:
-	bra     .Lso_done
-	nop
+	CGBA_STRIP_OVER_KE_RUN .Lso
 
-	/* !vflip hflip row loop (r5 = &pair_lut[pal][0], r2 = first nonzero word) */
-.Lso_nv_hf_entry:
+	/* hflip row loop (r5 = &pair_lut[pal][0], r2 = first nonzero word) */
+.Lso_hf_entry:
 	mov     r13, r0
-.Lso_nv_hf_r0:
+.Lso_hf_r0:
 	not     r2, r3
 	add     r2, r0
 	and     r3, r0
 	tst     r14, r0
-	bf      .Lso_nv_hf_part
+	bf      .Lso_hf_part
 
 	extu.b  r2, r0
 	shll2   r0
@@ -3125,174 +2910,40 @@ _cgba_render_4bpp_strip_over_sh4:
 	mov.l   @(r0, r5), r3
 	swap.w  r3, r3
 	mov.l   r3, @(12, r6)
-.Lso_nv_hf_next:
+.Lso_hf_next:
 	dt      r9
 	bt.s    .Lso_hf_tile_done
 	add     r11, r6
-	mov.l   @r1+, r2
+	mov.l   @r1, r2
+	mov.l   @(12, r15), r0
+	add     r0, r1
 	mov     r13, r0
 	tst     r2, r2
-	bf      .Lso_nv_hf_r0
-	bra     .Lso_nv_hf_next
+	bf      .Lso_hf_r0
+	bra     .Lso_hf_next
 	nop
 .Lso_hf_tile_done:
 	bra     .Lso_tile_next
 	nop
 
-.Lso_nv_hf_part:
+.Lso_hf_part:
 	SO_PART_BYTE_HF  0,  2, 1
 	SO_PART_BYTE_HF  4,  6, 1
 	SO_PART_BYTE_HF  8, 10, 1
 	SO_PART_BYTE_HF 12, 14, 0
-	bra     .Lso_nv_hf_next
-	nop
-
-	/* vflip overlay tile (!hflip & hflip) */
-.Lso_vflip:
-	mov.l   @r15, r2                    /* vflip_off = 28 - 2*start_r*4 */
-	add     r7, r1
-	add     r2, r1                      /* r1 = tile_ptr for row (7-start_r) */
-	mov.l   @(4, r15), r9               /* r9 = k */
-.Lso_vf_scan:
-	mov.l   @r1, r2
-	add     #-4, r1
-	tst     r2, r2
-	bf      .Lso_vf_nz0
-	dt      r9
-	bf.s    .Lso_vf_scan
-	add     r11, r6
-	mov     r3, r12                     /* all k rows empty */
-	bra     .Lso_tile_next
-	nop
-
-.Lso_vf_nz0:
-	mov     r3, r0
-	tst     #0x04, r0                   /* T = !hflip */
-	and     #0xF0, r0
-	shlr2   r0
-	shll8   r0
-	mov     r10, r5
-	bf.s    .Lso_vf_hf_entry
-	add     r0, r5
-
-	mov     r13, r0
-.Lso_vf_nhf_r0:
-	not     r2, r3
-	add     r2, r0
-	and     r3, r0
-	tst     r14, r0
-	bf      .Lso_vf_nhf_part
-
-	extu.b  r2, r0
-	shll2   r0
-	mov.l   @(r0, r5), r3
-	shlr8   r2
-	mov.l   r3, @(12, r6)
-
-	extu.b  r2, r0
-	shll2   r0
-	mov.l   @(r0, r5), r3
-	shlr8   r2
-	mov.l   r3, @(8, r6)
-
-	extu.b  r2, r0
-	shll2   r0
-	mov.l   @(r0, r5), r3
-	shlr8   r2
-	mov.l   r3, @(4, r6)
-
-	extu.b  r2, r0
-	shll2   r0
-	mov.l   @(r0, r5), r3
-	mov.l   r3, @r6
-.Lso_vf_nhf_next:
-	dt      r9
-	bt.s    .Lso_vf_tile_done
-	add     r11, r6
-	mov.l   @r1, r2
-	add     #-4, r1
-	mov     r13, r0
-	tst     r2, r2
-	bf      .Lso_vf_nhf_r0
-	bra     .Lso_vf_nhf_next
-	nop
-.Lso_vf_tile_done:
-	bra     .Lso_tile_next
-	nop
-
-.Lso_vf_nhf_part:
-	SO_PART_BYTE_NHF 12, 14, 1
-	SO_PART_BYTE_NHF  8, 10, 1
-	SO_PART_BYTE_NHF  4,  6, 1
-	SO_PART_BYTE_NHF  0,  2, 0
-	bra     .Lso_vf_nhf_next
-	nop
-
-.Lso_vf_hf_entry:
-	mov     r13, r0
-.Lso_vf_hf_r0:
-	not     r2, r3
-	add     r2, r0
-	and     r3, r0
-	tst     r14, r0
-	bf      .Lso_vf_hf_part
-
-	extu.b  r2, r0
-	shll2   r0
-	mov.l   @(r0, r5), r3
-	shlr8   r2
-	swap.w  r3, r3
-	mov.l   r3, @r6
-
-	extu.b  r2, r0
-	shll2   r0
-	mov.l   @(r0, r5), r3
-	shlr8   r2
-	swap.w  r3, r3
-	mov.l   r3, @(4, r6)
-
-	extu.b  r2, r0
-	shll2   r0
-	mov.l   @(r0, r5), r3
-	shlr8   r2
-	swap.w  r3, r3
-	mov.l   r3, @(8, r6)
-
-	extu.b  r2, r0
-	shll2   r0
-	mov.l   @(r0, r5), r3
-	swap.w  r3, r3
-	mov.l   r3, @(12, r6)
-.Lso_vf_hf_next:
-	dt      r9
-	bt.s    .Lso_vf_tile_done
-	add     r11, r6
-	mov.l   @r1, r2
-	add     #-4, r1
-	mov     r13, r0
-	tst     r2, r2
-	bf      .Lso_vf_hf_r0
-	bra     .Lso_vf_hf_next
-	nop
-
-.Lso_vf_hf_part:
-	SO_PART_BYTE_HF  0,  2, 1
-	SO_PART_BYTE_HF  4,  6, 1
-	SO_PART_BYTE_HF  8, 10, 1
-	SO_PART_BYTE_HF 12, 14, 0
-	bra     .Lso_vf_hf_next
+	bra     .Lso_hf_next
 	nop
 	.size   _cgba_render_4bpp_strip_over_sh4, .-_cgba_render_4bpp_strip_over_sh4
 
 /* ============================================================================
- * _cgba_render_4bpp_strip_blend_sh4
+ * _cgba_render_4bpp_strip_blend_sh4  /  _cgba_render_4bpp_strip_blend_sat_sh4
  *
- * Tile-major 4bpp alpha-blended strip renderer for direct-to-RGB565 Mode 0
- * blending (eva + evb <= 16, non-saturating, RGB565 BLND_MSK = 0x07E0F81F).
- * Works for any 2-byte aligned dst_top (all tile_hoff = 0..7).
+ * Tile-major 4bpp alpha-blended strip renderers for direct-to-RGB565 Mode 0/1
+ * blending (RGB565 BLND_MSK = 0x07E0F81F; sat=0 for eva+evb<=16, sat=1 for
+ * eva+evb>16 with channel clamping). Works for any 2-byte aligned dst_top.
  *
  * Signature:
- *   void cgba_render_4bpp_strip_blend_sh4(
+ *   void cgba_render_4bpp_strip_blend[_sat]_sh4(
  *     const u16 *map1,          // r4
  *     u32 counts_packed,        // r5: todraw1 | (todraw2 << 16)
  *     u16 *dst_top,             // r6: 2-byte aligned destination
@@ -3301,7 +2952,7 @@ _cgba_render_4bpp_strip_over_sh4:
  *     const u32 *term_a,        // @(4, sp_in): 256-entry pre-scaled BG term_a
  *     const u16 *map2)          // @(8, sp_in): second map segment if todraw2 != 0
  * ========================================================================== */
-.macro CGBA_BLEND_BYTE disp_lo, disp_hi, do_shift
+.macro CGBA_BLEND_BYTE_CALL pfx, disp_lo, disp_hi, do_shift
 	extu.b  r2, r0
 	tst     r0, r0
 	bt      2f
@@ -3310,19 +2961,8 @@ _cgba_render_4bpp_strip_over_sh4:
 	bt      1f
 	shll2   r0
 	mov.l   @(r0, r5), r3
+	bsr     \pfx\()_blend_pix
 	mov.w   @(\disp_lo, r6), r0
-	extu.w  r0, r0
-	swap.w  r0, r12
-	or      r12, r0
-	and     r13, r0
-	mul.l   r14, r0
-	sts     macl, r0
-	add     r3, r0
-	shlr2   r0
-	shlr2   r0
-	and     r13, r0
-	swap.w  r0, r12
-	or      r12, r0
 	mov.w   r0, @(\disp_lo, r6)
 1:	extu.b  r2, r0
 	shlr2   r0
@@ -3331,19 +2971,8 @@ _cgba_render_4bpp_strip_over_sh4:
 	bt      2f
 	shll2   r0
 	mov.l   @(r0, r5), r3
+	bsr     \pfx\()_blend_pix
 	mov.w   @(\disp_hi, r6), r0
-	extu.w  r0, r0
-	swap.w  r0, r12
-	or      r12, r0
-	and     r13, r0
-	mul.l   r14, r0
-	sts     macl, r0
-	add     r3, r0
-	shlr2   r0
-	shlr2   r0
-	and     r13, r0
-	swap.w  r0, r12
-	or      r12, r0
 	mov.w   r0, @(\disp_hi, r6)
 2:
 	.if \do_shift
@@ -3352,41 +2981,57 @@ _cgba_render_4bpp_strip_over_sh4:
 .endm
 
 /* Solid-color 2-pixel aligned blend pair (out-of-line miss helper keeps all
- * 4 solid loops compact in I-cache and inside 8-bit branch range):
- *   r3  = term_a[pix] (constant for all 8 pixels)
- *   r5  = last_pair_in  (d0 << 16 | d1)
- *   r2  = last_pair_out (out0 << 16 | out1)
- *   r13 = BLND_MSK (0x07E0F81F)
- *   r14 = evb (0..16) */
-.macro CGBA_SOLID_PAIR disp
+ * 4 solid loops compact in I-cache and inside 8-bit branch range). */
+.macro CGBA_SOLID_PAIR_P pfx, disp
 	mov.l   @(\disp, r6), r0
 	cmp/eq  r5, r0
 	bt      1f
-	bsr     .Lsbl_solid_pair_miss
+	bsr     \pfx\()_solid_pair_miss
 	mov     r0, r5
 1:	mov.l   r2, @(\disp, r6)
 .endm
 
-/* Solid-color 16-bit edge pixel for odd tile_hoff (shares (r5, r2) pair cache):
- *   Expands d -> (d << 16) | d; hits whenever r5 holds the same uniform pair. */
-.macro CGBA_SOLID_EDGE_PIX disp
+/* Solid-color 16-bit edge pixel for odd tile_hoff (shares (r5, r2) pair cache). */
+.macro CGBA_SOLID_EDGE_PIX_P pfx, disp
 	mov.w   @(\disp, r6), r0
 	extu.w  r0, r0
 	swap.w  r0, r12
 	or      r12, r0
 	cmp/eq  r5, r0
 	bt      1f
-	bsr     .Lsbl_solid_edge_miss
+	bsr     \pfx\()_solid_edge_miss
 	mov     r0, r5
 1:	mov     r2, r0
 	mov.w   r0, @(\disp, r6)
 .endm
 
-	.section .text._cgba_render_4bpp_strip_blend_sh4,"ax",@progbits
+.macro CGBA_SAT_R0_P pfx
+	mov.l   @(48, r15), r12
+	tst     r12, r0
+	bt      9f
+	mov.l   \pfx\()_ovfg, r12
+	tst     r12, r0
+	bt      6f
+	mov.l   \pfx\()_satg, r12
+	or      r12, r0
+6:	mov.l   \pfx\()_ovfr, r12
+	tst     r12, r0
+	bt      7f
+	mov.w   \pfx\()_satr, r12
+	extu.w  r12, r12
+	or      r12, r0
+7:	tst     #0x20, r0
+	bt      9f
+	or      #0x1F, r0
+9:
+.endm
+
+.macro CGBA_STRIP_BLEND_KERNEL sym, pfx, sat
+	.section .text.\sym,"ax",@progbits
 	.balign 4
-	.global _cgba_render_4bpp_strip_blend_sh4
-	.type   _cgba_render_4bpp_strip_blend_sh4, @function
-_cgba_render_4bpp_strip_blend_sh4:
+	.global \sym
+	.type   \sym, @function
+\sym:
 	mov.l   r8, @-r15
 	mov.l   r9, @-r15
 	mov.l   r10, @-r15
@@ -3424,20 +3069,16 @@ _cgba_render_4bpp_strip_blend_sh4:
 	mov     #16, r12
 	sub     r0, r12                     /* r12 = 16 - k * 480 */
 
-	/* Local stack frame (12 longs = 48 bytes):
-	 *   @(44, r15) = pure_cand (sentinel BLND_MSK if not pure)
-	 *   @(40, r15) = pure_solid_ta
-	 *   @(36, r15) = pure_solid_raw (init sentinel BLND_MSK)
-	 *   @(32, r15) = solid_word
-	 *   @(28, r15) = saved_raw_map
-	 *   @(24, r15) = row_step (+4 / -4)
-	 *   @(20, r15) = last_empty_raw (init sentinel BLND_MSK)
-	 *   @(16, r15) = map2
-	 *   @(12, r15) = todraw2
-	 *   @(8,  r15) = dst_next_delta
-	 *   @(4,  r15) = k
-	 *   @(0,  r15) = vflip_off */
-	mov.l   .Lsbl_blnd_msk, r13         /* r13 = 0x07E0F81F (also impossible 16-bit sentinel) */
+	/* Local stack frame (48 bytes; 52 bytes when sat=1 with @(48,r15)=OVF_ALL):
+	 *   @(44, r15) = pure_cand, @(40, r15) = pure_solid_ta, @(36, r15) = pure_solid_raw,
+	 *   @(32, r15) = solid_word, @(28, r15) = saved_raw_map, @(24, r15) = row_step,
+	 *   @(20, r15) = last_empty_raw, @(16, r15) = map2, @(12, r15) = todraw2,
+	 *   @(8, r15) = dst_next_delta, @(4, r15) = k, @(0, r15) = vflip_off */
+	.if \sat
+	mov.l   \pfx\()_ovf_all, r0
+	mov.l   r0, @-r15                   /* @(48, r15) = 0x08010020 */
+	.endif
+	mov.l   \pfx\()_blnd_msk, r13       /* r13 = 0x07E0F81F (also impossible 16-bit sentinel) */
 	mov     #0, r0
 	mov.l   r13, @-r15                  /* @(44, r15) = pure_cand */
 	mov.l   r0, @-r15                   /* @(40, r15) = pure_solid_ta */
@@ -3453,62 +3094,60 @@ _cgba_render_4bpp_strip_blend_sh4:
 	mov.l   r2, @-r15                   /* @(4,  r15) = k */
 	mov.l   r3, @-r15                   /* @(0,  r15) = vflip_off */
 
-	mov.w   .Lsbl_480, r11              /* r11 = 480 */
+	mov.w   \pfx\()_480, r11            /* r11 = 480 */
 
 	.balign 4
-.Lsbl_tile:
+\pfx\()_tile:
 	mov.w   @r4+, r0
-.Lsbl_tile_have_r0:
+\pfx\()_tile_have_r0:
 	mov.l   @(20, r15), r3
 	cmp/eq  r3, r0
-	bt      .Lsbl_known_empty
+	bt      \pfx\()_known_empty
 	mov.l   @(36, r15), r3
 	cmp/eq  r3, r0
-	bt      .Lsbl_known_solid
+	bt      \pfx\()_known_solid
 	mov     r0, r3                      /* r3 = raw_map */
 	swap.b  r0, r1
 	mov     #5, r2
 	shld    r2, r1
-	mov.w   .Lsbl_7fe0, r2
+	mov.w   \pfx\()_7fe0, r2
 	and     r2, r1                      /* r1 = tile_id << 5 */
 	add     r7, r1                      /* r1 = tile_charbase + start_r*4 + tile_id*32 */
 	tst     #0x08, r0                   /* T = !vflip */
-	bf      .Lsbl_setup_vflip
+	bf      \pfx\()_setup_vflip
 	mov     #4, r5
-	bra     .Lsbl_scan_start
+	bra     \pfx\()_scan_start
 	mov.l   r5, @(24, r15)
 
-.Lsbl_setup_vflip:
+\pfx\()_setup_vflip:
 	mov.l   @(0, r15), r2
 	add     r2, r1
 	mov     #-4, r5
 	mov.l   r5, @(24, r15)
 
-.Lsbl_scan_start:
+\pfx\()_scan_start:
 	mov.l   @(4, r15), r9               /* r9 = k */
-.Lsbl_empty_scan:
+\pfx\()_empty_scan:
 	mov.l   @r1, r2
 	add     r5, r1
 	tst     r2, r2
-	bf      .Lsbl_nz_found
+	bf      \pfx\()_nz_found
 	dt      r9
-	bf.s    .Lsbl_empty_scan
+	bf.s    \pfx\()_empty_scan
 	add     r11, r6
 
-	/* All k rows empty (bf.s delay slot already added final row stride):
-	 * cache raw_map and advance to next tile */
 	mov.l   r3, @(20, r15)
-	bra     .Lsbl_tile_next
+	bra     \pfx\()_tile_next
 	nop
 
-.Lsbl_known_empty:
+\pfx\()_known_empty:
 	add     #16, r6
 	dt      r8
-	bf      .Lsbl_tile
-	bra     .Lsbl_seg_done
+	bf      \pfx\()_tile
+	bra     \pfx\()_seg_done
 	nop
 
-.Lsbl_known_solid:
+\pfx\()_known_solid:
 	mov.l   @(40, r15), r3              /* r3 = pure_solid_ta */
 	mov.l   @(4, r15), r9               /* r9 = k */
 	mov     #0, r5
@@ -3521,27 +3160,31 @@ _cgba_render_4bpp_strip_blend_sh4:
 	mov     r6, r0
 	tst     #2, r0
 	bf      1f
-	bra     .Lsbl_psa_loop
+	bra     \pfx\()_psa_loop
 	nop
-1:	bra     .Lsbl_psu_loop
+1:	bra     \pfx\()_psu_loop
 	nop
 
-.Lsbl_tile_next:
+\pfx\()_tile_next:
 	mov.l   @(8, r15), r0               /* dst_next_delta = 16 - k * 480 */
 	add     r0, r6
 	dt      r8
-	bf      .Lsbl_tile
-.Lsbl_seg_done:
+	bf      \pfx\()_tile
+\pfx\()_seg_done:
 	mov.l   @(12, r15), r8              /* todraw2 */
 	tst     r8, r8
-	bt      .Lsbl_ret
+	bt      \pfx\()_ret
 	mov     #0, r0
 	mov.l   r0, @(12, r15)
-	bra     .Lsbl_tile
+	bra     \pfx\()_tile
 	mov.l   @(16, r15), r4              /* r4 = map2 */
 
-.Lsbl_ret:
+\pfx\()_ret:
+	.if \sat
+	add     #52, r15
+	.else
 	add     #48, r15
+	.endif
 	lds.l   @r15+, pr
 	mov.l   @r15+, r14
 	mov.l   @r15+, r13
@@ -3553,22 +3196,25 @@ _cgba_render_4bpp_strip_blend_sh4:
 	mov.l   @r15+, r8
 
 	.balign 4
-.Lsbl_blnd_msk:
+	.if \sat
+\pfx\()_ovf_all:
+	.long   0x08010020
+	.endif
+\pfx\()_blnd_msk:
 	.long   0x07E0F81F
-.Lsbl_480:
+\pfx\()_480:
 	.word   480
-.Lsbl_7fe0:
+\pfx\()_7fe0:
 	.word   0x7FE0
 
 	.balign 4
-.Lsbl_nz_found:
+\pfx\()_nz_found:
 	mov.l   r3, @(28, r15)              /* save raw_map for solid/general transitions */
 	mov     r3, r0
 	and     #0xF0, r0
 	shll2   r0                          /* pal * 64 bytes */
 	mov     r10, r5
 	add     r0, r5                      /* r5 = &term_a[pal * 16] */
-	/* Fast path: check if all 8 nibbles in r2 are identical (solid color row) */
 	mov     r2, r0
 	shll2   r0
 	shll2   r0
@@ -3576,17 +3222,17 @@ _cgba_render_4bpp_strip_blend_sh4:
 	shlr2   r0
 	shlr2   r0
 	tst     r0, r0
-	bt      .Lsbl_solid_enter
+	bt      \pfx\()_solid_enter
 	mov     r3, r0
 	tst     #0x04, r0                   /* T = !hflip */
 	bf      1f
-	bra     .Lsbl_nhf_have_r2
+	bra     \pfx\()_nhf_have_r2
 	nop
-1:	bra     .Lsbl_hf_have_r2
+1:	bra     \pfx\()_hf_have_r2
 	nop
 
 	.balign 4
-.Lsbl_solid_enter:
+\pfx\()_solid_enter:
 	mov.l   r2, @(32, r15)              /* save solid_word */
 	mov.l   @(4, r15), r0               /* k */
 	cmp/eq  r0, r9                      /* row 0 solid (no leading empty rows)? */
@@ -3598,7 +3244,6 @@ _cgba_render_4bpp_strip_blend_sh4:
 	and     #0x0F, r0
 	shll2   r0
 	mov.l   @(r0, r5), r3               /* r3 = term_a[pix] */
-	/* Preload 1-entry cache with black (0x0000 -> blended_black) */
 	mov     #0, r5
 	mov     r3, r2
 	shlr2   r2
@@ -3608,148 +3253,147 @@ _cgba_render_4bpp_strip_blend_sh4:
 	or      r12, r2                     /* r2 = (out_black << 16) | out_black */
 	mov     r6, r0
 	tst     #2, r0
-	bt      .Lsbl_sa_loop
-	bra     .Lsbl_su_loop
+	bt      \pfx\()_sa_loop
+	bra     \pfx\()_su_loop
 	nop
 
 	.balign 4
-.Lsbl_sa_loop:
-	CGBA_SOLID_PAIR  0
-	CGBA_SOLID_PAIR  4
-	CGBA_SOLID_PAIR  8
-	CGBA_SOLID_PAIR 12
-.Lsbl_sa_next:
+\pfx\()_sa_loop:
+	CGBA_SOLID_PAIR_P \pfx,  0
+	CGBA_SOLID_PAIR_P \pfx,  4
+	CGBA_SOLID_PAIR_P \pfx,  8
+	CGBA_SOLID_PAIR_P \pfx, 12
+\pfx\()_sa_next:
 	add     r11, r6
 	dt      r9
-	bf      .Lsbl_sa_fetch
-	mov.l   @(44, r15), r0              /* pure_cand */
+	bf      \pfx\()_sa_fetch
+	mov.l   @(44, r15), r0
 	cmp/eq  r13, r0
 	bt      1f
-	mov.l   r0, @(36, r15)              /* pure_solid_raw = raw_map */
-	bra     .Lsbl_psa_tile_done
-	mov.l   r3, @(40, r15)              /* pure_solid_ta = r3 */
-1:	bra     .Lsbl_tile_next
+	mov.l   r0, @(36, r15)
+	bra     \pfx\()_psa_tile_done
+	mov.l   r3, @(40, r15)
+1:	bra     \pfx\()_tile_next
 	nop
-.Lsbl_sa_fetch:
+\pfx\()_sa_fetch:
 	mov.l   @r1, r12
 	mov.l   @(24, r15), r0
 	add     r0, r1
 	mov.l   @(32, r15), r0
 	cmp/eq  r0, r12
-	bt      .Lsbl_sa_loop
+	bt      \pfx\()_sa_loop
 	tst     r12, r12
 	bf      1f
-	bra     .Lsbl_sa_next
-	mov.l   r13, @(44, r15)             /* had empty row -> not pure */
+	bra     \pfx\()_sa_next
+	mov.l   r13, @(44, r15)
 1:	mov     r12, r2
 	mov.l   @(28, r15), r3
-	bra     .Lsbl_nz_found
+	bra     \pfx\()_nz_found
 	nop
 
 	.balign 4
-.Lsbl_su_loop:
-	CGBA_SOLID_EDGE_PIX  0
+\pfx\()_su_loop:
+	CGBA_SOLID_EDGE_PIX_P \pfx,  0
 	add     #2, r6
-	CGBA_SOLID_PAIR      0
-	CGBA_SOLID_PAIR      4
-	CGBA_SOLID_PAIR      8
-	CGBA_SOLID_EDGE_PIX 12
+	CGBA_SOLID_PAIR_P     \pfx,  0
+	CGBA_SOLID_PAIR_P     \pfx,  4
+	CGBA_SOLID_PAIR_P     \pfx,  8
+	CGBA_SOLID_EDGE_PIX_P \pfx, 12
 	add     #-2, r6
-.Lsbl_su_next:
+\pfx\()_su_next:
 	add     r11, r6
 	dt      r9
-	bf      .Lsbl_su_fetch
-	mov.l   @(44, r15), r0              /* pure_cand */
+	bf      \pfx\()_su_fetch
+	mov.l   @(44, r15), r0
 	cmp/eq  r13, r0
 	bt      1f
-	mov.l   r0, @(36, r15)              /* pure_solid_raw = raw_map */
-	bra     .Lsbl_psu_tile_done
-	mov.l   r3, @(40, r15)              /* pure_solid_ta = r3 */
-1:	bra     .Lsbl_tile_next
+	mov.l   r0, @(36, r15)
+	bra     \pfx\()_psu_tile_done
+	mov.l   r3, @(40, r15)
+1:	bra     \pfx\()_tile_next
 	nop
-.Lsbl_su_fetch:
+\pfx\()_su_fetch:
 	mov.l   @r1, r12
 	mov.l   @(24, r15), r0
 	add     r0, r1
 	mov.l   @(32, r15), r0
 	cmp/eq  r0, r12
-	bt      .Lsbl_su_loop
+	bt      \pfx\()_su_loop
 	tst     r12, r12
 	bf      1f
-	bra     .Lsbl_su_next
-	mov.l   r13, @(44, r15)             /* had empty row -> not pure */
+	bra     \pfx\()_su_next
+	mov.l   r13, @(44, r15)
 1:	mov     r12, r2
 	mov.l   @(28, r15), r3
-	bra     .Lsbl_nz_found
+	bra     \pfx\()_nz_found
 	nop
 
-	/* Pure-solid aligned loop (zero VRAM reads, warm pair cache across tiles) */
 	.balign 4
-.Lsbl_psa_loop:
-	CGBA_SOLID_PAIR  0
-	CGBA_SOLID_PAIR  4
-	CGBA_SOLID_PAIR  8
-	CGBA_SOLID_PAIR 12
+\pfx\()_psa_loop:
+	CGBA_SOLID_PAIR_P \pfx,  0
+	CGBA_SOLID_PAIR_P \pfx,  4
+	CGBA_SOLID_PAIR_P \pfx,  8
+	CGBA_SOLID_PAIR_P \pfx, 12
 	dt      r9
-	bf.s    .Lsbl_psa_loop
+	bf.s    \pfx\()_psa_loop
 	add     r11, r6
-.Lsbl_psa_tile_done:
-	mov.l   @(8, r15), r0               /* dst_next_delta = 16 - k * 480 */
+\pfx\()_psa_tile_done:
+	mov.l   @(8, r15), r0
 	add     r0, r6
 	dt      r8
-	bt      .Lsbl_seg_done_p
+	bt      \pfx\()_seg_done_p
 	mov.w   @r4+, r0
-	mov.l   @(36, r15), r12             /* pure_solid_raw */
+	mov.l   @(36, r15), r12
 	cmp/eq  r12, r0
-	bt.s    .Lsbl_psa_loop
-	mov.l   @(4, r15), r9               /* delay slot: r9 = k */
-	bra     .Lsbl_tile_have_r0
+	bt.s    \pfx\()_psa_loop
+	mov.l   @(4, r15), r9
+	bra     \pfx\()_tile_have_r0
 	nop
 
-	/* Pure-solid unaligned (4k+2) loop: edge + 3 aligned pairs + edge */
 	.balign 4
-.Lsbl_psu_loop:
-	CGBA_SOLID_EDGE_PIX  0
+\pfx\()_psu_loop:
+	CGBA_SOLID_EDGE_PIX_P \pfx,  0
 	add     #2, r6
-	CGBA_SOLID_PAIR      0
-	CGBA_SOLID_PAIR      4
-	CGBA_SOLID_PAIR      8
-	CGBA_SOLID_EDGE_PIX 12
+	CGBA_SOLID_PAIR_P     \pfx,  0
+	CGBA_SOLID_PAIR_P     \pfx,  4
+	CGBA_SOLID_PAIR_P     \pfx,  8
+	CGBA_SOLID_EDGE_PIX_P \pfx, 12
 	add     #-2, r6
 	dt      r9
-	bf.s    .Lsbl_psu_loop
+	bf.s    \pfx\()_psu_loop
 	add     r11, r6
-.Lsbl_psu_tile_done:
-	mov.l   @(8, r15), r0               /* dst_next_delta = 16 - k * 480 */
+\pfx\()_psu_tile_done:
+	mov.l   @(8, r15), r0
 	add     r0, r6
 	dt      r8
-	bt      .Lsbl_seg_done_p
+	bt      \pfx\()_seg_done_p
 	mov.w   @r4+, r0
-	mov.l   @(36, r15), r12             /* pure_solid_raw */
+	mov.l   @(36, r15), r12
 	cmp/eq  r12, r0
-	bt.s    .Lsbl_psu_loop
-	mov.l   @(4, r15), r9               /* delay slot: r9 = k */
-	bra     .Lsbl_tile_have_r0
+	bt.s    \pfx\()_psu_loop
+	mov.l   @(4, r15), r9
+	bra     \pfx\()_tile_have_r0
 	nop
-.Lsbl_seg_done_p:
-	bra     .Lsbl_seg_done
+\pfx\()_seg_done_p:
+	bra     \pfx\()_seg_done
 	nop
 
-	/* Out-of-line pair & edge-pixel miss helper (shared by all 4 solid loops).
-	 * Entry: r0 = r5 = (d0 << 16) | d1, r3 = term_a[pix], r13 = BLND_MSK, r14 = evb
-	 * Exit:  r2 = (out0 << 16) | out1 */
+	/* Out-of-line pair & edge-pixel miss helper (shared by all 4 solid loops). */
 	.balign 4
-.Lsbl_solid_pair_miss:
+\pfx\()_solid_pair_miss:
 	swap.w  r0, r12
 	cmp/eq  r12, r0
 	bf      1f
-.Lsbl_solid_edge_miss:
+\pfx\()_solid_edge_miss:
 	and     r13, r0
 	mul.l   r14, r0
 	sts     macl, r0
 	add     r3, r0
 	shlr2   r0
 	shlr2   r0
+	.if \sat
+	CGBA_SAT_R0_P \pfx
+	.endif
 	and     r13, r0
 	swap.w  r0, r12
 	or      r12, r0
@@ -3764,6 +3408,9 @@ _cgba_render_4bpp_strip_blend_sh4:
 	add     r3, r0
 	shlr2   r0
 	shlr2   r0
+	.if \sat
+	CGBA_SAT_R0_P \pfx
+	.endif
 	and     r13, r0
 	swap.w  r0, r12
 	or      r12, r0
@@ -3778,6 +3425,9 @@ _cgba_render_4bpp_strip_blend_sh4:
 	add     r3, r0
 	shlr2   r0
 	shlr2   r0
+	.if \sat
+	CGBA_SAT_R0_P \pfx
+	.endif
 	and     r13, r0
 	swap.w  r0, r12
 	or      r12, r0
@@ -3785,24 +3435,58 @@ _cgba_render_4bpp_strip_blend_sh4:
 	rts
 	or      r0, r2                      /* r2 = (out0 << 16) | out1 */
 
+	/* Shared single-pixel blend helper called from CGBA_BLEND_BYTE_CALL (16 sites).
+	 * In: r0 = dst RGB565 (from delay slot), r3 = term_a[pix], r13 = BLND_MSK, r14 = evb.
+	 * Out: r0 = blended RGB565. Clobbers r12, MACL, T. */
 	.balign 4
-.Lsbl_nhf_have_r2:
-	CGBA_BLEND_BYTE 12, 14, 1
-	CGBA_BLEND_BYTE  8, 10, 1
-	CGBA_BLEND_BYTE  4,  6, 1
-	CGBA_BLEND_BYTE  0,  2, 0
-.Lsbl_nhf_next:
+\pfx\()_blend_pix:
+	extu.w  r0, r0
+	swap.w  r0, r12
+	or      r12, r0
+	and     r13, r0
+	mul.l   r14, r0
+	sts     macl, r0
+	add     r3, r0
+	shlr2   r0
+	shlr2   r0
+	.if \sat
+	CGBA_SAT_R0_P \pfx
+	.endif
+	and     r13, r0
+	swap.w  r0, r12
+	rts
+	or      r12, r0
+
+	.if \sat
+	.balign 4
+\pfx\()_ovfg:
+	.long   0x08000000
+\pfx\()_satg:
+	.long   0x07E00000
+\pfx\()_ovfr:
+	.long   0x00010000
+\pfx\()_satr:
+	.word   0xF800
+	.endif
+
+	.balign 4
+\pfx\()_nhf_have_r2:
+	CGBA_BLEND_BYTE_CALL \pfx, 12, 14, 1
+	CGBA_BLEND_BYTE_CALL \pfx,  8, 10, 1
+	CGBA_BLEND_BYTE_CALL \pfx,  4,  6, 1
+	CGBA_BLEND_BYTE_CALL \pfx,  0,  2, 0
+\pfx\()_nhf_next:
 	add     r11, r6
 	dt      r9
-	bf      .Lsbl_nhf_fetch
-	bra     .Lsbl_tile_next
+	bf      \pfx\()_nhf_fetch
+	bra     \pfx\()_tile_next
 	nop
-.Lsbl_nhf_fetch:
+\pfx\()_nhf_fetch:
 	mov.l   @r1, r2
 	mov.l   @(24, r15), r0
 	add     r0, r1
 	tst     r2, r2
-	bt      .Lsbl_nhf_next
+	bt      \pfx\()_nhf_next
 	mov     r2, r0
 	shll2   r0
 	shll2   r0
@@ -3811,29 +3495,29 @@ _cgba_render_4bpp_strip_blend_sh4:
 	shlr2   r0
 	tst     r0, r0
 	bf      1f
-	bra     .Lsbl_solid_enter
+	bra     \pfx\()_solid_enter
 	mov.l   @(28, r15), r3
-1:	bra     .Lsbl_nhf_have_r2
+1:	bra     \pfx\()_nhf_have_r2
 	nop
 
 	.balign 4
-.Lsbl_hf_have_r2:
-	CGBA_BLEND_BYTE  2,  0, 1
-	CGBA_BLEND_BYTE  6,  4, 1
-	CGBA_BLEND_BYTE 10,  8, 1
-	CGBA_BLEND_BYTE 14, 12, 0
-.Lsbl_hf_next:
+\pfx\()_hf_have_r2:
+	CGBA_BLEND_BYTE_CALL \pfx,  2,  0, 1
+	CGBA_BLEND_BYTE_CALL \pfx,  6,  4, 1
+	CGBA_BLEND_BYTE_CALL \pfx, 10,  8, 1
+	CGBA_BLEND_BYTE_CALL \pfx, 14, 12, 0
+\pfx\()_hf_next:
 	add     r11, r6
 	dt      r9
-	bf      .Lsbl_hf_fetch
-	bra     .Lsbl_tile_next
+	bf      \pfx\()_hf_fetch
+	bra     \pfx\()_tile_next
 	nop
-.Lsbl_hf_fetch:
+\pfx\()_hf_fetch:
 	mov.l   @r1, r2
 	mov.l   @(24, r15), r0
 	add     r0, r1
 	tst     r2, r2
-	bt      .Lsbl_hf_next
+	bt      \pfx\()_hf_next
 	mov     r2, r0
 	shll2   r0
 	shll2   r0
@@ -3842,11 +3526,15 @@ _cgba_render_4bpp_strip_blend_sh4:
 	shlr2   r0
 	tst     r0, r0
 	bf      1f
-	bra     .Lsbl_solid_enter
+	bra     \pfx\()_solid_enter
 	mov.l   @(28, r15), r3
-1:	bra     .Lsbl_hf_have_r2
+1:	bra     \pfx\()_hf_have_r2
 	nop
-	.size   _cgba_render_4bpp_strip_blend_sh4, .-_cgba_render_4bpp_strip_blend_sh4
+	.size   \sym, .-\sym
+.endm
+
+	CGBA_STRIP_BLEND_KERNEL _cgba_render_4bpp_strip_blend_sh4, .Lsbl, 0
+	CGBA_STRIP_BLEND_KERNEL _cgba_render_4bpp_strip_blend_sat_sh4, .Lsbs, 1
 
 /* ============================================================================
  * _cgba_blend_solid_rect_sh4
@@ -4382,613 +4070,6 @@ _cgba_render_obj_4bpp_affine_rot_sh4:
 	rts
 	mov.l   @r15+, r8
 	.size   _cgba_render_obj_4bpp_affine_rot_sh4, .-_cgba_render_obj_4bpp_affine_rot_sh4
-
-
-/* ============================================================================
- * _cgba_render_4bpp_strip_blend_sat_sh4
- *
- * Tile-major 4bpp saturating alpha-blended strip renderer for direct-to-RGB565
- * Mode 0 blending (eva + evb > 16, RGB565 BLND_MSK = 0x07E0F81F,
- * OVF = 0x08010020). Same signature and ABI as _cgba_render_4bpp_strip_blend_sh4.
- * ========================================================================== */
-.macro CGBA_BLEND_BYTE_SAT disp_lo, disp_hi, do_shift
-	extu.b  r2, r0
-	tst     r0, r0
-	bt      2f
-	and     #0x0F, r0
-	tst     r0, r0
-	bt      1f
-	shll2   r0
-	mov.l   @(r0, r5), r3
-	mov.w   @(\disp_lo, r6), r0
-	extu.w  r0, r0
-	swap.w  r0, r12
-	or      r12, r0
-	and     r13, r0
-	mul.l   r14, r0
-	sts     macl, r0
-	add     r3, r0
-	shlr2   r0
-	shlr2   r0
-	mov.l   @(48, r15), r12
-	tst     r12, r0
-	bt      3f
-	bsr     .Lsbs_sat_r0
-	nop
-3:	and     r13, r0
-	swap.w  r0, r12
-	or      r12, r0
-	mov.w   r0, @(\disp_lo, r6)
-1:	extu.b  r2, r0
-	shlr2   r0
-	shlr2   r0
-	tst     r0, r0
-	bt      2f
-	shll2   r0
-	mov.l   @(r0, r5), r3
-	mov.w   @(\disp_hi, r6), r0
-	extu.w  r0, r0
-	swap.w  r0, r12
-	or      r12, r0
-	and     r13, r0
-	mul.l   r14, r0
-	sts     macl, r0
-	add     r3, r0
-	shlr2   r0
-	shlr2   r0
-	mov.l   @(48, r15), r12
-	tst     r12, r0
-	bt      4f
-	bsr     .Lsbs_sat_r0
-	nop
-4:	and     r13, r0
-	swap.w  r0, r12
-	or      r12, r0
-	mov.w   r0, @(\disp_hi, r6)
-2:
-	.if \do_shift
-	shlr8   r2
-	.endif
-.endm
-
-.macro CGBA_SOLID_PAIR_SAT disp
-	mov.l   @(\disp, r6), r0
-	cmp/eq  r5, r0
-	bt      1f
-	bsr     .Lsbs_solid_pair_miss
-	mov     r0, r5
-1:	mov.l   r2, @(\disp, r6)
-.endm
-
-.macro CGBA_SOLID_EDGE_PIX_SAT disp
-	mov.w   @(\disp, r6), r0
-	extu.w  r0, r0
-	swap.w  r0, r12
-	or      r12, r0
-	cmp/eq  r5, r0
-	bt      1f
-	bsr     .Lsbs_solid_edge_miss
-	mov     r0, r5
-1:	mov     r2, r0
-	mov.w   r0, @(\disp, r6)
-.endm
-
-.macro CGBA_SAT_R0_INLINE
-	mov.l   @(48, r15), r12
-	tst     r12, r0
-	bt      9f
-	mov.l   .Lsbs_ovfg, r12
-	tst     r12, r0
-	bt      6f
-	mov.l   .Lsbs_satg, r12
-	or      r12, r0
-6:	mov.l   .Lsbs_ovfr, r12
-	tst     r12, r0
-	bt      7f
-	mov.w   .Lsbs_satr, r12
-	extu.w  r12, r12
-	or      r12, r0
-7:	tst     #0x20, r0
-	bt      9f
-	or      #0x1F, r0
-9:
-.endm
-
-	.section .text._cgba_render_4bpp_strip_blend_sat_sh4,"ax",@progbits
-	.balign 4
-	.global _cgba_render_4bpp_strip_blend_sat_sh4
-	.type   _cgba_render_4bpp_strip_blend_sat_sh4, @function
-_cgba_render_4bpp_strip_blend_sat_sh4:
-	mov.l   r8, @-r15
-	mov.l   r9, @-r15
-	mov.l   r10, @-r15
-	mov.l   r11, @-r15
-	mov.l   r12, @-r15
-	mov.l   r13, @-r15
-	mov.l   r14, @-r15
-	sts.l   pr, @-r15
-
-	extu.w  r5, r8                      /* r8  = todraw1 */
-	shlr16  r5                          /* r5  = todraw2 */
-	mov.l   @(40, r15), r1              /* r1  = map2 */
-	mov.l   @(36, r15), r10             /* r10 = term_a */
-	mov.l   @(32, r15), r0              /* r0  = (evb << 16) | (start_r << 8) | k */
-	mov     r0, r14
-	shlr16  r14                         /* r14 = evb (0..16) */
-	extu.b  r0, r2                      /* r2  = k (1..8) */
-	shlr8   r0
-	extu.b  r0, r0
-	shll2   r0                          /* r0  = start_r * 4 */
-	add     r0, r7                      /* r7  = tile_charbase + start_r * 4 */
-	add     r0, r0
-	mov     #28, r3
-	sub     r0, r3                      /* r3  = vflip_off = 28 - 2 * start_r * 4 */
-
-	/* dst_next_delta = 16 - k * 480 */
-	mov     r2, r0
-	shll8   r0
-	add     r0, r0                      /* k * 512 */
-	mov     r2, r12
-	shll2   r12
-	shll2   r12
-	add     r12, r12                    /* k * 32 */
-	sub     r12, r0                     /* k * 480 */
-	mov     #16, r12
-	sub     r0, r12                     /* r12 = 16 - k * 480 */
-
-	/* Local stack frame (13 longs = 52 bytes):
-	 *   @(48, r15) = OVF_ALL (0x08010020)
-	 *   @(44, r15) = pure_cand (sentinel BLND_MSK if not pure)
-	 *   @(40, r15) = pure_solid_ta
-	 *   @(36, r15) = pure_solid_raw (init sentinel BLND_MSK)
-	 *   @(32, r15) = solid_word
-	 *   @(28, r15) = saved_raw_map
-	 *   @(24, r15) = row_step (+4 / -4)
-	 *   @(20, r15) = last_empty_raw (init sentinel BLND_MSK)
-	 *   @(16, r15) = map2
-	 *   @(12, r15) = todraw2
-	 *   @(8,  r15) = dst_next_delta
-	 *   @(4,  r15) = k
-	 *   @(0,  r15) = vflip_off */
-	mov.l   .Lsbs_ovf_all, r0
-	mov.l   r0, @-r15                   /* @(48, r15) = 0x08010020 */
-	mov.l   .Lsbs_blnd_msk, r13         /* r13 = 0x07E0F81F */
-	mov     #0, r0
-	mov.l   r13, @-r15                  /* @(44, r15) = pure_cand */
-	mov.l   r0, @-r15                   /* @(40, r15) = pure_solid_ta */
-	mov.l   r13, @-r15                  /* @(36, r15) = pure_solid_raw */
-	mov.l   r0, @-r15                   /* @(32, r15) = solid_word */
-	mov.l   r0, @-r15                   /* @(28, r15) = saved_raw_map */
-	mov     #4, r0
-	mov.l   r0, @-r15                   /* @(24, r15) = row_step */
-	mov.l   r13, @-r15                  /* @(20, r15) = last_empty_raw */
-	mov.l   r1, @-r15                   /* @(16, r15) = map2 */
-	mov.l   r5, @-r15                   /* @(12, r15) = todraw2 */
-	mov.l   r12, @-r15                  /* @(8,  r15) = dst_next_delta */
-	mov.l   r2, @-r15                   /* @(4,  r15) = k */
-	mov.l   r3, @-r15                   /* @(0,  r15) = vflip_off */
-
-	mov.w   .Lsbs_480, r11              /* r11 = 480 */
-
-	.balign 4
-.Lsbs_tile:
-	mov.w   @r4+, r0
-.Lsbs_tile_have_r0:
-	mov.l   @(20, r15), r3
-	cmp/eq  r3, r0
-	bt      .Lsbs_known_empty
-	mov.l   @(36, r15), r3
-	cmp/eq  r3, r0
-	bt      .Lsbs_known_solid
-	mov     r0, r3                      /* r3 = raw_map */
-	swap.b  r0, r1
-	mov     #5, r2
-	shld    r2, r1
-	mov.w   .Lsbs_7fe0, r2
-	and     r2, r1                      /* r1 = tile_id << 5 */
-	add     r7, r1                      /* r1 = tile_charbase + start_r*4 + tile_id*32 */
-	tst     #0x08, r0                   /* T = !vflip */
-	bf      .Lsbs_setup_vflip
-	mov     #4, r5
-	bra     .Lsbs_scan_start
-	mov.l   r5, @(24, r15)
-
-.Lsbs_setup_vflip:
-	mov.l   @(0, r15), r2
-	add     r2, r1
-	mov     #-4, r5
-	mov.l   r5, @(24, r15)
-
-.Lsbs_scan_start:
-	mov.l   @(4, r15), r9               /* r9 = k */
-.Lsbs_empty_scan:
-	mov.l   @r1, r2
-	add     r5, r1
-	tst     r2, r2
-	bf      .Lsbs_nz_found
-	dt      r9
-	bf.s    .Lsbs_empty_scan
-	add     r11, r6
-
-	mov.l   r3, @(20, r15)
-	bra     .Lsbs_tile_next
-	nop
-
-.Lsbs_known_empty:
-	add     #16, r6
-	dt      r8
-	bf      .Lsbs_tile
-	bra     .Lsbs_seg_done
-	nop
-
-.Lsbs_known_solid:
-	mov.l   @(40, r15), r3              /* r3 = pure_solid_ta */
-	mov.l   @(4, r15), r9               /* r9 = k */
-	mov     #0, r5
-	mov     r3, r2
-	shlr2   r2
-	shlr2   r2
-	and     r13, r2
-	swap.w  r2, r12
-	or      r12, r2                     /* dst=0: term_a>>4 cannot saturate */
-	mov     r6, r0
-	tst     #2, r0
-	bf      1f
-	bra     .Lsbs_psa_loop
-	nop
-1:	bra     .Lsbs_psu_loop
-	nop
-
-.Lsbs_tile_next:
-	mov.l   @(8, r15), r0               /* dst_next_delta = 16 - k * 480 */
-	add     r0, r6
-	dt      r8
-	bf      .Lsbs_tile
-.Lsbs_seg_done:
-	mov.l   @(12, r15), r8              /* todraw2 */
-	tst     r8, r8
-	bt      .Lsbs_ret
-	mov     #0, r0
-	mov.l   r0, @(12, r15)
-	bra     .Lsbs_tile
-	mov.l   @(16, r15), r4              /* r4 = map2 */
-
-.Lsbs_ret:
-	add     #52, r15
-	lds.l   @r15+, pr
-	mov.l   @r15+, r14
-	mov.l   @r15+, r13
-	mov.l   @r15+, r12
-	mov.l   @r15+, r11
-	mov.l   @r15+, r10
-	mov.l   @r15+, r9
-	rts
-	mov.l   @r15+, r8
-
-	.balign 4
-.Lsbs_ovf_all:
-	.long   0x08010020
-.Lsbs_blnd_msk:
-	.long   0x07E0F81F
-.Lsbs_480:
-	.word   480
-.Lsbs_7fe0:
-	.word   0x7FE0
-
-	.balign 4
-.Lsbs_nz_found:
-	mov.l   r3, @(28, r15)              /* save raw_map */
-	mov     r3, r0
-	and     #0xF0, r0
-	shll2   r0                          /* pal * 64 bytes */
-	mov     r10, r5
-	add     r0, r5                      /* r5 = &term_a[pal * 16] */
-	mov     r2, r0
-	shll2   r0
-	shll2   r0
-	xor     r2, r0
-	shlr2   r0
-	shlr2   r0
-	tst     r0, r0
-	bt      .Lsbs_solid_enter
-	mov     r3, r0
-	tst     #0x04, r0                   /* T = !hflip */
-	bf      1f
-	bra     .Lsbs_nhf_have_r2
-	nop
-1:	bra     .Lsbs_hf_have_r2
-	nop
-
-	.balign 4
-.Lsbs_solid_enter:
-	mov.l   r2, @(32, r15)              /* save solid_word */
-	mov.l   @(4, r15), r0               /* k */
-	cmp/eq  r0, r9
-	bt      1f
-	bra     2f
-	mov.l   r13, @(44, r15)
-1:	mov.l   r3, @(44, r15)
-2:	mov     r2, r0
-	and     #0x0F, r0
-	shll2   r0
-	mov.l   @(r0, r5), r3               /* r3 = term_a[pix] */
-	mov     #0, r5
-	mov     r3, r2
-	shlr2   r2
-	shlr2   r2
-	and     r13, r2
-	swap.w  r2, r12
-	or      r12, r2
-	mov     r6, r0
-	tst     #2, r0
-	bt      .Lsbs_sa_loop
-	bra     .Lsbs_su_loop
-	nop
-
-	.balign 4
-.Lsbs_sa_loop:
-	CGBA_SOLID_PAIR_SAT  0
-	CGBA_SOLID_PAIR_SAT  4
-	CGBA_SOLID_PAIR_SAT  8
-	CGBA_SOLID_PAIR_SAT 12
-.Lsbs_sa_next:
-	add     r11, r6
-	dt      r9
-	bf      .Lsbs_sa_fetch
-	mov.l   @(44, r15), r0
-	cmp/eq  r13, r0
-	bt      1f
-	mov.l   r0, @(36, r15)
-	bra     .Lsbs_psa_tile_done
-	mov.l   r3, @(40, r15)
-1:	bra     .Lsbs_tile_next
-	nop
-.Lsbs_sa_fetch:
-	mov.l   @r1, r12
-	mov.l   @(24, r15), r0
-	add     r0, r1
-	mov.l   @(32, r15), r0
-	cmp/eq  r0, r12
-	bt      .Lsbs_sa_loop
-	tst     r12, r12
-	bf      1f
-	bra     .Lsbs_sa_next
-	mov.l   r13, @(44, r15)
-1:	mov     r12, r2
-	mov.l   @(28, r15), r3
-	bra     .Lsbs_nz_found
-	nop
-
-	.balign 4
-.Lsbs_su_loop:
-	CGBA_SOLID_EDGE_PIX_SAT  0
-	add     #2, r6
-	CGBA_SOLID_PAIR_SAT      0
-	CGBA_SOLID_PAIR_SAT      4
-	CGBA_SOLID_PAIR_SAT      8
-	CGBA_SOLID_EDGE_PIX_SAT 12
-	add     #-2, r6
-.Lsbs_su_next:
-	add     r11, r6
-	dt      r9
-	bf      .Lsbs_su_fetch
-	mov.l   @(44, r15), r0
-	cmp/eq  r13, r0
-	bt      1f
-	mov.l   r0, @(36, r15)
-	bra     .Lsbs_psu_tile_done
-	mov.l   r3, @(40, r15)
-1:	bra     .Lsbs_tile_next
-	nop
-.Lsbs_su_fetch:
-	mov.l   @r1, r12
-	mov.l   @(24, r15), r0
-	add     r0, r1
-	mov.l   @(32, r15), r0
-	cmp/eq  r0, r12
-	bt      .Lsbs_su_loop
-	tst     r12, r12
-	bf      1f
-	bra     .Lsbs_su_next
-	mov.l   r13, @(44, r15)
-1:	mov     r12, r2
-	mov.l   @(28, r15), r3
-	bra     .Lsbs_nz_found
-	nop
-
-	.balign 4
-.Lsbs_psa_loop:
-	CGBA_SOLID_PAIR_SAT  0
-	CGBA_SOLID_PAIR_SAT  4
-	CGBA_SOLID_PAIR_SAT  8
-	CGBA_SOLID_PAIR_SAT 12
-	dt      r9
-	bf.s    .Lsbs_psa_loop
-	add     r11, r6
-.Lsbs_psa_tile_done:
-	mov.l   @(8, r15), r0
-	add     r0, r6
-	dt      r8
-	bt      .Lsbs_seg_done_p
-	mov.w   @r4+, r0
-	mov.l   @(36, r15), r12
-	cmp/eq  r12, r0
-	bt.s    .Lsbs_psa_loop
-	mov.l   @(4, r15), r9
-	bra     .Lsbs_tile_have_r0
-	nop
-
-	.balign 4
-.Lsbs_psu_loop:
-	CGBA_SOLID_EDGE_PIX_SAT  0
-	add     #2, r6
-	CGBA_SOLID_PAIR_SAT      0
-	CGBA_SOLID_PAIR_SAT      4
-	CGBA_SOLID_PAIR_SAT      8
-	CGBA_SOLID_EDGE_PIX_SAT 12
-	add     #-2, r6
-	dt      r9
-	bf.s    .Lsbs_psu_loop
-	add     r11, r6
-.Lsbs_psu_tile_done:
-	mov.l   @(8, r15), r0
-	add     r0, r6
-	dt      r8
-	bt      .Lsbs_seg_done_p
-	mov.w   @r4+, r0
-	mov.l   @(36, r15), r12
-	cmp/eq  r12, r0
-	bt.s    .Lsbs_psu_loop
-	mov.l   @(4, r15), r9
-	bra     .Lsbs_tile_have_r0
-	nop
-.Lsbs_seg_done_p:
-	bra     .Lsbs_seg_done
-	nop
-
-	.balign 4
-.Lsbs_solid_pair_miss:
-	swap.w  r0, r12
-	cmp/eq  r12, r0
-	bf      1f
-.Lsbs_solid_edge_miss:
-	and     r13, r0
-	mul.l   r14, r0
-	sts     macl, r0
-	add     r3, r0
-	shlr2   r0
-	shlr2   r0
-	CGBA_SAT_R0_INLINE
-	and     r13, r0
-	swap.w  r0, r12
-	or      r12, r0
-	rts
-	mov     r0, r2
-1:	extu.w  r0, r0
-	swap.w  r0, r12
-	or      r12, r0
-	and     r13, r0
-	mul.l   r14, r0
-	sts     macl, r0
-	add     r3, r0
-	shlr2   r0
-	shlr2   r0
-	CGBA_SAT_R0_INLINE
-	and     r13, r0
-	swap.w  r0, r12
-	or      r12, r0
-	extu.w  r0, r2                      /* r2 = 0x0000_out1 */
-	mov     r5, r0
-	shlr16  r0
-	swap.w  r0, r12
-	or      r12, r0
-	and     r13, r0
-	mul.l   r14, r0
-	sts     macl, r0
-	add     r3, r0
-	shlr2   r0
-	shlr2   r0
-	CGBA_SAT_R0_INLINE
-	and     r13, r0
-	swap.w  r0, r12
-	or      r12, r0
-	shll16  r0
-	rts
-	or      r0, r2                      /* r2 = (out0 << 16) | out1 */
-
-	/* Out-of-line saturation helper called from CGBA_BLEND_BYTE_SAT on overflow.
-	 * Clobbers: r12, T. */
-	.balign 4
-.Lsbs_sat_r0:
-	mov.l   .Lsbs_ovfg, r12
-	tst     r12, r0
-	bt      1f
-	mov.l   .Lsbs_satg, r12
-	or      r12, r0
-1:	mov.l   .Lsbs_ovfr, r12
-	tst     r12, r0
-	bt      2f
-	mov.w   .Lsbs_satr, r12
-	extu.w  r12, r12
-	or      r12, r0
-2:	tst     #0x20, r0
-	bt      3f
-	or      #0x1F, r0
-3:	rts
-	nop
-
-	.balign 4
-.Lsbs_ovfg:
-	.long   0x08000000
-.Lsbs_satg:
-	.long   0x07E00000
-.Lsbs_ovfr:
-	.long   0x00010000
-.Lsbs_satr:
-	.word   0xF800
-
-	.balign 4
-.Lsbs_nhf_have_r2:
-	CGBA_BLEND_BYTE_SAT 12, 14, 1
-	CGBA_BLEND_BYTE_SAT  8, 10, 1
-	CGBA_BLEND_BYTE_SAT  4,  6, 1
-	CGBA_BLEND_BYTE_SAT  0,  2, 0
-.Lsbs_nhf_next:
-	add     r11, r6
-	dt      r9
-	bf      .Lsbs_nhf_fetch
-	bra     .Lsbs_tile_next
-	nop
-.Lsbs_nhf_fetch:
-	mov.l   @r1, r2
-	mov.l   @(24, r15), r0
-	add     r0, r1
-	tst     r2, r2
-	bt      .Lsbs_nhf_next
-	mov     r2, r0
-	shll2   r0
-	shll2   r0
-	xor     r2, r0
-	shlr2   r0
-	shlr2   r0
-	tst     r0, r0
-	bf      1f
-	bra     .Lsbs_solid_enter
-	mov.l   @(28, r15), r3
-1:	bra     .Lsbs_nhf_have_r2
-	nop
-
-	.balign 4
-.Lsbs_hf_have_r2:
-	CGBA_BLEND_BYTE_SAT  2,  0, 1
-	CGBA_BLEND_BYTE_SAT  6,  4, 1
-	CGBA_BLEND_BYTE_SAT 10,  8, 1
-	CGBA_BLEND_BYTE_SAT 14, 12, 0
-.Lsbs_hf_next:
-	add     r11, r6
-	dt      r9
-	bf      .Lsbs_hf_fetch
-	bra     .Lsbs_tile_next
-	nop
-.Lsbs_hf_fetch:
-	mov.l   @r1, r2
-	mov.l   @(24, r15), r0
-	add     r0, r1
-	tst     r2, r2
-	bt      .Lsbs_hf_next
-	mov     r2, r0
-	shll2   r0
-	shll2   r0
-	xor     r2, r0
-	shlr2   r0
-	shlr2   r0
-	tst     r0, r0
-	bf      1f
-	bra     .Lsbs_solid_enter
-	mov.l   @(28, r15), r3
-1:	bra     .Lsbs_hf_have_r2
-	nop
-	.size   _cgba_render_4bpp_strip_blend_sat_sh4, .-_cgba_render_4bpp_strip_blend_sat_sh4
 
 /* ============================================================================
  * void cgba_sparse_override_band_sh4(const cgba_sparse_band_ctx *ctx)
@@ -9089,9 +8170,11 @@ _cgba_render_4bpp_strip_over_u16_sh4:
 	sub     r1, r0                      /* k * 480 */
 	mov     #16, r1
 	sub     r0, r1                      /* r1  = 16 - k * 480 */
-	mov.l   r1, @-r15                   /* @(8, r15) = dst_next_delta */
-	mov.l   r2, @-r15                   /* @(4, r15) = k */
-	mov.l   r3, @-r15                   /* @(0, r15) = vflip_off */
+	mov     #4, r0
+	mov.l   r0, @-r15                   /* @(12, r15) = row_step (+4 or -4) */
+	mov.l   r1, @-r15                   /* @(8,  r15) = dst_next_delta */
+	mov.l   r2, @-r15                   /* @(4,  r15) = k */
+	mov.l   r3, @-r15                   /* @(0,  r15) = vflip_off */
 
 	mov.w   .Lsou_480, r11              /* r11 = 480 */
 	mov.l   .Lsou_eeeef, r13            /* r13 = 0xEEEEEEEF */
@@ -9110,17 +8193,23 @@ _cgba_render_4bpp_strip_over_u16_sh4:
 	shld    r2, r1
 	mov.w   .Lsou_7fe0, r2
 	and     r2, r1                      /* r1 = tile_id << 5 */
+	add     r7, r1                      /* r1 = tile_ptr (top row) */
 	tst     #0x08, r0                   /* T = !vflip */
-	bf      .Lsou_to_vflip
-	add     r7, r1                      /* r1 = tile_ptr (+4/row) */
+	mov     #4, r5
+	bt      1f
+	mov.l   @(0, r15), r2               /* vflip_off */
+	add     r2, r1
+	mov     #-4, r5
+1:	mov.l   r5, @(12, r15)              /* row_step = +4 or -4 */
 
 	mov.l   @(4, r15), r9               /* r9 = k */
-.Lsou_nv_scan:
-	mov.l   @r1+, r2
+.Lsou_scan:
+	mov.l   @r1, r2
+	add     r5, r1
 	tst     r2, r2
-	bf      .Lsou_nv_nz0
+	bf      .Lsou_nz0
 	dt      r9
-	bf.s    .Lsou_nv_scan
+	bf.s    .Lsou_scan
 	add     r11, r6
 
 	mov     r3, r12
@@ -9137,34 +8226,36 @@ _cgba_render_4bpp_strip_over_u16_sh4:
 	bra     .Lsou_ke_run
 	nop
 
-.Lsou_nv_nz0:
+.Lsou_nz0:
 	mov     r3, r0
 	tst     #0x04, r0                   /* T = !hflip */
 	and     #0xF0, r0
 	shlr2   r0
 	shll8   r0
 	mov     r10, r5
-	bf.s    .Lsou_to_nv_hf
+	bf.s    .Lsou_to_hf
 	add     r0, r5                      /* r5 = &pair_lut[pal][0] */
 
 	mov     r13, r0
-.Lsou_nv_nhf_r0:
+.Lsou_nhf_r0:
 	not     r2, r3
 	add     r2, r0
 	and     r3, r0
 	tst     r14, r0
-	bf      .Lsou_nv_nhf_part
+	bf      .Lsou_nhf_part
 
 	SOU_OPAQUE_XTRCT_NHF
-.Lsou_nv_nhf_next:
+.Lsou_nhf_next:
 	dt      r9
 	bt.s    .Lsou_tile_next
 	add     r11, r6
-	mov.l   @r1+, r2
+	mov.l   @r1, r2
+	mov.l   @(12, r15), r0
+	add     r0, r1
 	mov     r13, r0
 	tst     r2, r2
-	bf      .Lsou_nv_nhf_r0
-	bra     .Lsou_nv_nhf_next
+	bf      .Lsou_nhf_r0
+	bra     .Lsou_nhf_next
 	nop
 
 .Lsou_tile_next:
@@ -9177,7 +8268,7 @@ _cgba_render_4bpp_strip_over_u16_sh4:
 	sts     macl, r8
 	tst     r8, r8
 	bf      .Lsou_span2
-	add     #12, r15
+	add     #16, r15                    /* pop vflip_off, k, dst_next_delta, row_step */
 	mov.l   @r15+, r14
 	mov.l   @r15+, r13
 	mov.l   @r15+, r12
@@ -9193,11 +8284,8 @@ _cgba_render_4bpp_strip_over_u16_sh4:
 	bra     .Lsou_tile
 	lds     r0, macl
 
-.Lsou_to_nv_hf:
-	bra     .Lsou_nv_hf_entry
-	nop
-.Lsou_to_vflip:
-	bra     .Lsou_vflip
+.Lsou_to_hf:
+	bra     .Lsou_hf_entry
 	nop
 
 	.balign 4
@@ -9211,198 +8299,47 @@ _cgba_render_4bpp_strip_over_u16_sh4:
 	.word   0x7FE0
 	.balign 4
 
-.Lsou_nv_nhf_part:
+.Lsou_nhf_part:
 	SOU_PART_BYTE 12, 14, 1
 	SOU_PART_BYTE  8, 10, 1
 	SOU_PART_BYTE  4,  6, 1
 	SOU_PART_BYTE  0,  2, 0
-	bra     .Lsou_nv_nhf_next
+	bra     .Lsou_nhf_next
 	nop
 
-	/* Out-of-line 2-tile-at-a-time known-empty run skip */
-.Lsou_ke_run:
-	dt      r8
-	bt.s    .Lsou_ke_done
-	add     #16, r6
-	mov     r4, r0
-	tst     #2, r0
-	bt      .Lsou_ke_aligned
-	mov.w   @r4+, r0
-	cmp/eq  r12, r0
-	bf      .Lsou_ke_have_r0
-	dt      r8
-	bt.s    .Lsou_ke_done
-	add     #16, r6
-.Lsou_ke_aligned:
-	mov     r8, r5
-	shlr    r5
-	tst     r5, r5
-	bt      .Lsou_ke_tail1
-	extu.w  r12, r2
-	swap.w  r2, r1
-	or      r1, r2                      /* r2 = [r12 | r12] */
-.Lsou_ke_pair:
-	mov.l   @r4+, r0
-	cmp/eq  r2, r0
-	bf      .Lsou_ke_pmiss
-	dt      r5
-	bf.s    .Lsou_ke_pair
-	add     #32, r6
-.Lsou_ke_tail1:
-	mov     r8, r0
-	tst     #1, r0
-	bt      .Lsou_ke_done
-	mov.w   @r4+, r0
-	cmp/eq  r12, r0
-	bf.s    .Lsou_ke_have_r0
-	mov     #1, r8
-	bra     .Lsou_done
-	add     #16, r6
-.Lsou_ke_pmiss:
-	shll    r5
-	mov     #1, r1
-	and     r8, r1
-	mov     r5, r8
-	add     r1, r8
-	swap.w  r0, r1
-	exts.w  r1, r1
-	cmp/eq  r12, r1
-	bt.s    1f
-	exts.w  r0, r0
-	add     #-2, r4
-	bra     .Lsou_tile_have_r0
-	mov     r1, r0
-1:	add     #16, r6
-	bra     .Lsou_tile_have_r0
-	add     #-1, r8
-.Lsou_ke_have_r0:
-	bra     .Lsou_tile_have_r0
-	nop
-.Lsou_ke_done:
-	bra     .Lsou_done
-	nop
+	CGBA_STRIP_OVER_KE_RUN .Lsou
 
-.Lsou_nv_hf_entry:
+.Lsou_hf_entry:
 	mov     r13, r0
-.Lsou_nv_hf_r0:
+.Lsou_hf_r0:
 	not     r2, r3
 	add     r2, r0
 	and     r3, r0
 	tst     r14, r0
-	bf      .Lsou_nv_hf_part
+	bf      .Lsou_hf_part
 	SOU_OPAQUE_XTRCT_HF
-.Lsou_nv_hf_next:
+.Lsou_hf_next:
 	dt      r9
 	bt.s    .Lsou_hf_tile_done
 	add     r11, r6
-	mov.l   @r1+, r2
+	mov.l   @r1, r2
+	mov.l   @(12, r15), r0
+	add     r0, r1
 	mov     r13, r0
 	tst     r2, r2
-	bf      .Lsou_nv_hf_r0
-	bra     .Lsou_nv_hf_next
+	bf      .Lsou_hf_r0
+	bra     .Lsou_hf_next
 	nop
 .Lsou_hf_tile_done:
 	bra     .Lsou_tile_next
 	nop
 
-.Lsou_nv_hf_part:
+.Lsou_hf_part:
 	SOU_PART_BYTE  2,  0, 1
 	SOU_PART_BYTE  6,  4, 1
 	SOU_PART_BYTE 10,  8, 1
 	SOU_PART_BYTE 14, 12, 0
-	bra     .Lsou_nv_hf_next
-	nop
-
-	/* vflip path (row_step = -4) */
-	.balign 4
-.Lsou_vflip:
-	add     r7, r1
-	mov.l   @(0, r15), r0               /* vflip_off */
-	add     r0, r1
-	mov.l   @(4, r15), r9               /* k */
-.Lsou_vf_scan:
-	mov.l   @r1, r2
-	add     #-4, r1
-	tst     r2, r2
-	bf      .Lsou_vf_nz0
-	dt      r9
-	bf.s    .Lsou_vf_scan
-	add     r11, r6
-	mov     r3, r12
-	bra     .Lsou_tile_next
-	nop
-
-.Lsou_vf_nz0:
-	mov     r3, r0
-	tst     #0x04, r0                   /* T = !hflip */
-	and     #0xF0, r0
-	shlr2   r0
-	shll8   r0
-	mov     r10, r5
-	add     r0, r5
-	bt      .Lsou_vf_nhf_entry
-	bra     .Lsou_vf_hf_entry
-	nop
-.Lsou_vf_nhf_entry:
-
-	mov     r13, r0
-.Lsou_vf_nhf_r0:
-	not     r2, r3
-	add     r2, r0
-	and     r3, r0
-	tst     r14, r0
-	bf      .Lsou_vf_nhf_part
-	SOU_OPAQUE_XTRCT_NHF
-.Lsou_vf_nhf_next:
-	dt      r9
-	bt.s    .Lsou_vf_tile_done
-	add     r11, r6
-	mov.l   @r1, r2
-	add     #-4, r1
-	mov     r13, r0
-	tst     r2, r2
-	bf      .Lsou_vf_nhf_r0
-	bra     .Lsou_vf_nhf_next
-	nop
-.Lsou_vf_tile_done:
-	bra     .Lsou_tile_next
-	nop
-
-.Lsou_vf_nhf_part:
-	SOU_PART_BYTE 12, 14, 1
-	SOU_PART_BYTE  8, 10, 1
-	SOU_PART_BYTE  4,  6, 1
-	SOU_PART_BYTE  0,  2, 0
-	bra     .Lsou_vf_nhf_next
-	nop
-
-.Lsou_vf_hf_entry:
-	mov     r13, r0
-.Lsou_vf_hf_r0:
-	not     r2, r3
-	add     r2, r0
-	and     r3, r0
-	tst     r14, r0
-	bf      .Lsou_vf_hf_part
-	SOU_OPAQUE_XTRCT_HF
-.Lsou_vf_hf_next:
-	dt      r9
-	bt.s    .Lsou_vf_tile_done
-	add     r11, r6
-	mov.l   @r1, r2
-	add     #-4, r1
-	mov     r13, r0
-	tst     r2, r2
-	bf      .Lsou_vf_hf_r0
-	bra     .Lsou_vf_hf_next
-	nop
-
-.Lsou_vf_hf_part:
-	SOU_PART_BYTE  2,  0, 1
-	SOU_PART_BYTE  6,  4, 1
-	SOU_PART_BYTE 10,  8, 1
-	SOU_PART_BYTE 14, 12, 0
-	bra     .Lsou_vf_hf_next
+	bra     .Lsou_hf_next
 	nop
 	.size   _cgba_render_4bpp_strip_over_u16_sh4, .-_cgba_render_4bpp_strip_over_u16_sh4
 
@@ -10402,6 +9339,8 @@ _cgba_render_4bpp_strip_base_u16_sh4:
 	sub     r1, r0                      /* k * 480 */
 	mov     #16, r1
 	sub     r0, r1                      /* r1  = dst_next_delta = 16 - k*480 */
+	mov     #4, r0
+	mov.l   r0, @-r15                   /* @(8, r15) = row_step (+4 or -4) */
 	mov.l   r1, @-r15                   /* @(4, r15) = dst_next_delta */
 	mov.l   r3, @-r15                   /* @(0, r15) = vflip_off */
 
@@ -10419,23 +9358,30 @@ _cgba_render_4bpp_strip_base_u16_sh4:
 	shld    r2, r1
 	mov.w   .Lsbu_7fe0, r2
 	and     r2, r1                      /* r1 = tile_id << 5 */
+	add     r7, r1                      /* r1 = tile_ptr (top row) */
 	tst     #0x08, r0                   /* T = !vflip */
-	bf      .Lsbu_to_vflip
-	add     r7, r1                      /* r1 = tile_ptr (step +4/row) */
+	mov     #4, r2
+	bt      1f
+	mov.l   @(0, r15), r2               /* vflip_off */
+	add     r2, r1
+	mov     #-4, r2
+1:	mov.l   r2, @(8, r15)               /* row_step = +4 or -4 */
 
 	tst     #0x04, r0                   /* T = !hflip */
 	and     #0xF0, r0
 	shlr2   r0
 	shll8   r0
 	mov     r10, r5
-	bf.s    .Lsbu_to_nv_hf
+	bf.s    .Lsbu_to_hf
 	add     r0, r5                      /* r5 = &pair_lut[pal][0] */
 
 	mov     r13, r9                     /* r9 = k rows */
 	add     #2, r6                      /* r6 = dst + 2 (4-byte aligned!) */
 	add     #2, r11                     /* r11 = 482 */
-.Lsbu_nv_nhf_row:
-	mov.l   @r1+, r2
+.Lsbu_nhf_row:
+	mov.l   @r1, r2
+	mov.l   @(8, r15), r0
+	add     r0, r1
 	extu.b  r2, r0                      /* b3 -> [p6|p7] */
 	shll2   r0
 	mov.l   @(r0, r5), r14
@@ -10465,9 +9411,9 @@ _cgba_render_4bpp_strip_base_u16_sh4:
 	swap.w  r3, r3                      /* low 16 = p0 */
 	dt      r9
 	mov.w   r3, @-r6                    /* r6 = row_i, dest[0] = p0 */
-	bf.s    .Lsbu_nv_nhf_row
+	bf.s    .Lsbu_nhf_row
 	add     r11, r6                     /* r6 = row_{i+1} + 2 */
-.Lsbu_nv_nhf_end:
+.Lsbu_nhf_end:
 	add     #-2, r6                     /* restore r6 = dst_top + k*480 */
 	add     #-2, r11                    /* restore r11 = 480 */
 	mov.l   @(4, r15), r0
@@ -10479,7 +9425,7 @@ _cgba_render_4bpp_strip_base_u16_sh4:
 	sts     mach, r8
 	tst     r8, r8
 	bf      .Lsbu_span2
-	add     #8, r15                     /* pop vflip_off + dst_next_delta */
+	add     #12, r15                    /* pop vflip_off + dst_next_delta + row_step */
 	mov.l   @r15+, r14
 	mov.l   @r15+, r13
 	mov.l   @r15+, r12
@@ -10498,11 +9444,8 @@ _cgba_render_4bpp_strip_base_u16_sh4:
 .Lsbu_to_rep1:
 	bra     .Lsbu_rep1
 	nop
-.Lsbu_to_nv_hf:
-	bra     .Lsbu_nv_hf
-	nop
-.Lsbu_to_vflip:
-	bra     .Lsbu_vflip
+.Lsbu_to_hf:
+	bra     .Lsbu_hf
 	nop
 
 	.balign 4
@@ -10624,11 +9567,13 @@ _cgba_render_4bpp_strip_base_u16_sh4:
 	bra     .Lsbu_done
 	nop
 
-	/* !vflip, hflip (r6 = 4k+2) */
-.Lsbu_nv_hf:
+	/* hflip (r6 = 4k+2, unified !vflip/vflip via @(8, r15) row_step) */
+.Lsbu_hf:
 	mov     r13, r9
-.Lsbu_nv_hf_row:
-	mov.l   @r1+, r2
+.Lsbu_hf_row:
+	mov.l   @r1, r2
+	mov.l   @(8, r15), r0
+	add     r0, r1
 	extu.b  r2, r0                      /* b3 -> [p6|p7] */
 	shll2   r0
 	mov.l   @(r0, r5), r14
@@ -10662,7 +9607,7 @@ _cgba_render_4bpp_strip_base_u16_sh4:
 	dt      r9
 	mov.w   r0, @(12, r6)               /* dest[7] = p0 */
 	add     #-2, r6
-	bf.s    .Lsbu_nv_hf_row
+	bf.s    .Lsbu_hf_row
 	add     r11, r6
 
 	mov.l   @(4, r15), r0
@@ -10670,113 +9615,6 @@ _cgba_render_4bpp_strip_base_u16_sh4:
 	bt.s    .Lsbu_done_bra
 	add     r0, r6
 	bra     .Lsbu_tile
-	nop
-
-	/* vflip (!hflip & hflip, r6 = 4k+2) */
-.Lsbu_vflip:
-	mov.l   @r15, r2                    /* vflip_off */
-	add     r7, r1
-	add     r2, r1                      /* r1 = tile_ptr for row (7-start_r) */
-	tst     #0x04, r0                   /* T = !hflip */
-	and     #0xF0, r0
-	shlr2   r0
-	shll8   r0
-	mov     r10, r5
-	bf.s    .Lsbu_vf_hf
-	add     r0, r5
-
-	mov     r13, r9
-.Lsbu_vf_nhf_row:
-	mov.l   @r1, r2
-	add     #-4, r1
-	extu.b  r2, r0                      /* b3 -> [p6|p7] */
-	shll2   r0
-	mov.l   @(r0, r5), r14
-	shlr8   r2
-	mov     r14, r0
-	mov.w   r0, @(14, r6)               /* dest[7] = p7 */
-	add     #2, r6
-
-	extu.b  r2, r0                      /* b2 -> [p4|p5] */
-	shll2   r0
-	mov.l   @(r0, r5), r3
-	shlr8   r2
-	xtrct   r3, r14                     /* [p5|p6] */
-	mov.l   r14, @(8, r6)
-
-	extu.b  r2, r0                      /* b1 -> [p2|p3] */
-	shll2   r0
-	mov.l   @(r0, r5), r14
-	shlr8   r2
-	xtrct   r14, r3                     /* [p3|p4] */
-	mov.l   r3, @(4, r6)
-
-	extu.b  r2, r0                      /* b0 -> [p0|p1] */
-	shll2   r0
-	mov.l   @(r0, r5), r3
-	xtrct   r3, r14                     /* [p1|p2] */
-	mov.l   r14, @r6
-	swap.w  r3, r3                      /* low 16 = p0 */
-	dt      r9
-	mov.w   r3, @-r6
-	bf.s    .Lsbu_vf_nhf_row
-	add     r11, r6
-
-	mov.l   @(4, r15), r0
-	dt      r8
-	bt.s    .Lsbu_done_bra
-	add     r0, r6
-	bra     .Lsbu_tile
-	nop
-
-.Lsbu_vf_hf:
-	mov     r13, r9
-.Lsbu_vf_hf_row:
-	mov.l   @r1, r2
-	add     #-4, r1
-	extu.b  r2, r0                      /* b3 -> [p6|p7] */
-	shll2   r0
-	mov.l   @(r0, r5), r14
-	shlr8   r2
-	mov.w   r14, @r6                    /* dest[0] = p7 */
-	add     #2, r6
-
-	extu.b  r2, r0                      /* b2 -> [p4|p5] */
-	shll2   r0
-	mov.l   @(r0, r5), r3
-	shlr8   r2
-	xtrct   r3, r14                     /* [p5|p6] */
-	swap.w  r14, r14                    /* [p6|p5] */
-	mov.l   r14, @r6
-
-	extu.b  r2, r0                      /* b1 -> [p2|p3] */
-	shll2   r0
-	mov.l   @(r0, r5), r14
-	shlr8   r2
-	xtrct   r14, r3                     /* [p3|p4] */
-	swap.w  r3, r3                      /* [p4|p3] */
-	mov.l   r3, @(4, r6)
-
-	extu.b  r2, r0                      /* b0 -> [p0|p1] */
-	shll2   r0
-	mov.l   @(r0, r5), r3
-	xtrct   r3, r14                     /* [p1|p2] */
-	swap.w  r14, r14                    /* [p2|p1] */
-	mov.l   r14, @(8, r6)
-	swap.w  r3, r0                      /* low 16 = p0 */
-	dt      r9
-	mov.w   r0, @(12, r6)
-	add     #-2, r6
-	bf.s    .Lsbu_vf_hf_row
-	add     r11, r6
-
-	mov.l   @(4, r15), r0
-	add     r0, r6
-	dt      r8
-	bf      1f
-	bra     .Lsbu_done
-	nop
-1:	bra     .Lsbu_tile
 	nop
 	.size   _cgba_render_4bpp_strip_base_u16_sh4, .-_cgba_render_4bpp_strip_base_u16_sh4
 

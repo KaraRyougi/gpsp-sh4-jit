@@ -5971,17 +5971,13 @@ bool translate_block_thumb(u32 pc, bool ram_region)
               if ((opk >> 11) & 1u) {
                 if (w == 0u) sh4_emit_mov_l_load(&cg, SH4_REG_T2, SH4_REG_T1);
                 else         sh4_emit_mov_l_load_disp(&cg, SH4_REG_T2, SH4_REG_T1, w);
-                sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
-                sh4_emit_swap_w(&cg, SH4_REG_T1, SH4_REG_T1);
-                sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
+                sh4_emit_bswap32(&cg, SH4_REG_T1, SH4_REG_T1);
                 sh4_emit_store_greg(&cg, SH4_REG_T1, rdk);
                 sh4_thumb_const_kill(rdk);
               } else {
                 if (k > 0)
                   sh4_emit_load_greg(&cg, rdk, SH4_REG_T1);
-                sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
-                sh4_emit_swap_w(&cg, SH4_REG_T1, SH4_REG_T1);
-                sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
+                sh4_emit_bswap32(&cg, SH4_REG_T1, SH4_REG_T1);
                 if (w == 0u) sh4_emit_mov_l_store(&cg, SH4_REG_T1, SH4_REG_T2);
                 else         sh4_emit_mov_l_store_disp(&cg, SH4_REG_T1, SH4_REG_T2, w);
               }

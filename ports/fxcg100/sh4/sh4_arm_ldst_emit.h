@@ -38,9 +38,7 @@ static inline void sh4g_arm_emit_load_r0_r3(sh4_codegen *cg, int kind)
   switch (kind) {
   case LDK_W:
     sh4_emit_mov_l_load_r0(cg, SH4_REG_T2, SH4_REG_T1);
-    sh4_emit_swap_b(cg, SH4_REG_T1, SH4_REG_T1);
-    sh4_emit_swap_w(cg, SH4_REG_T1, SH4_REG_T1);
-    sh4_emit_swap_b(cg, SH4_REG_T1, SH4_REG_T1);
+    sh4_emit_bswap32(cg, SH4_REG_T1, SH4_REG_T1);
     break;
   case LDK_B:
     sh4_emit_mov_b_load_r0(cg, SH4_REG_T2, SH4_REG_T1);
@@ -282,17 +280,6 @@ have_address:
 
           /* Unified ROM8 guard: (addr - 0x08008000) < rom8_limit checks
            * region == 8, block >= 8, AND offset < gamepak_size in one branch. */
-          sh4g_const(tp, 0x08008000u, SH4_REG_T1);
-          { sh4_codegen cg = sh4g_open(tp);
-            sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
-            sh4_emit_sub(&cg, SH4_REG_T1, SH4_REG_RET); /* R0 = addr - 0x08008000 */
-            sh4g_close(tp, &cg); }
-          sh4g_const(tp, rom8_limit, SH4_REG_T1);
-          { sh4_codegen cg = sh4g_open(tp);
-            sh4_emit_cmphs(&cg, SH4_REG_T1, SH4_REG_RET); /* off >= rom8_limit */
-            sh4g_close(tp, &cg); }
-          rom8_miss[nrom8++] = sh4g_emit_bt_placeholder(tp);
-
           if (align_mask) {
             sh4_codegen cg = sh4g_open(tp);
             sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_T1);
@@ -302,18 +289,9 @@ have_address:
             rom8_miss[nrom8++] = sh4g_emit_bf_placeholder(tp);
           }
 
-          { sh4_codegen cg = sh4g_open(tp);
-            sh4_emit_mov_imm(&cg, -12, SH4_REG_T1);
-            sh4_emit_shld(&cg, SH4_REG_T1, SH4_REG_RET); /* R0 = block_idx - 8 */
-            sh4_emit_shll2(&cg, SH4_REG_RET);
-            sh4g_close(tp, &cg); }
-          sh4g_const(tp, (u32)(uintptr_t)(cgba_gamepak_fragment_blocks + 8),
-                     SH4_REG_T2);
-          { sh4_codegen cg = sh4g_open(tp);
-            sh4_emit_mov_l_load_r0(&cg, SH4_REG_T2, SH4_REG_T2);
-            sh4_emit_tst(&cg, SH4_REG_T2, SH4_REG_T2);   /* block == NULL */
-            sh4g_close(tp, &cg); }
-          rom8_miss[nrom8++] = sh4g_emit_bt_placeholder(tp);
+          sh4g_emit_rom8_page_lookup(tp, rom8_limit,
+                                     cgba_gamepak_fragment_blocks + 8,
+                                     SH4_REG_T0, rom8_miss, &nrom8);
 
           sh4g_const(tp, 0x0FFFu, SH4_REG_RET);
           { sh4_codegen cg = sh4g_open(tp);
@@ -387,37 +365,15 @@ have_address:
 
           if (is_load) {
             sh4_codegen cg = sh4g_open(tp);
-            switch (kind) {
-            case LDK_W:
-              sh4_emit_mov_l_load_r0(&cg, SH4_REG_T2, SH4_REG_T1);
-              sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
-              sh4_emit_swap_w(&cg, SH4_REG_T1, SH4_REG_T1);
-              sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
-              break;
-            case LDK_B:
-              sh4_emit_mov_b_load_r0(&cg, SH4_REG_T2, SH4_REG_T1);
-              sh4_emit_extu_b(&cg, SH4_REG_T1, SH4_REG_T1);
-              break;
-            case LDK_UH:
-              sh4_emit_mov_w_load_r0(&cg, SH4_REG_T2, SH4_REG_T1);
-              sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
-              sh4_emit_extu_w(&cg, SH4_REG_T1, SH4_REG_T1);
-              break;
-            case LDK_SH:
-              sh4_emit_mov_w_load_r0(&cg, SH4_REG_T2, SH4_REG_T1);
-              sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
-              sh4_emit_exts_w(&cg, SH4_REG_T1, SH4_REG_T1);
-              break;
-            default: /* LDK_SB */
-              sh4_emit_mov_b_load_r0(&cg, SH4_REG_T2, SH4_REG_T1);
-              break;
-            }
+            sh4g_arm_emit_load_r0_r3(&cg, kind);
             sh4_emit_store_greg(&cg, SH4_REG_T1, rd);
             if (effective_wb)
               sh4_emit_store_greg(&cg, SH4_REG_ARG2, rn);
             sh4g_close(tp, &cg);
           } else {
-            /* IWRAM SMC tags live directly at iwram[0..0x7FFF]. */
+            /* Fast SMC bypass via cgba_iwram_code_end, else check tag at iwram + off. */
+            u8 *smc_ok = sh4g_emit_smc_bypass(tp, &cgba_iwram_code_end,
+                                              SH4_REG_RET, SH4_REG_ARG0, SH4_REG_T1);
             sh4g_const(tp, (u32)(uintptr_t)iwram, SH4_REG_ARG0);
             { sh4_codegen cg = sh4g_open(tp);
               if (kind == LDK_W)
@@ -429,13 +385,12 @@ have_address:
               sh4_emit_tst(&cg, SH4_REG_T1, SH4_REG_T1); /* T = tag clear */
               sh4g_close(tp, &cg); }
             iwram_miss[niw++] = sh4g_emit_bf_placeholder(tp);
+            sh4g_patch_cond(smc_ok, *tp);
 
             { sh4_codegen cg = sh4g_open(tp);
               sh4_emit_load_greg(&cg, rd, SH4_REG_T1);
               if (kind == LDK_W) {
-                sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
-                sh4_emit_swap_w(&cg, SH4_REG_T1, SH4_REG_T1);
-                sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
+                sh4_emit_bswap32(&cg, SH4_REG_T1, SH4_REG_T1);
                 sh4_emit_mov_l_store_r0(&cg, SH4_REG_T1, SH4_REG_T2);
               } else if (kind == LDK_UH) {
                 sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
@@ -537,28 +492,10 @@ static inline int sh4g_arm_ldst_reg_run_native(u8 **tp, const u32 *ops,
     sh4_emit_add_reg(&cg, SH4_REG_ARG2, SH4_REG_T0);
     sh4g_close(tp, &cg); }
 
-  sh4g_const(tp, 0x08008000u, SH4_REG_T1);
-  { sh4_codegen cg = sh4g_open(tp);
-    sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
-    sh4_emit_sub(&cg, SH4_REG_T1, SH4_REG_RET);       /* R0 = addr0 - 0x08008000 */
-    sh4g_close(tp, &cg); }
-  sh4g_const(tp, rom8_limit, SH4_REG_T1);
-  { sh4_codegen cg = sh4g_open(tp);
-    sh4_emit_cmphs(&cg, SH4_REG_T1, SH4_REG_RET);     /* off >= rom8_limit */
-    sh4g_close(tp, &cg); }
-  rom8_miss[0] = sh4g_emit_bt_placeholder(tp);
-
-  { sh4_codegen cg = sh4g_open(tp);
-    sh4_emit_mov_imm(&cg, -12, SH4_REG_T1);
-    sh4_emit_shld(&cg, SH4_REG_T1, SH4_REG_RET);      /* R0 = block_idx - 8 */
-    sh4_emit_shll2(&cg, SH4_REG_RET);
-    sh4g_close(tp, &cg); }
-  sh4g_const(tp, (u32)(uintptr_t)(cgba_gamepak_fragment_blocks + 8), SH4_REG_T2);
-  { sh4_codegen cg = sh4g_open(tp);
-    sh4_emit_mov_l_load_r0(&cg, SH4_REG_T2, SH4_REG_T2);
-    sh4_emit_tst(&cg, SH4_REG_T2, SH4_REG_T2);        /* R3 == NULL */
-    sh4g_close(tp, &cg); }
-  rom8_miss[1] = sh4g_emit_bt_placeholder(tp);
+  { int nr8 = 0;
+    sh4g_emit_rom8_page_lookup(tp, rom8_limit,
+                               cgba_gamepak_fragment_blocks + 8,
+                               SH4_REG_T0, rom8_miss, &nr8); }
 
   /* Perform op[0] and cache R6 = reg[rn] - guest_page_base, R5 = 0x1000. */
   sh4g_const(tp, 0x0FFFu, SH4_REG_RET);
@@ -789,9 +726,7 @@ static inline int sh4g_arm_iwram_byte_run_native(u8 **tp, const u32 *ops,
           }
         }
         sh4g_close(tp, &cg); }
-      all_done = *tp;
-      sh4g_u16(tp, 0xA000);                                  /* BRA done */
-      sh4g_u16(tp, (uint16_t)(0x7000 | (SH4_REG_CYCLES << 8) | ((-cnt) & 0xFF)));
+      all_done = sh4g_emit_bra_debit(tp, cnt);
 
       /* Exact fallback on any guard miss (no guest state modified yet). */
       while (ng)

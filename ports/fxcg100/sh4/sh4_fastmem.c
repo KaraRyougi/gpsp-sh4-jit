@@ -10,7 +10,7 @@
 #include <string.h>
 #include "vendor/gpsp/common.h"   /* gpSP fixed-size types (u8/u32/...) */
 #include "vendor/gpsp/gpsp_config.h"
-#include "ports/fxcg100/sh4/sh4_fastmem.h"
+#include "ports/fxcg100/sh4/sh4_fastmem_emit.h"
 
 #if CGBA_SH4_COMPACT_FASTMEM_TUPLE && CGBA_SH4_FASTMEM_OOL_DESC
 extern u8 rom_translation_cache[ROM_TRANSLATION_CACHE_SIZE];

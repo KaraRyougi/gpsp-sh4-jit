@@ -360,6 +360,15 @@ extern u16 palette_ram_converted[512];
  * after rebuilding, so independent consumers cannot hide invalidation from
  * one another. */
 extern volatile u32 palette_ram_dirty;
+#define mark_palette_ram_dirty() \
+  (palette_ram_dirty = CGBA_PALETTE_DIRTY_ACTIVE)
+#define mark_palette_ram_addr_dirty(off) do {                                 \
+  if ((u32)(off) < 0x200u) palette_ram_dirty = CGBA_PALETTE_DIRTY_ACTIVE;     \
+  else                     palette_ram_dirty |= CGBA_PALETTE_DIRTY_OBJ_ONLY;  \
+} while (0)
+#else
+#define mark_palette_ram_dirty() ((void)0)
+#define mark_palette_ram_addr_dirty(off) ((void)(off))
 #endif
 #if defined(CGBA_VIDEO_DIRTY_SCANLINE) && CGBA_VIDEO_DIRTY_SCANLINE
 #define CGBA_VRAM_DIRTY_BG   0x01u
@@ -372,6 +381,36 @@ extern volatile u32 palette_ram_dirty;
 extern volatile u32 cgba_vram_dirty;
 extern volatile u32 cgba_vram_sb_dirty;
 extern volatile u32 cgba_video_io_dirty;
+#define mark_vram_dirty_off(off)                                              \
+  do {                                                                        \
+    u32 _vo = (u32)(off);                                                     \
+    if (_vo < 0x10000u) {                                                     \
+      cgba_vram_dirty |= CGBA_VRAM_DIRTY_BG;                                  \
+      cgba_vram_sb_dirty |= (1u << (_vo >> 11));                              \
+    } else {                                                                  \
+      cgba_vram_dirty |= CGBA_VRAM_DIRTY_OBJ;                                 \
+    }                                                                         \
+  } while (0)
+#define mark_vram_dirty_span(off, bytes)                                      \
+  do {                                                                        \
+    u32 _vo = (u32)(off), _vb = (u32)(bytes);                                 \
+    if (_vo < 0x10000u && _vb > 0u) {                                         \
+      u32 _hi = _vo + _vb - 1u;                                               \
+      if (_hi >= 0x10000u) _hi = 0xFFFFu;                                     \
+      u32 _s0 = _vo >> 11, _s1 = _hi >> 11;                                   \
+      u32 _m = (_s1 - _s0 >= 31u) ? 0xFFFFFFFFu                               \
+                                  : (((2u << (_s1 - _s0)) - 1u) << _s0);      \
+      cgba_vram_dirty |= CGBA_VRAM_DIRTY_BG;                                  \
+      cgba_vram_sb_dirty |= _m;                                               \
+    }                                                                         \
+    if (_vb > 0u && _vo + _vb > 0x10000u)                                     \
+      cgba_vram_dirty |= CGBA_VRAM_DIRTY_OBJ;                                 \
+  } while (0)
+#define mark_vram_dirty_all()                                                 \
+  do {                                                                        \
+    cgba_vram_dirty = CGBA_VRAM_DIRTY_ALL;                                    \
+    cgba_vram_sb_dirty = 0xFFFFFFFFu;                                         \
+  } while (0)
 #define CGBA_VIDEO_DEFERRED_ACTIVE 1
 extern volatile u32 cgba_pending_sl_count;
 extern u32 cgba_pending_sl_start;
@@ -390,10 +429,28 @@ static inline void cgba_video_snapshot_bg2_before_write(void) {
     cgba_snapshot_bg2_affine_pending();
 }
 #else
+#define mark_vram_dirty_off(off) ((void)(off))
+#define mark_vram_dirty_span(off, bytes) do { (void)(off); (void)(bytes); } while (0)
+#define mark_vram_dirty_all() ((void)0)
 static inline void cgba_video_flush_before_write(void) {}
 static inline void cgba_video_snapshot_bg2_before_write(void) {}
 static inline void cgba_discard_pending_scanlines(void) {}
 #endif
+/* Alignment-safe SMC tag-mirror scan shared by DMA, CPU stores, and SWI HLE.
+ * SH-4 faults on unaligned u32 loads, so peel unaligned head/tail bytes. */
+static inline int cgba_smc_tags_nonzero(const u8 *tags, u32 len)
+{
+  u32 i = 0;
+  if (!tags)
+    return 0;
+  for (; i < len && (((uintptr_t)tags + i) & 3u); i++)
+    if (tags[i]) return 1;
+  for (; i + 4u <= len; i += 4u)
+    if (*(const u32 *)(const void *)(tags + i)) return 1;
+  for (; i < len; i++)
+    if (tags[i]) return 1;
+  return 0;
+}
 extern u16 io_registers[512];
 extern u8 vram[1024 * 96];
 extern u8 bios_rom[1024 * 16];

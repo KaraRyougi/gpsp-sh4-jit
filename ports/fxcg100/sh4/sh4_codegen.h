@@ -119,6 +119,13 @@ static inline void sh4_emit_swap_b(sh4_codegen *cg, unsigned rm, unsigned rn)
 { sh4_emit_u16(cg, SH4_NM(0x6008, rn, rm)); }
 static inline void sh4_emit_swap_w(sh4_codegen *cg, unsigned rm, unsigned rn)
 { sh4_emit_u16(cg, SH4_NM(0x6009, rn, rm)); }
+/* 32-bit byte-order swap (LE <-> BE): rm -> rn (rm preserved when rm != rn). */
+static inline void sh4_emit_bswap32(sh4_codegen *cg, unsigned rm, unsigned rn)
+{
+  sh4_emit_swap_b(cg, rm, rn);
+  sh4_emit_swap_w(cg, rn, rn);
+  sh4_emit_swap_b(cg, rn, rn);
+}
 static inline void sh4_emit_xtrct(sh4_codegen *cg, unsigned rm, unsigned rn)
 { sh4_emit_u16(cg, SH4_NM(0x200D, rn, rm)); }
 

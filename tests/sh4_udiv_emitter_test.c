@@ -435,16 +435,19 @@ static void check_signature_and_observers(void)
     failf("cross-map signature accepted");
 
   cheat_master_hook = pc;
-  if (!sh4g_thumb_udiv_loop_has_observer(pc) || emit_prefix(pc) != 0)
+  if (!sh4g_range_has_observer(pc, pc + CGBA_SH4_THUMB_UDIV_LOOP_BYTES) ||
+      emit_prefix(pc) != 0)
     failf("cheat observer did not suppress prefix");
   reset_observers();
   idle_loop_target_pc = pc + CGBA_SH4_THUMB_UDIV_LOOP_BYTES - 2u;
-  if (!sh4g_thumb_udiv_loop_has_observer(pc) || emit_prefix(pc) != 0)
+  if (!sh4g_range_has_observer(pc, pc + CGBA_SH4_THUMB_UDIV_LOOP_BYTES) ||
+      emit_prefix(pc) != 0)
     failf("idle observer did not suppress prefix");
   reset_observers();
   translation_gate_targets = 1;
   translation_gate_target_pc[0] = pc + 20u;
-  if (!sh4g_thumb_udiv_loop_has_observer(pc) || emit_prefix(pc) != 0)
+  if (!sh4g_range_has_observer(pc, pc + CGBA_SH4_THUMB_UDIV_LOOP_BYTES) ||
+      emit_prefix(pc) != 0)
     failf("translation-gate observer did not suppress prefix");
 
   reset_observers();
@@ -452,7 +455,8 @@ static void check_signature_and_observers(void)
   idle_loop_target_pc = pc - 2u;
   translation_gate_targets = 1;
   translation_gate_target_pc[0] = pc + CGBA_SH4_THUMB_UDIV_LOOP_BYTES;
-  if (sh4g_thumb_udiv_loop_has_observer(pc) || emit_prefix(pc) == 0)
+  if (sh4g_range_has_observer(pc, pc + CGBA_SH4_THUMB_UDIV_LOOP_BYTES) ||
+      emit_prefix(pc) == 0)
     failf("out-of-range observer suppressed prefix");
   reset_observers();
 }

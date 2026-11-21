@@ -157,16 +157,12 @@ static inline int sh4g_thumb_block_native(u8 **tp, u32 opcode, u32 pc,
       if (!(rlist & (1u << i))) continue;
       sh4_emit_mov_l_load_r0(&cg, SH4_REG_T2, SH4_REG_T1);
       sh4_emit_add_imm(&cg, 4, SH4_REG_RET);
-      sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_ARG0);
-      sh4_emit_swap_w(&cg, SH4_REG_ARG0, SH4_REG_ARG0);
-      sh4_emit_swap_b(&cg, SH4_REG_ARG0, SH4_REG_T1);
+      sh4_emit_bswap32(&cg, SH4_REG_T1, SH4_REG_T1);
       sh4_emit_store_greg(&cg, SH4_REG_T1, i);
     }
     sh4_emit_mov_l_load_r0(&cg, SH4_REG_T2, SH4_REG_T1);
     sh4_emit_add_imm(&cg, 4, SH4_REG_RET);
-    sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_ARG0);
-    sh4_emit_swap_w(&cg, SH4_REG_ARG0, SH4_REG_ARG0);
-    sh4_emit_swap_b(&cg, SH4_REG_ARG0, SH4_REG_T1);
+    sh4_emit_bswap32(&cg, SH4_REG_T1, SH4_REG_T1);
     sh4_emit_mov_imm(&cg, 1, SH4_REG_ARG0);
     sh4_emit_not(&cg, SH4_REG_ARG0, SH4_REG_ARG0);
     sh4_emit_and(&cg, SH4_REG_ARG0, SH4_REG_T1);

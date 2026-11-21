@@ -173,6 +173,35 @@
 7:
 .endm
 
+.macro ROM_HASH_WALK pfx, miss_lbl, hit_lbl, far_miss=0
+  mov.l   \pfx\()_mul, r3
+  dmulu.l r2, r3
+  sts     macl, r0
+  mov     #-(32-ROM_BRANCH_HASH_BITS), r1
+  shld    r1, r0                  /* hash index = product >> (32 - bits) */
+  shll2   r0                      /* * sizeof(u32) */
+  mov.l   \pfx\()_hash, r1
+  mov.l   @(r0,r1), r5            /* blk_offset = rom_branch_hash[hash] */
+  mov.l   \pfx\()_tcache, r6
+1:
+  tst     r5, r5
+.if \far_miss
+  bf      2f
+  bra     \miss_lbl
+  nop
+2:
+.else
+  bt      \miss_lbl
+.endif
+  mov     r5, r7
+  add     r6, r7                  /* r7 = &rom_translation_cache[blk_offset] */
+  mov.l   @r7, r0                 /* hashhdr_type.pc_value */
+  cmp/eq  r2, r0
+  bt      \hit_lbl
+  bra     1b
+  mov.l   @(4,r7), r5             /* delay slot: hashhdr_type.next_entry */
+.endm
+
 /* ---- resident vector table (base pinned in R9 by the entry prologue) ----
  * Generated code reaches these with MOV.L @(disp4,R9),Rn (2 bytes) instead of
  * a 10-12 byte inline literal island. Entry ORDER must match the SH4G_VEC_*
@@ -242,25 +271,7 @@ iba_hash:
   mov.l   r4, @(r0,r14)           /* delay slot: commit reg[REG_PC] */
 iba_hash_miss:
 #endif
-  mov.l   ibh_mul, r3
-  dmulu.l r2, r3
-  sts     macl, r0
-  mov     #-(32-ROM_BRANCH_HASH_BITS), r1
-  shld    r1, r0                  /* hash index = product >> (32 - bits) */
-  shll2   r0                      /* * sizeof(u32) */
-  mov.l   ibh_hash, r1
-  mov.l   @(r0,r1), r5            /* blk_offset = rom_branch_hash[hash] */
-  mov.l   ibh_tcache, r6
-iba_walk:
-  tst     r5, r5
-  bt      .Liba_to_slow           /* miss */
-  mov     r5, r7
-  add     r6, r7                  /* r7 = &rom_translation_cache[blk_offset] */
-  mov.l   @r7, r0                 /* hashhdr_type.pc_value */
-  cmp/eq  r2, r0
-  bt      iba_hit
-  bra     iba_walk
-  mov.l   @(4,r7), r5             /* delay slot: hashhdr_type.next_entry */
+  ROM_HASH_WALK ibh, .Liba_to_slow, iba_hit
 iba_hit:
   INC_COUNTER cgba_dynarec_ibh_arm_hit_count
   add     #8, r7                  /* sizeof(hashhdr_type) + prologue size */
@@ -316,25 +327,7 @@ ibt_hash:
   mov.l   r4, @(r0,r14)           /* delay slot: commit reg[REG_PC] */
 ibt_hash_miss:
 #endif
-  mov.l   ibh_mul, r3
-  dmulu.l r2, r3
-  sts     macl, r0
-  mov     #-(32-ROM_BRANCH_HASH_BITS), r1
-  shld    r1, r0
-  shll2   r0
-  mov.l   ibh_hash, r1
-  mov.l   @(r0,r1), r5
-  mov.l   ibh_tcache, r6
-ibt_walk:
-  tst     r5, r5
-  bt      .Libt_to_slow
-  mov     r5, r7
-  add     r6, r7
-  mov.l   @r7, r0
-  cmp/eq  r2, r0
-  bt      ibt_hit
-  bra     ibt_walk
-  mov.l   @(4,r7), r5             /* delay slot */
+  ROM_HASH_WALK ibh, .Libt_to_slow, ibt_hit
 ibt_hit:
   INC_COUNTER cgba_dynarec_ibh_thumb_hit_count
   add     #8, r7
@@ -389,25 +382,7 @@ defsymbl(sh4_indirect_branch_dual_thumb_current)
   jmp     @r7
   mov.l   r1, @(r0,r14)           /* delay slot: commit reg[REG_PC] */
 .Libdc_miss:
-  mov.l   ibh_mul, r3
-  dmulu.l r2, r3
-  sts     macl, r0
-  mov     #-(32-ROM_BRANCH_HASH_BITS), r1
-  shld    r1, r0
-  shll2   r0
-  mov.l   ibh_hash, r1
-  mov.l   @(r0,r1), r5
-  mov.l   ibh_tcache, r6
-.Libdc_walk:
-  tst     r5, r5
-  bt      .Libd_to_slow
-  mov     r5, r7
-  add     r6, r7
-  mov.l   @r7, r0
-  cmp/eq  r2, r0
-  bt      .Libdc_hit
-  bra     .Libdc_walk
-  mov.l   @(4,r7), r5             /* delay slot */
+  ROM_HASH_WALK ibh, .Libd_to_slow, .Libdc_hit
 .Libdc_hit:
   INC_COUNTER cgba_dynarec_ibh_dual_thumb_hit_count
   add     #8, r7
@@ -787,29 +762,7 @@ ibd_arm_hash:
   nop
 
 ibd_arm_hash_miss:
-  mov.l   txt_ibh_mul, r3
-  dmulu.l r2, r3
-  sts     macl, r0
-  mov     #-(32-ROM_BRANCH_HASH_BITS), r1
-  shld    r1, r0
-  shll2   r0
-  mov.l   txt_ibh_hash, r1
-  mov.l   @(r0,r1), r5
-  mov.l   txt_ibh_tcache, r6
-ibd_arm_walk:
-  tst     r5, r5
-  bf      1f
-  bra     ibd_slow
-  nop
-1:
-  mov     r5, r7
-  add     r6, r7
-  mov.l   @r7, r0
-  cmp/eq  r2, r0
-  bt      ibd_arm_hit
-  mov.l   @(4,r7), r5
-  bra     ibd_arm_walk
-  nop
+  ROM_HASH_WALK txt_ibh, ibd_slow, ibd_arm_hit, 1
 ibd_arm_hit:
   INC_COUNTER cgba_dynarec_ibh_dual_arm_hit_count
   add     #8, r7
@@ -846,26 +799,7 @@ ibd_thumb_hash:
   nop
 
 ibd_thumb_hash_miss:
-  mov.l   txt_ibh_mul, r3
-  dmulu.l r2, r3
-  sts     macl, r0
-  mov     #-(32-ROM_BRANCH_HASH_BITS), r1
-  shld    r1, r0
-  shll2   r0
-  mov.l   txt_ibh_hash, r1
-  mov.l   @(r0,r1), r5
-  mov.l   txt_ibh_tcache, r6
-ibd_thumb_walk:
-  tst     r5, r5
-  bt      ibd_slow
-  mov     r5, r7
-  add     r6, r7
-  mov.l   @r7, r0
-  cmp/eq  r2, r0
-  bt      ibd_thumb_hit
-  mov.l   @(4,r7), r5
-  bra     ibd_thumb_walk
-  nop
+  ROM_HASH_WALK txt_ibh, ibd_slow, ibd_thumb_hit, 0
 ibd_thumb_hit:
   INC_COUNTER cgba_dynarec_ibh_dual_thumb_hit_count
   add     #8, r7

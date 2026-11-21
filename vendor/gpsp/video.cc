@@ -5627,6 +5627,94 @@ static_assert(offsetof(cgba_mode0_bg_plan, flags) == 30, "plan layout");
 static_assert(offsetof(cgba_mode0_bg_plan, tile_hoff) == 31, "plan layout");
 #endif
 
+/* Unified horizontal tile-span plan for arbitrary [x0, x1) slices (including
+ * full-width [0, 240)) across 256px / 512px text BG screenblocks. */
+struct cgba_bg_hspan_plan {
+  u16 first_byte_off;
+  u16 map2_byte_off;
+  u32 cp;
+  u16 x0;
+  u16 mid_x;
+  u16 right_x;
+  u8  thoff;
+  u8  left_w;
+  u8  right_w;
+  u8  mid_aligned;
+};
+
+static inline void cgba_build_bg_hspan_plan(
+  u32 hofs, u32 wide, u32 x0, u32 x1, cgba_bg_hspan_plan *out)
+{
+  u32 total_w = x1 - x0;
+  u32 h = (hofs + x0) & (wide ? 511u : 255u);
+  u16 map_right_off = 0u, second_off = 0u;
+  if (wide) {
+    if (h >= 256u) {
+      h -= 256u;
+      map_right_off = 1024u;
+    } else {
+      second_off = 1024u;
+    }
+  }
+  u32 pixel_run = 256u - h;
+  u32 thoff = h & 7u;
+  u32 left_w = thoff ? MIN(total_w, 8u - thoff) : 0u;
+  u32 rem = total_w - left_w;
+  pixel_run -= left_w;
+  u32 todraw1 = MIN(rem, pixel_run) >> 3;
+  rem -= todraw1 << 3;
+  pixel_run -= todraw1 << 3;
+  bool need_switch = (rem > 0u) && (pixel_run == 0u);
+  u32 todraw2 = rem >> 3;
+  u32 right_w = rem & 7u;
+  out->first_byte_off = (u16)((map_right_off + (h >> 3)) << 1);
+  out->map2_byte_off = (u16)((need_switch
+                                ? second_off
+                                : (map_right_off + (h >> 3) + (left_w ? 1u : 0u) + todraw1)) << 1);
+  out->cp = todraw1 | (todraw2 << 16);
+  out->x0 = (u16)x0;
+  out->mid_x = (u16)(x0 + left_w);
+  out->right_x = (u16)(x1 - right_w);
+  out->thoff = (u8)thoff;
+  out->left_w = (u8)left_w;
+  out->right_w = (u8)right_w;
+  out->mid_aligned = ((x0 + left_w) & 1u) == 0u ? 1u : 0u;
+}
+
+static inline void cgba_bg_hspan_from_plan(
+  const cgba_mode0_bg_plan *p, cgba_bg_hspan_plan *out)
+{
+  u32 thoff = p->tile_hoff;
+  u32 left_w = thoff ? (8u - thoff) : 0u;
+  out->first_byte_off = p->first_byte_off;
+  out->map2_byte_off = p->map2_byte_off;
+  out->cp = p->counts_packed;
+  out->x0 = 0u;
+  out->mid_x = (u16)left_w;
+  out->right_x = (u16)(240u - thoff);
+  out->thoff = (u8)thoff;
+  out->left_w = (u8)left_w;
+  out->right_w = (u8)thoff;
+  out->mid_aligned = (left_w & 1u) == 0u ? 1u : 0u;
+}
+
+/* True when every tile in this strip's tile row references tile 0 and tile 0's
+ * rows [start_r, start_r + k) are completely transparent. */
+static inline bool cgba_4bpp_strip_row_zero_skip(
+  const cgba_mode0_bg_plan *p, u32 vhalf, u32 voffset, u32 start_r, u32 k)
+{
+  if (!(p->flags & 2u))
+    return false;
+  u32 vtile_row = (voffset & 255u) >> 3;
+  if (p->row_nonzero[vhalf] & (1u << vtile_row))
+    return false;
+  const u32 *t0 = (const u32 *)(p->tile_charbase + (start_r << 2));
+  u32 any = 0u;
+  for (u32 r = 0u; r < k; r++)
+    any |= t0[r];
+  return any == 0u;
+}
+
 struct alignas(32) cgba_mode0_state {
   cgba_mode0_bg_plan plans[4];
   u8   lorder[16][8];
@@ -6068,36 +6156,12 @@ static __attribute__((noinline)) void cgba_rebuild_bg_plans(u32 video_mode, u16 
       if (__builtin_expect(h_raw == cgba_m0.bg_hofs[layer], 1))
         continue;
       cgba_m0.bg_hofs[layer] = (u16)h_raw;
-      u32 wide = cgba_m0.bg_wide[layer];
-      u32 h = h_raw;
-      u16 map_right_off = 0, second_off = 0;
-      if (wide) {
-        if (h >= 256u) {
-          h -= 256u;
-          map_right_off = 1024u;
-        } else {
-          second_off = 1024u;
-        }
-      } else {
-        h &= 255u;
-      }
-      u32 pixel_run = 256u - h;
-      u32 tile_hoff = h & 7u;
-      u32 partial_left = tile_hoff ? (8u - tile_hoff) : 0u;
-      u32 rem = 240u - partial_left;
-      pixel_run -= partial_left;
-      u32 todraw1 = MIN(rem, pixel_run) >> 3;
-      rem -= todraw1 << 3;
-      pixel_run -= todraw1 << 3;
-      bool need_switch = (rem > 0u) && (pixel_run == 0u);
-      u32 todraw2 = rem >> 3;
-      u16 first_off = (u16)(map_right_off + (h >> 3));
-      u16 map2_off = need_switch ? second_off
-                                 : (u16)(first_off + (tile_hoff ? 1u : 0u) + todraw1);
-      p->counts_packed = (u32)todraw1 | ((u32)todraw2 << 16);
-      p->first_byte_off = (u16)(first_off << 1);
-      p->map2_byte_off = (u16)(map2_off << 1);
-      p->tile_hoff = (u8)tile_hoff;
+      cgba_bg_hspan_plan sp;
+      cgba_build_bg_hspan_plan(h_raw, cgba_m0.bg_wide[layer], 0u, 240u, &sp);
+      p->counts_packed = sp.cp;
+      p->first_byte_off = sp.first_byte_off;
+      p->map2_byte_off = sp.map2_byte_off;
+      p->tile_hoff = sp.thoff;
       continue;
     }
 
@@ -6113,42 +6177,18 @@ static __attribute__((noinline)) void cgba_rebuild_bg_plans(u32 video_mode, u16 
     u32 base_block = (bg_control >> 8) & 0x1Fu;
     u32 sb_bot = base_block + ((map_size & 2u) ? ((map_size & 1u) ? 2u : 1u) : 0u);
     u32 tilecntrl = (bg_control >> 2) & 3u;
-    u32 h = h_raw;
-    cgba_m0.bg_hofs[layer] = (u16)h;
+    cgba_m0.bg_hofs[layer] = (u16)h_raw;
     cgba_m0.bg_wide[layer] = (u8)(map_size & 1u);
-    u16 map_right_off = 0, second_off = 0;
-    if (map_size & 1u) {
-      if (h >= 256u) {
-        h -= 256u;
-        map_right_off = 1024u;
-      } else {
-        second_off = 1024u;
-      }
-    } else {
-      h &= 255u;
-    }
-    u32 pixel_run = 256u - h;
-    u32 tile_hoff = h & 7u;
-    u32 partial_left = tile_hoff ? (8u - tile_hoff) : 0u;
-    u32 rem = 240u - partial_left;
-    pixel_run -= partial_left;
-    u32 todraw1 = MIN(rem, pixel_run) >> 3;
-    rem -= todraw1 << 3;
-    pixel_run -= todraw1 << 3;
-    bool need_switch = (rem > 0u) && (pixel_run == 0u);
-    u32 todraw2 = rem >> 3;
-
-    u16 first_off = (u16)(map_right_off + (h >> 3));
-    u16 map2_off = need_switch ? second_off
-                               : (u16)(first_off + (tile_hoff ? 1u : 0u) + todraw1);
+    cgba_bg_hspan_plan sp;
+    cgba_build_bg_hspan_plan(h_raw, map_size & 1u, 0u, 240u, &sp);
     p->tile_charbase = &vram[tilecntrl * 16384u];
     p->sb_ptr[0] = (u16 *)&vram[base_block * 2048u];
     p->sb_ptr[1] = (u16 *)&vram[sb_bot * 2048u];
-    p->counts_packed = (u32)todraw1 | ((u32)todraw2 << 16);
+    p->counts_packed = sp.cp;
     p->vofs = vofs;
-    p->first_byte_off = (u16)(first_off << 1);
-    p->map2_byte_off = (u16)(map2_off << 1);
-    p->tile_hoff = (u8)tile_hoff;
+    p->first_byte_off = sp.first_byte_off;
+    p->map2_byte_off = sp.map2_byte_off;
+    p->tile_hoff = sp.thoff;
     if (is8bpp) {
       p->row_nonzero[0] = 0xFFFFFFFFu;
       p->row_nonzero[1] = 0xFFFFFFFFu;
@@ -6514,16 +6554,42 @@ static __attribute__((noinline)) void cgba_render_4bpp_strip_blend_c(
   }
 }
 
-static __attribute__((noinline)) void cgba_render_4bpp_bg_blend_rows(
-  const cgba_mode0_bg_plan *p, u32 sy0, u32 sy1, u16 *dst_first_row,
-  u32 eva, u32 evb)
+static inline void cgba_dispatch_4bpp_strip_blend(
+  bool saturate, const u16 *map1, u32 counts_packed, u16 *dst_top,
+  const u8 *tile_charbase, u32 rke, const u32 *term_a, const u16 *map2)
+{
+  if (!saturate) {
+#if defined(CGBA_SH4_ASM_4BPP) && !defined(USE_XBGR1555_FORMAT)
+    cgba_render_4bpp_strip_blend_sh4(
+      map1, counts_packed, dst_top, tile_charbase, rke, term_a, map2);
+#else
+    cgba_render_4bpp_strip_blend_c<false>(
+      map1, counts_packed, dst_top, tile_charbase, rke, term_a, map2);
+#endif
+  } else {
+#if defined(CGBA_SH4_ASM_4BPP) && !defined(USE_XBGR1555_FORMAT)
+    cgba_render_4bpp_strip_blend_sat_sh4(
+      map1, counts_packed, dst_top, tile_charbase, rke, term_a, map2);
+#else
+    cgba_render_4bpp_strip_blend_c<true>(
+      map1, counts_packed, dst_top, tile_charbase, rke, term_a, map2);
+#endif
+  }
+}
+
+static __attribute__((noinline)) void cgba_render_4bpp_bg_blend_hspan_rows(
+  const cgba_mode0_bg_plan *p, const cgba_bg_hspan_plan *sp,
+  u32 sy0, u32 sy1, u16 *dst_first_row, u32 eva, u32 evb)
 {
   if (eva == 0u && evb == 16u)
     return;
   const u32 *term_a = cgba_bg_blend_term_a_get(eva);
   const bool saturate = (eva + evb) > 16u;
-  const u32 thoff = p->tile_hoff;
-  const u8 pflags = p->flags;
+  const u32 left_w = sp->left_w;
+  const u32 right_w = sp->right_w;
+  const u32 cp = sp->cp;
+  const u32 todraw1 = cp & 0xFFFFu;
+  const u32 todraw2 = cp >> 16;
   u32 y = sy0;
   u16 *dst_top = dst_first_row;
 
@@ -6534,79 +6600,57 @@ static __attribute__((noinline)) void cgba_render_4bpp_bg_blend_rows(
     if (y + k > sy1)
       k = sy1 - y;
     u32 vhalf = voffset >> 8;
-    if (pflags & 2u) {
-      u32 vtile_row = (voffset & 255u) >> 3;
-      if (!(p->row_nonzero[vhalf] & (1u << vtile_row))) {
-        const u32 *t0 = (const u32 *)(p->tile_charbase + (start_r << 2));
-        u32 any = 0;
-        for (u32 r = 0; r < k; r++)
-          any |= t0[r];
-        if (any == 0u) {
-          y += k;
-          dst_top += k * 240u;
-          continue;
-        }
-      }
+    if (cgba_4bpp_strip_row_zero_skip(p, vhalf, voffset, start_r, k)) {
+      y += k;
+      dst_top += k * 240u;
+      continue;
     }
     u8 *map_row_b = (u8 *)p->sb_ptr[vhalf] + ((voffset & 0xF8u) << 3);
-    u16 *map1 = (u16 *)(map_row_b + p->first_byte_off);
-    u16 *map2 = (u16 *)(map_row_b + p->map2_byte_off);
+    u16 *map1 = (u16 *)(map_row_b + sp->first_byte_off);
+    u16 *map2 = (u16 *)(map_row_b + sp->map2_byte_off);
+    u16 left_raw = left_w ? *map1++ : 0u;
+    u16 right_raw = right_w ? *(map2 + todraw2) : 0u;
     u32 rke = (evb << 16) | (start_r << 8) | k;
 
-    if (__builtin_expect(thoff == 0u, 1)) {
-      if (!saturate) {
-#if defined(CGBA_SH4_ASM_4BPP) && !defined(USE_XBGR1555_FORMAT)
-        cgba_render_4bpp_strip_blend_sh4(
-          map1, p->counts_packed, dst_top, p->tile_charbase, rke, term_a, map2);
-#else
-        cgba_render_4bpp_strip_blend_c<false>(
-          map1, p->counts_packed, dst_top, p->tile_charbase, rke, term_a, map2);
-#endif
-      } else {
-#if defined(CGBA_SH4_ASM_4BPP) && !defined(USE_XBGR1555_FORMAT)
-        cgba_render_4bpp_strip_blend_sat_sh4(
-          map1, p->counts_packed, dst_top, p->tile_charbase, rke, term_a, map2);
-#else
-        cgba_render_4bpp_strip_blend_c<true>(
-          map1, p->counts_packed, dst_top, p->tile_charbase, rke, term_a, map2);
-#endif
-      }
-    } else {
-      u32 left_w = 8u - thoff;
-      u32 cp = p->counts_packed;
-      u16 left_raw = *map1++;
-      u16 *mid_map1 = (cp & 0xFFFFu) ? map1 : map2;
-      u32 mid_cp = (cp & 0xFFFFu) ? cp : (cp >> 16);
-      u16 right_raw = *(map2 + (cp >> 16));
-      if (!saturate) {
-#if defined(CGBA_SH4_ASM_4BPP) && !defined(USE_XBGR1555_FORMAT)
-        cgba_render_4bpp_strip_blend_sh4(
-          mid_map1, mid_cp, dst_top + left_w, p->tile_charbase, rke, term_a, map2);
-#else
-        cgba_render_4bpp_strip_blend_c<false>(
-          mid_map1, mid_cp, dst_top + left_w, p->tile_charbase, rke, term_a, map2);
-#endif
+    if (cp != 0u) {
+      u16 *mid_map1 = todraw1 ? map1 : map2;
+      u32 mid_cp = todraw1 ? cp : todraw2;
+      cgba_dispatch_4bpp_strip_blend(
+        saturate, mid_map1, mid_cp, dst_top + sp->mid_x, p->tile_charbase,
+        rke, term_a, map2);
+    }
+    if (left_w) {
+      if (!saturate)
         cgba_render_4bpp_part_blend_strip<false>(
-          dst_top, k, thoff, 8u, left_raw, p->tile_charbase, start_r, term_a, evb);
+          dst_top + sp->x0, k, sp->thoff, sp->thoff + left_w, left_raw,
+          p->tile_charbase, start_r, term_a, evb);
+      else
+        cgba_render_4bpp_part_blend_strip<true>(
+          dst_top + sp->x0, k, sp->thoff, sp->thoff + left_w, left_raw,
+          p->tile_charbase, start_r, term_a, evb);
+    }
+    if (right_w) {
+      if (!saturate)
         cgba_render_4bpp_part_blend_strip<false>(
-          dst_top + left_w + 232u, k, 0u, thoff, right_raw, p->tile_charbase, start_r, term_a, evb);
-      } else {
-#if defined(CGBA_SH4_ASM_4BPP) && !defined(USE_XBGR1555_FORMAT)
-        cgba_render_4bpp_strip_blend_sat_sh4(
-          mid_map1, mid_cp, dst_top + left_w, p->tile_charbase, rke, term_a, map2);
-#else
-        cgba_render_4bpp_strip_blend_c<true>(
-          mid_map1, mid_cp, dst_top + left_w, p->tile_charbase, rke, term_a, map2);
-#endif
+          dst_top + sp->right_x, k, 0u, right_w, right_raw,
+          p->tile_charbase, start_r, term_a, evb);
+      else
         cgba_render_4bpp_part_blend_strip<true>(
-          dst_top, k, thoff, 8u, left_raw, p->tile_charbase, start_r, term_a, evb);
-        cgba_render_4bpp_part_blend_strip<true>(
-          dst_top + left_w + 232u, k, 0u, thoff, right_raw, p->tile_charbase, start_r, term_a, evb);
-      }
+          dst_top + sp->right_x, k, 0u, right_w, right_raw,
+          p->tile_charbase, start_r, term_a, evb);
     }
     y += k;
     dst_top += k * 240u;
   }
+}
+
+static inline void cgba_render_4bpp_bg_blend_rows(
+  const cgba_mode0_bg_plan *p, u32 sy0, u32 sy1, u16 *dst_first_row,
+  u32 eva, u32 evb)
+{
+  cgba_bg_hspan_plan sp;
+  cgba_bg_hspan_from_plan(p, &sp);
+  cgba_render_4bpp_bg_blend_hspan_rows(p, &sp, sy0, sy1, dst_first_row, eva, evb);
 }
 
 static __attribute__((noinline)) void cgba_render_8bpp_part_base_strip(
@@ -8754,56 +8798,74 @@ static __attribute__((noinline)) void cgba_render_4bpp_part_strip_fullcolor(
 #endif
 }
 
-struct cgba_bg_hspan_plan {
-  u16 first_byte_off;
-  u16 map2_byte_off;
-  u32 cp;
-  u16 x0;
-  u16 mid_x;
-  u16 right_x;
-  u8  thoff;
-  u8  left_w;
-  u8  right_w;
-  u8  mid_aligned;
-};
-
-static inline void cgba_build_bg_hspan_plan(
-  u32 hofs, u32 wide, u32 x0, u32 x1, cgba_bg_hspan_plan *out)
+static inline void cgba_dispatch_4bpp_strip_sh4(
+  bool base_done, bool aligned, const u16 *map1, u32 cp, u16 *dst_top,
+  const u8 *charbase, u32 rk, const u32 *pair_lut, const u16 *map2)
 {
-  u32 total_w = x1 - x0;
-  u32 h = (hofs + x0) & (wide ? 511u : 255u);
-  u16 map_right_off = 0u, second_off = 0u;
-  if (wide) {
-    if (h >= 256u) {
-      h -= 256u;
-      map_right_off = 1024u;
-    } else {
-      second_off = 1024u;
-    }
+  if (__builtin_expect(aligned, 1)) {
+    if (base_done)
+      cgba_render_4bpp_strip_over_sh4(
+        map1, cp, dst_top, charbase, rk, pair_lut, map2);
+    else
+      cgba_render_4bpp_strip_base_sh4(
+        map1, cp, dst_top, charbase, rk, pair_lut, map2);
+  } else {
+    if (base_done)
+      cgba_render_4bpp_strip_over_u16_sh4(
+        map1, cp, dst_top, charbase, rk, pair_lut, map2);
+    else
+      cgba_render_4bpp_strip_base_u16_sh4(
+        map1, cp, dst_top, charbase, rk, pair_lut, map2);
   }
-  u32 pixel_run = 256u - h;
-  u32 thoff = h & 7u;
-  u32 left_w = thoff ? MIN(total_w, 8u - thoff) : 0u;
-  u32 rem = total_w - left_w;
-  pixel_run -= left_w;
-  u32 todraw1 = MIN(rem, pixel_run) >> 3;
-  rem -= todraw1 << 3;
-  pixel_run -= todraw1 << 3;
-  bool need_switch = (rem > 0u) && (pixel_run == 0u);
-  u32 todraw2 = rem >> 3;
-  u32 right_w = rem & 7u;
-  out->first_byte_off = (u16)((map_right_off + (h >> 3)) << 1);
-  out->map2_byte_off = (u16)((need_switch
-                                ? second_off
-                                : (map_right_off + (h >> 3) + (left_w ? 1u : 0u) + todraw1)) << 1);
-  out->cp = todraw1 | (todraw2 << 16);
-  out->x0 = (u16)x0;
-  out->mid_x = (u16)(x0 + left_w);
-  out->right_x = (u16)(x1 - right_w);
-  out->thoff = (u8)thoff;
-  out->left_w = (u8)left_w;
-  out->right_w = (u8)right_w;
-  out->mid_aligned = ((x0 + left_w) & 1u) == 0u ? 1u : 0u;
+}
+
+static inline void cgba_render_4bpp_part_edge_sh4(
+  u16 *dst, u32 k, u32 col0, u32 col1, u16 raw_map,
+  const u8 *charbase, u32 start_r, bool base_done,
+  const u16 *pal, const u16 *bpal, const u32 *pair_lut)
+{
+  if (base_done) {
+    cgba_render_4bpp_part_strip_fullcolor<false>(
+      dst, k, col0, col1, raw_map, charbase, start_r, pal);
+  } else if ((((uintptr_t)dst & 3u) == 0u) && (((col0 | col1) & 1u) == 0u)) {
+    cgba_render_4bpp_part_strip_even_base(
+      dst, k, col0, col1, raw_map, charbase, start_r, pair_lut);
+  } else {
+    cgba_render_4bpp_part_strip_fullcolor<true>(
+      dst, k, col0, col1, raw_map, charbase, start_r, bpal);
+  }
+}
+
+static inline void cgba_render_4bpp_hspan_seg_sh4(
+  const cgba_bg_hspan_plan *sp, u8 *map_row_b, u16 *dst_top,
+  const u8 *charbase, u32 start_r, u32 k, u32 rk, bool base_done,
+  const u16 *pal, const u16 *bpal, const u32 *pair_lut)
+{
+  u16 *map1 = (u16 *)(map_row_b + sp->first_byte_off);
+  u16 *map2 = (u16 *)(map_row_b + sp->map2_byte_off);
+  u32 left_w = sp->left_w;
+  u32 right_w = sp->right_w;
+  u32 cp = sp->cp;
+  u32 todraw1 = cp & 0xFFFFu;
+  u32 todraw2 = cp >> 16;
+  u16 left_raw = left_w ? *map1++ : 0u;
+  u16 right_raw = right_w ? *(map2 + todraw2) : 0u;
+
+  if (cp != 0u) {
+    u16 *mid_map1 = todraw1 ? map1 : map2;
+    u32 mid_cp = todraw1 ? cp : todraw2;
+    cgba_dispatch_4bpp_strip_sh4(
+      base_done, sp->mid_aligned != 0u, mid_map1, mid_cp, dst_top + sp->mid_x,
+      charbase, rk, pair_lut, map2);
+  }
+  if (left_w)
+    cgba_render_4bpp_part_edge_sh4(
+      dst_top + sp->x0, k, sp->thoff, sp->thoff + left_w, left_raw,
+      charbase, start_r, base_done, pal, bpal, pair_lut);
+  if (right_w)
+    cgba_render_4bpp_part_edge_sh4(
+      dst_top + sp->right_x, k, 0u, right_w, right_raw,
+      charbase, start_r, base_done, pal, bpal, pair_lut);
 }
 
 static __attribute__((noinline)) void cgba_render_4bpp_bg_split_sh4(
@@ -8851,7 +8913,6 @@ static __attribute__((noinline)) void cgba_render_4bpp_bg_split_sh4(
   }
 
   const u8 *const charbase = p->tile_charbase;
-  const u8 pflags = p->flags;
   u32 y = sy0;
   while (y < sy1) {
     u32 voffset = (y + p->vofs) & 511u;
@@ -8860,194 +8921,41 @@ static __attribute__((noinline)) void cgba_render_4bpp_bg_split_sh4(
     if (y + k > sy1)
       k = sy1 - y;
     u32 vhalf = voffset >> 8;
-    if (base_done && (pflags & 2u)) {
-      u32 vtile_row = (voffset & 255u) >> 3;
-      if (!(p->row_nonzero[vhalf] & (1u << vtile_row))) {
-        const u32 *t0 = (const u32 *)(charbase + (start_r << 2));
-        u32 any = 0;
-        for (u32 r = 0; r < k; r++)
-          any |= t0[r];
-        if (any == 0u) {
-          y += k;
-          continue;
-        }
-      }
+    if (base_done && cgba_4bpp_strip_row_zero_skip(p, vhalf, voffset, start_r, k)) {
+      y += k;
+      continue;
     }
     u8 *map_row_b = (u8 *)p->sb_ptr[vhalf] + ((voffset & 0xF8u) << 3);
     u16 *dst_top = screen_base + y * 240u;
     u32 rk = (start_r << 8) | k;
 
     for (u32 s = 0; s < nseg; s++) {
-      const cgba_bg_hspan_plan *sp = &segs[s];
-      u16 *map1 = (u16 *)(map_row_b + sp->first_byte_off);
-      u16 *map2 = (u16 *)(map_row_b + sp->map2_byte_off);
-      u32 left_w = sp->left_w;
-      u32 right_w = sp->right_w;
-      u32 cp = sp->cp;
-      u32 todraw1 = cp & 0xFFFFu;
-      u32 todraw2 = cp >> 16;
-      u16 left_raw = left_w ? *map1++ : 0u;
-      u16 right_raw = right_w ? *(map2 + todraw2) : 0u;
-
-      if (cp != 0u) {
-        u16 *mid_map1 = todraw1 ? map1 : map2;
-        u32 mid_cp = todraw1 ? cp : todraw2;
-        if (__builtin_expect(sp->mid_aligned != 0u, 1)) {
-          if (base_done)
-            cgba_render_4bpp_strip_over_sh4(
-              mid_map1, mid_cp, dst_top + sp->mid_x, charbase, rk, seg_plut[s], map2);
-          else
-            cgba_render_4bpp_strip_base_sh4(
-              mid_map1, mid_cp, dst_top + sp->mid_x, charbase, rk, seg_plut[s], map2);
-        } else {
-          if (base_done)
-            cgba_render_4bpp_strip_over_u16_sh4(
-              mid_map1, mid_cp, dst_top + sp->mid_x, charbase, rk, seg_plut[s], map2);
-          else
-            cgba_render_4bpp_strip_base_u16_sh4(
-              mid_map1, mid_cp, dst_top + sp->mid_x, charbase, rk, seg_plut[s], map2);
-        }
-      }
-      if (left_w) {
-        if (base_done)
-          cgba_render_4bpp_part_strip_fullcolor<false>(
-            dst_top + sp->x0, k, sp->thoff, sp->thoff + left_w, left_raw,
-            charbase, start_r, seg_pal[s]);
-        else
-          cgba_render_4bpp_part_strip_fullcolor<true>(
-            dst_top + sp->x0, k, sp->thoff, sp->thoff + left_w, left_raw,
-            charbase, start_r, seg_bpal[s]);
-      }
-      if (right_w) {
-        if (base_done)
-          cgba_render_4bpp_part_strip_fullcolor<false>(
-            dst_top + sp->right_x, k, 0u, right_w, right_raw,
-            charbase, start_r, seg_pal[s]);
-        else
-          cgba_render_4bpp_part_strip_fullcolor<true>(
-            dst_top + sp->right_x, k, 0u, right_w, right_raw,
-            charbase, start_r, seg_bpal[s]);
-      }
+      cgba_render_4bpp_hspan_seg_sh4(
+        &segs[s], map_row_b, dst_top, charbase, start_r, k, rk,
+        base_done != 0u, seg_pal[s], seg_bpal[s], seg_plut[s]);
     }
     y += k;
   }
 }
 
-static __attribute__((noinline)) void cgba_render_4bpp_bg_blend_span(
+static inline void cgba_render_4bpp_bg_blend_span(
   const cgba_mode0_bg_plan *p, u32 hofs, u32 wide,
   u32 sy0, u32 sy1, u32 x0, u32 x1,
   u16 *screen_base, u32 eva, u32 evb)
 {
-  u32 total_w = x1 - x0;
-  if (total_w == 0u || (eva == 0u && evb == 16u))
+  if (x1 <= x0 || (eva == 0u && evb == 16u))
     return;
-  const u32 *term_a = cgba_bg_blend_term_a_get(eva);
-  const bool saturate = (eva + evb) > 16u;
-  u32 h = (hofs + x0) & (wide ? 511u : 255u);
-  u16 map_right_off = 0u, second_off = 0u;
-  if (wide) {
-    if (h >= 256u) {
-      h -= 256u;
-      map_right_off = 1024u;
-    } else {
-      second_off = 1024u;
-    }
-  }
-  u32 pixel_run = 256u - h;
-  u32 thoff = h & 7u;
-  u32 left_w = thoff ? MIN(total_w, 8u - thoff) : 0u;
-  u32 rem = total_w - left_w;
-  pixel_run -= left_w;
-  u32 todraw1 = MIN(rem, pixel_run) >> 3;
-  rem -= todraw1 << 3;
-  pixel_run -= todraw1 << 3;
-  bool need_switch = (rem > 0u) && (pixel_run == 0u);
-  u32 todraw2 = rem >> 3;
-  u32 right_w = rem & 7u;
-  u32 first_byte_off = (map_right_off + (h >> 3)) << 1;
-  u32 map2_byte_off = (need_switch
-                         ? second_off
-                         : (map_right_off + (h >> 3) + (left_w ? 1u : 0u) + todraw1)) << 1;
-  u32 cp = todraw1 | (todraw2 << 16);
-  u32 mid_x = x0 + left_w;
-  u32 right_x = x1 - right_w;
-  u8 pflags = p->flags;
-  u32 y = sy0;
-
-  while (y < sy1) {
-    u32 voffset = (y + p->vofs) & 511u;
-    u32 start_r = voffset & 7u;
-    u32 k = 8u - start_r;
-    if (y + k > sy1)
-      k = sy1 - y;
-    u32 vhalf = voffset >> 8;
-    if (pflags & 2u) {
-      u32 vtile_row = (voffset & 255u) >> 3;
-      if (!(p->row_nonzero[vhalf] & (1u << vtile_row))) {
-        const u32 *t0 = (const u32 *)(p->tile_charbase + (start_r << 2));
-        u32 any = 0;
-        for (u32 r = 0; r < k; r++)
-          any |= t0[r];
-        if (any == 0u) {
-          y += k;
-          continue;
-        }
-      }
-    }
-    u8 *map_row_b = (u8 *)p->sb_ptr[vhalf] + ((voffset & 0xF8u) << 3);
-    u16 *map1 = (u16 *)(map_row_b + first_byte_off);
-    u16 *map2 = (u16 *)(map_row_b + map2_byte_off);
-    u16 *dst_top = screen_base + y * 240u;
-    u16 left_raw = left_w ? *map1++ : 0u;
-    u16 right_raw = right_w ? *(map2 + todraw2) : 0u;
-    u32 rke = (evb << 16) | (start_r << 8) | k;
-
-    if (cp != 0u) {
-      u16 *mid_map1 = todraw1 ? map1 : map2;
-      u32 mid_cp = todraw1 ? cp : todraw2;
-      if (!saturate) {
-#if defined(CGBA_SH4_ASM_4BPP) && !defined(USE_XBGR1555_FORMAT)
-        cgba_render_4bpp_strip_blend_sh4(
-          mid_map1, mid_cp, dst_top + mid_x, p->tile_charbase, rke, term_a, map2);
-#else
-        cgba_render_4bpp_strip_blend_c<false>(
-          mid_map1, mid_cp, dst_top + mid_x, p->tile_charbase, rke, term_a, map2);
-#endif
-      } else {
-#if defined(CGBA_SH4_ASM_4BPP) && !defined(USE_XBGR1555_FORMAT)
-        cgba_render_4bpp_strip_blend_sat_sh4(
-          mid_map1, mid_cp, dst_top + mid_x, p->tile_charbase, rke, term_a, map2);
-#else
-        cgba_render_4bpp_strip_blend_c<true>(
-          mid_map1, mid_cp, dst_top + mid_x, p->tile_charbase, rke, term_a, map2);
-#endif
-      }
-    }
-    if (left_w) {
-      if (!saturate)
-        cgba_render_4bpp_part_blend_strip<false>(
-          dst_top + x0, k, thoff, thoff + left_w, left_raw, p->tile_charbase, start_r, term_a, evb);
-      else
-        cgba_render_4bpp_part_blend_strip<true>(
-          dst_top + x0, k, thoff, thoff + left_w, left_raw, p->tile_charbase, start_r, term_a, evb);
-    }
-    if (right_w) {
-      if (!saturate)
-        cgba_render_4bpp_part_blend_strip<false>(
-          dst_top + right_x, k, 0u, right_w, right_raw, p->tile_charbase, start_r, term_a, evb);
-      else
-        cgba_render_4bpp_part_blend_strip<true>(
-          dst_top + right_x, k, 0u, right_w, right_raw, p->tile_charbase, start_r, term_a, evb);
-    }
-    y += k;
-  }
+  cgba_bg_hspan_plan sp;
+  cgba_build_bg_hspan_plan(hofs, wide, x0, x1, &sp);
+  cgba_render_4bpp_bg_blend_hspan_rows(
+    p, &sp, sy0, sy1, screen_base + sy0 * 240u, eva, evb);
 }
 
-static __attribute__((noinline)) void cgba_folded_palette_prepare(
-  u16 p1, u32 eva, u32 evb)
+template<typename Fn>
+static inline void cgba_folded_prepare_impl(u32 key, Fn transform)
 {
 #if !CGBA_PALETTE_FOLDED_BIT
-#error "CGBA_PALETTE_FOLDED_BIT must be non-zero when cgba_folded_palette_prepare is enabled"
+#error "CGBA_PALETTE_FOLDED_BIT must be non-zero when folded palette prepare is enabled"
 #endif
   static_assert((CGBA_PALETTE_DIRTY_ACTIVE & CGBA_PALETTE_DIRTY_FOLDED) != 0u,
                 "CGBA_PALETTE_DIRTY_ACTIVE must include CGBA_PALETTE_DIRTY_FOLDED");
@@ -9057,90 +8965,6 @@ static __attribute__((noinline)) void cgba_folded_palette_prepare(
     cgba_folded_valid = false;
     cgba_folded_union_owner = 1u;
   }
-  u32 key = ((u32)p1 << 16) | (eva << 8) | evb;
-  bool key_changed = !cgba_folded_valid || (cgba_folded_key != key);
-  u32 dirty = palette_ram_dirty & (CGBA_PALETTE_DIRTY_FOLDED | CGBA_PALETTE_DIRTY_FOLDED_OBJ);
-  if (__builtin_expect(!key_changed && dirty == 0u, 1))
-    return;
-  palette_ram_dirty &= ~(CGBA_PALETTE_DIRTY_FOLDED | CGBA_PALETTE_DIRTY_FOLDED_OBJ);
-  u32 ta = (((u32)p1 | ((u32)p1 << 16)) & BLND_MSK) * eva;
-  bool sat = (eva + evb) > 16u;
-
-  if (key_changed || (dirty & CGBA_PALETTE_DIRTY_FOLDED)) {
-    bool bd_changed = key_changed ||
-                      (cgba_folded_pal_snap[0] != palette_ram_converted[0]);
-    u16 bd_folded = sat ? cgba_blend_rgb565_direct<true>(ta, palette_ram_converted[0], evb)
-                        : cgba_blend_rgb565_direct<false>(ta, palette_ram_converted[0], evb);
-    cgba_folded_pal[0] = bd_folded;
-
-    for (u32 sub = 0; sub < 16u; sub++) {
-      u32 base = sub << 4;
-      if (!key_changed && !bd_changed &&
-          cgba_memeq_u32(&cgba_folded_pal_snap[base], &palette_ram_converted[base], 8u))
-        continue;
-      memcpy(&cgba_folded_pal_snap[base], &palette_ram_converted[base],
-             16u * sizeof(u16));
-      u16 *fpal = &cgba_folded_pal[base];
-      u16 *fshd = &cgba_folded_bg_shadow[base];
-      const u16 *src = &palette_ram_converted[base];
-      if (sat) {
-        for (u32 c = 0; c < 16u; c++)
-          fpal[c] = cgba_blend_rgb565_direct<true>(ta, src[c], evb);
-      } else {
-        for (u32 c = 0; c < 16u; c++)
-          fpal[c] = cgba_blend_rgb565_direct<false>(ta, src[c], evb);
-      }
-      fshd[0] = bd_folded;
-      memcpy(fshd + 1, fpal + 1, 15u * sizeof(u16));
-      u16 (*out)[2] = cgba_folded_pair_lut[sub];
-      for (u32 b = 0; b < 256u; b++) {
-        out[b][0] = fshd[b & 15u];
-        out[b][1] = fshd[b >> 4];
-      }
-    }
-  }
-
-  if (key_changed ||
-      !cgba_memeq_u32(&cgba_folded_pal_snap[256], &palette_ram_converted[256], 128u)) {
-    memcpy(&cgba_folded_pal_snap[256], &palette_ram_converted[256],
-           256u * sizeof(u16));
-    if (sat) {
-      for (u32 c = 256u; c < 512u; c++)
-        cgba_folded_pal[c] = cgba_blend_rgb565_direct<true>(
-          ta, palette_ram_converted[c], evb);
-    } else {
-      for (u32 c = 256u; c < 512u; c++)
-        cgba_folded_pal[c] = cgba_blend_rgb565_direct<false>(
-          ta, palette_ram_converted[c], evb);
-    }
-  }
-  cgba_folded_key = key;
-  cgba_folded_valid = true;
-}
-
-static inline u16 cgba_apply_brightness_rgb565(u16 pixcol, u32 effect, u32 evy)
-{
-  u32 epixel = ((u32)pixcol | ((u32)pixcol << 16)) & BLND_MSK;
-  u32 pa = (effect == COL_EFFECT_DARK) ? 0u
-                                       : (((BLND_MSK * evy) >> 4) & BLND_MSK);
-  u32 pb = ((epixel * (16u - evy)) >> 4) & BLND_MSK;
-  epixel = (pa + pb) & BLND_MSK;
-  return (u16)((epixel >> 16) | epixel);
-}
-
-static __attribute__((noinline)) void cgba_folded_brightness_prepare(
-  u32 effect, u32 evy)
-{
-#if !CGBA_PALETTE_FOLDED_BIT
-#error "CGBA_PALETTE_FOLDED_BIT must be non-zero when cgba_folded_brightness_prepare is enabled"
-#endif
-  if (cgba_folded_union_owner != 1u) {
-    cgba_folded_valid = false;
-    cgba_folded_union_owner = 1u;
-  }
-  /* Bit 15 is always 0 in alpha-blend keys (eva <= 16), keeping brightness
-   * keys disjoint from alpha-blend keys in the shared folded-palette cache. */
-  u32 key = 0x00008000u | (effect << 8) | evy;
   bool key_changed = !cgba_folded_valid || (cgba_folded_key != key);
   u32 dirty = palette_ram_dirty & (CGBA_PALETTE_DIRTY_FOLDED | CGBA_PALETTE_DIRTY_FOLDED_OBJ);
   if (__builtin_expect(!key_changed && dirty == 0u, 1))
@@ -9150,7 +8974,7 @@ static __attribute__((noinline)) void cgba_folded_brightness_prepare(
   if (key_changed || (dirty & CGBA_PALETTE_DIRTY_FOLDED)) {
     bool bd_changed = key_changed ||
                       (cgba_folded_pal_snap[0] != palette_ram_converted[0]);
-    u16 bd_folded = cgba_apply_brightness_rgb565(palette_ram_converted[0], effect, evy);
+    u16 bd_folded = transform(palette_ram_converted[0]);
     cgba_folded_pal[0] = bd_folded;
 
     for (u32 sub = 0; sub < 16u; sub++) {
@@ -9164,7 +8988,7 @@ static __attribute__((noinline)) void cgba_folded_brightness_prepare(
       u16 *fshd = &cgba_folded_bg_shadow[base];
       const u16 *src = &palette_ram_converted[base];
       for (u32 c = 0; c < 16u; c++)
-        fpal[c] = cgba_apply_brightness_rgb565(src[c], effect, evy);
+        fpal[c] = transform(src[c]);
       fshd[0] = bd_folded;
       memcpy(fshd + 1, fpal + 1, 15u * sizeof(u16));
       u16 (*out)[2] = cgba_folded_pair_lut[sub];
@@ -9180,11 +9004,47 @@ static __attribute__((noinline)) void cgba_folded_brightness_prepare(
     memcpy(&cgba_folded_pal_snap[256], &palette_ram_converted[256],
            256u * sizeof(u16));
     for (u32 c = 256u; c < 512u; c++)
-      cgba_folded_pal[c] = cgba_apply_brightness_rgb565(
-        palette_ram_converted[c], effect, evy);
+      cgba_folded_pal[c] = transform(palette_ram_converted[c]);
   }
   cgba_folded_key = key;
   cgba_folded_valid = true;
+}
+
+static __attribute__((noinline)) void cgba_folded_palette_prepare(
+  u16 p1, u32 eva, u32 evb)
+{
+  u32 key = ((u32)p1 << 16) | (eva << 8) | evb;
+  u32 ta = (((u32)p1 | ((u32)p1 << 16)) & BLND_MSK) * eva;
+  if ((eva + evb) > 16u) {
+    cgba_folded_prepare_impl(key, [=](u16 c) {
+      return cgba_blend_rgb565_direct<true>(ta, c, evb);
+    });
+  } else {
+    cgba_folded_prepare_impl(key, [=](u16 c) {
+      return cgba_blend_rgb565_direct<false>(ta, c, evb);
+    });
+  }
+}
+
+static inline u16 cgba_apply_brightness_rgb565(u16 pixcol, u32 effect, u32 evy)
+{
+  u32 epixel = ((u32)pixcol | ((u32)pixcol << 16)) & BLND_MSK;
+  u32 pa = (effect == COL_EFFECT_DARK) ? 0u
+                                       : (((BLND_MSK * evy) >> 4) & BLND_MSK);
+  u32 pb = ((epixel * (16u - evy)) >> 4) & BLND_MSK;
+  epixel = (pa + pb) & BLND_MSK;
+  return (u16)((epixel >> 16) | epixel);
+}
+
+static __attribute__((noinline)) void cgba_folded_brightness_prepare(
+  u32 effect, u32 evy)
+{
+  /* Bit 15 is always 0 in alpha-blend keys (eva <= 16), keeping brightness
+   * keys disjoint from alpha-blend keys in the shared folded-palette cache. */
+  u32 key = 0x00008000u | (effect << 8) | evy;
+  cgba_folded_prepare_impl(key, [=](u16 c) {
+    return cgba_apply_brightness_rgb565(c, effect, evy);
+  });
 }
 
 static __attribute__((noinline)) void cgba_render_4bpp_text_bg_strip_sh4(
@@ -9192,151 +9052,28 @@ static __attribute__((noinline)) void cgba_render_4bpp_text_bg_strip_sh4(
   bool base_done, const u16 *cur_pal, const u16 *cur_base_pal,
   const u32 *cur_pair_lut)
 {
-  const u8 pflags = p->flags;
-  const u32 thoff = p->tile_hoff;
-  if (__builtin_expect(thoff == 0u, 1)) {
-    u32 y = sy0;
-    while (y < sy1) {
-      u32 voffset = (y + p->vofs) & 511u;
-      u32 start_r = voffset & 7u;
-      u32 k = 8u - start_r;
-      if (y + k > sy1)
-        k = sy1 - y;
-      u32 vhalf = voffset >> 8;
-      if (base_done && (pflags & 2u)) {
-        u32 vtile_row = (voffset & 255u) >> 3;
-        if (!(p->row_nonzero[vhalf] & (1u << vtile_row))) {
-          const u32 *t0 = (const u32 *)(p->tile_charbase + (start_r << 2));
-          u32 any = 0u;
-          for (u32 r = 0u; r < k; r++)
-            any |= t0[r];
-          if (any == 0u) {
-            y += k;
-            continue;
-          }
-        }
-      }
-      u8 *map_row_b = (u8 *)p->sb_ptr[vhalf] + ((voffset & 0xF8u) << 3);
-      u16 *map1 = (u16 *)(map_row_b + p->first_byte_off);
-      u16 *map2 = (u16 *)(map_row_b + p->map2_byte_off);
-      u16 *dst_top = screen_base + y * 240u;
-      u32 rk = (start_r << 8) | k;
-      if (base_done)
-        cgba_render_4bpp_strip_over_sh4(
-          map1, p->counts_packed, dst_top, p->tile_charbase, rk, cur_pair_lut, map2);
-      else
-        cgba_render_4bpp_strip_base_sh4(
-          map1, p->counts_packed, dst_top, p->tile_charbase, rk, cur_pair_lut, map2);
+  cgba_bg_hspan_plan sp;
+  cgba_bg_hspan_from_plan(p, &sp);
+  const u8 *const charbase = p->tile_charbase;
+  u32 y = sy0;
+  while (y < sy1) {
+    u32 voffset = (y + p->vofs) & 511u;
+    u32 start_r = voffset & 7u;
+    u32 k = 8u - start_r;
+    if (y + k > sy1)
+      k = sy1 - y;
+    u32 vhalf = voffset >> 8;
+    if (base_done && cgba_4bpp_strip_row_zero_skip(p, vhalf, voffset, start_r, k)) {
       y += k;
+      continue;
     }
-    return;
-  }
-
-  if (!(thoff & 1u)) {
-    /* Even tile_hoff (2, 4, 6): middle full tiles start at 4-byte aligned dst! */
-    u32 y = sy0;
-    u32 left_w = 8u - thoff;
-    u32 cp = p->counts_packed;
-    while (y < sy1) {
-      u32 voffset = (y + p->vofs) & 511u;
-      u32 start_r = voffset & 7u;
-      u32 k = 8u - start_r;
-      if (y + k > sy1)
-        k = sy1 - y;
-      u32 vhalf = voffset >> 8;
-      if (base_done && (pflags & 2u)) {
-        u32 vtile_row = (voffset & 255u) >> 3;
-        if (!(p->row_nonzero[vhalf] & (1u << vtile_row))) {
-          const u32 *t0 = (const u32 *)(p->tile_charbase + (start_r << 2));
-          u32 any = 0u;
-          for (u32 r = 0u; r < k; r++)
-            any |= t0[r];
-          if (any == 0u) {
-            y += k;
-            continue;
-          }
-        }
-      }
-      u8 *map_row_b = (u8 *)p->sb_ptr[vhalf] + ((voffset & 0xF8u) << 3);
-      u16 *map1 = (u16 *)(map_row_b + p->first_byte_off);
-      u16 *map2 = (u16 *)(map_row_b + p->map2_byte_off);
-      u16 *dst_top = screen_base + y * 240u;
-      u16 left_raw = *map1++;
-      u16 *mid_map1 = (cp & 0xFFFFu) ? map1 : map2;
-      u32 mid_cp = (cp & 0xFFFFu) ? cp : (cp >> 16);
-      u16 right_raw = *(map2 + (cp >> 16));
-      u32 rk = (start_r << 8) | k;
-      if (base_done) {
-        cgba_render_4bpp_strip_over_sh4(
-          mid_map1, mid_cp, dst_top + left_w, p->tile_charbase, rk, cur_pair_lut, map2);
-        cgba_render_4bpp_part_strip_fullcolor<false>(
-          dst_top, k, thoff, 8u, left_raw, p->tile_charbase, start_r, cur_pal);
-        cgba_render_4bpp_part_strip_fullcolor<false>(
-          dst_top + left_w + 232u, k, 0u, thoff, right_raw, p->tile_charbase, start_r, cur_pal);
-      } else {
-        cgba_render_4bpp_strip_base_sh4(
-          mid_map1, mid_cp, dst_top + left_w, p->tile_charbase, rk, cur_pair_lut, map2);
-        cgba_render_4bpp_part_strip_even_base(
-          dst_top, k, thoff, 8u, left_raw, p->tile_charbase, start_r, cur_pair_lut);
-        cgba_render_4bpp_part_strip_even_base(
-          dst_top + left_w + 232u, k, 0u, thoff, right_raw, p->tile_charbase, start_r, cur_pair_lut);
-      }
-      y += k;
-    }
-    return;
-  }
-
-  /* Odd tile_hoff (1, 3, 5, 7): 8-line unaligned strip for BOTH over & base! */
-  {
-    u32 y = sy0;
-    u32 left_w = 8u - thoff;
-    u32 cp = p->counts_packed;
-    while (y < sy1) {
-      u32 voffset = (y + p->vofs) & 511u;
-      u32 start_r = voffset & 7u;
-      u32 k = 8u - start_r;
-      if (y + k > sy1)
-        k = sy1 - y;
-      u32 vhalf = voffset >> 8;
-      if (base_done && (pflags & 2u)) {
-        u32 vtile_row = (voffset & 255u) >> 3;
-        if (!(p->row_nonzero[vhalf] & (1u << vtile_row))) {
-          const u32 *t0 = (const u32 *)(p->tile_charbase + (start_r << 2));
-          u32 any = 0u;
-          for (u32 r = 0u; r < k; r++)
-            any |= t0[r];
-          if (any == 0u) {
-            y += k;
-            continue;
-          }
-        }
-      }
-      u8 *map_row_b = (u8 *)p->sb_ptr[vhalf] + ((voffset & 0xF8u) << 3);
-      u16 *map1 = (u16 *)(map_row_b + p->first_byte_off);
-      u16 *map2 = (u16 *)(map_row_b + p->map2_byte_off);
-      u16 *dst_top = screen_base + y * 240u;
-      u16 left_raw = *map1++;
-      u16 *mid_map1 = (cp & 0xFFFFu) ? map1 : map2;
-      u32 mid_cp = (cp & 0xFFFFu) ? cp : (cp >> 16);
-      u16 right_raw = *(map2 + (cp >> 16));
-      u32 rk = (start_r << 8) | k;
-      if (base_done) {
-        cgba_render_4bpp_strip_over_u16_sh4(
-          mid_map1, mid_cp, dst_top + left_w, p->tile_charbase, rk, cur_pair_lut, map2);
-        cgba_render_4bpp_part_strip_fullcolor<false>(
-          dst_top, k, thoff, 8u, left_raw, p->tile_charbase, start_r, cur_pal);
-        cgba_render_4bpp_part_strip_fullcolor<false>(
-          dst_top + left_w + 232u, k, 0u, thoff, right_raw, p->tile_charbase, start_r, cur_pal);
-      } else {
-        cgba_render_4bpp_strip_base_u16_sh4(
-          mid_map1, mid_cp, dst_top + left_w, p->tile_charbase, rk, cur_pair_lut, map2);
-        cgba_render_4bpp_part_strip_fullcolor<true>(
-          dst_top, k, thoff, 8u, left_raw, p->tile_charbase, start_r, cur_base_pal);
-        cgba_render_4bpp_part_strip_fullcolor<true>(
-          dst_top + left_w + 232u, k, 0u, thoff, right_raw, p->tile_charbase, start_r, cur_base_pal);
-      }
-      y += k;
-    }
+    u8 *map_row_b = (u8 *)p->sb_ptr[vhalf] + ((voffset & 0xF8u) << 3);
+    u16 *dst_top = screen_base + y * 240u;
+    u32 rk = (start_r << 8) | k;
+    cgba_render_4bpp_hspan_seg_sh4(
+      &sp, map_row_b, dst_top, charbase, start_r, k, rk,
+      base_done, cur_pal, cur_base_pal, cur_pair_lut);
+    y += k;
   }
 }
 
@@ -9355,74 +9092,44 @@ static __attribute__((noinline)) void cgba_render_4bpp_merged_strip_sh4(
   alignas(4) u16 merged[32];
 
   auto draw_merged = [&](u16 *dst_top, u32 start_r, u32 k, u32 rk, u32 is_over) {
+    bool ov = is_over != 0u;
     if (thoff == 0u) {
-      if (is_over)
-        cgba_render_4bpp_strip_over_sh4(
-          merged, 30u, dst_top, charbase, rk, l_plut, merged + 30);
-      else
-        cgba_render_4bpp_strip_base_sh4(
-          merged, 30u, dst_top, charbase, rk, l_plut, merged + 30);
-    } else if (is_over) {
-      if (mid_aligned)
-        cgba_render_4bpp_strip_over_sh4(
-          merged + 1, 29u, dst_top + left_w, charbase, rk, l_plut, merged + 30);
-      else
-        cgba_render_4bpp_strip_over_u16_sh4(
-          merged + 1, 29u, dst_top + left_w, charbase, rk, l_plut, merged + 30);
-      cgba_render_4bpp_part_strip_fullcolor<false>(
-        dst_top, k, thoff, 8u, merged[0], charbase, start_r, l_pal);
-      cgba_render_4bpp_part_strip_fullcolor<false>(
-        dst_top + left_w + 232u, k, 0u, thoff, merged[30], charbase, start_r, l_pal);
+      cgba_dispatch_4bpp_strip_sh4(
+        ov, true, merged, 30u, dst_top, charbase, rk, l_plut, merged + 30);
     } else {
-      if (mid_aligned)
-        cgba_render_4bpp_strip_base_sh4(
-          merged + 1, 29u, dst_top + left_w, charbase, rk, l_plut, merged + 30);
-      else
-        cgba_render_4bpp_strip_base_u16_sh4(
-          merged + 1, 29u, dst_top + left_w, charbase, rk, l_plut, merged + 30);
-      cgba_render_4bpp_part_strip_fullcolor<true>(
-        dst_top, k, thoff, 8u, merged[0], charbase, start_r, l_bpal);
-      cgba_render_4bpp_part_strip_fullcolor<true>(
-        dst_top + left_w + 232u, k, 0u, thoff, merged[30], charbase, start_r, l_bpal);
+      cgba_dispatch_4bpp_strip_sh4(
+        ov, mid_aligned, merged + 1, 29u, dst_top + left_w, charbase, rk,
+        l_plut, merged + 30);
+      cgba_render_4bpp_part_edge_sh4(
+        dst_top, k, thoff, 8u, merged[0], charbase, start_r, ov,
+        l_pal, l_bpal, l_plut);
+      cgba_render_4bpp_part_edge_sh4(
+        dst_top + left_w + 232u, k, 0u, thoff, merged[30], charbase, start_r,
+        ov, l_pal, l_bpal, l_plut);
     }
   };
 
   auto draw_single = [&](const cgba_mode0_bg_plan *q, u16 *map1, u16 *map2,
                          u16 *dst_top, u32 start_r, u32 k, u32 rk, u32 is_over) {
+    bool ov = is_over != 0u;
     u32 cp = q->counts_packed;
     if (thoff == 0u) {
-      if (is_over)
-        cgba_render_4bpp_strip_over_sh4(map1, cp, dst_top, charbase, rk, l_plut, map2);
-      else
-        cgba_render_4bpp_strip_base_sh4(map1, cp, dst_top, charbase, rk, l_plut, map2);
+      cgba_dispatch_4bpp_strip_sh4(
+        ov, true, map1, cp, dst_top, charbase, rk, l_plut, map2);
     } else {
       u16 left_raw = *map1++;
       u16 *mid_map1 = (cp & 0xFFFFu) ? map1 : map2;
       u32 mid_cp = (cp & 0xFFFFu) ? cp : (cp >> 16);
       u16 right_raw = *(map2 + (cp >> 16));
-      if (is_over) {
-        if (mid_aligned)
-          cgba_render_4bpp_strip_over_sh4(
-            mid_map1, mid_cp, dst_top + left_w, charbase, rk, l_plut, map2);
-        else
-          cgba_render_4bpp_strip_over_u16_sh4(
-            mid_map1, mid_cp, dst_top + left_w, charbase, rk, l_plut, map2);
-        cgba_render_4bpp_part_strip_fullcolor<false>(
-          dst_top, k, thoff, 8u, left_raw, charbase, start_r, l_pal);
-        cgba_render_4bpp_part_strip_fullcolor<false>(
-          dst_top + left_w + 232u, k, 0u, thoff, right_raw, charbase, start_r, l_pal);
-      } else {
-        if (mid_aligned)
-          cgba_render_4bpp_strip_base_sh4(
-            mid_map1, mid_cp, dst_top + left_w, charbase, rk, l_plut, map2);
-        else
-          cgba_render_4bpp_strip_base_u16_sh4(
-            mid_map1, mid_cp, dst_top + left_w, charbase, rk, l_plut, map2);
-        cgba_render_4bpp_part_strip_fullcolor<true>(
-          dst_top, k, thoff, 8u, left_raw, charbase, start_r, l_bpal);
-        cgba_render_4bpp_part_strip_fullcolor<true>(
-          dst_top + left_w + 232u, k, 0u, thoff, right_raw, charbase, start_r, l_bpal);
-      }
+      cgba_dispatch_4bpp_strip_sh4(
+        ov, mid_aligned, mid_map1, mid_cp, dst_top + left_w, charbase, rk,
+        l_plut, map2);
+      cgba_render_4bpp_part_edge_sh4(
+        dst_top, k, thoff, 8u, left_raw, charbase, start_r, ov,
+        l_pal, l_bpal, l_plut);
+      cgba_render_4bpp_part_edge_sh4(
+        dst_top + left_w + 232u, k, 0u, thoff, right_raw, charbase, start_r,
+        ov, l_pal, l_bpal, l_plut);
     }
   };
 
@@ -10146,7 +9853,6 @@ static __attribute__((noinline)) void cgba_render_4bpp_bg_hspan_strip_sh4(
                            x0, x1, &sp);
 
   const u8 *const charbase = p->tile_charbase;
-  const u8 pflags = p->flags;
   const u32 *const row_empty = cgba_m0.row_all_empty[layer];
   u32 y = sy0;
   while (y < sy1) {
@@ -10158,74 +9864,18 @@ static __attribute__((noinline)) void cgba_render_4bpp_bg_hspan_strip_sh4(
     u32 vhalf = voffset >> 8;
     if (base_done) {
       u32 vtile_row = (voffset & 255u) >> 3;
-      u32 rbit = 1u << vtile_row;
-      if (row_empty[vhalf] & rbit) {
+      if ((row_empty[vhalf] & (1u << vtile_row)) ||
+          cgba_4bpp_strip_row_zero_skip(p, vhalf, voffset, start_r, k)) {
         y += k;
         continue;
-      }
-      if ((pflags & 2u) && !(p->row_nonzero[vhalf] & rbit)) {
-        const u32 *t0 = (const u32 *)(charbase + (start_r << 2));
-        u32 any = 0;
-        for (u32 r = 0; r < k; r++)
-          any |= t0[r];
-        if (any == 0u) {
-          y += k;
-          continue;
-        }
       }
     }
     u8 *map_row_b = (u8 *)p->sb_ptr[vhalf] + ((voffset & 0xF8u) << 3);
     u16 *dst_top = screen_base + y * 240u;
     u32 rk = (start_r << 8) | k;
-    u16 *map1 = (u16 *)(map_row_b + sp.first_byte_off);
-    u16 *map2 = (u16 *)(map_row_b + sp.map2_byte_off);
-    u32 left_w = sp.left_w;
-    u32 right_w = sp.right_w;
-    u32 cp = sp.cp;
-    u32 todraw1 = cp & 0xFFFFu;
-    u32 todraw2 = cp >> 16;
-    u16 left_raw = left_w ? *map1++ : 0u;
-    u16 right_raw = right_w ? *(map2 + todraw2) : 0u;
-
-    if (cp != 0u) {
-      u16 *mid_map1 = todraw1 ? map1 : map2;
-      u32 mid_cp = todraw1 ? cp : todraw2;
-      if (__builtin_expect(sp.mid_aligned != 0u, 1)) {
-        if (base_done)
-          cgba_render_4bpp_strip_over_sh4(
-            mid_map1, mid_cp, dst_top + sp.mid_x, charbase, rk, pair_lut, map2);
-        else
-          cgba_render_4bpp_strip_base_sh4(
-            mid_map1, mid_cp, dst_top + sp.mid_x, charbase, rk, pair_lut, map2);
-      } else {
-        if (base_done)
-          cgba_render_4bpp_strip_over_u16_sh4(
-            mid_map1, mid_cp, dst_top + sp.mid_x, charbase, rk, pair_lut, map2);
-        else
-          cgba_render_4bpp_strip_base_u16_sh4(
-            mid_map1, mid_cp, dst_top + sp.mid_x, charbase, rk, pair_lut, map2);
-      }
-    }
-    if (left_w) {
-      if (base_done)
-        cgba_render_4bpp_part_strip_fullcolor<false>(
-          dst_top + sp.x0, k, sp.thoff, sp.thoff + left_w, left_raw,
-          charbase, start_r, pal_conv);
-      else
-        cgba_render_4bpp_part_strip_fullcolor<true>(
-          dst_top + sp.x0, k, sp.thoff, sp.thoff + left_w, left_raw,
-          charbase, start_r, base_pal);
-    }
-    if (right_w) {
-      if (base_done)
-        cgba_render_4bpp_part_strip_fullcolor<false>(
-          dst_top + sp.right_x, k, 0u, right_w, right_raw,
-          charbase, start_r, pal_conv);
-      else
-        cgba_render_4bpp_part_strip_fullcolor<true>(
-          dst_top + sp.right_x, k, 0u, right_w, right_raw,
-          charbase, start_r, base_pal);
-    }
+    cgba_render_4bpp_hspan_seg_sh4(
+      &sp, map_row_b, dst_top, charbase, start_r, k, rk,
+      base_done != 0u, pal_conv, base_pal, pair_lut);
     y += k;
   }
 }
@@ -10410,39 +10060,17 @@ static inline void cgba_build_mode1_text_plan(u32 layer, cgba_mode0_bg_plan *p)
   const u32 base_block = (bg_control >> 8) & 0x1Fu;
   const u32 sb_bot = base_block + ((map_size & 2u) ? ((map_size & 1u) ? 2u : 1u) : 0u);
   const u32 tilecntrl = (bg_control >> 2) & 3u;
-  u32 h = read_ioreg(REG_BGxHOFS(layer)) & 511u;
-  u16 map_right_off = 0, second_off = 0;
-  if (map_size & 1u) {
-    if (h >= 256u) {
-      h -= 256u;
-      map_right_off = 1024u;
-    } else {
-      second_off = 1024u;
-    }
-  } else {
-    h &= 255u;
-  }
-  u32 pixel_run = 256u - h;
-  u32 tile_hoff = h & 7u;
-  u32 partial_left = tile_hoff ? (8u - tile_hoff) : 0u;
-  u32 rem = 240u - partial_left;
-  pixel_run -= partial_left;
-  u32 todraw1 = MIN(rem, pixel_run) >> 3;
-  rem -= todraw1 << 3;
-  pixel_run -= todraw1 << 3;
-  bool need_switch = (rem > 0u) && (pixel_run == 0u);
-  u32 todraw2 = rem >> 3;
-  u16 first_off = (u16)(map_right_off + (h >> 3));
-  u16 map2_off = need_switch ? second_off
-                             : (u16)(first_off + (tile_hoff ? 1u : 0u) + todraw1);
+  cgba_bg_hspan_plan sp;
+  cgba_build_bg_hspan_plan(read_ioreg(REG_BGxHOFS(layer)) & 511u,
+                           map_size & 1u, 0u, 240u, &sp);
   p->tile_charbase = &vram[tilecntrl * 16384u];
   p->sb_ptr[0] = (u16 *)&vram[base_block * 2048u];
   p->sb_ptr[1] = (u16 *)&vram[sb_bot * 2048u];
-  p->counts_packed = (u32)todraw1 | ((u32)todraw2 << 16);
+  p->counts_packed = sp.cp;
   p->vofs = read_ioreg(REG_BGxVOFS(layer));
-  p->first_byte_off = (u16)(first_off << 1);
-  p->map2_byte_off = (u16)(map2_off << 1);
-  p->tile_hoff = (u8)tile_hoff;
+  p->first_byte_off = sp.first_byte_off;
+  p->map2_byte_off = sp.map2_byte_off;
+  p->tile_hoff = sp.thoff;
 #if defined(CGBA_VIDEO_DIRTY_SCANLINE) && CGBA_VIDEO_DIRTY_SCANLINE
   u32 nz0 = cgba_sb_get_row_nonzero(base_block);
   if (map_size & 1u)
