@@ -55,9 +55,9 @@ static int all_zero(const u8 *p, size_t size)
 static void reset_ranges(void)
 {
   iwram_code_min = ~0U;
-  iwram_code_max = 0;
+  cgba_iwram_code_end = 0U;
   ewram_code_min = ~0U;
-  ewram_code_max = 0;
+  cgba_ewram_code_end = 0U;
 }
 
 static void test_iwram_offset_zero(void)
@@ -67,7 +67,7 @@ static void test_iwram_offset_zero(void)
   memset(iwram, 0xA5, 0x8000);       /* translated-code tag mirror */
   iwram[0x8000] = 0x5A;              /* guest data must not be cleared */
   iwram_code_min = 0;
-  iwram_code_max = 0;
+  cgba_iwram_code_end = 0;           /* degenerate end <= min -> full clear */
 
   flush_translation_cache_ram();
 
@@ -76,9 +76,9 @@ static void test_iwram_offset_zero(void)
   CHECK(iwram[0x8000] == 0x5A,
         "IWRAM data changed while clearing its tag mirror: %02X",
         iwram[0x8000]);
-  CHECK(iwram_code_min == ~0U && iwram_code_max == 0,
+  CHECK(iwram_code_min == ~0U && cgba_iwram_code_end == 0,
         "IWRAM range was not reset: %08X-%08X",
-        iwram_code_min, iwram_code_max);
+        iwram_code_min, cgba_iwram_code_end);
 }
 
 static void test_ewram_offset_zero(void)
@@ -88,7 +88,7 @@ static void test_ewram_offset_zero(void)
   ewram[0] = 0x5A;                   /* guest data must not be cleared */
   memset(ewram + 0x40000, 0xA5, 0x40000); /* translated-code tag mirror */
   ewram_code_min = 0;
-  ewram_code_max = 0;
+  cgba_ewram_code_end = 0;           /* degenerate end <= min -> full clear */
 
   flush_translation_cache_ram();
 
@@ -96,18 +96,44 @@ static void test_ewram_offset_zero(void)
         "EWRAM offset-zero tag survived the production RAM flush");
   CHECK(ewram[0] == 0x5A,
         "EWRAM data changed while clearing its tag mirror: %02X", ewram[0]);
-  CHECK(ewram_code_min == ~0U && ewram_code_max == 0,
+  CHECK(ewram_code_min == ~0U && cgba_ewram_code_end == 0,
         "EWRAM range was not reset: %08X-%08X",
-        ewram_code_min, ewram_code_max);
+        ewram_code_min, cgba_ewram_code_end);
+}
+
+static void test_subrange_and_dual_hot_preserved(void)
+{
+  reset_ranges();
+  memset(iwram, 0, sizeof(iwram));
+  memset(iwram + 0x100, 0xA5, 0x20);
+  iwram_code_min = 0x104;
+  cgba_iwram_code_end = 0x118;
+  cgba_dynarec_dual_hot[0] = 0x08001235u;
+  cgba_dynarec_dual_hot[1] = 0x8C100008u;
+
+  flush_translation_cache_ram();
+
+  CHECK(all_zero(iwram + 0x100, 0x18),
+        "IWRAM subrange [0x100, 0x118) was not cleared");
+  CHECK(iwram[0x118] == 0xA5,
+        "IWRAM byte past cgba_iwram_code_end was unexpectedly cleared: %02X",
+        iwram[0x118]);
+  CHECK(cgba_dynarec_dual_hot[0] == 0x08001235u &&
+        cgba_dynarec_dual_hot[1] == 0x8C100008u,
+        "cgba_dynarec_dual_hot (ROM-only) was wiped by RAM flush");
+  CHECK(iwram_code_min == ~0U && cgba_iwram_code_end == 0,
+        "IWRAM range was not reset after subrange flush: %08X-%08X",
+        iwram_code_min, cgba_iwram_code_end);
 }
 
 int main(void)
 {
   test_iwram_offset_zero();
   test_ewram_offset_zero();
+  test_subrange_and_dual_hot_preserved();
 
-  CHECK(flush_ram_count == 2,
-        "production RAM flush call count=%u expected=2", flush_ram_count);
+  CHECK(flush_ram_count == 3,
+        "production RAM flush call count=%u expected=3", flush_ram_count);
   if (failures) {
     printf("SH4 RAM offset-zero flush regression failed: %u\n", failures);
     return 1;

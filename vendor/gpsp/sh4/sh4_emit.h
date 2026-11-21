@@ -57,7 +57,6 @@ void sh4_helper_exit(u32 pc);
 void sh4_pc_redispatch(u32 pc);
 /* Compact helper-call trampolines (literal tuple read via PR; sh4_stub.S). */
 void sh4_op2_tramp(void);
-void sh4_op2_mem_tramp(void);
 void sh4_op2_pc_tramp(void);
 void sh4_op2_pc_mem_tramp(void);
 u32  sh4_update_gba(u32 pc);
@@ -74,7 +73,6 @@ void sh4_cold_interp_entry(void);
 /* Port-provided trap for an executed wild guest branch (untranslatable PC):
  * panics with the guest target on-screen instead of jumping to garbage. */
 void cgba_sh4_wild_jump(u32 pc) __attribute__((noreturn));
-void smc_write(void);
 void execute_swi(u32 pc);
 void sh4_cheat_hook(void);
 
@@ -90,11 +88,7 @@ extern u32 idle_loop_target_pc;
 u32 *cgba_sh4_prof_counter_for_key(u32 key);
 #endif
 
-u32  execute_read_cpsr(void);
-u32  execute_read_spsr(void);
 u32  execute_spsr_restore(u32 address);
-void execute_store_cpsr(u32 new_cpsr, u32 store_mask);
-void execute_store_spsr(u32 new_spsr, u32 store_mask);
 
 /* Bring-up instruction helpers (sh4_interp_helpers.c) — interpret one guest
  * instruction against reg[]/memory using the shared C core. Handlers that can
@@ -1519,7 +1513,7 @@ static inline int sh4g_registered_idle_signature_ok(const u8 *map,
 /* C-helper handlers (bring-up): pass opcode in R4, pc in R5, JSR.     */
 /* ================================================================== */
 
-/* All four forms emit the compact fixed-shape trampoline site (~28-32 bytes,
+/* All three forms emit the compact fixed-shape trampoline site (~28-32 bytes,
  * see sh4g_op2_tramp_call): the shared stub reads (fn, opcode, pc[, cycles])
  * through PR, runs the helper, debits guest-memory cycles (MEM forms, both
  * paths — as the old inline glue did), and on a nonzero helper return (1 =
@@ -1527,10 +1521,6 @@ static inline int sh4g_registered_idle_signature_ok(const u8 *map,
  * leaves via sh4_helper_exit. */
 #define SH4_CALL_OP2(fn)                                                      \
   sh4g_op2_tramp_call(&translation_ptr, (const void *)sh4_op2_tramp,          \
-                      (const void *)(fn), (u32)opcode, (u32)pc, 0, 0)
-
-#define SH4_CALL_OP2_MEM(fn)                                                  \
-  sh4g_op2_tramp_call(&translation_ptr, (const void *)sh4_op2_mem_tramp,      \
                       (const void *)(fn), (u32)opcode, (u32)pc, 0, 0)
 
 #define SH4_CALL_OP2_PC(fn)                                                   \

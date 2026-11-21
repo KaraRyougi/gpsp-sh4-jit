@@ -113,7 +113,6 @@ void cgba_sh4_fm_ool_push(u32 r, u32 p, u32 o, u32 c){(void)r;(void)p;(void)o;(v
 void cgba_sh4_fm_ool_reset_rom(void){}
 void cgba_sh4_fm_ool_reset_ram(void){}
 void cgba_sh4_fm_ool_reset_all(void){}
-void cgba_sh4_fm_ool_set_bios_mode(int on){(void)on;}
 void cgba_sh4_fm_ool_rewind(const u8 *p, int r){(void)p;(void)r;}
 u8 *cgba_sh4_fm_ool_rom_limit(u32 t){(void)t;return NULL;}
 struct cgba_sh4_fm_desc;

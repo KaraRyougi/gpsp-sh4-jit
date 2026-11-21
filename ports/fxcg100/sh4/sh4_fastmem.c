@@ -21,20 +21,14 @@ extern int cgba_sh4_extra_cycles;
  *   - ROM cache: grows downward from the top of rom_translation_cache (sorted
  *     in strictly descending ret_pc order; shares the existing ROM arena with
  *     zero extra .cgba.highbss cost).
- *   - BIOS watermark descriptors: 32-entry table in .cgba.highbss so SWI/BIOS
- *     stubs below rom_cache_watermark survive flush_translation_cache_rom().
  *   - RAM cache: fixed 1024-entry table (16 KiB in .cgba.highbss, sorted in
  *     strictly ascending ret_pc order; any overflow falls back to inline).
  *   - 512-entry direct-mapped cache in .cgba.highbss probed directly in SH-4
  *     ASM inside sh4_fastmem_compact8_tramp. */
 enum {
-  CGBA_SH4_BIOS_FM_DESC_MAX = 32,
   CGBA_SH4_RAM_FM_DESC_MAX = 1024,
   CGBA_SH4_OOL_CACHE_SIZE = 512
 };
-static cgba_sh4_fm_desc cgba_sh4_bios_fm_desc[CGBA_SH4_BIOS_FM_DESC_MAX] CGBA_HIGH_BSS;
-static u32 cgba_sh4_bios_fm_desc_count CGBA_HIGH_BSS;
-static int cgba_sh4_fm_ool_bios_mode CGBA_HIGH_BSS;
 static cgba_sh4_fm_desc cgba_sh4_ram_fm_desc[CGBA_SH4_RAM_FM_DESC_MAX] CGBA_HIGH_BSS;
 static u32 cgba_sh4_ram_fm_desc_count CGBA_HIGH_BSS;
 static cgba_sh4_fm_desc *cgba_sh4_rom_fm_desc_cur CGBA_HIGH_BSS;
@@ -48,11 +42,6 @@ static inline unsigned cgba_sh4_fm_ool_hash(u32 ret_pc)
 static inline cgba_sh4_fm_desc *cgba_sh4_rom_fm_desc_top(void)
 {
   return (cgba_sh4_fm_desc *)(void *)(rom_translation_cache + ROM_TRANSLATION_CACHE_SIZE);
-}
-
-void cgba_sh4_fm_ool_set_bios_mode(int on)
-{
-  cgba_sh4_fm_ool_bios_mode = on;
 }
 
 void cgba_sh4_fm_ool_reset_rom(void)
@@ -69,8 +58,6 @@ void cgba_sh4_fm_ool_reset_ram(void)
 
 void cgba_sh4_fm_ool_reset_all(void)
 {
-  cgba_sh4_bios_fm_desc_count = 0u;
-  cgba_sh4_fm_ool_bios_mode = 0;
   cgba_sh4_rom_fm_desc_cur = cgba_sh4_rom_fm_desc_top();
   cgba_sh4_ram_fm_desc_count = 0u;
   memset(cgba_sh4_fm_ool_cache, 0, sizeof(cgba_sh4_fm_ool_cache));
@@ -96,10 +83,6 @@ void cgba_sh4_fm_ool_rewind(const u8 *ptr, int ram_region)
     while (cgba_sh4_ram_fm_desc_count > 0u &&
            cgba_sh4_ram_fm_desc[cgba_sh4_ram_fm_desc_count - 1u].ret_pc >= lim)
       cgba_sh4_ram_fm_desc_count--;
-  } else if (cgba_sh4_fm_ool_bios_mode) {
-    while (cgba_sh4_bios_fm_desc_count > 0u &&
-           cgba_sh4_bios_fm_desc[cgba_sh4_bios_fm_desc_count - 1u].ret_pc >= lim)
-      cgba_sh4_bios_fm_desc_count--;
   } else {
     cgba_sh4_fm_desc *top = cgba_sh4_rom_fm_desc_top();
     if (!cgba_sh4_rom_fm_desc_cur)
@@ -115,8 +98,6 @@ int cgba_sh4_fm_ool_can_record(const u8 *tp)
 {
   if (tp >= rom_translation_cache &&
       tp < rom_translation_cache + ROM_TRANSLATION_CACHE_SIZE) {
-    if (cgba_sh4_fm_ool_bios_mode)
-      return cgba_sh4_bios_fm_desc_count < CGBA_SH4_BIOS_FM_DESC_MAX;
     cgba_sh4_fm_desc *cur = cgba_sh4_rom_fm_desc_cur;
     if (!cur) {
       cur = cgba_sh4_rom_fm_desc_top();
@@ -135,29 +116,19 @@ int cgba_sh4_fm_ool_can_record(const u8 *tp)
 void cgba_sh4_fm_ool_push(u32 ret_pc, u32 pc_flags, u32 opcode, u32 cycle_count)
 {
   const u8 *p = (const u8 *)(uintptr_t)ret_pc;
+  int popped = 0;
   if (p >= rom_translation_cache &&
       p < rom_translation_cache + ROM_TRANSLATION_CACHE_SIZE) {
-    if (cgba_sh4_fm_ool_bios_mode) {
-      while (cgba_sh4_bios_fm_desc_count > 0u &&
-             cgba_sh4_bios_fm_desc[cgba_sh4_bios_fm_desc_count - 1u].ret_pc >= ret_pc) {
-        cgba_sh4_bios_fm_desc_count--;
-        memset(cgba_sh4_fm_ool_cache, 0, sizeof(cgba_sh4_fm_ool_cache));
-      }
-      cgba_sh4_fm_desc *d = &cgba_sh4_bios_fm_desc[cgba_sh4_bios_fm_desc_count++];
-      d->ret_pc = ret_pc;
-      d->pc_flags = pc_flags;
-      d->opcode = opcode;
-      d->cycle_count = cycle_count;
-      return;
-    }
     cgba_sh4_fm_desc *top = cgba_sh4_rom_fm_desc_top();
     if (!cgba_sh4_rom_fm_desc_cur)
       cgba_sh4_rom_fm_desc_cur = top;
     while (cgba_sh4_rom_fm_desc_cur < top &&
            cgba_sh4_rom_fm_desc_cur->ret_pc >= ret_pc) {
       cgba_sh4_rom_fm_desc_cur++;
-      memset(cgba_sh4_fm_ool_cache, 0, sizeof(cgba_sh4_fm_ool_cache));
+      popped = 1;
     }
+    if (popped)
+      memset(cgba_sh4_fm_ool_cache, 0, sizeof(cgba_sh4_fm_ool_cache));
     cgba_sh4_fm_desc *d = --cgba_sh4_rom_fm_desc_cur;
     d->ret_pc = ret_pc;
     d->pc_flags = pc_flags;
@@ -167,8 +138,10 @@ void cgba_sh4_fm_ool_push(u32 ret_pc, u32 pc_flags, u32 opcode, u32 cycle_count)
     while (cgba_sh4_ram_fm_desc_count > 0u &&
            cgba_sh4_ram_fm_desc[cgba_sh4_ram_fm_desc_count - 1u].ret_pc >= ret_pc) {
       cgba_sh4_ram_fm_desc_count--;
-      memset(cgba_sh4_fm_ool_cache, 0, sizeof(cgba_sh4_fm_ool_cache));
+      popped = 1;
     }
+    if (popped)
+      memset(cgba_sh4_fm_ool_cache, 0, sizeof(cgba_sh4_fm_ool_cache));
     cgba_sh4_fm_desc *d = &cgba_sh4_ram_fm_desc[cgba_sh4_ram_fm_desc_count++];
     d->ret_pc = ret_pc;
     d->pc_flags = pc_flags;
@@ -192,14 +165,6 @@ CGBA_HOT_TEXT const cgba_sh4_fm_desc *cgba_sh4_fastmem_ool_lookup(u32 ret_pc)
         u32 k = arr[mid].ret_pc;
         if (k == ret_pc) { found = &arr[mid]; break; }
         if (k > ret_pc) lo = mid + 1u; else hi = mid;
-      }
-    }
-    if (!found) {
-      for (u32 i = 0u; i < cgba_sh4_bios_fm_desc_count; i++) {
-        if (cgba_sh4_bios_fm_desc[i].ret_pc == ret_pc) {
-          found = &cgba_sh4_bios_fm_desc[i];
-          break;
-        }
       }
     }
   } else {

@@ -484,6 +484,8 @@ static int cgba_sh4_store_u16_io_fast(u32 address, u32 source)
     dma_number = ((address & 0x3FEu) - 0x0BAu) / 12u;
     dma[dma_number].start_type = DMA_INACTIVE;
     cgba_hblank_dma_mask &= (u8)~(1u << dma_number);
+    if (dma_number == 0u)
+      cgba_dma0_bg2_fast = 0u;
     dma[dma_number].direct_sound_channel = DMA_NO_DIRECT_SOUND;
     address16(io_registers, address & 0x3FEu) = eswap16((u16)source);
     return 1;

@@ -143,7 +143,6 @@ void cgba_sh4_fm_ool_push(u32 ret_pc, u32 pc_flags, u32 opcode, u32 cycle_count)
 void cgba_sh4_fm_ool_reset_rom(void);
 void cgba_sh4_fm_ool_reset_ram(void);
 void cgba_sh4_fm_ool_reset_all(void);
-void cgba_sh4_fm_ool_set_bios_mode(int on);
 void cgba_sh4_fm_ool_rewind(const u8 *ptr, int ram_region);
 u8  *cgba_sh4_fm_ool_rom_limit(u32 threshold);
 const cgba_sh4_fm_desc *cgba_sh4_fastmem_ool_lookup(u32 ret_pc);

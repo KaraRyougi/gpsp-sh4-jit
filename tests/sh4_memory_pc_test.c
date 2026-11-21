@@ -23,6 +23,7 @@ u8 ewram[1024 * 256 * 2] = {0};
 u8 iwram[1024 * 32 * 2] = {0};
 dma_transfer_type dma[DMA_CHAN_CNT];
 u8 cgba_hblank_dma_mask;
+u8 cgba_dma0_bg2_fast;
 
 const u32 cpu_modes[16] = {0};
 const u32 cpsr_masks[4][2] = {{0}};
@@ -238,6 +239,7 @@ static void test_dma_disable_clears_hblank_mask(void)
   dma[0].start_type = DMA_START_HBLANK;
   dma[0].direct_sound_channel = DMA_DIRECT_SOUND_A;
   cgba_hblank_dma_mask = 0x05u; /* DMA0 + DMA2 active */
+  cgba_dma0_bg2_fast = 1u;
   reg[1] = 0u;
   reg[2] = 0x040000BAu;
   write_calls = 0;
@@ -252,6 +254,8 @@ static void test_dma_disable_clears_hblank_mask(void)
         "dma[0].start_type=%u (expected DMA_INACTIVE)", dma[0].start_type);
   CHECK(name, cgba_hblank_dma_mask == 0x04u,
         "cgba_hblank_dma_mask=0x%02X (expected 0x04)", cgba_hblank_dma_mask);
+  CHECK(name, cgba_dma0_bg2_fast == 0u,
+        "cgba_dma0_bg2_fast=%u (expected 0)", cgba_dma0_bg2_fast);
 }
 
 static void test_io_fast_store_ignores_above_0x400(void)

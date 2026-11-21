@@ -72,12 +72,11 @@ u8 *ram_translation_ptr = ram_translation_cache;
 /* Note, see stub files for more cache definitions */
 
 /* `min == ~0U` is the unseen sentinel; guest I/EWRAM offset zero is valid
- * translated code.  Host RAM-cache byte zero is a separate sentinel. */
+ * translated code.  Host RAM-cache byte zero is a separate sentinel.
+ * `cgba_*_code_end` is the exclusive upper byte bound of all written tags. */
 u32 iwram_code_min = ~0U;
-u32 iwram_code_max =  0U;
 u32 cgba_iwram_code_end = 0U;
 u32 ewram_code_min = ~0U;
-u32 ewram_code_max =  0U;
 u32 cgba_ewram_code_end = 0U;
 
 #define INITIAL_ROM_WATERMARK   16   // To avoid NULL aliasing
@@ -2898,11 +2897,13 @@ static inline u16 cgba_thumb_scan_info(u32 opcode)
     location[1] = CODE_TAG_BLOCK16;    \
   ram_block_tag -= 2;                  \
 }
+#define allocate_tag_width_arm 4u
 
 #define allocate_tag_thumb(location) { \
   location[0] = ram_block_tag;         \
   ram_block_tag -= 2;                  \
 }
+#define allocate_tag_width_thumb 2u
 
 typedef struct
 {
@@ -3073,10 +3074,14 @@ u8 function_cc *block_lookup_translate_##type(u32 pc)                         \
       if (!VALID_TAG(*tagp)) {                                                \
         allocate_tag_##type(tagp);                                            \
         if (pcregion == 3) {                                                  \
-          u32 _iw_end = (pc & 0x7FFFu) + 4u;                                  \
+          u32 _iw_off = pc & 0x7FFFu;                                         \
+          u32 _iw_end = _iw_off + allocate_tag_width_##type;                  \
+          if (_iw_off < iwram_code_min) iwram_code_min = _iw_off;             \
           if (_iw_end > cgba_iwram_code_end) cgba_iwram_code_end = _iw_end;   \
         } else {                                                              \
-          u32 _ew_end = (pc & 0x3FFFFu) + 4u;                                 \
+          u32 _ew_off = pc & 0x3FFFFu;                                        \
+          u32 _ew_end = _ew_off + allocate_tag_width_##type;                  \
+          if (_ew_off < ewram_code_min) ewram_code_min = _ew_off;             \
           if (_ew_end > cgba_ewram_code_end) cgba_ewram_code_end = _ew_end;   \
         }                                                                     \
         trentry = get_ram_tag(*tagp);                                         \
@@ -3745,9 +3750,11 @@ extern int cgba_dynarec_single_block;
     address32(tag_base, tag_off) = CODE_TAG_BLOCK32;                          \
   }                                                                           \
   if (block_end_pc >= 0x03000000u) {                                          \
+    if (tag_off < iwram_code_min) iwram_code_min = tag_off;                   \
     if ((tag_off + 4u) > cgba_iwram_code_end)                                 \
       cgba_iwram_code_end = tag_off + 4u;                                     \
   } else {                                                                    \
+    if (tag_off < ewram_code_min) ewram_code_min = tag_off;                   \
     if ((tag_off + 4u) > cgba_ewram_code_end)                                 \
       cgba_ewram_code_end = tag_off + 4u;                                     \
   }                                                                           \
@@ -3762,17 +3769,15 @@ extern int cgba_dynarec_single_block;
     address16(tag_base, tag_off) = CODE_TAG_BLOCK16;                          \
   }                                                                           \
   if (block_end_pc >= 0x03000000u) {                                          \
+    if (tag_off < iwram_code_min) iwram_code_min = tag_off;                   \
     if ((tag_off + 2u) > cgba_iwram_code_end)                                 \
       cgba_iwram_code_end = tag_off + 2u;                                     \
   } else {                                                                    \
+    if (tag_off < ewram_code_min) ewram_code_min = tag_off;                   \
     if ((tag_off + 2u) > cgba_ewram_code_end)                                 \
       cgba_ewram_code_end = tag_off + 2u;                                     \
   }                                                                           \
 }
-
-#define smc_write_arm_no()                                                    \
-
-#define smc_write_thumb_no()                                                  \
 
 #define cgba_scan_existing_arm()                                              \
 
@@ -3814,13 +3819,14 @@ extern int cgba_dynarec_single_block;
       if (_dom_n < cgba_eff_cap) cgba_eff_cap = _dom_n;                       \
     }                                                                         \
     if (__builtin_expect(ram_region, 0)) {                                    \
-      if (cgba_blk_start < 0x3007FF0u) {                                      \
-        u32 _rn = (0x3007FF0u - cgba_blk_start) / type##_instruction_width;   \
-        if (_rn < cgba_eff_cap) cgba_eff_cap = _rn;                           \
-      } else if (cgba_blk_start < 0x203FFFF0u) {                              \
-        u32 _rn = (0x203FFFF0u - cgba_blk_start) / type##_instruction_width;  \
-        if (_rn < cgba_eff_cap) cgba_eff_cap = _rn;                           \
-      }                                                                       \
+      /* Cap inside the active IWRAM (32 KiB) or EWRAM (256 KiB) mirror so a  \
+       * scan stops before the 16-byte tail (e.g. IWRAM 0x7FF0..0x7FFF BIOS   \
+       * IRQ vector/flags) and never wraps past the mirror boundary. */       \
+      u32 _mask = (_dom == 3u) ? 0x7FFFu : 0x3FFFFu;                          \
+      u32 _off  = cgba_blk_start & _mask;                                     \
+      u32 _stop = (_off < (_mask - 15u)) ? (_mask - 15u) : (_mask + 1u);      \
+      u32 _rn   = (_stop - _off) / type##_instruction_width;                  \
+      if (_rn < cgba_eff_cap) cgba_eff_cap = _rn;                             \
     }                                                                         \
   }                                                                           \
   /* Find the end of the block */                                             \
@@ -3922,17 +3928,6 @@ extern int cgba_dynarec_single_block;
 
 #define thumb_fix_pc()                                                        \
   pc &= ~0x01                                                                 \
-
-#define update_pc_limits()                                                    \
-if (ram_region) {                                                             \
-  if (pc >= 0x3000000) {                                                      \
-    iwram_code_min = MIN(pc & 0x7FFF, iwram_code_min);                        \
-    iwram_code_max = MAX(pc & 0x7FFF, iwram_code_max);                        \
-  } else {                                                                    \
-    ewram_code_min = MIN(pc & 0x3FFFF, ewram_code_min);                       \
-    ewram_code_max = MAX(pc & 0x3FFFF, ewram_code_max);                       \
-  }                                                                           \
-}                                                                             \
 
 bool translate_block_arm(u32 pc, bool ram_region)
 {
@@ -4085,7 +4080,6 @@ bool translate_block_arm(u32 pc, bool ram_region)
       arm_process_cheats();
     }
 
-    update_pc_limits();
 #ifdef SH4_ARCH
     if (block_data_position == 0 || block_data[block_data_position].update_cycles)
       sh4_greg_forward_reset();
@@ -5614,6 +5608,7 @@ bool translate_block_thumb(u32 pc, bool ram_region)
   const int allow_fuse = !cgba_dynarec_single_block;
   int sp_span_valid = 0;       /* 0=none, 1=loads-only, 2=loads+stores */
   u32 sp_span_max_off = 0u;
+  u32 sp_span_store_wmask = 0u;
 #endif
   u32 pc_seq_cycles = ws_cyc_seq[(pc >> 24) & 0x0Fu][0];
   if ((pc >> 12) != pc_region) {
@@ -5674,6 +5669,9 @@ bool translate_block_thumb(u32 pc, bool ram_region)
     }
     new_pc_region = (pc >> 12);
     if (__builtin_expect(new_pc_region != pc_region, 0)) {
+#ifndef CGBA_SH4_EXACT_CYCLE_BOUNDARIES
+      sp_span_valid = 0;
+#endif
       pc_region = new_pc_region;
       pc_address_block = cgba_memory_map_read_4k(pc);
       if (!pc_address_block) {
@@ -5692,10 +5690,12 @@ bool translate_block_thumb(u32 pc, bool ram_region)
 
     if (__builtin_expect(pc == cheat_hook, 0))
     {
+#if defined(SH4_ARCH) && !defined(CGBA_SH4_EXACT_CYCLE_BOUNDARIES)
+      sp_span_valid = 0;
+#endif
       thumb_process_cheats();
     }
 
-    update_pc_limits();
 #ifdef SH4_ARCH
     {
       u32 cur_op = readaddress16(pc_address_block, (pc & 0x0FFF));
@@ -5733,9 +5733,7 @@ bool translate_block_thumb(u32 pc, bool ram_region)
             sh4_greg_forward_reset();
             last_opcode = next_op;
             opcode = next_op;
-            pc += 2;
-            update_pc_limits();
-            pc += 2;
+            pc += 4;
             block_data_position++;
             sh4g_litseg_maybe_flush(&translation_ptr);
             thumb_fused = 1;
@@ -5749,11 +5747,12 @@ bool translate_block_thumb(u32 pc, bool ram_region)
           (pc + 2) != cheat_hook &&
           ((pc + 2) & 0x0FFFu) != 0u) {
         u32 next_op = readaddress16(pc_address_block, (pc + 2) & 0x0FFF);
-        if ((cgba_thumb_hi_lut[cur_op >> 8] & 0x4000u) ||
-            (u32)(next_op - 0xD000u) < 0x0E00u ||
-            ((u32)(cur_op - 0x6000u) < 0x3000u &&
-             (u32)(next_op - 0x6000u) < 0x3000u &&
-             ((cur_op >> 3) & 7u) == ((next_op >> 3) & 7u))) {
+        if (!(sp_span_valid && (cur_op & 0xF000u) == 0x9000u) &&
+            ((cgba_thumb_hi_lut[cur_op >> 8] & 0x4000u) ||
+             (u32)(next_op - 0xD000u) < 0x0E00u ||
+             ((u32)(cur_op - 0x6000u) < 0x3000u &&
+              (u32)(next_op - 0x6000u) < 0x3000u &&
+              ((cur_op >> 3) & 7u) == ((next_op >> 3) & 7u)))) {
           thumb_fused = cgba_thumb_try_peephole(
             &translation_ptr, cur_op, next_op,
             &pc, &cycle_count, &block_data_position, &block_exit_position,
@@ -5765,14 +5764,10 @@ bool translate_block_thumb(u32 pc, bool ram_region)
         }
         /* 4-slot R4..R7 BBRA for straight-line dead-flag Thumb ALU runs. */
         if (!thumb_fused && !(block_data[block_data_position].flag_data & 0xFu) &&
-            sh4g_thumb_bbra_maybe(cur_op) &&
-            block_data_position + 1 < num_insns &&
-            !block_data[block_data_position + 1].update_cycles &&
             !(block_data[block_data_position + 1].flag_data & 0xFu) &&
-            (pc + 2u) != cheat_hook &&
-            ((pc + 2u) & 0x0FFFu) != 0u) {
+            sh4g_thumb_bbra_maybe(cur_op)) {
           u32 rm_arr[16], wm_arr[16];
-          u16 next_rop = readaddress16(pc_address_block, (pc + 2u) & 0x0FFF);
+          u16 next_rop = (u16)next_op;
           if (sh4g_thumb_bbra_maybe(next_rop) &&
               sh4g_thumb_bbra_classify(cur_op, &rm_arr[0], &wm_arr[0]) &&
               sh4g_thumb_bbra_classify(next_rop, &rm_arr[1], &wm_arr[1])) {
@@ -5859,7 +5854,7 @@ bool translate_block_thumb(u32 pc, bool ram_region)
           s32 scan = block_data_position;
           u32 scan_pc = pc;
           int sp_cnt = 0, sp_has_st = 0;
-          u32 max_o = 0u;
+          u32 max_o = 0u, st_wmask = 0u;
           while (scan < num_insns && (scan_pc >> 12) == pc_region &&
                  scan_pc != cheat_hook) {
             u32 sop = readaddress16(pc_address_block, scan_pc & 0x0FFFu);
@@ -5872,7 +5867,10 @@ bool translate_block_thumb(u32 pc, bool ram_region)
               if (so <= 60u) {
                 sp_cnt++;
                 if (so > max_o) max_o = so;
-                if (!((sop >> 11) & 1u)) sp_has_st = 1;
+                if (!((sop >> 11) & 1u)) {
+                  sp_has_st = 1;
+                  st_wmask |= (1u << (so >> 2));
+                }
               }
             } else if (shi == 0xB0u || shi == 0xB4u || shi == 0xB5u ||
                        shi == 0xBCu || shi == 0xBDu ||
@@ -5891,7 +5889,7 @@ bool translate_block_thumb(u32 pc, bool ram_region)
           if (sp_cnt >= 2) {
             u8 *deopt[3], *sp_ok;
             int nd = 0, pre_deb = (int)(cycle_count - pc_seq_cycles);
-            sh4g_litseg_reserve(&translation_ptr, 6);
+            sh4g_litseg_reserve_bytes(&translation_ptr, 7, 160u);
             sh4_greg_forward_reset();
             { sh4_codegen cg = sh4g_open(&translation_ptr);
               sh4_emit_load_greg(&cg, 13, SH4_REG_T0);  /* R1 = SP */
@@ -5909,13 +5907,35 @@ bool translate_block_thumb(u32 pc, bool ram_region)
               sh4g_close(&translation_ptr, &cg); }
             deopt[nd++] = sh4g_emit_bf_placeholder(&translation_ptr);
             if (sp_has_st) {
+              u8 *smc_ok;
+              int first = 1, w;
               sh4g_const(&translation_ptr, (u32)(uintptr_t)&cgba_iwram_code_end,
                          SH4_REG_T2);
               { sh4_codegen cg = sh4g_open(&translation_ptr);
                 sh4_emit_mov_l_load(&cg, SH4_REG_T2, SH4_REG_T1);
                 sh4_emit_cmphs(&cg, SH4_REG_T1, SH4_REG_T0);
                 sh4g_close(&translation_ptr, &cg); }
+              smc_ok = sh4g_emit_bt_placeholder(&translation_ptr);
+              /* Fast bypass missed (e.g. high-IWRAM code above SP): check the
+               * actual SMC tags for the stored stack words before deopting. */
+              sh4g_const(&translation_ptr, (u32)(uintptr_t)iwram, SH4_REG_T2);
+              { sh4_codegen cg = sh4g_open(&translation_ptr);
+                sh4_emit_add_reg(&cg, SH4_REG_T0, SH4_REG_T2);
+                for (w = 0; w < 16; w++) {
+                  if (!(st_wmask & (1u << w))) continue;
+                  if (first) {
+                    if (w == 0) sh4_emit_mov_l_load(&cg, SH4_REG_T2, SH4_REG_RET);
+                    else        sh4_emit_mov_l_load_disp(&cg, SH4_REG_T2, SH4_REG_RET, (unsigned)w);
+                    first = 0;
+                  } else {
+                    sh4_emit_mov_l_load_disp(&cg, SH4_REG_T2, SH4_REG_T1, (unsigned)w);
+                    sh4_emit_or(&cg, SH4_REG_T1, SH4_REG_RET);
+                  }
+                }
+                sh4_emit_tst(&cg, SH4_REG_RET, SH4_REG_RET);
+                sh4g_close(&translation_ptr, &cg); }
               deopt[nd++] = sh4g_emit_bf_placeholder(&translation_ptr);
+              sh4g_patch_cond(smc_ok, translation_ptr);
             }
             sp_ok = sh4g_emit_bra_placeholder(&translation_ptr);
             while (nd)
@@ -5928,10 +5948,12 @@ bool translate_block_thumb(u32 pc, bool ram_region)
             sh4g_patch_bra(sp_ok, translation_ptr);
             sp_span_valid = sp_has_st ? 2 : 1;
             sp_span_max_off = max_o;
+            sp_span_store_wmask = st_wmask;
           }
         }
         if (sp_span_valid && sp_off <= sp_span_max_off &&
-            (sp_is_load || sp_span_valid == 2)) {
+            (sp_is_load ||
+             (sp_span_valid == 2 && (sp_span_store_wmask & (1u << (sp_off >> 2)))))) {
           u8 *forward_start = translation_ptr;
           u32 iwram_bias = (u32)(uintptr_t)(iwram + 0x8000) - 0x03000000u;
           sh4g_litseg_reserve(&translation_ptr, 1);
@@ -6277,13 +6299,7 @@ void init_bios_hooks(void)
   // SWI calls from ROM and RAM regardless of cache flushes.
   rom_translation_ptr = &rom_translation_cache[rom_cache_watermark];
   last_rom_translation_ptr = rom_translation_ptr;
-#if defined(SH4_ARCH) && CGBA_SH4_COMPACT_FASTMEM_TUPLE && CGBA_SH4_FASTMEM_OOL_DESC
-  cgba_sh4_fm_ool_set_bios_mode(1);
-#endif
   bios_swi_entrypoint = block_lookup_address_arm(0x8);
-#if defined(SH4_ARCH) && CGBA_SH4_COMPACT_FASTMEM_TUPLE && CGBA_SH4_FASTMEM_OOL_DESC
-  cgba_sh4_fm_ool_set_bios_mode(0);
-#endif
   rom_cache_watermark = (u32)(rom_translation_ptr - rom_translation_cache);
 }
 
@@ -6296,11 +6312,8 @@ void flush_translation_cache_ram(void)
   CGBA_DIAG_LOG("@@CGBA_RAMFLUSH n=%lu pc=%08lx used=%lu iw=%04x-%04x",
     (unsigned long)cgba_dynarec_ram_flush_count, (unsigned long)reg[REG_PC],
     (unsigned long)(ram_translation_ptr - ram_translation_cache),
-    (unsigned)(iwram_code_min & 0xFFFF), (unsigned)(iwram_code_max & 0xFFFF));
+    (unsigned)(iwram_code_min & 0xFFFF), (unsigned)(cgba_iwram_code_end & 0xFFFF));
 #endif
-  /*printf("ram flush %d (pc %x), %x to %x, %x to %x\n",
-   flush_ram_count, reg[REG_PC], iwram_code_min, iwram_code_max,
-   ewram_code_min, ewram_code_max);*/
 
 #ifdef SH4_ARCH
   last_ram_translation_ptr =
@@ -6320,40 +6333,33 @@ void flush_translation_cache_ram(void)
   /* min == ~0U is the explicit unseen state; offset zero is valid code. */
   if (cgba_sh4_ram_code_seen(iwram_code_min) || cgba_iwram_code_end > 0U) {
     if (cgba_sh4_ram_code_seen(iwram_code_min) &&
-        iwram_code_max > iwram_code_min) {
-      u32 clr_max = MAX(iwram_code_max, cgba_iwram_code_end);
-      iwram_code_min &= ~15U;
-      clr_max = MIN(clr_max + 8, 0x8000);
-      memset(&iwram[iwram_code_min], 0, clr_max - iwram_code_min);
+        cgba_iwram_code_end > iwram_code_min) {
+      u32 clr_min = iwram_code_min & ~15U;
+      u32 clr_max = MIN(cgba_iwram_code_end, 0x8000U);
+      memset(&iwram[clr_min], 0, clr_max - clr_min);
     } else
       memset(iwram, 0, 0x8000);
   }
 
   if (cgba_sh4_ram_code_seen(ewram_code_min) || cgba_ewram_code_end > 0U) {
     if (cgba_sh4_ram_code_seen(ewram_code_min) &&
-        ewram_code_max > ewram_code_min) {
-      u32 clr_max = MAX(ewram_code_max, cgba_ewram_code_end);
-      ewram_code_min &= ~15U;
-      clr_max = MIN(clr_max + 8, 0x40000);
-      memset(&ewram[0x40000 + ewram_code_min], 0, clr_max - ewram_code_min);
+        cgba_ewram_code_end > ewram_code_min) {
+      u32 clr_min = ewram_code_min & ~15U;
+      u32 clr_max = MIN(cgba_ewram_code_end, 0x40000U);
+      memset(&ewram[0x40000 + clr_min], 0, clr_max - clr_min);
     } else
       memset(&ewram[0x40000], 0, 0x40000);
   }
 
   iwram_code_min = ~0U;
-  iwram_code_max =  0U;
   cgba_iwram_code_end = 0U;
   ewram_code_min = ~0U;
-  ewram_code_max =  0U;
   cgba_ewram_code_end = 0U;
   ram_block_tag = INITIAL_TOP_TAG;
 
-  /* The dual-hot dispatch table (sh4_stub.S) caches RESOLVED HOST POINTERS,
-   * including RAM-cache blocks (Thumb returns into IWRAM/EWRAM code). Leaving
-   * them across a RAM flush hands the stub a stale pointer into rewritten
-   * cache memory — a wild jump long after the flush. ROM flush and init
-   * already clear it; this path was the gap. */
-  memset(cgba_dynarec_dual_hot, 0, sizeof(cgba_dynarec_dual_hot));
+  /* cgba_dynarec_dual_hot is populated strictly on rom_branch_hash hits
+   * (sh4_stub.S), so it only ever holds ROM-cache pointers and is cleared
+   * by flush_translation_cache_rom() — never invalidated by RAM flushes. */
 }
 
 #ifdef SH4_ARCH
@@ -6472,21 +6478,20 @@ void init_dynarec_caches(void)
   memset(iwram, 0, 0x8000);
   memset(&ewram[0x40000], 0, 0x40000);
 
-  ewram_code_min = 0;
-  ewram_code_max = 0x40000;
+  ewram_code_min = ~0U;
   cgba_ewram_code_end = 0U;
-  iwram_code_min = 0;
-  iwram_code_max = 0x8000;
+  iwram_code_min = ~0U;
   cgba_iwram_code_end = 0U;
+  ram_block_tag = INITIAL_TOP_TAG;
 }
 
 void flush_dynarec_caches(void)
 {
-  /* Flush ROM and RAM caches. */
+  /* Flush ROM and RAM caches (force a full wipe of both RAM tag tables). */
   flush_translation_cache_rom();
   ewram_code_min = 0;
-  ewram_code_max = 0x40000;
+  cgba_ewram_code_end = 0x40000U;
   iwram_code_min = 0;
-  iwram_code_max = 0x8000;
+  cgba_iwram_code_end = 0x8000U;
   flush_translation_cache_ram();
 }

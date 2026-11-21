@@ -987,16 +987,23 @@ extern int cgba_diff_stop_on_budget;
 }
 /* When the interpreter runs on behalf of the dynarec (cold-code chunks,
  * VRAM execution, or BIOS fallback), CPU stores to IWRAM/EWRAM bypass the
- * JIT's execute_store_* SMC hooks. Check the translated-code tag mirror and
- * flush ram_translation_cache if a previously translated RAM instruction is
- * overwritten (e.g. Classic NES unpacking code into IWRAM from VRAM). */
-static inline void cgba_interp_smc_check(u32 address, unsigned bytes)
+ * JIT's execute_store_* SMC hooks, and I/O stores that kick off immediate
+ * DMA into IWRAM/EWRAM return CPU_ALERT_SMC (which the interpreter loop
+ * otherwise ignores). Check both so ram_translation_cache is always flushed
+ * before returning to JIT code. */
+static inline void cgba_interp_smc_check(u32 address, unsigned bytes,
+                                         cpu_alert_type *alert)
 {
   const u8 *tag;
   u32 hit = 0;
 
   if (!(cgba_diff_stop_on_budget | cgba_diff_stop_on_bios_exit))
     return;
+  if (*alert & CPU_ALERT_SMC) {
+    *alert &= (cpu_alert_type)~CPU_ALERT_SMC;
+    flush_translation_cache_ram();
+    return;
+  }
   switch (address >> 24) {
   case 0x03: tag = iwram + (address & 0x7FFF); break;
   case 0x02: tag = ewram + (address & 0x3FFFF) + 0x40000; break;
@@ -1008,7 +1015,7 @@ static inline void cgba_interp_smc_check(u32 address, unsigned bytes)
     flush_translation_cache_ram();
 }
 #else
-#define cgba_interp_smc_check(address, bytes) ((void)0)
+#define cgba_interp_smc_check(address, bytes, alert) ((void)0)
 #endif
 
 #define fast_write_memory(size, type, address, value)                         \
@@ -1023,7 +1030,7 @@ static inline void cgba_interp_smc_check(u32 address, unsigned bytes)
                                                                               \
   cgba_pf_check_store(_address, (size) / 8);                                  \
   cpu_alert |= write_memory##size(_address, value);                           \
-  cgba_interp_smc_check(_address, (size) / 8);                                \
+  cgba_interp_smc_check(_address, (size) / 8, &cpu_alert);                    \
 }                                                                             \
 
 #define load_aligned32(address, dest)                                         \
@@ -1062,7 +1069,7 @@ static inline void cgba_interp_smc_check(u32 address, unsigned bytes)
   }                                                                           \
   cgba_pf_check_store(_address, 4);                                           \
   cpu_alert |= write_memory32(_address, value);                               \
-  cgba_interp_smc_check(_address, 4);                                         \
+  cgba_interp_smc_check(_address, 4, &cpu_alert);                             \
 }                                                                             \
 
 #define load_memory_u8(address, dest)                                         \
@@ -1735,7 +1742,8 @@ extern u32 cgba_interp_instr_bios, cgba_interp_instr_rom, cgba_interp_instr_ram;
                        (u32)CGBA_SH4_HOT_THRESHOLD;                           \
              if (_et > (u32)CGBA_SH4_HOT_THRESHOLD)                           \
                _et = (u32)CGBA_SH4_HOT_THRESHOLD;                             \
-             if (cgba_hot_count[_hi] >= _et && !cgba_pf_valid) {              \
+             if (cgba_heat_expect != 0xFFFFFFFFu &&                           \
+                 cgba_hot_count[_hi] >= _et && !cgba_pf_valid) {              \
                collapse_flags();                                              \
                cgba_diff_stop_cycles_remaining = cycles_remaining;            \
                return;                                                        \
@@ -1818,8 +1826,9 @@ void execute_arm(u32 cycles)
        if (cgba_diff_stop_active && cgba_diff_stop_on_budget) {
           /* budget chunk (cold-code gate): hand halts back to the caller —
            * event processing belongs to the JIT's sleep loop, not to an
-           * interpreted chunk (it would swallow the whole frame here). */
-          collapse_flags();
+           * interpreted chunk (it would swallow the whole frame here).
+           * reg[REG_CPSR] is already collapsed on every path reaching the top
+           * of while(1) (entry, loop bottoms, and alert:). */
           cgba_diff_stop_cycles_remaining = cycles_remaining;
           return;
        }

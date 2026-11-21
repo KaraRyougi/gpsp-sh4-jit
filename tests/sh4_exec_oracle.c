@@ -88,7 +88,6 @@ void cgba_sh4_fm_ool_push(u32 r, u32 p, u32 o, u32 c){
 void cgba_sh4_fm_ool_reset_rom(void){ orc_fm_ool_n = 0; }
 void cgba_sh4_fm_ool_reset_ram(void){ orc_fm_ool_n = 0; }
 void cgba_sh4_fm_ool_reset_all(void){ orc_fm_ool_n = 0; }
-void cgba_sh4_fm_ool_set_bios_mode(int on){ (void)on; }
 void cgba_sh4_fm_ool_rewind(const u8 *p, int r){ (void)p; (void)r; }
 u8 *cgba_sh4_fm_ool_rom_limit(u32 t){(void)t;return NULL;}
 struct cgba_sh4_fm_desc;
@@ -99,7 +98,6 @@ void sh4_op2_tramp(void){}
 void sh4_indirect_branch_thumb(u32 a){(void)a;}
 void sh4_pc_redispatch(u32 pc){(void)pc;}
 void sh4_update_gba(u32 pc){(void)pc;}
-void sh4_op2_mem_tramp(void){}
 void sh4_headless_trace_op(char k, u32 pc, u32 op){(void)k;(void)pc;(void)op;}
 void sh4_indirect_branch_arm(u32 a){(void)a;}
 void sh4_indirect_branch_dual(u32 a){(void)a;}

@@ -953,23 +953,6 @@ defsymbl(sh4_cold_interp_entry)
   bra     lookup_pc
   nop
 
-/* ---- RAM self-modifying-code flush; R6 = current PC ---- */
-defsymbl(smc_write)
-  mov     #REG_PC, r0
-  mov.l   r6, @(r0,r14)
-  sts.l   pr, @-r15
-  CPSR_FLUSH
-  CALL    flush_translation_cache_ram
-  CPSR_RELOAD
-  lds.l   @r15+, pr
-  bra     lookup_pc
-  nop
-
-/* ---- read CPSR: flags are already materialized in CPSR ---- */
-defsymbl(execute_read_cpsr)
-  rts
-  mov     r8, r0                  /* delay slot: cached CPSR */
-
 /* ---- software interrupt; R4 = return PC (next instruction) ---- */
 /* Exact divide HLE is a direct generated-code call, so bracket its C body with
  * the same persistent-state synchronization used by the shared trampolines. */
@@ -1076,23 +1059,6 @@ defsymbl(sh4_op2_tramp)             /* plain: fn(opcode, pc), no exits */
   jsr     @r0
   mov.l   @r1+, r5                  /* pc (delay slot: not PC-relative) */
   CPSR_RELOAD_R1
-  lds.l   @r15+, pr
-  rts
-  nop
-
-defsymbl(sh4_op2_mem_tramp)         /* + unconditional guest-memory debit */
-  sts     pr, r1
-  sts.l   pr, @-r15
-  CPSR_FLUSH
-  add     #8, r1                    /* skip the TRAMP literal -> fn */
-  mov.l   @r1+, r0
-  mov.l   @r1+, r4
-  jsr     @r0
-  mov.l   @r1+, r5
-  CPSR_RELOAD_R1
-  mov.l   tram_extra, r1            /* &cgba_sh4_extra_cycles */
-  mov.l   @r1, r1
-  sub     r1, r13
   lds.l   @r15+, pr
   rts
   nop
