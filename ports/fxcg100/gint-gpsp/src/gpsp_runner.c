@@ -11,6 +11,7 @@
 #include "fxcg100_platform.h"
 #include "nor_rom.h"
 #include "rom_meta.h"
+#include "save_path.h"
 #include "vendor/gpsp/common.h"
 #include "vendor/gpsp/gba_memory.h"
 #include "vendor/gpsp/savestate.h"
@@ -1084,36 +1085,32 @@ int cgba_state_decompress(const u8 *in, unsigned insz, u8 *raw, unsigned rawsz)
 	return i == n;
 }
 
-/* Per-ROM savestate names: "<BASE><slot>.SVS" where BASE = up to 6 filtered
- * chars of the loaded ROM's label, so different games keep separate slots.
- * Legacy fixed-name CGBAST<slot>.SAV files are still tried on load. */
+static size_t cgba_current_rom_header_len(void)
+{
+	return cgba_current_rom_size < sizeof(cgba_current_rom_header)
+		? (size_t)cgba_current_rom_size
+		: sizeof(cgba_current_rom_header);
+}
+
+/* Per-ROM savestate names: "\\fls0\SAVES\<TITLE>_<slot>.SVS" where TITLE is
+ * the sanitized 12-byte GBA internal title from ROM header 0xA0..0xAB with
+ * spaces replaced by underscores (falling back to the 4-char game code and
+ * then up to 6 filtered chars of the ROM label). Unambiguous legacy root
+ * 6-char ROM-stem .SVS files and fixed-name CGBAST<slot>.SAV files are still
+ * tried on load. */
 static void cgba_state_path(uint16_t *path, unsigned slot)
 {
-	static const char prefix[] = "\\\\fls0\\";
-	const char *nm = cgba_gpsp_rom_name(cgba_loaded_rom_id);
-	char base[7];
-	unsigned i, b = 0;
+	cgba_save_state_path(path, cgba_current_rom_header,
+		cgba_current_rom_header_len(),
+		cgba_gpsp_rom_name(cgba_loaded_rom_id), slot);
+}
 
-	for (i = 0; nm && nm[i] && nm[i] != '.' && b < 6; i++) {
-		char c = nm[i];
-		if (c >= 'a' && c <= 'z')
-			c = (char)(c - 'a' + 'A');
-		if ((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9'))
-			base[b++] = c;
-	}
-	if (b == 0) {
-		base[0] = 'C'; base[1] = 'G'; base[2] = 'B'; base[3] = 'A';
-		b = 4;
-	}
-	base[b] = 0;
-
-	for (i = 0; prefix[i]; i++)
-		path[i] = (uint16_t)prefix[i];
-	for (b = 0; base[b]; b++)
-		path[i++] = (uint16_t)base[b];
-	path[i++] = (uint16_t)('0' + (slot % 10));
-	path[i++] = '.'; path[i++] = 'S'; path[i++] = 'V'; path[i++] = 'S';
-	path[i] = 0;
+static int cgba_state_path_legacy_rom(uint16_t *path, unsigned slot)
+{
+	return cgba_save_legacy_state_path(path, cgba_current_rom_header,
+		cgba_current_rom_header_len(),
+		cgba_gpsp_rom_name(cgba_loaded_rom_id),
+		&cgba_storage_roms, slot);
 }
 
 static void cgba_state_path_legacy(uint16_t *path, unsigned slot)
@@ -1155,7 +1152,7 @@ void cgba_save_timing_text(char *dst, size_t size)
 
 int fxcg100_savestate_exists(uint32_t slot)
 {
-	uint16_t path[24];
+	uint16_t path[CGBA_SAVE_PATH_MAX];
 
 	cgba_state_path(path, slot);
 	return fxcg100_storage_blob_size(path) >= 0;
@@ -1164,7 +1161,7 @@ int fxcg100_savestate_exists(uint32_t slot)
 int cgba_gpsp_state_save(unsigned slot)
 {
 	u8 *buf = cgba_state_buffer();
-	uint16_t path[24];
+	uint16_t path[CGBA_SAVE_PATH_MAX];
 	int ok = 0, synced;
 	uint32_t t0 = fxcg100_ticks(), t1;
 
@@ -1254,11 +1251,13 @@ static int cgba_state_load_from(const uint16_t *path)
 
 int cgba_gpsp_state_load(unsigned slot)
 {
-	uint16_t path[24];
+	uint16_t path[CGBA_SAVE_PATH_MAX];
 	int ok;
 
 	cgba_state_path(path, slot);
 	ok = cgba_state_load_from(path);
+	if (!ok && cgba_state_path_legacy_rom(path, slot))
+		ok = cgba_state_load_from(path);
 	if (!ok) {                              /* legacy fixed-name fallback */
 		cgba_state_path_legacy(path, slot);
 		ok = cgba_state_load_from(path);
@@ -1275,35 +1274,22 @@ int cgba_gpsp_state_load(unsigned slot)
 
 /* ---- GBA in-game backup save (SRAM / Flash / EEPROM) persistence ---------- */
 /* The live save lives in gpSP's gamepak_backup[]; it is loaded when a ROM boots
- * and written back to \\fls0\<BASE>.SAV (BASE = the ROM stem, matching the
- * savestate naming) when it changes. Nothing wrote it to storage before, so
- * in-game saves were lost on power-off. */
+ * and written back to \\fls0\SAVES\<TITLE>.SAV (matching the savestate naming)
+ * when it changes. Nothing wrote it to storage before, so in-game saves were
+ * lost on power-off. */
 static void cgba_backup_path(uint16_t *path)
 {
-	static const char prefix[] = "\\\\fls0\\";
-	const char *nm = cgba_gpsp_rom_name(cgba_loaded_rom_id);
-	char base[7];
-	unsigned i, b = 0;
+	cgba_save_backup_path(path, cgba_current_rom_header,
+		cgba_current_rom_header_len(),
+		cgba_gpsp_rom_name(cgba_loaded_rom_id));
+}
 
-	for (i = 0; nm && nm[i] && nm[i] != '.' && b < 6; i++) {
-		char c = nm[i];
-		if (c >= 'a' && c <= 'z')
-			c = (char)(c - 'a' + 'A');
-		if ((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9'))
-			base[b++] = c;
-	}
-	if (b == 0) {
-		base[0] = 'G'; base[1] = 'A'; base[2] = 'M'; base[3] = 'E';
-		b = 4;
-	}
-	base[b] = 0;
-
-	for (i = 0; prefix[i]; i++)
-		path[i] = (uint16_t)prefix[i];
-	for (b = 0; base[b]; b++)
-		path[i++] = (uint16_t)base[b];
-	path[i++] = '.'; path[i++] = 'S'; path[i++] = 'A'; path[i++] = 'V';
-	path[i] = 0;
+static int cgba_backup_path_legacy(uint16_t *path)
+{
+	return cgba_save_legacy_backup_path(path, cgba_current_rom_header,
+		cgba_current_rom_header_len(),
+		cgba_gpsp_rom_name(cgba_loaded_rom_id),
+		&cgba_storage_roms);
 }
 
 /* Bytes of gamepak_backup the current game actually uses, by detected type. */
@@ -1319,11 +1305,13 @@ static unsigned cgba_backup_size(void)
 
 void cgba_gpsp_backup_load(void)
 {
-	uint16_t path[24];
+	uint16_t path[CGBA_SAVE_PATH_MAX];
 	int fsz;
 
 	cgba_backup_path(path);
 	fsz = fxcg100_storage_blob_size(path);
+	if (fsz <= 0 && cgba_backup_path_legacy(path))
+		fsz = fxcg100_storage_blob_size(path);
 	/* Load whatever the file holds; gpSP detects the type on first access and
 	 * reads it straight from gamepak_backup, so the bytes just need to be there. */
 	if (fsz > 0 && fsz <= (int)sizeof(gamepak_backup))
@@ -1334,7 +1322,7 @@ void cgba_gpsp_backup_load(void)
 static void cgba_gpsp_backup_flush(void)
 {
 	unsigned sz = cgba_backup_size();
-	uint16_t path[24];
+	uint16_t path[CGBA_SAVE_PATH_MAX];
 	int wrote;
 
 	if (sz == 0)
@@ -1749,12 +1737,14 @@ void cgba_gpsp_shutdown(void)
 	memory_term();
 	cgba_nor_rom_close(&cgba_current_nor_rom);
 	memset(cgba_current_nor_path, 0, sizeof(cgba_current_nor_path));
-	memset(cgba_current_rom_header, 0, sizeof(cgba_current_rom_header));
-	cgba_current_rom_size = 0;
 	cgba_rom_mapping_failed = 0;
 	/* No guest can resume now, so persist backup only after closing the ROM;
-	 * this avoids a pointless full-ROM block refresh on exit. */
+	 * this avoids a pointless full-ROM block refresh on exit. Keep the ROM
+	 * header and size intact until after the flush so the game code stays
+	 * available for the backup filename. */
 	cgba_gpsp_backup_flush();
+	memset(cgba_current_rom_header, 0, sizeof(cgba_current_rom_header));
+	cgba_current_rom_size = 0;
 	cgba_mode3_debug_copy_active = 0;
 	cgba_active_framebuffer = NULL;
 }

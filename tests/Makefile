@@ -17,11 +17,11 @@ comma   := ,
 DEAD_STRIP := $(if $(filter Darwin,$(shell uname -s)),\
 	-Wl$(comma)-dead_strip,-Wl$(comma)--gc-sections)
 
-.PHONY: all smoke audit core litpool thumb cond native-ldst input config-version storage lcd-cleanup scale classpad fxcg-ui fxcg-sync txt-reader rtc backup-dirty nor-world-switch rom-library overclock cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc \
+.PHONY: all smoke audit core litpool thumb cond native-ldst input config-version storage lcd-cleanup scale classpad fxcg-ui fxcg-sync txt-reader rtc backup-dirty nor-world-switch rom-library save-path overclock cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc \
 	swi-overlap swi-oam udiv udiv-emitter idle-signature video-opaque \
 	video-blend-cache video-backdrop-shadow video-sprite-decode video-tile-row-cache video-text-fastpaths video-dirty-scanline arm-mixer m4a-skip clean
 
-all: smoke core litpool thumb cond native-ldst rtc pacing backup-dirty nor-world-switch rom-library overclock input config-version storage lcd-cleanup scale classpad fxcg-ui fxcg-sync txt-reader cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc swi-overlap swi-oam udiv \
+all: smoke core litpool thumb cond native-ldst rtc pacing backup-dirty nor-world-switch rom-library save-path overclock input config-version storage lcd-cleanup scale classpad fxcg-ui fxcg-sync txt-reader cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc swi-overlap swi-oam udiv \
 	udiv-emitter idle-signature video-opaque video-blend-cache \
 	video-backdrop-shadow video-sprite-decode video-tile-row-cache video-text-fastpaths video-dirty-scanline arm-mixer m4a-skip audit
 
@@ -242,6 +242,12 @@ rom-library: $(ROOT)/tests/rom_library_test.c \
 	  $(ROOT)/tests/rom_library_test.c $(DEAD_STRIP) \
 	  -o $(BIN)-rom-library
 	$(BIN)-rom-library
+
+save-path: $(ROOT)/tests/save_path_test.c \
+	   $(ROOT)/ports/fxcg100/gint-gpsp/src/save_path.h \
+	   $(ROOT)/ports/fxcg100/gint-gpsp/src/nor_rom.h
+	$(CC) $(CFLAGS) -I$(ROOT) $(ROOT)/tests/save_path_test.c -o $(BIN)-save-path
+	$(BIN)-save-path
 
 
 # ARM condition-code -> SH4 T-bit emission, every cond x every NZCV (host-only).

@@ -21,9 +21,13 @@
 #define BFile_WriteOnly 0x02
 #define BFile_ReadWrite 0x03
 
+#define BFile_File      1
+#define BFile_Folder    5
+
 #define CP_BFILE_CREATE   0x04
 #define CP_BFILE_SEEK_SET 0
 #define CP_BFILE_ENOPATH  (-8)
+#define CP_BFILE_EEXIST   (-9)
 #define CP_BFILE_ENOENT   (-14)
 #define CP_BFILE_PATH_MAX 160
 
@@ -47,6 +51,7 @@ extern int BFile_Write(int fd, void const *buf, int size);
 extern int BFile_Seek(int fd, int offset, int whence);
 extern int BFile_Close(int fd);
 extern int BFile_Remove(char const *path);
+extern int BFile_Mkdir(char const *path);
 extern int BFile_FStat(int fd, struct cp_bfile_stat *statbuf);
 extern int BFile_FindFirst(uint16_t const *pattern, int *shandle,
 	uint16_t *foundfile, struct BFile_FileInfo *fileinfo);
@@ -106,10 +111,13 @@ static inline int cp_bfile_create(const uint16_t *path, int type, int *size)
 	char cpath[CP_BFILE_PATH_MAX];
 	int fd;
 
-	(void)type;
 	(void)size;
 	if(!cp_bfile_char_path(cpath, path))
 		return -2;
+	if(type == BFile_Folder) {
+		int rc = BFile_Mkdir(cpath);
+		return (rc >= 0 || rc == CP_BFILE_EEXIST) ? 0 : -2;
+	}
 	fd = BFile_Open(cpath, BFile_WriteOnly | CP_BFILE_CREATE);
 	if(fd < 0)
 		return -2;

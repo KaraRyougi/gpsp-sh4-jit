@@ -53,9 +53,12 @@ int fxcg100_storage_write_blob(const uint16_t *path, const void *src, unsigned s
 #define CGBA_CONFIG_VERSION_LEGACY 2u
 
 #define CGBA_BFILE_FILE 1
+#define CGBA_BFILE_FOLDER 5
+#define CGBA_BFILE_ALREADY_EXISTS (-13)
 #define CGBA_BFILE_READ_ONLY 0x01
 #define CGBA_BFILE_WRITE_ONLY 0x02
 #define CGBA_BFILE_READ_WRITE 0x03
+#define CGBA_STORAGE_PATH_MAX 160u
 
 #if defined(CGBA_CLASSPAD)
 /* ClassPad II: the OS file API behind Fugue-style adapters. */
@@ -408,6 +411,51 @@ static int update_existing_blob(storage_request *request, int fd)
   return !run_size || write_range(request, fd, run_start, run_size);
 }
 
+/* Return the index of the last backslash after the \\fls0\ device prefix, or 0
+ * when the path lies directly in the storage root. */
+static unsigned path_subdir_end(const uint16_t *path)
+{
+  static const char prefix[] = "\\\\fls0\\";
+  unsigned i, last = 0;
+
+  if (!path)
+    return 0;
+  for (i = 0; prefix[i]; i++) {
+    if (path[i] != (uint16_t)(unsigned char)prefix[i])
+      return 0;
+  }
+  for (; path[i]; i++) {
+    if (path[i] == '\\')
+      last = i;
+  }
+  return last > 7u ? last : 0u;
+}
+
+static int os_bfile_ensure_parent_dir(const uint16_t *path)
+{
+  unsigned end = path_subdir_end(path);
+  uint16_t dir[CGBA_STORAGE_PATH_MAX];
+
+  if (end == 0 || end >= CGBA_STORAGE_PATH_MAX)
+    return 0;
+  for (unsigned i = 0; i < end; i++)
+    dir[i] = path[i];
+  dir[end] = 0;
+
+  for (unsigned i = 7u; i <= end; i++) {
+    if (i == end || dir[i] == '\\') {
+      uint16_t saved = dir[i];
+      int rc;
+      dir[i] = 0;
+      rc = os_bfile_create(dir, CGBA_BFILE_FOLDER, NULL);
+      dir[i] = saved;
+      if (rc < 0 && rc != CGBA_BFILE_ALREADY_EXISTS)
+        return 0;
+    }
+  }
+  return 1;
+}
+
 /* The entire operation runs in one OS-world visit, including all changed
  * ranges. Absolute reads remain correct after a preceding range write. */
 static int storage_transaction(void *opaque)
@@ -443,16 +491,20 @@ static int storage_transaction(void *opaque)
       return 0;
   } else if (!writing) {
     return request->operation == STORAGE_SIZE ? -1 : 0;
-  } else if (fd != -1) {
-    /* Fugue -1 is EntryNotFound. Permission/locking/I/O errors must not
-     * cause an existing save to be deleted. */
+  } else if (fd != -1 && !(fd == -3 && path_subdir_end(request->path))) {
+    /* Fugue -1 is EntryNotFound; -3 (IllegalPath) can also occur when a
+     * subdirectory such as \\fls0\SAVES does not exist yet. Permission,
+     * locking, and I/O errors must not proceed to file creation. */
     return 0;
   }
 
   int create_size = (int)request->size;
   storage_will_mutate(request);
-  if (os_bfile_create(request->path, CGBA_BFILE_FILE, &create_size) < 0)
-    return 0;
+  if (os_bfile_create(request->path, CGBA_BFILE_FILE, &create_size) < 0) {
+    if (!os_bfile_ensure_parent_dir(request->path) ||
+        os_bfile_create(request->path, CGBA_BFILE_FILE, &create_size) < 0)
+      return 0;
+  }
   fd = os_bfile_open(request->path, CGBA_BFILE_WRITE_ONLY);
   if (fd < 0)
     return 0;

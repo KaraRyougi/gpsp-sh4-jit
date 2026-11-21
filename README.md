@@ -165,13 +165,13 @@ stops gpSP from starting, hold Clear while launching it.
 
 ## Save data and savestates
 
-Regular in-game GBA saves are supported and stored in `.SAV` files named after the ROM. gpSP writes new save data to storage when you change games or exit the emulator.
+Regular in-game GBA saves are supported and stored under `SAVES/` as `<TITLE>.SAV` using the cartridge's 12-byte GBA internal title with spaces replaced by underscores (for example `SAVES/ZELDA_MINISH.SAV` for *The Legend of Zelda: The Minish Cap* and `SAVES/ZELDA_ALTTP.SAV` for *A Link to the Past*). gpSP creates the `SAVES` folder automatically and writes new save data to storage when you change games or exit the emulator.
 
 To make sure your latest progress is written safely, exit with **Exit gpSP** (or `MENU` on the fx-CG50, `HOME` on the fx-CG100, then confirm), or load another game before turning off or resetting the calculator.
 
-Savestates are stored in ROM-named `.SVS` files. In the pause menu, pick a slot from 0 to 9 with Left / Right on the **Save state** or **Load state** row (or with the digit keys), then press `EXE` (`OK`). Saving keeps the menu open and confirms at the bottom; loading goes back to the game. If you prefer, you can assign quick-save and quick-load shortcuts for the selected slot.
+Savestates are stored under `SAVES/` as `<TITLE>_<slot>.SVS` (for example `SAVES/ZELDA_MINISH_0.SVS`–`SAVES/ZELDA_MINISH_9.SVS`). In the pause menu, pick a slot from 0 to 9 with Left / Right on the **Save state** or **Load state** row (or with the digit keys), then press `EXE` (`OK`). Saving keeps the menu open and confirms at the bottom; loading goes back to the game. If you prefer, you can assign quick-save and quick-load shortcuts for the selected slot.
 
-gpSP forms save filenames from the first six alphanumeric characters in the ROM filename. Make those six characters unique for each game so that two ROMs do not accidentally share the same save files.
+For homebrew ROMs without an internal title in the header, gpSP falls back to the 4-character game code and then to the first six alphanumeric characters of the ROM filename. Existing legacy 6-character saves in the storage root are still loaded automatically when no other ROM on the calculator shares the same 6-character prefix, and subsequent saves write into `SAVES/`.
 
 Savestates may not work across different gpSP releases, so regular in-game saves are the safer choice for long-term progress.
 

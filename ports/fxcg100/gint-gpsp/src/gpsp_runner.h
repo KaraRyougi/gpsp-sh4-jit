@@ -62,13 +62,17 @@ void cgba_gpsp_jit_flush_mark(void);
 void cgba_gpsp_jit_flushes(uint32_t *rom, uint32_t *ram);
 uint32_t cgba_gpsp_jit_ram_full(void);
 
-/* GBA in-game backup save (SRAM/Flash/EEPROM) persistence to \\fls0\<ROM>.SAV.
- * The save is loaded when a ROM boots and dirty data is persisted by shutdown
- * when switching games or exiting gpSP. */
+/* GBA in-game backup save (SRAM/Flash/EEPROM) persistence to
+ * \\fls0\SAVES\<TITLE>.SAV (12-byte GBA internal title with spaces replaced by
+ * underscores, falling back to the game code or ROM stem). The save is loaded
+ * when a ROM boots and dirty data is persisted by shutdown when switching games
+ * or exiting gpSP. */
 void cgba_gpsp_backup_load(void);
 
-/* Savestates: raw gba_save_state image at \\fls0\CGBAST<slot>.SAV (also
- * loadable by the emulator harness as its checkpoint blob). 1 = ok. */
+/* Savestates: compressed or raw gba_save_state image at
+ * \\fls0\SAVES\<TITLE>_<slot>.SVS (also loadable by the emulator harness as its
+ * checkpoint blob; unambiguous legacy root ROM-stem .SVS and CGBAST<slot>.SAV
+ * are still accepted on load). 1 = ok. */
 int cgba_gpsp_state_save(unsigned slot);
 int cgba_gpsp_state_load(unsigned slot);
 

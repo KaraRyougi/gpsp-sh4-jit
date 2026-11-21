@@ -37,12 +37,25 @@ static int fake_close(int);
 #define CAPACITY (416 * 1024)
 static uint8_t disk[CAPACITY], source[CAPACITY];
 static const uint16_t path[] = {'S', 0};
-static int exists, length, position, opened, mode, in_os;
-static int switches, notes, reads, writes, bytes_written, creates, removes;
+static const uint16_t subdir_path[] = {
+  '\\', '\\', 'f', 'l', 's', '0', '\\', 'S', 'A', 'V', 'E', 'S', '\\',
+  'Z', 'E', 'L', 'D', 'A', '.', 'S', 'A', 'V', 0
+};
+static const uint16_t saves_dir[] = {
+  '\\', '\\', 'f', 'l', 's', '0', '\\', 'S', 'A', 'V', 'E', 'S', 0
+};
+static int exists, dir_exists = 1, length, position, opened, mode, in_os;
+static int switches, notes, reads, writes, bytes_written, creates, dir_creates, removes;
 static int offsets[128], lengths[128];
-static int fail_open, fail_size, fail_read, fail_seek, fail_write, fail_close;
+static int fail_open, missing_dir_open_err, fail_size, fail_read, fail_seek, fail_write, fail_close;
 static int fail_create, fail_remove;
 static int short_read, short_write;
+
+static int fc_eq(const uint16_t *a, const uint16_t *b)
+{
+  while (*a && *b && *a == *b) { a++; b++; }
+  return *a == *b;
+}
 
 int fxcg100_input_maps_valid(const uint16_t *a, const uint16_t *b)
 { (void)a; (void)b; return 1; }
@@ -59,7 +72,9 @@ void fxcg100_lcd_note_os_activity(void) { assert(!in_os); notes++; }
 static int fake_open(const uint16_t *p, int m)
 {
   assert(in_os && p && !opened);
-  if (fail_open) return -8;
+  if (fail_open) return fail_open;
+  if (fc_eq(p, subdir_path) && !dir_exists)
+    return missing_dir_open_err ? missing_dir_open_err : -1;
   if (!exists) return -1;
   opened = 1; mode = m; position = 0; return 7;
 }
@@ -67,9 +82,19 @@ static int fake_size(int fd)
 { assert(in_os && opened && fd == 7); return fail_size ? -5 : length; }
 static int fake_create(const uint16_t *p, int type, int *size)
 {
-  assert(in_os && !opened && p && type == 1);
+  assert(in_os && !opened && p);
+  if (type == CGBA_BFILE_FOLDER) {
+    assert(size == NULL && fc_eq(p, saves_dir));
+    dir_creates++;
+    if (fail_create) return -4;
+    if (dir_exists) return CGBA_BFILE_ALREADY_EXISTS;
+    dir_exists = 1;
+    return 0;
+  }
+  assert(type == CGBA_BFILE_FILE && size != NULL);
   creates++;
   if (fail_create) return -4;
+  if (fc_eq(p, subdir_path) && !dir_exists) return -1;
   assert(!exists && *size <= CAPACITY);
   exists = 1; length = *size; memset(disk, 0, length); return 0;
 }
@@ -114,14 +139,14 @@ static int fake_close(int fd)
 }
 static void counters(void)
 {
-  switches = notes = reads = writes = bytes_written = creates = removes = 0;
-  fail_open = fail_size = fail_read = fail_seek = fail_write = fail_close = 0;
+  switches = notes = reads = writes = bytes_written = creates = dir_creates = removes = 0;
+  fail_open = missing_dir_open_err = fail_size = fail_read = fail_seek = fail_write = fail_close = 0;
   fail_create = fail_remove = short_read = short_write = 0;
 }
 static void reset(int size)
 {
   assert(!opened && !in_os);
-  counters(); exists = 1; length = size;
+  counters(); exists = 1; dir_exists = 1; length = size;
   memset(disk, 0xAA, sizeof(disk)); memcpy(source, disk, sizeof(source));
   storage_mutation_generation = 0;
 }
@@ -160,8 +185,21 @@ int main(void)
   assert(creates == 1 && removes == 1 && !memcmp(disk, source, 8192));
   reset(8192); assert(save(4096)); assert(length == 4096 && bytes_written == 4096);
 
-  reset(8192); fail_open = 1;
+  reset(8192); fail_open = -8;
   assert(!save(length)); assert(!creates && !removes && !storage_mutation_generation);
+  /* Subdirectory auto-creation: missing \\fls0\SAVES created in the same world
+   * switch whether open reports -1 (EntryNotFound) or -3 (IllegalPath). */
+  reset(8192); exists = 0; dir_exists = 0;
+  assert(fxcg100_storage_write_blob(subdir_path, source, 8192));
+  assert(switches == 1 && notes == 1 && !opened && dir_exists);
+  assert(dir_creates == 1 && creates == 2 && bytes_written == 8192);
+  reset(8192); exists = 0; dir_exists = 0; missing_dir_open_err = -3;
+  assert(fxcg100_storage_write_blob(subdir_path, source, 8192));
+  assert(switches == 1 && notes == 1 && !opened && dir_exists);
+  assert(dir_creates == 1 && creates == 2 && bytes_written == 8192);
+  /* Root paths still treat -3 as an error and never create directories. */
+  reset(8192); exists = 0; fail_open = -3;
+  assert(!save(length)); assert(!creates && !dir_creates && !storage_mutation_generation);
   reset(8192); fail_size = 1;
   assert(!save(length)); assert(!writes && !removes);
   reset(8192); source[0] ^= 1; fail_read = 1;
