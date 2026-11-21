@@ -1472,67 +1472,88 @@ int main(void)
                 }
   }
 
-  /* ---- ARM MOV/MVN with register-specified shifts: Mario hot helper miss ---- */
+  /* ---- ARM DP with register-specified shifts (all 12 non-S ops) ---- */
   {
     static const u32 vals3[] = {
       0, 1, 0x80000000u, 0x7FFFFFFFu, 0xFFFFFFFFu, 0x12345678u, 0xA5A50000u
     };
     static const u32 amounts[] = { 0, 1, 4, 31, 32, 33, 64, 255, 256 };
-    for (u32 aop = 0xD; aop <= 0xF; aop += 2)
-      for (u32 type = 0; type < 4; type++)
-        for (unsigned vi = 0; vi < sizeof vals3 / sizeof *vals3; vi++)
-          for (unsigned ai = 0; ai < sizeof amounts / sizeof *amounts; ai++) {
-            u32 opcode = 0xE0000000u | (aop << 21) | (3u << 12)
-                       | (5u << 8) | (type << 5) | 0x10u | 4u;
-            static u8 abuf[1024]; u8 *ap = abuf;
-            u32 val = vals3[vi], amount = amounts[ai] & 0xFF;
-            u32 shifted;
+    static const u32 ops[] = { 0, 1, 2, 3, 4, 5, 6, 7, 0xC, 0xD, 0xE, 0xF };
+    const u32 rn_val = 0x3C5A960Fu;
+    for (unsigned oi = 0; oi < sizeof ops / sizeof *ops; oi++) {
+      u32 aop = ops[oi];
+      int uses_c = (aop == 5 || aop == 6 || aop == 7);
+      for (u32 cin = 0; cin <= (u32)uses_c; cin++)
+        for (u32 type = 0; type < 4; type++)
+          for (unsigned vi = 0; vi < sizeof vals3 / sizeof *vals3; vi++)
+            for (unsigned ai = 0; ai < sizeof amounts / sizeof *amounts; ai++) {
+              u32 opcode = 0xE0000000u | (aop << 21) | (2u << 16) | (3u << 12)
+                         | (5u << 8) | (type << 5) | 0x10u | 4u;
+              static u8 abuf[1024]; u8 *ap = abuf;
+              u32 val = vals3[vi], amount = amounts[ai] & 0xFF;
+              u32 shifted, want;
+              u32 cpsr = 0x8000001Fu | (cin << 29);
 
-            if (!sh4g_arm_dp_native(&ap, opcode, pc, 0)) {
-              printf("FAIL adp-regshift op=%08X: native rejected\n", opcode);
-              fails++; continue;
-            }
-            cases++;
-
-            memset(g_reg, 0, sizeof g_reg);
-            for (int i = 0; i < 16; i++) g_reg[i] = 0xCD000000u + (u32)i;
-            g_reg[3] = 0x51515151u;
-            g_reg[4] = val;
-            g_reg[5] = amounts[ai];
-            g_reg[SH4_GREG_CPSR] = 0xA000001Fu;
-
-            if (!run_sh4x(abuf, (size_t)(ap - abuf))) {
-              printf("FAIL adp-regshift op=%08X: interpreter: %s\n",
-                     opcode, unmodeled);
-              fails++; continue;
-            }
-
-            if (amount == 0) {
-              shifted = val;
-            } else {
-              switch (type) {
-              case 0: shifted = (amount < 32) ? (val << amount) : 0; break;
-              case 1: shifted = (amount < 32) ? (val >> amount) : 0; break;
-              case 2: shifted = (amount < 32) ? (u32)((s32)val >> amount)
-                                              : (u32)((s32)val >> 31); break;
-              default: {
-                u32 rot = amount & 31;
-                shifted = rot ? ((val >> rot) | (val << (32 - rot))) : val;
-                break;
+              if (!sh4g_arm_dp_native(&ap, opcode, pc, 0)) {
+                printf("FAIL adp-regshift op=%08X: native rejected\n", opcode);
+                fails++; continue;
               }
+              cases++;
+
+              memset(g_reg, 0, sizeof g_reg);
+              for (int i = 0; i < 16; i++) g_reg[i] = 0xCD000000u + (u32)i;
+              g_reg[2] = rn_val;
+              g_reg[3] = 0x51515151u;
+              g_reg[4] = val;
+              g_reg[5] = amounts[ai];
+              g_reg[SH4_GREG_CPSR] = cpsr;
+
+              if (!run_sh4x(abuf, (size_t)(ap - abuf))) {
+                printf("FAIL adp-regshift op=%08X: interpreter: %s\n",
+                       opcode, unmodeled);
+                fails++; continue;
+              }
+
+              if (amount == 0) {
+                shifted = val;
+              } else {
+                switch (type) {
+                case 0: shifted = (amount < 32) ? (val << amount) : 0; break;
+                case 1: shifted = (amount < 32) ? (val >> amount) : 0; break;
+                case 2: shifted = (amount < 32) ? (u32)((s32)val >> amount)
+                                                : (u32)((s32)val >> 31); break;
+                default: {
+                  u32 rot = amount & 31;
+                  shifted = rot ? ((val >> rot) | (val << (32 - rot))) : val;
+                  break;
+                }
+                }
+              }
+
+              switch (aop) {
+              case 0x0: want = rn_val & shifted; break;
+              case 0x1: want = rn_val ^ shifted; break;
+              case 0x2: want = rn_val - shifted; break;
+              case 0x3: want = shifted - rn_val; break;
+              case 0x4: want = rn_val + shifted; break;
+              case 0x5: want = rn_val + shifted + cin; break;
+              case 0x6: want = rn_val - shifted - (1u - cin); break;
+              case 0x7: want = shifted - rn_val - (1u - cin); break;
+              case 0xC: want = rn_val | shifted; break;
+              case 0xD: want = shifted; break;
+              case 0xE: want = rn_val & ~shifted; break;
+              default:  want = ~shifted; break;
+              }
+              if (g_reg[3] != want || g_reg[2] != rn_val || g_reg[4] != val ||
+                  g_reg[5] != amounts[ai] || g_reg[SH4_GREG_CPSR] != cpsr) {
+                printf("FAIL adp-regshift op=%08X val=%08X amt=%08X cin=%u: "
+                       "rd=%08X want %08X r2=%08X r4=%08X r5=%08X cpsr=%08X\n",
+                       opcode, val, amounts[ai], cin, g_reg[3], want, g_reg[2],
+                       g_reg[4], g_reg[5], g_reg[SH4_GREG_CPSR]);
+                fails++;
               }
             }
-
-            u32 want = (aop == 0xD) ? shifted : ~shifted;
-            if (g_reg[3] != want || g_reg[4] != val || g_reg[5] != amounts[ai] ||
-                g_reg[SH4_GREG_CPSR] != 0xA000001Fu) {
-              printf("FAIL adp-regshift op=%08X val=%08X amt=%08X: "
-                     "rd=%08X want %08X r4=%08X r5=%08X cpsr=%08X\n",
-                     opcode, val, amounts[ai], g_reg[3], want, g_reg[4],
-                     g_reg[5], g_reg[SH4_GREG_CPSR]);
-              fails++;
-            }
-          }
+    }
   }
 
   /* ---- fastmem: real sites calling real routines over a modeled map ---- */
@@ -1685,7 +1706,7 @@ int main(void)
       { 0x02000200u, 0, 0, "ewram" },
       { 0x02052340u, 0, 0, "ewram-mirror-high" },
       { 0x02042340u, 0, 2, "ewram-mirror-smc" },
-      { 0x06000300u, 0, -1, "vram" },           /* -1: word/half ok, byte slow */
+      { 0x06000300u, 0, 0, "vram" },            /* word/half (aligned or unaligned) and byte all fast */
       { 0x04000000u, 0, 1, "io" },
       { 0x08000400u, 0, 1, "rom" },
       { 0x00000100u, 1, 1, "bios" },
@@ -1750,7 +1771,12 @@ int main(void)
           u32 reg = eff >> 24;
           if (reg == 2) { page = ewram; poff = eff & 0x3FFFF; }
           else if (reg == 3) { page = giwram + 0x8000; poff = eff & 0x7FFF; }
-          else if (reg == 6) { page = vram; poff = eff & 0x7FFF; }
+          else if (reg == 6) {
+            page = vram;
+            poff = (!is_load && kind == LDK_W) ? (eff & 0x7FFCu)
+                 : (!is_load)                  ? (eff & 0x7FFEu)
+                                               : (eff & 0x7FFFu);
+          }
           if (page) memcpy(mem_before, page + poff, 4);
 
           orc_reset_windows();
@@ -1784,12 +1810,11 @@ int main(void)
 
           /* expected route */
           int want_slow;
-          if (mis) want_slow = 1;
+          if (mis && (is_load || reg != 6)) want_slow = 1;
           else if (is_load) want_slow = tgts[ti].slow_ld;
           else {
             want_slow = tgts[ti].slow_st;
-            if (want_slow == -1) want_slow = (kind == LDK_B);   /* vram byte */
-            else if (want_slow == 2) want_slow = 1;             /* smc tag */
+            if (want_slow == 2) want_slow = 1;                  /* smc tag */
             else if (kind == LDK_UH && orc_fastmem_io16_direct_store(eff))
               want_slow = 0;
           }
@@ -1868,7 +1893,10 @@ int main(void)
             case LDK_W: want[0] = (u8)v; want[1] = (u8)(v >> 8);
                         want[2] = (u8)(v >> 16); want[3] = (u8)(v >> 24); break;
             case LDK_UH: want[0] = (u8)v; want[1] = (u8)(v >> 8); break;
-            default:     want[0] = (u8)v; break;
+            default:
+              want[0] = (u8)v;
+              if (reg == 6) want[1] = (u8)v; /* GBA VRAM 8-bit store duplicates byte */
+              break;
             }
             if (memcmp(page + poff, want, 4) != 0) {
               printf("FAIL fm %s @%s: mem %02X%02X%02X%02X want %02X%02X%02X%02X\n",
@@ -2741,7 +2769,7 @@ int main(void)
                        : (regn == 6) ? vram : rom;
         u32 poff = eff & 0x7FFF;
         u8 mem_before[4];
-        int st_slow = (regn == 6) ? (kind == SH4_THUMB_LDK_B) : (regn >= 8);
+        int st_slow = (regn == 6) ? 0 : (regn >= 8);
 
         memset(g_reg, 0, sizeof g_reg);
         for (int i = 0; i < 16; i++) g_reg[i] = 0x7EB00000u + (u32)i;
@@ -2817,7 +2845,10 @@ int main(void)
             case SH4_THUMB_LDK_W: want[0]=(u8)v; want[1]=(u8)(v>>8);
                                   want[2]=(u8)(v>>16); want[3]=(u8)(v>>24); break;
             case SH4_THUMB_LDK_UH: want[0]=(u8)v; want[1]=(u8)(v>>8); break;
-            default:               want[0]=(u8)v; break;
+            default:
+              want[0]=(u8)v;
+              if (regn == 6) want[1]=(u8)v;
+              break;
             }
             if (memcmp(page + poff, want, 4) != 0) {
               printf("FAIL tfm %s @%X: mem mismatch\n", tforms[fi].nm, base);

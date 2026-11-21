@@ -1280,6 +1280,99 @@ static bool run_tests(void)
     CHECK(verify_frame("obj_only_folded_pal_blend_update"));
   }
 
+  /* 6. Mode 4 direct 16-bit OBJ_BLEND fast path vs STCKCOLOR + merge_blend<OBJ_BLEND, true>:
+   *    verify bit-exact parity across opaque-before-ST, ST-before-opaque,
+   *    multiple overlapping ST OBJs, 8-bpp ST OBJ, odd-aligned window clips,
+   *    saturating & non-saturating BLDALPHA, and zero st_buf residue across lines. */
+  {
+    for (u32 i = 0; i < 512u; i++)
+      palette_ram_converted[i] = (u16)((i * 251u + 0x1234u) & 0xFFFFu);
+    palette_ram_dirty = CGBA_PALETTE_DIRTY_ACTIVE;
+    for (u32 y = 0; y < 160u; y++)
+      for (u32 x = 0; x < 240u; x++) {
+        vram[y * 240u + x] = (u8)((x * 7u + y * 13u) & 0xFFu);
+        vram[0xA000u + y * 240u + x] = (u8)((x * 11u + y * 5u + 3u) & 0xFFu);
+      }
+    for (u32 t = 0; t < 16u; t++) {
+      for (u32 b = 0; b < 32u; b++) {
+        u8 lo = (u8)((t + b) & 0x0Fu);
+        u8 hi = (u8)((t * 3u + b + 1u) & 0x0Fu);
+        vram[0x10000u + t * 32u + b] = (u8)((hi << 4) | lo);
+      }
+    }
+    memset(oam_ram, 0, sizeof(oam_ram));
+    for (u32 i = 0; i < 128u; i++)
+      oam_ram[i * 4u] = eswap16(0x0200u);
+
+    oam_ram[0 * 4u + 0] = eswap16(10u | 0x0000u);
+    oam_ram[0 * 4u + 1] = eswap16(30u | 0x4000u);
+    oam_ram[0 * 4u + 2] = eswap16(1u | (1u << 12));
+
+    oam_ram[1 * 4u + 0] = eswap16(8u | 0x0400u);
+    oam_ram[1 * 4u + 1] = eswap16(20u | 0x8000u);
+    oam_ram[1 * 4u + 2] = eswap16(2u | (2u << 12));
+
+    oam_ram[2 * 4u + 0] = eswap16(12u | 0x2400u);
+    oam_ram[2 * 4u + 1] = eswap16(28u | 0x4000u);
+    oam_ram[2 * 4u + 2] = eswap16(4u);
+
+    oam_ram[3 * 4u + 0] = eswap16(14u | 0x0000u);
+    oam_ram[3 * 4u + 1] = eswap16(24u | 0x4000u);
+    oam_ram[3 * 4u + 2] = eswap16(3u | (3u << 12));
+
+    reg[OAM_UPDATED] = 1u;
+    write_ioreg(REG_BG2CNT, 0x0000u);
+    write_ioreg(REG_BG2PA, 0x0100u);
+    write_ioreg(REG_BG2PB, 0x0000u);
+    write_ioreg(REG_BG2PC, 0x0000u);
+    write_ioreg(REG_BG2PD, 0x0100u);
+    write_ioreg(REG_BLDCNT, 0x3F3Fu);
+
+    static const u16 alphas[2] = { 0x0D0Fu, 0x0709u };
+    static const u16 dispcnts[2] = { 0x1F44u, 0x1F54u };
+    static const u32 spans[2][2] = { { 0u, 240u }, { 21u, 197u } };
+
+    for (u32 ai = 0; ai < 2u; ai++) {
+      write_ioreg(REG_BLDALPHA, alphas[ai]);
+      write_ioreg(REG_DISPCNT, dispcnts[ai]);
+      reg[OAM_UPDATED] = 1u;
+      order_obj(4u);
+      for (u32 si = 0; si < 2u; si++) {
+        u32 s = spans[si][0], e = spans[si][1];
+        for (u32 y = 6u; y < 44u; y++) {
+          write_ioreg(REG_VCOUNT, (u16)y);
+          affine_reference_x[0] = 0;
+          affine_reference_y[0] = (s32)(y << 8);
+
+          u16 got[240];
+          u16 ref[240];
+          u32 tmp[240];
+          memset(got, 0xAA, sizeof(got));
+          memset(ref, 0xAA, sizeof(ref));
+
+          bool ok = try_render_mode4_direct_obj_blend(
+            s, e, got, 0x1Fu, dispcnts[ai], 0x3F3Fu);
+          CHECK(ok);
+
+          bitmap_render_layers<STCKCOLOR, INDXCOLOR, u32>(
+            s, e, tmp, 0x1Fu);
+          merge_blend<OBJ_BLEND, true>(s, e, ref, tmp);
+
+          if (memcmp(got, ref, sizeof(got)) != 0) {
+            for (u32 x = 0; x < 240u; x++) {
+              if (got[x] != ref[x]) {
+                fprintf(stderr,
+                  "mode4 direct OBJ_BLEND mismatch ai=%u si=%u y=%u x=%u: "
+                  "got=%04X ref=%04X\n", ai, si, y, x, got[x], ref[x]);
+                return false;
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
   return true;
 }
 

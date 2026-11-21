@@ -159,6 +159,13 @@ void cgba_render_8bpp_strip_over_sh4(
 void cgba_render_8bpp_strip_blend_sh4(
   const u16 *map1, u32 counts, u16 *dst_top, const u8 *tile_charbase,
   u32 rke_sat, const u32 *term_a256, const u16 *map2, const u16 *bd_pal256);
+void cgba_render_mode4_blit_base_sh4(
+  const u8 *src, u32 count, u16 *dst, const u16 *pal);
+void cgba_render_mode4_blit_over_sh4(
+  const u8 *src, u32 count, u16 *dst, const u16 *pal);
+void cgba_blend_mode4_st4bpp_sh4(
+  u16 *dst, const u16 *bg, u16 *st, u32 count,
+  const u32 *ta, u32 evb_sat);
 struct cgba_aff_rot_bg_params {
   u16 *dst_end;
   const u8 *map_base;
@@ -2361,6 +2368,14 @@ static inline void render_scanline_bitmap(
     u32 pixel_x = (u32)(source_x >> 8);
     u32 pixcnt = MIN(end - start, width - pixel_x);
     pixfmt *valptr = &src_ptr[pixel_x + (pixel_y * width)];
+#ifdef CGBA_SH4_ASM_4BPP
+    if (rdtype == FULLCOLOR && mode == 4 && !mosaic && sizeof(dsttype) == 2 &&
+        sizeof(pixfmt) == 1) {
+      cgba_render_mode4_blit_over_sh4(
+        (const u8 *)valptr, pixcnt, (u16 *)dst_ptr, palptr);
+      return;
+    }
+#endif
     pixfmt val = 0;
     u32 mctr = 0;
     for (u32 i = 0; pixcnt; i++, pixcnt--, valptr++) {
@@ -4967,6 +4982,288 @@ static bool try_render_direct_single_bg_blend(
   return true;
 }
 
+#if !defined(USE_XBGR1555_FORMAT) && CGBA_VIDEO_SPRITE_DECODE_CACHE
+/* Direct 16-bit Mode 4 BG2 base-layer render: when BG2 covers [start, end)
+ * in unscaled, unrotated, non-mosaic BLIT mode with no OBJs behind it,
+ * pixel index 0 maps directly to palette_ram_converted[0] (backdrop), so
+ * fill_line_background is unnecessary and a single 8-bpp lookup blit suffices. */
+static inline void cgba_render_mode4_bg2_base(
+  u32 start, u32 end, u16 *scanline, u16 dispcnt)
+{
+  const u32 mosamount = read_ioreg(REG_MOSAIC) & 0xFFu;
+  const u32 bg_control = read_ioreg(REG_BG2CNT);
+  const bool mosaic = ((bg_control & 0x40u) != 0u) && (mosamount != 0u);
+  const s32 dx = (s16)read_ioreg(REG_BG2PA);
+  const s32 dy = (s16)read_ioreg(REG_BG2PC);
+  const s32 source_x = affine_reference_x[0] + (s32)start * dx;
+  const s32 source_y = affine_reference_y[0] + (s32)start * dy;
+
+  if (__builtin_expect(!mosaic && dy == 0 && dx == 256 &&
+                       source_x >= 0 && ((u32)(source_y >> 8)) < 160u &&
+                       ((u32)(source_x >> 8)) + (end - start) <= 240u, 1)) {
+    const u32 base = (dispcnt & 0x10u) ? 0xA000u : 0x0000u;
+    const u8 *src = &vram[base + ((u32)(source_y >> 8)) * 240u + ((u32)(source_x >> 8))];
+#ifdef CGBA_SH4_ASM_4BPP
+    cgba_render_mode4_blit_base_sh4(src, end - start, scanline + start,
+                                    palette_ram_converted);
+#else
+    u16 *dst = scanline + start;
+    const u16 *pal = palette_ram_converted;
+    for (u32 i = 0, n = end - start; i < n; i++)
+      dst[i] = pal[src[i]];
+#endif
+    return;
+  }
+
+  fill_line_background<FULLCOLOR, u16>(start, end, scanline);
+  if (mosaic) {
+    if (dy)
+      render_scanline_bitmap<FULLCOLOR, u16, 4, u8, 240, 160, ROTATED, true>(
+        start, end, scanline, palette_ram_converted);
+    else if (dx == 256)
+      render_scanline_bitmap<FULLCOLOR, u16, 4, u8, 240, 160, BLIT, true>(
+        start, end, scanline, palette_ram_converted);
+    else
+      render_scanline_bitmap<FULLCOLOR, u16, 4, u8, 240, 160, SCALED, true>(
+        start, end, scanline, palette_ram_converted);
+  } else {
+    if (dy)
+      render_scanline_bitmap<FULLCOLOR, u16, 4, u8, 240, 160, ROTATED, false>(
+        start, end, scanline, palette_ram_converted);
+    else if (dx == 256)
+      render_scanline_bitmap<FULLCOLOR, u16, 4, u8, 240, 160, BLIT, false>(
+        start, end, scanline, palette_ram_converted);
+    else
+      render_scanline_bitmap<FULLCOLOR, u16, 4, u8, 240, 160, SCALED, false>(
+        start, end, scanline, palette_ram_converted);
+  }
+}
+
+/* Direct 16-bit Mode 4 + OBJ_BLEND fast path (COL_EFFECT_NONE with one or more
+ * semi-transparent OBJs).  Avoids building a 32-bit STCKCOLOR buffer for BG2
+ * and all opaque OBJs and avoids a full-width merge_blend pass.
+ *
+ * Exactness conditions:
+ *  - Mode 4, COL_EFFECT_NONE, OBJs enabled in window.
+ *  - Both BG2 and Backdrop are 2nd targets in BLDCNT (bits 10 and 13), so any
+ *    BG2/backdrop pixel beneath a semi-transparent OBJ unconditionally blends.
+ *  - No visible OBJ on this scanline has priority behind BG2 (or BG2 is off).
+ *  - Whenever an opaque OBJ precedes a semi-transparent OBJ, or >1 semi-
+ *    transparent OBJ exists on the line, a 16-bit snapshot of pure BG2 is saved
+ *    so semi-transparent OBJs always blend against BG2 (never another OBJ),
+ *    matching STCKCOLOR's (*dest_ptr & 0x100) rule bit-for-bit. */
+static __attribute__((noinline)) bool try_render_mode4_direct_obj_blend(
+  u32 start, u32 end, u16 *scanline, u32 enable_flags, u16 dispcnt, u32 bldcnt)
+{
+  if (!(enable_flags & 0x10u))
+    return false;
+  const bool bg2_en = (enable_flags & 0x04u) != 0u;
+  if (bg2_en) {
+    if ((bldcnt & 0x2400u) != 0x2400u)
+      return false;
+  } else {
+    if (!(bldcnt & 0x2000u))
+      return false;
+  }
+
+  const s32 vcount = read_ioreg(REG_VCOUNT);
+  const u32 bg2_prio = read_ioreg(REG_BG2CNT) & 3u;
+  const u32 pmask = obj_row_prio_mask[vcount];
+  if (bg2_en && (pmask & ~((1u << (bg2_prio + 1u)) - 1u)) != 0u)
+    return false;
+
+  if (bg2_en)
+    cgba_render_mode4_bg2_base(start, end, scanline, dispcnt);
+  else
+    fill_line_background<FULLCOLOR, u16>(start, end, scanline);
+
+  if (!pmask)
+    return true;
+  if (__builtin_expect(!obj_list_built, 0))
+    cgba_order_obj_materialize_lists();
+
+  const u32 bldalpha = read_ioreg(REG_BLDALPHA);
+  const u32 eva = MIN(16u, (bldalpha >> 0) & 0x1Fu);
+  const u32 evb = MIN(16u, (bldalpha >> 8) & 0x1Fu);
+  const bool can_sat = (eva + evb) > 16u;
+  const bool obj1dmap = (dispcnt & 0x40u) != 0u;
+  const bool mosaic_active = (read_ioreg(REG_MOSAIC) & 0xFF00u) != 0u;
+  const u16 *const obj_pal = &palette_ram_converted[0x100];
+  u32 st_rem = obj_alpha_count[vcount];
+
+  u16 bg_save[240];
+  bool bg_saved = false;
+  if (st_rem > 1u) {
+    memcpy(bg_save + start, scanline + start, (end - start) * sizeof(u16));
+    bg_saved = true;
+  }
+
+  static u16 cgba_obj_idx_pal[256];
+  static bool cgba_obj_idx_pal_init = false;
+  if (__builtin_expect(!cgba_obj_idx_pal_init, 0)) {
+    for (u32 i = 0; i < 256u; i++)
+      cgba_obj_idx_pal[i] = (u16)(0x100u | i);
+    cgba_obj_idx_pal_init = true;
+  }
+
+  const u32 max_prio = bg2_en ? bg2_prio : 3u;
+#ifdef CGBA_SH4_ASM_4BPP
+  const u8 forbid_mask = mosaic_active ? 0x08u : 0x00u;
+#endif
+
+  for (s32 prio = (s32)max_prio; prio >= 0; prio--) {
+    if (!(pmask & (1u << (u32)prio)))
+      continue;
+    if (!(obj_alpha_prio_mask[vcount] & (1u << (u32)prio))) {
+      if (st_rem > 0u && !bg_saved) {
+        memcpy(bg_save + start, scanline + start, (end - start) * sizeof(u16));
+        bg_saved = true;
+      }
+      render_scanline_objs<u16, FULLCOLOR>(
+        (u32)prio, start, end, scanline, obj_pal);
+      continue;
+    }
+
+    const u32 objcnt = obj_priority_count[prio][vcount];
+    const u8 *const objlist = obj_priority_list[prio][vcount];
+    for (s32 objn = (s32)objcnt - 1; objn >= 0; objn--) {
+      const cgba_decoded_obj *d = &decoded_objs[objlist[objn]];
+      const s32 ox = d->sprite.obj_x;
+      const u8 ff = d->fast_flags;
+      const s32 ox_end = ox + ((!(ff & 1u) && (d->attr0 & 0x100u) && d->sprite.is_double)
+                                ? (d->sprite.obj_w << 1) : d->sprite.obj_w);
+      const bool is_st = ((d->attr0 & 0x0C00u) == 0x0400u);
+      if (ox_end <= (s32)start || ox >= (s32)end) {
+        if (is_st && st_rem > 0u)
+          st_rem--;
+        continue;
+      }
+
+      if (!is_st) {
+        if (st_rem > 0u && !bg_saved) {
+          memcpy(bg_save + start, scanline + start, (end - start) * sizeof(u16));
+          bg_saved = true;
+        }
+#ifdef CGBA_SH4_ASM_4BPP
+        if (__builtin_expect((ff & 1u) != 0u && (ff & forbid_mask) == 0u &&
+                             ox >= (s32)start && ox_end <= (s32)end, 1)) {
+          u32 voffset = (ff & 4u) ? (u32)(d->sprite.obj_y + d->sprite.obj_h - vcount - 1)
+                                  : (u32)(vcount - d->sprite.obj_y);
+          u32 pshift = obj1dmap ? (u32)d->fast_row_shift : 10u;
+          u32 off = (d->fast_tile_base + ((voffset >> 3) << pshift) +
+                     ((voffset & 7u) << 2)) & 0x7FFFu;
+          u32 span = d->fast_span;
+          if (ff & 2u) {
+            if (__builtin_expect(off >= span, 1)) {
+              cgba_render_obj_4bpp_tiles_hf_sh4(
+                &vram[0x10000u + off], d->fast_num_tiles,
+                scanline + ox, obj_pal + d->fast_pal_off);
+              continue;
+            }
+          } else {
+            if (__builtin_expect(off + span < 0x8000u, 1)) {
+              cgba_render_obj_4bpp_tiles_sh4(
+                &vram[0x10000u + off], d->fast_num_tiles,
+                scanline + ox, obj_pal + d->fast_pal_off);
+              continue;
+            }
+          }
+        } else if ((d->attr0 & 0x2100u) == 0x0100u && (ff & forbid_mask) == 0u) {
+          if (cgba_render_obj_4bpp_affine_fast(
+                d, start, end, scanline, obj_pal, vcount, obj1dmap))
+            continue;
+        }
+#endif
+        render_scanline_obj_slow<u16, FULLCOLOR>(
+          &d->sprite, d->attr0, start, end, scanline, 0u, obj_pal,
+          vcount, obj1dmap, mosaic_active);
+      } else {
+        const u32 clip_s = (ox > (s32)start) ? (u32)ox : start;
+        const u32 clip_e = (ox_end < (s32)end) ? (u32)ox_end : end;
+        /* Persistent zeroed scratch buffer: every non-zero pixel written inside
+         * [clip_s, clip_e) is cleared back to 0 as it is blended, avoiding a
+         * per-scanline memset(). */
+        static u16 st_buf[240] __attribute__((aligned(4)));
+
+        bool drew = false;
+#ifdef CGBA_SH4_ASM_4BPP
+        if ((d->attr0 & 0x2100u) == 0x0100u && (ff & forbid_mask) == 0u) {
+          drew = cgba_render_obj_4bpp_affine_fast(
+            d, clip_s, clip_e, st_buf, cgba_obj_idx_pal, vcount, obj1dmap);
+        }
+#endif
+        if (!drew) {
+          render_scanline_obj_slow<u16, INDXCOLOR>(
+            &d->sprite, d->attr0, clip_s, clip_e, st_buf, 0x100u, obj_pal,
+            vcount, obj1dmap, mosaic_active);
+        }
+
+        const u16 *const bg_src = bg_saved ? bg_save : scanline;
+        if (!(d->attr0 & 0x2000u)) {
+          /* 4-bpp semi-transparent sprite: precompute 16-entry term_a table. */
+          u32 ta[16];
+          const u16 *sp = obj_pal + d->fast_pal_off;
+          for (u32 c = 1u; c < 16u; c++) {
+            u32 p1 = sp[c];
+            ta[c] = (((p1 | (p1 << 16)) & BLND_MSK) * eva);
+          }
+#ifdef CGBA_SH4_ASM_4BPP
+          cgba_blend_mode4_st4bpp_sh4(
+            scanline + clip_s, bg_src + clip_s, st_buf + clip_s,
+            clip_e - clip_s, ta, evb | (can_sat ? 0x80u : 0u));
+#else
+          if (can_sat) {
+            for (u32 x = clip_s; x < clip_e; x++) {
+              u16 v = st_buf[x];
+              if (v) {
+                st_buf[x] = 0u;
+                scanline[x] = cgba_blend_rgb565_direct<true>(
+                  ta[v & 0x0Fu], bg_src[x], evb);
+              }
+            }
+          } else {
+            for (u32 x = clip_s; x < clip_e; x++) {
+              u16 v = st_buf[x];
+              if (v) {
+                st_buf[x] = 0u;
+                scanline[x] = cgba_blend_rgb565_direct<false>(
+                  ta[v & 0x0Fu], bg_src[x], evb);
+              }
+            }
+          }
+#endif
+        } else {
+          if (can_sat) {
+            for (u32 x = clip_s; x < clip_e; x++) {
+              u16 v = st_buf[x];
+              if (v) {
+                st_buf[x] = 0u;
+                u32 p1 = obj_pal[v & 0xFFu];
+                u32 ta = (((p1 | (p1 << 16)) & BLND_MSK) * eva);
+                scanline[x] = cgba_blend_rgb565_direct<true>(ta, bg_src[x], evb);
+              }
+            }
+          } else {
+            for (u32 x = clip_s; x < clip_e; x++) {
+              u16 v = st_buf[x];
+              if (v) {
+                st_buf[x] = 0u;
+                u32 p1 = obj_pal[v & 0xFFu];
+                u32 ta = (((p1 | (p1 << 16)) & BLND_MSK) * eva);
+                scanline[x] = cgba_blend_rgb565_direct<false>(ta, bg_src[x], evb);
+              }
+            }
+          }
+        }
+        if (st_rem > 0u)
+          st_rem--;
+      }
+    }
+  }
+  return true;
+}
+#endif
+
 static void render_w_effects(
   u32 start, u32 end, u16* scanline, u32 enable_flags,
   const layer_render_struct *renderers
@@ -5061,6 +5358,12 @@ static void render_w_effects(
 
   // Default rendering mode, without layer effects (except perhaps sprites).
   if (obj_blend) {
+#if !defined(USE_XBGR1555_FORMAT) && CGBA_VIDEO_SPRITE_DECODE_CACHE
+    if ((dispcnt & 0x07u) == 4u &&
+        try_render_mode4_direct_obj_blend(
+          start, end, scanline, enable_flags, dispcnt, bldcnt))
+      return;
+#endif
     u32 tmp_buf[240];
     renderers->stacked(start, end, tmp_buf, enable_flags);
     merge_blend<OBJ_BLEND, true>(start, end, scanline, tmp_buf);
@@ -5142,6 +5445,24 @@ static void bitmap_render_layers(
 
   u32 current_layer;
   u32 layer_order_pos;
+
+#if !defined(USE_XBGR1555_FORMAT) && CGBA_VIDEO_SPRITE_DECODE_CACHE
+  if (bgmode == FULLCOLOR && objmode == FULLCOLOR && sizeof(dsttype) == 2 &&
+      modeidx == 1u && (enable_flags & 0x04u)) {
+    const u32 bg2_prio = bg_control & 3u;
+    const u32 pmask = (enable_flags & 0x10u)
+      ? obj_row_prio_mask[read_ioreg(REG_VCOUNT)] : 0u;
+    if ((pmask & ~((1u << (bg2_prio + 1u)) - 1u)) == 0u) {
+      cgba_render_mode4_bg2_base(start, end, (u16 *)scanline, dispcnt);
+      for (s32 prio = (s32)bg2_prio; prio >= 0; prio--) {
+        if (pmask & (1u << (u32)prio))
+          render_scanline_objs<u16, FULLCOLOR>(
+            (u32)prio, start, end, (u16 *)scanline, &palette_ram_converted[0x100]);
+      }
+      return;
+    }
+  }
+#endif
 
   fill_line_background<bgmode, dsttype>(start, end, scanline);
 
@@ -7443,7 +7764,8 @@ static __attribute__((noinline)) bool cgba_sl_begin_frame(
     }
   }
   cgba_sl_sync_palette(&bg_dirty, &obj_dirty);
-  cgba_sync_mode0_palettes();
+  if (video_mode < 3)
+    cgba_sync_mode0_palettes();
   if (dispcnt & 0x80) {
     /* Steady forced blank: only depends on dispcnt (checked via io_same). */
     obj_dirty = false;
@@ -7466,6 +7788,8 @@ static __attribute__((noinline)) void cgba_sl_midframe_dirty(
     cgba_sl_cur_uniform = false;
     cgba_sl_frame_bg_dirty = true;
     cgba_bg_plan_valid = false;
+    if (video_mode < 3)
+      cgba_sync_mode0_palettes();
   }
   if (cgba_vram_dirty) {
     u32 vd = cgba_vram_dirty;
@@ -7484,7 +7808,8 @@ static __attribute__((noinline)) void cgba_sl_midframe_dirty(
   if (palette_ram_dirty & CGBA_PALETTE_DIRTY_SCANLINE) {
     bool pbg = false, pobj = false;
     cgba_sl_sync_palette(&pbg, &pobj);
-    cgba_sync_mode0_palettes();
+    if (video_mode < 3)
+      cgba_sync_mode0_palettes();
     if (pbg) {
       cgba_sl_cur_uniform = false;
       cgba_sl_frame_bg_dirty = true;

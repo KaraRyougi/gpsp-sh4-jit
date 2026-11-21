@@ -19,11 +19,11 @@ DEAD_STRIP := $(if $(filter Darwin,$(shell uname -s)),\
 
 .PHONY: all smoke audit core litpool thumb cond native-ldst input config-version storage lcd-cleanup backlight-overlay state-codec scale classpad fxcg-ui fxcg-sync txt-reader rtc backup-dirty nor-world-switch rom-library save-path overclock cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc \
 	swi-overlap swi-oam udiv udiv-emitter idle-signature \
-	video-backdrop-shadow video-sprite-decode video-text-fastpaths video-dirty-scanline arm-mixer arm-pcm-clamp m4a-skip clean
+	video-backdrop-shadow video-sprite-decode video-text-fastpaths video-dirty-scanline arm-mixer arm-pcm-clamp m4a-skip ea-mixer clean
 
 all: smoke core litpool thumb cond native-ldst rtc pacing backup-dirty nor-world-switch rom-library save-path overclock input config-version storage lcd-cleanup backlight-overlay state-codec scale classpad fxcg-ui fxcg-sync txt-reader cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc swi-overlap swi-oam udiv \
 	udiv-emitter idle-signature \
-	video-backdrop-shadow video-sprite-decode video-text-fastpaths video-dirty-scanline arm-mixer arm-pcm-clamp m4a-skip audit
+	video-backdrop-shadow video-sprite-decode video-text-fastpaths video-dirty-scanline arm-mixer arm-pcm-clamp m4a-skip ea-mixer audit
 
 # Execution oracle: run emitted native code in a mini SH4 interpreter against
 # the C-helper semantics (closes the pixel-soak blind spot on the audio path).
@@ -435,6 +435,12 @@ arm-pcm-clamp: $(ROOT)/tests/sh4_arm_pcm_clamp_test.c \
 	  -o $(BIN)-arm-pcm-clamp
 	$(BIN)-arm-pcm-clamp
 
+ea-mixer: $(ROOT)/tests/sh4_ea_mixer_test.c \
+	$(ROOT)/ports/fxcg100/sh4/sh4_ea_mixer.h
+	$(CC) $(CFLAGS) -O2 -I$(ROOT) $(ROOT)/tests/sh4_ea_mixer_test.c \
+	  -o $(BIN)-ea-mixer
+	$(BIN)-ea-mixer
+
 # Requires sh-elf-as + sh-elf-objcopy on PATH.
 audit: $(ROOT)/tests/sh4_codegen_audit.c $(ROOT)/ports/fxcg100/sh4/sh4_codegen.h
 	$(CC) $(CFLAGS) -I$(ROOT) $(ROOT)/tests/sh4_codegen_audit.c -o $(BIN)-audit
@@ -451,4 +457,4 @@ clean:
 	  $(BIN)-swi-oam $(BIN)-udiv-emitter $(BIN)-idle-signature \
 	  $(BIN)-video-opaque $(BIN)-video-blend-cache \
 	  $(BIN)-video-backdrop-shadow \
-	  $(BIN)-video-sprite-decode $(BIN)-video-tile-row-cache $(BIN)-arm-mixer $(BIN)-arm-pcm-clamp $(BIN)-audit
+	  $(BIN)-video-sprite-decode $(BIN)-video-tile-row-cache $(BIN)-arm-mixer $(BIN)-arm-pcm-clamp $(BIN)-ea-mixer $(BIN)-audit

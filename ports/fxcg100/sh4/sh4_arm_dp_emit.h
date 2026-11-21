@@ -239,7 +239,7 @@ SH4G_NOINLINE int sh4g_arm_dp_native(u8 **tp, u32 opcode, u32 pc, u32 flag_statu
       shift_type = (opcode >> 5) & 3;
       if ((opcode >> 4) & 1) {
         shift_rs = (opcode >> 8) & 0xF;
-        if (S || (op != 0xD && op != 0xF) || shift_rs == 15)
+        if (S || shift_rs == 15 || (op != 0xD && op != 0xF && rn == 15))
           return 0;                               /* needs shifter C or PC+12 */
         reg_shifted = 1;                          /* register-specified shift */
       } else {
@@ -296,8 +296,9 @@ SH4G_NOINLINE int sh4g_arm_dp_native(u8 **tp, u32 opcode, u32 pc, u32 flag_statu
       }
     }
     if (!op2_first) {
-      if (shifted) sh4g_arm_shift_imm_op2(tp, shift_type, shift_amount, rm);
-      else         sh4g_arm_load_op2(tp, is_imm, op2, rm, pc);
+      if (reg_shifted) sh4g_arm_shift_reg_op2_noflags(tp, shift_type, rm, shift_rs);
+      else if (shifted) sh4g_arm_shift_imm_op2(tp, shift_type, shift_amount, rm);
+      else             sh4g_arm_load_op2(tp, is_imm, op2, rm, pc);
     }
     sh4g_dp_addsub(tp, is_sub, rd, write, fm);
     return 1;
@@ -414,8 +415,9 @@ arm_logic_flags:
       sh4_emit_load_greg(&cg, rn, SH4_REG_T0);
       sh4g_close(tp, &cg);
     }
-    if (shifted) sh4g_arm_shift_imm_op2(tp, shift_type, shift_amount, rm);
-    else         sh4g_arm_load_op2(tp, is_imm, op2, rm, pc);
+    if (reg_shifted) sh4g_arm_shift_reg_op2_noflags(tp, shift_type, rm, shift_rs);
+    else if (shifted) sh4g_arm_shift_imm_op2(tp, shift_type, shift_amount, rm);
+    else             sh4g_arm_load_op2(tp, is_imm, op2, rm, pc);
     if (reverse) {                                /* swap to T0=op2, T1=rn */
       sh4_codegen cg = sh4g_open(tp);
       sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);

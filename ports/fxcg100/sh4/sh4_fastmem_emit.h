@@ -725,19 +725,16 @@ static inline u8 *sh4g_fastmem_emit_routine(u8 **tp, int fm)
 
   /* ---- 3. Store-only specialized paths (VRAM / Palette / IO16) ---- */
   if (!is_load) {
-    /* Byte stores only hit IWRAM/EWRAM natively; everything else stays on C. */
-    if (kind == CGBA_FM_STORE_B) {
-      sh4g_far_jmp(tp, slow_tramp);
-      sh4g_litseg_end_tail(tp);
-      return entry;
-    }
-
-    /* 3a. Direct VRAM store (region 6) for word / halfword. */
+    /* 3a. Direct VRAM store (region 6) for word / halfword / byte.
+     * On ARM7TDMI, unaligned STR/STRH mask off low address bits (align_mask),
+     * and write_vram8 masks bit 0 and duplicates the low byte across the
+     * 16-bit halfword (symmetric, so no byte-swap needed). */
     {
-      u8 *not_vram, *not_mirror, *vram_unaligned;
+      u8 *not_vram, *not_mirror;
 #ifdef CGBA_VIDEO_DEFERRED_ACTIVE
       u8 *vram_pending;
 #endif
+      u32 vram_mask = (kind == CGBA_FM_STORE_W) ? 0x1FFFCu : 0x1FFFEu;
       { sh4_codegen cg = sh4g_open(tp);
         sh4_emit_cmpeq_imm(&cg, 6);                  /* T = VRAM */
         sh4g_close(tp, &cg); }
@@ -752,12 +749,6 @@ static inline u8 *sh4g_fastmem_emit_routine(u8 **tp, int fm)
       vram_pending = sh4g_emit_bf_placeholder(tp);
 #endif
 
-      { sh4_codegen cg = sh4g_open(tp);
-        sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
-        sh4_emit_tst_imm(&cg, align_mask);
-        sh4g_close(tp, &cg); }
-      vram_unaligned = sh4g_emit_bf_placeholder(tp);
-
       /* Preload reg[rd] into R2 while R0 is free (compact8 already passes R2). */
       if (!compact8) {
         sh4_codegen cg = sh4g_open(tp);
@@ -767,11 +758,11 @@ static inline u8 *sh4g_fastmem_emit_routine(u8 **tp, int fm)
         sh4g_close(tp, &cg);
       }
 
-      /* Full VRAM offset: addr & 0x1FFFF; mirror 0x18000..0x1FFFF -> 0x10000..0x17FFF. */
-      sh4g_const(tp, 0x1FFFFu, SH4_REG_ARG0);
+      /* Aligned VRAM offset: addr & vram_mask; mirror 0x18000..0x1FFFF -> 0x10000..0x17FFF. */
+      sh4g_const(tp, vram_mask, SH4_REG_ARG0);
       { sh4_codegen cg = sh4g_open(tp);
         sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
-        sh4_emit_and(&cg, SH4_REG_ARG0, SH4_REG_RET); /* R0 = addr & 0x1FFFF */
+        sh4_emit_and(&cg, SH4_REG_ARG0, SH4_REG_RET); /* R0 = addr & vram_mask */
         sh4g_close(tp, &cg); }
       sh4g_const(tp, 0x18000u, SH4_REG_ARG0);
       { sh4_codegen cg = sh4g_open(tp);
@@ -818,17 +809,32 @@ static inline u8 *sh4g_fastmem_emit_routine(u8 **tp, int fm)
 #endif
 #endif
       sh4g_const(tp, (u32)(uintptr_t)vram, SH4_REG_T2);
-      sh4g_fastmem_emit_store_xfer(tp, kind, compact8, 1);
+      if (kind == CGBA_FM_STORE_B) {
+        sh4_codegen cg = sh4g_open(tp);
+        sh4_emit_extu_b(&cg, SH4_REG_T1, SH4_REG_T1);
+        sh4_emit_mov_reg(&cg, SH4_REG_T1, SH4_REG_ARG0);
+        sh4_emit_shll8(&cg, SH4_REG_ARG0);
+        sh4_emit_or(&cg, SH4_REG_ARG0, SH4_REG_T1);
+        sh4_emit_mov_w_store_r0(&cg, SH4_REG_T1, SH4_REG_T2);
+        sh4g_close(tp, &cg);
+      } else {
+        sh4g_fastmem_emit_store_xfer(tp, kind, compact8, 1);
+      }
       sh4g_fastmem_emit_wb(tp, wb);
       sh4g_fastmem_ret_debit(tp, kind == CGBA_FM_STORE_W ? 2 : 1, compact8);
 
-      sh4g_patch_cond(vram_unaligned, *tp);
 #ifdef CGBA_VIDEO_DEFERRED_ACTIVE
       sh4g_patch_cond(vram_pending, *tp);
-#endif
       sh4g_far_jmp(tp, slow_tramp);
+#endif
       sh4g_patch_cond(not_vram, *tp);
       /* R0 still equals region. */
+    }
+    /* Byte stores only hit IWRAM/EWRAM/VRAM natively; everything else stays on C. */
+    if (kind == CGBA_FM_STORE_B) {
+      sh4g_far_jmp(tp, slow_tramp);
+      sh4g_litseg_end_tail(tp);
+      return entry;
     }
     if (kind == CGBA_FM_STORE_UH)
       sh4g_fastmem_emit_ewram(tp, is_load, kind, align_mask, wb, compact8, slow_tramp);

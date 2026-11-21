@@ -41,6 +41,7 @@
 #endif
 #ifdef CGBA_SH4_M4A_MIX_SKIP
 #include "ports/fxcg100/sh4/sh4_m4a_skip.h"
+#include "ports/fxcg100/sh4/sh4_ea_mixer.h"
 #endif
 
 /* ------------------------------------------------------------------ */
@@ -116,6 +117,10 @@ extern volatile s32 cgba_sh4_arm_mixer_budget;
 int cgba_sh4_arm_mixer_loop_try(u32 unused, u32 pc);
 int cgba_sh4_arm_pcm_clamp_loop_try(u32 unused, u32 pc);
 #endif
+#if defined(CGBA_SH4_M4A_MIX_SKIP) && CGBA_SH4_M4A_MIX_SKIP
+extern volatile s32 cgba_sh4_ea_mixer_budget;
+int cgba_sh4_ea_mixer_try(u32 opcode, u32 pc);
+#endif
 
 extern void *tmemld[11][16];
 extern void *tmemst[4][16];
@@ -146,7 +151,8 @@ extern void *tmemst[4][16];
 
 #if defined(CGBA_SH4_THUMB_UDIV_FASTPATH) || \
     defined(CGBA_SH4_ARM_MIXER_FASTPATH) || \
-    defined(CGBA_SH4_M4A_LOOP_FOLD)
+    defined(CGBA_SH4_M4A_LOOP_FOLD) || \
+    (defined(CGBA_SH4_M4A_MIX_SKIP) && CGBA_SH4_M4A_MIX_SKIP)
 static inline int sh4g_range_has_observer(u32 start, u32 end)
 {
   u32 i;
@@ -599,6 +605,45 @@ static inline void sh4g_arm_seam_fastpaths(u8 **tp, const u8 *map, u32 pc,
     (int)block_data[block_data_position].update_cycles)
 #endif
 
+#if defined(CGBA_SH4_M4A_MIX_SKIP) && CGBA_SH4_M4A_MIX_SKIP
+static inline int sh4g_ea_mixer_match_iwram(u32 pc)
+{
+  u32 off, h, i;
+  if ((pc >> 24) != 0x03u || (pc & 3u) != 0u)
+    return 0;
+  off = pc & 0x7FFFu;
+  if (off + CGBA_SH4_EA_MIXER_BYTES > 0x8000u)
+    return 0;
+  if (readaddress32(iwram + 0x8000u, off + 0u) != CGBA_SH4_EA_MIXER_W0 ||
+      readaddress32(iwram + 0x8000u, off + 4u) != CGBA_SH4_EA_MIXER_W1 ||
+      readaddress32(iwram + 0x8000u, off + 8u) != CGBA_SH4_EA_MIXER_W2 ||
+      readaddress32(iwram + 0x8000u, off + 12u) != CGBA_SH4_EA_MIXER_W3)
+    return 0;
+  h = 0x811C9DC5u;
+  for (i = 0u; i < CGBA_SH4_EA_MIXER_WORDS; i++)
+    h = cgba_sh4_ea_mixer_fnv1a_step(
+      h, readaddress32(iwram + 0x8000u, off + i * 4u));
+  if (h != CGBA_SH4_EA_MIXER_FNV1A)
+    return 0;
+  return !sh4g_range_has_observer(pc, pc + CGBA_SH4_EA_MIXER_BYTES);
+}
+
+static inline void sh4g_ea_mixer_entry(u8 **tp, u32 pc)
+{
+  if (!sh4g_ea_mixer_match_iwram(pc))
+    return;
+  sh4g_const(tp, (u32)(uintptr_t)&cgba_sh4_ea_mixer_budget, SH4_REG_T0);
+  {
+    sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_l_store(&cg, SH4_REG_CYCLES, SH4_REG_T0);
+    sh4g_close(tp, &cg);
+  }
+  sh4g_op2_tramp_call(tp, (const void *)sh4_op2_pc_mem_tramp,
+                      (const void *)cgba_sh4_ea_mixer_try,
+                      CGBA_SH4_EA_MIXER_W0, pc, 1, 0);
+}
+#endif
+
 static inline void sh4g_block_entry_fastpaths(u8 **tp, const u8 *map,
                                                u32 pc, int thumb)
 {
@@ -612,8 +657,13 @@ static inline void sh4g_block_entry_fastpaths(u8 **tp, const u8 *map,
     sh4g_arm_pcm_clamp_entry(tp, map, pc);
   }
 #endif
+#if defined(CGBA_SH4_M4A_MIX_SKIP) && CGBA_SH4_M4A_MIX_SKIP
+  if (!thumb)
+    sh4g_ea_mixer_entry(tp, pc);
+#endif
 #if !defined(CGBA_SH4_THUMB_UDIV_FASTPATH) && \
-    !defined(CGBA_SH4_ARM_MIXER_FASTPATH)
+    !defined(CGBA_SH4_ARM_MIXER_FASTPATH) && \
+    !(defined(CGBA_SH4_M4A_MIX_SKIP) && CGBA_SH4_M4A_MIX_SKIP)
   (void)tp; (void)map; (void)pc; (void)thumb;
 #endif
 }

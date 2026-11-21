@@ -87,6 +87,81 @@ u8 *bios_swi_entrypoint = NULL;
 #ifdef SH4_ARCH
 u32 cgba_hle_bios_irq_entry(void);   /* sh4_interp_helpers.c */
 u32 cgba_hle_bios_irq_exit(void);
+
+/* Per-256-byte IWRAM SMC quarantine.  Games with a small self-modifying stub
+ * in IWRAM (e.g., an audio mixer patching 1-2 loop instructions each frame)
+ * otherwise trigger flush_translation_cache_ram() multiple times per frame and
+ * wipe hundreds of KiB of unrelated IWRAM code.  After CGBA_SH4_SMC_HEAT_THRESH
+ * CPU-store SMC hits on the same 256 B IWRAM page, quarantine that page: never
+ * translate blocks starting in or spanning into it, and dispatch entries in it
+ * to sh4_cold_interp_entry.  Because no tag bits are ever set in a quarantined
+ * page after the triggering flush, subsequent self-modifications to that page
+ * take the zero-tag fast path without flushing the rest of the RAM cache. */
+#define CGBA_SH4_SMC_PAGE_SHIFT   8u
+#define CGBA_SH4_SMC_PAGE_COUNT   (0x8000u >> CGBA_SH4_SMC_PAGE_SHIFT)
+#define CGBA_SH4_SMC_HEAT_THRESH  2u
+u8  cgba_iwram_smc_heat[CGBA_SH4_SMC_PAGE_COUNT];
+u8  cgba_iwram_smc_quarantine[CGBA_SH4_SMC_PAGE_COUNT];
+u32 cgba_iwram_smc_quarantine_any = 0u;
+
+void cgba_sh4_note_iwram_smc(u32 iwram_off)
+{
+  u32 page = (iwram_off & 0x7FFFu) >> CGBA_SH4_SMC_PAGE_SHIFT;
+  if (cgba_iwram_smc_heat[page] < 255u)
+    cgba_iwram_smc_heat[page]++;
+  if (cgba_iwram_smc_heat[page] >= CGBA_SH4_SMC_HEAT_THRESH) {
+    cgba_iwram_smc_quarantine[page] = 1u;
+    cgba_iwram_smc_quarantine_any = 1u;
+  }
+}
+
+static inline void cgba_sh4_reset_iwram_smc_quarantine(void)
+{
+  memset(cgba_iwram_smc_heat, 0, sizeof(cgba_iwram_smc_heat));
+  memset(cgba_iwram_smc_quarantine, 0, sizeof(cgba_iwram_smc_quarantine));
+  cgba_iwram_smc_quarantine_any = 0u;
+}
+
+static inline int cgba_sh4_iwram_page_quarantined(u32 pc)
+{
+  return __builtin_expect(cgba_iwram_smc_quarantine_any != 0u, 0) &&
+         (pc >> 24) == 0x03u &&
+         cgba_iwram_smc_quarantine[(pc & 0x7FFFu) >> CGBA_SH4_SMC_PAGE_SHIFT];
+}
+
+static inline u32 cgba_sh4_iwram_quarantine_cap(u32 start, u32 width, u32 cap)
+{
+  if (__builtin_expect(cgba_iwram_smc_quarantine_any != 0u, 0) &&
+      (start >> 24) == 0x03u) {
+    u32 p0 = (start & 0x7FFFu) >> CGBA_SH4_SMC_PAGE_SHIFT;
+    u32 p;
+    for (p = p0 + 1u; p < CGBA_SH4_SMC_PAGE_COUNT; p++) {
+      if (cgba_iwram_smc_quarantine[p]) {
+        u32 lim = (start & ~0x7FFFu) + (p << CGBA_SH4_SMC_PAGE_SHIFT);
+        u32 n = (lim - start) / width;
+        if (n < cap)
+          cap = n;
+        break;
+      }
+    }
+  }
+  return cap;
+}
+#define cgba_sh4_set_cold_pending() (cgba_cold_pending = 1)
+#else
+static inline int cgba_sh4_iwram_page_quarantined(u32 pc)
+{
+  (void)pc;
+  return 0;
+}
+static inline u32 cgba_sh4_iwram_quarantine_cap(u32 start, u32 width, u32 cap)
+{
+  (void)start;
+  (void)width;
+  return cap;
+}
+static inline void cgba_sh4_reset_iwram_smc_quarantine(void) {}
+#define cgba_sh4_set_cold_pending() ((void)0)
 #endif
 
 // Contains an offset table to rom_translation cache area
@@ -3065,6 +3140,27 @@ static inline u8 *cgba_sh4_chase_bra(u8 *target)
   return target;
 }
 
+static void cgba_sh4_emit_chain_existing(u8 **tp, u32 *cycle_count,
+                                         u8 *chain_existing_target)
+{
+  u8 *chain_dst;
+  long chain_disp;
+  sh4g_litseg_reserve(tp, 2);
+  if (*cycle_count != 0) {
+    sh4g_cycle_debit(tp, (int)*cycle_count);
+    *cycle_count = 0;
+  }
+  chain_dst = cgba_sh4_chase_bra(chain_existing_target);
+  chain_disp = ((long)(uintptr_t)chain_dst -
+                ((long)(uintptr_t)(*tp) + 4)) / 2;
+  if (chain_disp >= -2048 && chain_disp <= 2047) {
+    sh4g_u16(tp, (u16)(0xA000u | (chain_disp & 0x0FFFu)));
+    sh4g_u16(tp, 0x0009u);
+  } else {
+    sh4g_far_jmp(tp, chain_dst);
+  }
+}
+
 static u8 *cgba_rom_hash_lookup_thumb(u32 pc)
 {
   u32 key = pc | 1u;
@@ -3099,9 +3195,14 @@ u8 function_cc *block_lookup_translate_##type(u32 pc)                         \
     case 0x2:                                                                 \
     case 0x3:                                                                 \
     {                                                                         \
-      u16* tagp = (pcregion == 2) ? (u16 *)(ewram + (pc & 0x3FFFF) + 0x40000) \
-                                  : (u16 *)(iwram + (pc & 0x7FFF));           \
+      u16* tagp;                                                              \
       ramtag_type* trentry;                                                   \
+      if (pcregion == 3 && cgba_sh4_iwram_page_quarantined(pc)) {             \
+        cgba_sh4_set_cold_pending();                                          \
+        return NULL;                                                          \
+      }                                                                       \
+      tagp = (pcregion == 2) ? (u16 *)(ewram + (pc & 0x3FFFF) + 0x40000)      \
+                             : (u16 *)(iwram + (pc & 0x7FFF));                \
       /* Allocate a tag if not a valid one, and initialize header */          \
       if (!VALID_TAG(*tagp)) {                                                \
         allocate_tag_##type(tagp);                                            \
@@ -3327,6 +3428,8 @@ u8 function_cc *block_lookup_address_arm(u32 pc)
    * trapping as a wild jump; avoids allocating a VRAM tag table or SMC hooks. */
   if((pc >> 24) == 0x06u)
     return (u8 *)sh4_cold_interp_entry;
+  if(cgba_sh4_iwram_page_quarantined(pc))
+    return (u8 *)sh4_cold_interp_entry;
 #endif
   cgba_wj_note(pc);
 #ifdef SH4_ARCH
@@ -3378,6 +3481,8 @@ u8 function_cc *block_lookup_address_thumb(u32 pc)
    * (e.g. 0x06000080) and branch there. Interpret VRAM execution instead of
    * trapping as a wild jump; avoids allocating a VRAM tag table or SMC hooks. */
   if((pc >> 24) == 0x06u)
+    return (u8 *)sh4_cold_interp_entry;
+  if(cgba_sh4_iwram_page_quarantined(pc))
     return (u8 *)sh4_cold_interp_entry;
 #endif
   cgba_wj_note(pc);
@@ -3811,7 +3916,32 @@ extern int cgba_dynarec_single_block;
   }                                                                           \
 }
 
+#if defined(SH4_ARCH) && CGBA_SH4_THUMB_CHAIN_EXISTING
+/* In RAM (especially IWRAM 3D engines with many branch/call-return entries into
+ * large ARM functions), chaining a scan onto an already-translated RAM block
+ * prevents O(N^2) tail duplication from overflowing the 512 KiB RAM cache. */
 #define cgba_scan_existing_arm()                                              \
+  if (ram_region && !CGBA_SH4_DIFF_ACTIVE() &&                                \
+      (block_end_pc >> 24) == (cgba_blk_start >> 24) &&                       \
+      (idle_loop_target_pc == 0xFFFFFFFFu ||                                  \
+       (u32)(block_end_pc - (idle_loop_target_pc - 64u)) > 128u)) {           \
+    u16 *_tp = (block_end_pc < 0x03000000u)                                   \
+      ? (u16 *)(ewram + (block_end_pc & 0x3FFFFu) + 0x40000u)                 \
+      : (u16 *)(iwram + (block_end_pc & 0x7FFFu));                            \
+    if (VALID_TAG(*_tp)) {                                                    \
+      ramtag_type *_te = get_ram_tag(*_tp);                                   \
+      if (_te->offset_arm) {                                                  \
+        u8 *_existing = ram_translation_cache + _te->offset_arm;              \
+        if (_existing != attempt_base) {                                      \
+          chain_existing_target = _existing;                                  \
+          break;                                                              \
+        }                                                                     \
+      }                                                                       \
+    }                                                                         \
+  }
+#else
+#define cgba_scan_existing_arm()
+#endif
 
 #if defined(SH4_ARCH) && CGBA_SH4_THUMB_CHAIN_EXISTING
 #define cgba_scan_existing_thumb()                                            \
@@ -3851,6 +3981,8 @@ extern int cgba_dynarec_single_block;
       if (_dom_n < cgba_eff_cap) cgba_eff_cap = _dom_n;                       \
     }                                                                         \
     if (__builtin_expect(ram_region, 0)) {                                    \
+      cgba_eff_cap = cgba_sh4_iwram_quarantine_cap(                           \
+        cgba_blk_start, type##_instruction_width, cgba_eff_cap);              \
       /* Cap inside the active IWRAM (32 KiB) or EWRAM (256 KiB) mirror so a  \
        * scan stops before the 16-byte tail (e.g. IWRAM 0x7FF0..0x7FFF BIOS   \
        * IRQ vector/flags) and never wraps past the mirror boundary. */       \
@@ -3983,6 +4115,9 @@ bool translate_block_arm(u32 pc, bool ram_region)
   u8 *translation_ptr = NULL;
   u8 *translation_cache_limit = NULL;
   u8 *attempt_base = NULL;
+#ifdef SH4_ARCH
+  u8 *chain_existing_target = NULL;
+#endif
   s32 i;
   u32 flag_status;
   block_exit_type external_block_exits[MAX_EXITS];
@@ -4618,10 +4753,23 @@ bool translate_block_arm(u32 pc, bool ram_region)
 
 #ifdef SH4_ARCH
   sh4_greg_forward_reset();
-  if (ended_uncond && (last_condition & 0x0F) == 0x0E)
-    sh4g_litseg_end_tail(&translation_ptr);
-  else
+  if ((last_condition & 0x0F) != 0x0E) {
     sh4g_litseg_end(&translation_ptr);
+    generate_branch_patch_conditional(backpatch_address, translation_ptr);
+    last_condition = 0x0E;
+    ended_uncond = 0;   /* the open conditional's skip target IS the gate */
+  } else if (chain_existing_target == NULL) {
+    if (ended_uncond)
+      sh4g_litseg_end_tail(&translation_ptr);
+    else
+      sh4g_litseg_end(&translation_ptr);
+  }
+  if (chain_existing_target != NULL) {
+    cgba_sh4_emit_chain_existing(&translation_ptr, &cycle_count,
+                                 chain_existing_target);
+    sh4g_litseg_end_tail(&translation_ptr);
+    ended_uncond = 1;
+  }
 #endif
 
   /* This can happen if the last instruction is *not* inconditional */
@@ -6037,22 +6185,8 @@ bool translate_block_thumb(u32 pc, bool ram_region)
 #ifdef SH4_ARCH
   sh4_greg_forward_reset();
   if (chain_existing_target != NULL) {
-    u8 *chain_dst;
-    long chain_disp;
-    sh4g_litseg_reserve(&translation_ptr, 2);
-    if (cycle_count != 0) {
-      sh4g_cycle_debit(&translation_ptr, (int)cycle_count);
-      cycle_count = 0;
-    }
-    chain_dst = cgba_sh4_chase_bra(chain_existing_target);
-    chain_disp = ((long)(uintptr_t)chain_dst -
-                  ((long)(uintptr_t)translation_ptr + 4)) / 2;
-    if (chain_disp >= -2048 && chain_disp <= 2047) {
-      sh4g_u16(&translation_ptr, (u16)(0xA000u | (chain_disp & 0x0FFFu)));
-      sh4g_u16(&translation_ptr, 0x0009u);
-    } else {
-      sh4g_far_jmp(&translation_ptr, chain_dst);
-    }
+    cgba_sh4_emit_chain_existing(&translation_ptr, &cycle_count,
+                                 chain_existing_target);
     ended_uncond = 1;
   }
   if (ended_uncond)
@@ -6420,11 +6554,13 @@ void init_dynarec_caches(void)
   iwram_code_min = ~0U;
   cgba_iwram_code_end = 0U;
   ram_block_tag = INITIAL_TOP_TAG;
+  cgba_sh4_reset_iwram_smc_quarantine();
 }
 
 void flush_dynarec_caches(void)
 {
   /* Flush ROM and RAM caches (force a full wipe of both RAM tag tables). */
+  cgba_sh4_reset_iwram_smc_quarantine();
   flush_translation_cache_rom();
   ewram_code_min = 0;
   cgba_ewram_code_end = 0x40000U;

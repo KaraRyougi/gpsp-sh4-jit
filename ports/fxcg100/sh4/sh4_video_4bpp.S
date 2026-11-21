@@ -10117,3 +10117,317 @@ _cgba_render_4bpp_part_strip_sh4:
 	bra     .Lps_done
 	nop
 	.size   _cgba_render_4bpp_part_strip_sh4, .-_cgba_render_4bpp_part_strip_sh4
+
+/* ============================================================================
+ * void cgba_render_mode4_blit_base_sh4(
+ *   const u8 *src,        // r4: 8-bpp Mode 4 pixels (1 byte/pixel)
+ *   u32 count,            // r5: pixel count
+ *   u16 *dst,             // r6: RGB565 scanline destination
+ *   const u16 *pal        // r7: 256-entry RGB565 palette_ram_converted
+ * );
+ * Unconditional 8-bpp palette lookup (index 0 maps to pal[0] = backdrop).
+ * ============================================================================ */
+	.section .text._cgba_render_mode4_blit_base_sh4,"ax",@progbits
+	.global _cgba_render_mode4_blit_base_sh4
+	.type   _cgba_render_mode4_blit_base_sh4, @function
+	.balign 4
+_cgba_render_mode4_blit_base_sh4:
+	mov     r5, r3
+	shlr2   r3
+	tst     r3, r3
+	bt      .Lm4b_tail
+	.balign 4
+.Lm4b_loop4:
+	mov.b   @r4+, r0
+	extu.b  r0, r0
+	add     r0, r0
+	mov.w   @(r0, r7), r0
+	mov.w   r0, @r6
+
+	mov.b   @r4+, r0
+	extu.b  r0, r0
+	add     r0, r0
+	mov.w   @(r0, r7), r0
+	mov.w   r0, @(2, r6)
+
+	mov.b   @r4+, r0
+	extu.b  r0, r0
+	add     r0, r0
+	mov.w   @(r0, r7), r0
+	mov.w   r0, @(4, r6)
+
+	mov.b   @r4+, r0
+	extu.b  r0, r0
+	add     r0, r0
+	mov.w   @(r0, r7), r0
+	mov.w   r0, @(6, r6)
+
+	dt      r3
+	bf.s    .Lm4b_loop4
+	add     #8, r6
+.Lm4b_tail:
+	mov     r5, r0
+	and     #3, r0
+	tst     r0, r0
+	bt      .Lm4b_done
+	mov     r0, r3
+.Lm4b_loop1:
+	mov.b   @r4+, r0
+	extu.b  r0, r0
+	add     r0, r0
+	mov.w   @(r0, r7), r0
+	mov.w   r0, @r6
+	dt      r3
+	bf.s    .Lm4b_loop1
+	add     #2, r6
+.Lm4b_done:
+	rts
+	nop
+	.size   _cgba_render_mode4_blit_base_sh4, .-_cgba_render_mode4_blit_base_sh4
+
+/* ============================================================================
+ * void cgba_render_mode4_blit_over_sh4(
+ *   const u8 *src,        // r4: 8-bpp Mode 4 pixels (1 byte/pixel)
+ *   u32 count,            // r5: pixel count
+ *   u16 *dst,             // r6: RGB565 scanline destination
+ *   const u16 *pal        // r7: 256-entry RGB565 palette_ram_converted
+ * );
+ * Transparent-zero 8-bpp palette lookup (preserves dst when src[i] == 0).
+ * ============================================================================ */
+	.section .text._cgba_render_mode4_blit_over_sh4,"ax",@progbits
+	.global _cgba_render_mode4_blit_over_sh4
+	.type   _cgba_render_mode4_blit_over_sh4, @function
+	.balign 4
+_cgba_render_mode4_blit_over_sh4:
+	tst     r5, r5
+	bt      .Lm4o_done
+	.balign 4
+.Lm4o_loop:
+	mov.b   @r4+, r0
+	tst     r0, r0
+	bt.s    .Lm4o_next
+	extu.b  r0, r0
+	add     r0, r0
+	mov.w   @(r0, r7), r0
+	mov.w   r0, @r6
+.Lm4o_next:
+	dt      r5
+	bf.s    .Lm4o_loop
+	add     #2, r6
+.Lm4o_done:
+	rts
+	nop
+	.size   _cgba_render_mode4_blit_over_sh4, .-_cgba_render_mode4_blit_over_sh4
+
+/* ============================================================================
+ * void cgba_blend_mode4_st4bpp_sh4(
+ *   u16 *dst,             // r4: RGB565 scanline destination
+ *   const u16 *bg,        // r5: RGB565 BG2 background source
+ *   u16 *st,              // r6: semi-transparent OBJ index buffer (cleared to 0)
+ *   u32 count,            // r7: pixel count
+ *   const u32 *ta,        // @(0,r15): 16-entry precomputed term_a table
+ *   u32 evb_sat           // @(4,r15): evb (0..16) | (can_sat ? 0x80 : 0)
+ * );
+ * Fast paired-zero-skipping 4-bpp semi-transparent RGB565 alpha blender.
+ * Clears every non-zero entry in st[0..count-1] back to 0 in place so callers
+ * can reuse a persistent zeroed buffer without memset().
+ * ============================================================================ */
+	.section .text._cgba_blend_mode4_st4bpp_sh4,"ax",@progbits
+	.global _cgba_blend_mode4_st4bpp_sh4
+	.type   _cgba_blend_mode4_st4bpp_sh4, @function
+	.balign 4
+_cgba_blend_mode4_st4bpp_sh4:
+	tst     r7, r7
+	bf      0f
+	rts
+	nop
+0:	mov.l   r8, @-r15
+	mov.l   r9, @-r15
+	mov.l   r10, @-r15
+	mov.l   r11, @-r15
+	mov.l   r12, @-r15
+	sts.l   pr, @-r15
+
+	mov.l   @(24, r15), r10             /* r10 = ta */
+	mov.l   @(28, r15), r0              /* r0  = evb | (can_sat ? 0x80 : 0) */
+	mov.l   .Lbs_blnd_msk, r8           /* r8  = 0x07E0F81F */
+	mov     #0, r9
+	tst     #0x80, r0
+	bt      1f
+	mov.l   .Lbs_ovf_all, r9            /* r9  = 0x08010020 */
+1:	and     #0x7F, r0
+	mov     r0, r11                     /* r11 = evb (0..16) */
+
+	/* Align st (r6) to 4 bytes if starting at odd pixel */
+	mov     r6, r0
+	tst     #2, r0
+	bt      .Lbs_aligned
+	mov.w   @r6, r0
+	extu.w  r0, r0
+	tst     r0, r0
+	bt      .Lbs_lead_next
+	mov     #0, r1
+	mov.w   r1, @r6
+	mov.w   @r5, r2
+	bsr     .Lbs_blend_one
+	extu.w  r2, r2
+	mov.w   r0, @r4
+.Lbs_lead_next:
+	add     #2, r6
+	add     #2, r4
+	add     #2, r5
+	add     #-1, r7
+
+.Lbs_aligned:
+	mov     r7, r3
+	shlr    r3
+	tst     r3, r3
+	bt      .Lbs_tail
+	.balign 4
+.Lbs_pair:
+	mov.l   @r6, r12                    /* big-endian: hi16=st[0], lo16=st[1] */
+	tst     r12, r12
+	bt.s    .Lbs_pair_next
+	mov     #0, r0
+	mov.l   r0, @r6                     /* clear both halfwords back to 0 */
+	swap.w  r12, r0                     /* low16 = st[0] */
+	extu.w  r0, r0
+	tst     r0, r0
+	bt      .Lbs_p1
+	mov.w   @r5, r2
+	extu.w  r2, r2
+	and     #0x0F, r0
+	shll2   r0
+	mov.l   @(r0, r10), r0
+	mov     r2, r1
+	shll16  r1
+	or      r1, r2
+	and     r8, r2
+	mul.l   r11, r2
+	sts     macl, r2
+	add     r2, r0
+	shlr2   r0
+	shlr2   r0
+	tst     r9, r0
+	bt      3f
+	bsr     .Lbs_sat
+	nop
+3:	and     r8, r0
+	mov     r0, r2
+	shlr16  r2
+	or      r2, r0
+	mov.w   r0, @r4
+.Lbs_p1:
+	extu.w  r12, r0                     /* low16 = st[1] */
+	tst     r0, r0
+	bt      .Lbs_pair_next
+	mov.w   @(2, r5), r0
+	extu.w  r0, r2
+	mov     r12, r0
+	and     #0x0F, r0
+	shll2   r0
+	mov.l   @(r0, r10), r0
+	mov     r2, r1
+	shll16  r1
+	or      r1, r2
+	and     r8, r2
+	mul.l   r11, r2
+	sts     macl, r2
+	add     r2, r0
+	shlr2   r0
+	shlr2   r0
+	tst     r9, r0
+	bt      4f
+	bsr     .Lbs_sat
+	nop
+4:	and     r8, r0
+	mov     r0, r2
+	shlr16  r2
+	or      r2, r0
+	mov.w   r0, @(2, r4)
+.Lbs_pair_next:
+	add     #4, r6
+	add     #4, r4
+	dt      r3
+	bf.s    .Lbs_pair
+	add     #4, r5
+
+.Lbs_tail:
+	mov     r7, r0
+	tst     #1, r0
+	bt      .Lbs_done
+	mov.w   @r6, r0
+	extu.w  r0, r0
+	tst     r0, r0
+	bt      .Lbs_done
+	mov     #0, r1
+	mov.w   r1, @r6
+	mov.w   @r5, r2
+	bsr     .Lbs_blend_one
+	extu.w  r2, r2
+	mov.w   r0, @r4
+
+.Lbs_done:
+	lds.l   @r15+, pr
+	mov.l   @r15+, r12
+	mov.l   @r15+, r11
+	mov.l   @r15+, r10
+	mov.l   @r15+, r9
+	rts
+	mov.l   @r15+, r8
+
+	.balign 4
+/* Leaf helper for odd lead/tail pixel: r0=st_val, r2=bg_pix -> r0=blended. */
+.Lbs_blend_one:
+	and     #0x0F, r0
+	shll2   r0
+	mov.l   @(r0, r10), r0
+	mov     r2, r1
+	shll16  r1
+	or      r1, r2
+	and     r8, r2
+	mul.l   r11, r2
+	sts     macl, r2
+	add     r2, r0
+	shlr2   r0
+	shlr2   r0
+	tst     r9, r0
+	bt      .Lbs_pack
+	mov     r0, r2
+	and     r9, r2
+	mov     r2, r1
+	shlr2   r1
+	shlr2   r1
+	shlr    r1
+	sub     r1, r2
+	shlr    r1
+	or      r1, r2
+	or      r2, r0
+.Lbs_pack:
+	and     r8, r0
+	mov     r0, r2
+	shlr16  r2
+	rts
+	or      r2, r0
+
+	/* Branchless SWAR RGB565 per-channel saturation (ovf bits at 27, 16, 5). */
+	.balign 4
+.Lbs_sat:
+	mov     r0, r2
+	and     r9, r2
+	mov     r2, r1
+	shlr2   r1
+	shlr2   r1
+	shlr    r1
+	sub     r1, r2
+	shlr    r1
+	or      r1, r2
+	rts
+	or      r2, r0
+
+	.balign 4
+.Lbs_blnd_msk:
+	.long   0x07E0F81F
+.Lbs_ovf_all:
+	.long   0x08010020
+	.size   _cgba_blend_mode4_st4bpp_sh4, .-_cgba_blend_mode4_st4bpp_sh4

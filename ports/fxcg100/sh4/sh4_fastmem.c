@@ -21,12 +21,12 @@ extern int cgba_sh4_extra_cycles;
  *   - ROM cache: grows downward from the top of rom_translation_cache (sorted
  *     in strictly descending ret_pc order; shares the existing ROM arena with
  *     zero extra .cgba.highbss cost).
- *   - RAM cache: fixed 1024-entry table (16 KiB in .cgba.highbss, sorted in
- *     strictly ascending ret_pc order; any overflow falls back to inline).
+ *   - RAM cache: fixed 4096-entry table (64 KiB in .cgba.highbss, sorted in
+ *     strictly ascending ret_pc order; any overflow falls back to C helper).
  *   - 512-entry direct-mapped cache in .cgba.highbss probed directly in SH-4
  *     ASM inside sh4_fastmem_compact8_tramp. */
 enum {
-  CGBA_SH4_RAM_FM_DESC_MAX = 1024,
+  CGBA_SH4_RAM_FM_DESC_MAX = 4096,
   CGBA_SH4_OOL_CACHE_SIZE = 512
 };
 static cgba_sh4_fm_desc cgba_sh4_ram_fm_desc[CGBA_SH4_RAM_FM_DESC_MAX] CGBA_HIGH_BSS;

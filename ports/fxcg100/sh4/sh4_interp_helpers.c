@@ -429,6 +429,10 @@ static u32 cgba_sh4_align_store_address(u32 address, unsigned bytes)
  * SH4 port stores through these C helpers, so it lives here. The tag is read
  * byte-wise (the target faults on unaligned wide loads). Mirrors
  * dma_write_iwram / dma_write_ewram in gba_memory.c. */
+#ifdef SH4_ARCH
+extern void cgba_sh4_note_iwram_smc(u32 iwram_off);
+#endif
+
 static cpu_alert_type cgba_sh4_smc_check(u32 address, unsigned bytes)
 {
   const u8 *tag;
@@ -441,7 +445,14 @@ static cpu_alert_type cgba_sh4_smc_check(u32 address, unsigned bytes)
   case 0x02: tag = ewram + (address & 0x3FFFF) + 0x40000; break;   /* 256 KB */
   default:   return CPU_ALERT_NONE;
   }
-  return cgba_smc_tags_nonzero(tag, bytes) ? CPU_ALERT_SMC : CPU_ALERT_NONE;
+  if (cgba_smc_tags_nonzero(tag, bytes)) {
+#ifdef SH4_ARCH
+    if ((address >> 24) == 0x03u)
+      cgba_sh4_note_iwram_smc(address & 0x7FFFu);
+#endif
+    return CPU_ALERT_SMC;
+  }
+  return CPU_ALERT_NONE;
 }
 
 void function_cc execute_store_u8(u32 address, u32 source)
@@ -1856,6 +1867,161 @@ int cgba_sh4_arm_pcm_clamp_loop_try(u32 unused, u32 pc)
   reg[12] = r12;
   cgba_sh4_extra_cycles = (int)spent;
   return 1;
+}
+#endif
+
+#if defined(CGBA_SH4_M4A_MIX_SKIP) && CGBA_SH4_M4A_MIX_SKIP
+#include "ports/fxcg100/sh4/sh4_ea_mixer.h"
+
+volatile s32 cgba_sh4_ea_mixer_budget;
+
+int cgba_sh4_ea_mixer_try(u32 opcode, u32 pc)
+{
+  u32 r0 = reg[0];
+  u32 r1 = reg[1];
+  u32 count = reg[2];
+  u32 lr = reg[REG_LR];
+  u32 r0_reg, r0_off, r0_mask, r1_reg, r1_off, r1_mask;
+  u8 *r0_data;
+  const u8 *r0_tags;
+  u32 ch_off, nch, active_ch = 0u, skipped_ch = 0u;
+  u32 lead, rem, tail;
+  u32 est_cycles;
+  s32 budget = cgba_sh4_ea_mixer_budget;
+  (void)opcode;
+  (void)pc;
+
+  cgba_sh4_extra_cycles = 0;
+  if (CGBA_SH4_DIFF_ACTIVE() || (reg[REG_CPSR] & 0x20u))
+    return 0;
+
+  if (count == 0u) {
+    est_cycles = cgba_sh4_ea_mixer_estimate_cycles(0u, r1, 0u, 0u);
+    reg[0] = r1;
+    if (lr & 1u) {
+      reg[REG_CPSR] |= 0x20u;
+      reg[REG_PC] = lr & ~1u;
+    } else {
+      reg[REG_CPSR] &= ~0x20u;
+      reg[REG_PC] = lr & ~3u;
+    }
+    if (budget > 0 && est_cycles < (u32)budget) {
+      cgba_sh4_extra_cycles = (int)est_cycles;
+      return 1;
+    }
+    cgba_sh4_extra_cycles = (budget > 0) ? (int)budget : 1;
+    return 2;
+  }
+
+  if (count > CGBA_SH4_EA_MIXER_MAX_SAMPLES)
+    return 0;
+
+  r0_reg = r0 >> 24;
+  if ((r0 & 3u) != 0u)
+    return 0;
+  if (r0_reg == 0x03u) {
+    r0_mask = 0x7FFFu;
+    r0_data = iwram + 0x8000u;
+    r0_tags = iwram;
+  } else if (r0_reg == 0x02u) {
+    r0_mask = 0x3FFFFu;
+    r0_data = ewram;
+    r0_tags = ewram + 0x40000u;
+  } else {
+    return 0;
+  }
+  r0_off = r0 & r0_mask;
+  if (r0_off + 28u + 20u > r0_mask + 1u)
+    return 0;
+
+  r1_reg = r1 >> 24;
+  if (r1_reg == 0x03u) {
+    r1_mask = 0x7FFFu;
+  } else if (r1_reg == 0x02u) {
+    r1_mask = 0x3FFFFu;
+  } else {
+    return 0;
+  }
+  r1_off = r1 & r1_mask;
+  if (r1_off + count > r1_mask + 1u)
+    return 0;
+
+  /* Pass 1: validate every channel entry, sentinel rewind, SMC tags, and
+   * non-overlap before mutating any state. */
+  ch_off = r0_off + 28u;
+  for (nch = 0u; nch < CGBA_SH4_EA_MIXER_MAX_CHANNELS; nch++) {
+    u32 ptr, vol;
+    if (ch_off + 20u > r0_mask + 1u)
+      return 0;
+    ptr = readaddress32(r0_data, ch_off + 0u);
+    vol = readaddress32(r0_data, ch_off + 4u);
+    if (vol == 255u) {
+      if (ptr != (nch + 1u) * 20u)
+        return 0;
+      break;
+    }
+    if (vol != 0u) {
+      u32 src_reg = ptr >> 24;
+      if (src_reg != 0x02u && src_reg != 0x03u &&
+          (src_reg < 0x08u || src_reg > 0x0Du))
+        return 0;
+      if (address32(r0_tags, ch_off + 0u) != 0u ||
+          address32(r0_tags, ch_off + 8u) != 0u)
+        return 0;
+      active_ch++;
+    } else {
+      skipped_ch++;
+    }
+    ch_off += 20u;
+  }
+  if (nch >= CGBA_SH4_EA_MIXER_MAX_CHANNELS)
+    return 0;
+
+  {
+    u32 r0_end = ch_off + 20u;
+    u32 r1_end = r1_off + count;
+    if (r0_reg == r1_reg && !(r1_end <= r0_off || r0_end <= r1_off))
+      return 0;
+  }
+
+  /* Pass 2: advance each active channel's (ptr, frac) in O(channels). */
+  lead = (r1 & 3u) ? (4u - (r1 & 3u)) : 0u;
+  if (lead > count)
+    lead = count;
+  rem = count - lead;
+  tail = rem & 3u;
+
+  ch_off = r0_off + 28u;
+  for (u32 i = 0u; i < nch; i++, ch_off += 20u) {
+    u32 vol = readaddress32(r0_data, ch_off + 4u);
+    if (vol == 0u)
+      continue;
+    uint32_t ptr = readaddress32(r0_data, ch_off + 0u);
+    uint32_t frac = readaddress32(r0_data, ch_off + 8u);
+    uint32_t frac_inc = readaddress32(r0_data, ch_off + 12u);
+    uint32_t int_inc = readaddress32(r0_data, ch_off + 16u);
+    cgba_sh4_ea_mixer_advance_channel(&ptr, &frac, frac_inc, int_inc,
+                                      count, tail);
+    address32(r0_data, ch_off + 0u) = eswap32((u32)ptr);
+    address32(r0_data, ch_off + 8u) = eswap32((u32)frac);
+  }
+
+  reg[0] = r1 + count;
+  if (lr & 1u) {
+    reg[REG_CPSR] |= 0x20u;
+    reg[REG_PC] = lr & ~1u;
+  } else {
+    reg[REG_CPSR] &= ~0x20u;
+    reg[REG_PC] = lr & ~3u;
+  }
+
+  est_cycles = cgba_sh4_ea_mixer_estimate_cycles(count, r1, active_ch, skipped_ch);
+  if (budget > 0 && est_cycles < (u32)budget) {
+    cgba_sh4_extra_cycles = (int)est_cycles;
+    return 1;
+  }
+  cgba_sh4_extra_cycles = (budget > 0) ? (int)budget : 1;
+  return 2;
 }
 #endif
 
