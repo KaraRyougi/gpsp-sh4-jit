@@ -6482,6 +6482,248 @@ _cgba_render_8bpp_strip_base_sh4:
 	.size   _cgba_render_8bpp_strip_base_sh4, .-_cgba_render_8bpp_strip_base_sh4
 
 /* ============================================================================
+ * _cgba_render_8bpp_strip_over_sh4
+ *   Tile-major SH-4 big-endian 8-bpp FULLCOLOR overlay strip renderer
+ *   (k = 1..8 rows per tile, index 0 transparent).  Includes a 1-entry
+ *   empty-tile raw-map cache, whole-row zero skip, half-row zero skip,
+ *   and cmp/str branchless 4-pixel opaque runs.  Uses 16-bit mov.w stores
+ *   so aligned (4k) and unaligned (4k+2) destinations share one code path.
+ *
+ *   void cgba_render_8bpp_strip_over_sh4(
+ *     const u16 *map1, u32 counts_packed, u16 *dst_top,
+ *     const u8 *tile_charbase, u32 start_r_and_k,
+ *     const u16 *pal256, const u16 *map2)
+ * ========================================================================== */
+.macro CGBA_8BPP_OVER4 reg, o0, o1, o2, o3, lbl
+	tst     \reg, \reg
+	bt      \lbl\()_done
+	mov     #0, r1
+	cmp/str r1, \reg
+	bt      \lbl\()_part
+	extu.b  \reg, r0
+	shll    r0
+	mov.w   @(r0, r10), r0
+	shlr8   \reg
+	mov.w   r0, @(\o3, r12)
+	extu.b  \reg, r0
+	shll    r0
+	mov.w   @(r0, r10), r0
+	shlr8   \reg
+	mov.w   r0, @(\o2, r12)
+	extu.b  \reg, r0
+	shll    r0
+	mov.w   @(r0, r10), r0
+	shlr8   \reg
+	mov.w   r0, @(\o1, r12)
+	mov     \reg, r0
+	shll    r0
+	mov.w   @(r0, r10), r0
+	bra     \lbl\()_done
+	mov.w   r0, @(\o0, r12)
+\lbl\()_part:
+	extu.b  \reg, r0
+	tst     r0, r0
+	bt.s    1f
+	shlr8   \reg
+	shll    r0
+	mov.w   @(r0, r10), r0
+	mov.w   r0, @(\o3, r12)
+1:	extu.b  \reg, r0
+	tst     r0, r0
+	bt.s    2f
+	shlr8   \reg
+	shll    r0
+	mov.w   @(r0, r10), r0
+	mov.w   r0, @(\o2, r12)
+2:	extu.b  \reg, r0
+	tst     r0, r0
+	bt.s    3f
+	shlr8   \reg
+	shll    r0
+	mov.w   @(r0, r10), r0
+	mov.w   r0, @(\o1, r12)
+3:	tst     \reg, \reg
+	bt      \lbl\()_done
+	mov     \reg, r0
+	shll    r0
+	mov.w   @(r0, r10), r0
+	mov.w   r0, @(\o0, r12)
+\lbl\()_done:
+.endm
+
+	.section .text._cgba_render_8bpp_strip_over_sh4,"ax",@progbits
+	.balign 4
+	.global _cgba_render_8bpp_strip_over_sh4
+	.type   _cgba_render_8bpp_strip_over_sh4, @function
+_cgba_render_8bpp_strip_over_sh4:
+	tst     r5, r5
+	bf      1f
+	rts
+	nop
+1:	mov.l   @(0, r15), r0               /* r0 = (start_r << 8) | k */
+	mov.l   @(4, r15), r1               /* r1 = pal256 */
+	mov.l   @(8, r15), r2               /* r2 = map2 */
+	mov.l   r8, @-r15
+	mov.l   r9, @-r15
+	mov.l   r10, @-r15
+	mov.l   r11, @-r15
+	mov.l   r12, @-r15
+	mov.l   r13, @-r15
+	mov.l   r14, @-r15
+	add     #-16, r15                   /* +0=k, +4=todraw2, +8=map2, +12=empty_raw */
+
+	mov     r1, r10                     /* r10 = pal256 */
+	mov.l   r2, @(8, r15)
+	mov     #1, r2
+	shll16  r2
+	mov.l   r2, @(12, r15)              /* empty_raw sentinel (0x10000) */
+	mov     r0, r3
+	extu.b  r3, r3                      /* r3 = k (1..8) */
+	mov.l   r3, @(0, r15)
+	shlr8   r0
+	extu.b  r0, r0                      /* r0 = start_r (0..7) */
+	mov     r0, r1
+	shll2   r1
+	shll    r1                          /* r1 = start_r << 3 */
+	add     r1, r7                      /* r7 = tb_norm = tile_charbase + start_r*8 */
+	shll    r1                          /* r1 = start_r << 4 */
+	mov     #56, r9
+	sub     r1, r9                      /* r9 = vflip_off = 56 - start_r*16 */
+	mov.w   .L8o_stride, r13            /* r13 = 480 */
+
+	mov     r5, r1
+	shlr16  r1                          /* r1 = todraw2 */
+	mov.l   r1, @(4, r15)
+	extu.w  r5, r5                      /* r5 = todraw1 */
+	tst     r5, r5
+	bf      .L8o_tile_loop
+	mov.l   @(4, r15), r5
+	mov     #0, r0
+	mov.l   r0, @(4, r15)
+	mov.l   @(8, r15), r4
+	tst     r5, r5
+	bf      .L8o_tile_loop
+	bra     .L8o_done
+	nop
+
+	.balign 4
+.L8o_tile_loop:
+	mov.w   @r4+, r0
+	mov.l   @(12, r15), r1
+	cmp/eq  r1, r0
+	bt      .L8o_tile_skip
+	swap.b  r0, r1
+	shll2   r1
+	shll2   r1
+	shll2   r1
+	mov.w   .L8o_tile_mask, r2
+	extu.w  r2, r2
+	and     r2, r1                      /* r1 = (tid & 0x3FF) << 6 */
+	tst     #0x08, r0                   /* T = !vflip */
+	mov     #8, r8
+	bt.s    1f
+	add     r7, r1
+	add     r9, r1
+	mov     #-8, r8
+1:	mov     r1, r11                     /* r11 = r_tile */
+	mov     r6, r12                     /* r12 = r_dst */
+	mov.l   @r15, r14                   /* r14 = k */
+.L8o_lead_zero:
+	mov.l   @r11, r2
+	mov.l   @(4, r11), r3
+	mov     r2, r1
+	or      r3, r1
+	tst     r1, r1
+	bf      .L8o_first_nz
+	add     r8, r11
+	dt      r14
+	bf.s    .L8o_lead_zero
+	add     r13, r12
+	mov.l   r0, @(12, r15)              /* all k rows zero -> cache raw map entry */
+.L8o_tile_skip:
+	dt      r5
+	bf.s    .L8o_tile_loop
+	add     #16, r6
+	bra     .L8o_span2
+	nop
+
+.L8o_first_nz:
+	tst     #0x04, r0                   /* T = !hflip */
+	bt      .L8o_nf_have
+	bra     .L8o_hf_have
+	nop
+
+	.balign 4
+.L8o_stride:    .word 480
+.L8o_tile_mask: .word 0xFFC0
+
+	.balign 4
+.L8o_nf_loop:
+	mov.l   @r11, r2
+	mov.l   @(4, r11), r3
+	mov     r2, r0
+	or      r3, r0
+	tst     r0, r0
+	bt      .L8o_nf_next
+.L8o_nf_have:
+	CGBA_8BPP_OVER4 r2, 0, 2, 4, 6, .L8o_nf_lo
+	CGBA_8BPP_OVER4 r3, 8, 10, 12, 14, .L8o_nf_hi
+.L8o_nf_next:
+	add     r8, r11
+	dt      r14
+	bf.s    .L8o_nf_loop
+	add     r13, r12
+	dt      r5
+	bt.s    .L8o_span2
+	add     #16, r6
+	bra     .L8o_tile_loop
+	nop
+
+	.balign 4
+.L8o_hf_loop:
+	mov.l   @r11, r2
+	mov.l   @(4, r11), r3
+	mov     r2, r0
+	or      r3, r0
+	tst     r0, r0
+	bt      .L8o_hf_next
+.L8o_hf_have:
+	CGBA_8BPP_OVER4 r2, 14, 12, 10, 8, .L8o_hf_lo
+	CGBA_8BPP_OVER4 r3, 6, 4, 2, 0, .L8o_hf_hi
+.L8o_hf_next:
+	add     r8, r11
+	dt      r14
+	bf.s    .L8o_hf_loop
+	add     r13, r12
+	dt      r5
+	bt.s    .L8o_span2
+	add     #16, r6
+	bra     .L8o_tile_loop
+	nop
+
+.L8o_span2:
+	mov.l   @(4, r15), r5
+	tst     r5, r5
+	bt      .L8o_done
+	mov     #0, r0
+	mov.l   r0, @(4, r15)
+	mov.l   @(8, r15), r4
+	bra     .L8o_tile_loop
+	nop
+
+.L8o_done:
+	add     #16, r15
+	mov.l   @r15+, r14
+	mov.l   @r15+, r13
+	mov.l   @r15+, r12
+	mov.l   @r15+, r11
+	mov.l   @r15+, r10
+	mov.l   @r15+, r9
+	rts
+	mov.l   @r15+, r8
+	.size   _cgba_render_8bpp_strip_over_sh4, .-_cgba_render_8bpp_strip_over_sh4
+
+/* ============================================================================
  * _cgba_render_8bpp_strip_blend_sh4
  *   Tile-major SH-4 big-endian 8-bpp direct RGB565 alpha-blend strip renderer
  *   with whole-row backdrop LUT fast path (bd_pal256) and per-pixel backdrop

@@ -2406,30 +2406,47 @@ static bool dma_bulk_copy(dma_transfer_type *dmach, u32 src, u32 dst,
       s = dma_bulk_span(src, bytes, false, &st);
       if (s) {
         u8 *iod = (u8 *)io_registers + ioff;
-        if (width == 4) {
+        if (width == 4 && length == 4u && ioff == 0x020u) {
+          /* Hot 4-word BG2PA..BG2Y affine block (e.g., Mode-7 per-scanline HDMA). */
           const u32 *s32 = (const u32 *)s;
           u32 *d32 = (u32 *)iod;
-          for (u32 i = 0; i < length; i++)
-            d32[i] = s32[i];
-          dma_bus_val = readaddress32(s, bytes - 4);
-        } else {
-          const u16 *s16 = (const u16 *)s;
-          u16 *d16 = (u16 *)iod;
-          for (u32 i = 0; i < length; i++)
-            d16[i] = s16[i];
-          dma_bus_val = readaddress16(s, bytes - 2);
-        }
+          u32 w0 = s32[0], w1 = s32[1], w2 = s32[2], w3 = s32[3];
+          d32[0] = w0;
+          d32[1] = w1;
+          d32[2] = w2;
+          d32[3] = w3;
+          dma_bus_val = eswap32(w3);
 #ifdef CGBA_VRAM_DIRTY_ACTIVE
-        cgba_video_io_dirty = 1;
+          cgba_video_io_dirty = 1;
 #endif
-        if (ioff < 0x02Cu && iend > 0x028u)
-          affine_reference_x[0] = signext28(read_ioreg32(REG_BG2X_L));
-        if (ioff < 0x030u && iend > 0x02Cu)
-          affine_reference_y[0] = signext28(read_ioreg32(REG_BG2Y_L));
-        if (ioff < 0x03Cu && iend > 0x038u)
-          affine_reference_x[1] = signext28(read_ioreg32(REG_BG3X_L));
-        if (ioff < 0x040u && iend > 0x03Cu)
-          affine_reference_y[1] = signext28(read_ioreg32(REG_BG3Y_L));
+          affine_reference_x[0] = signext28(eswap32(w2));
+          affine_reference_y[0] = signext28(eswap32(w3));
+        } else {
+          if (width == 4) {
+            const u32 *s32 = (const u32 *)s;
+            u32 *d32 = (u32 *)iod;
+            for (u32 i = 0; i < length; i++)
+              d32[i] = s32[i];
+            dma_bus_val = readaddress32(s, bytes - 4);
+          } else {
+            const u16 *s16 = (const u16 *)s;
+            u16 *d16 = (u16 *)iod;
+            for (u32 i = 0; i < length; i++)
+              d16[i] = s16[i];
+            dma_bus_val = readaddress16(s, bytes - 2);
+          }
+#ifdef CGBA_VRAM_DIRTY_ACTIVE
+          cgba_video_io_dirty = 1;
+#endif
+          if (ioff < 0x02Cu && iend > 0x028u)
+            affine_reference_x[0] = signext28(read_ioreg32(REG_BG2X_L));
+          if (ioff < 0x030u && iend > 0x02Cu)
+            affine_reference_y[0] = signext28(read_ioreg32(REG_BG2Y_L));
+          if (ioff < 0x03Cu && iend > 0x038u)
+            affine_reference_x[1] = signext28(read_ioreg32(REG_BG3X_L));
+          if (ioff < 0x040u && iend > 0x03Cu)
+            affine_reference_y[1] = signext28(read_ioreg32(REG_BG3Y_L));
+        }
         *alert = CPU_ALERT_NONE;
         dmach->source_address = src + bytes;
         if (dmach->dest_direction != 3) dmach->dest_address = dst + bytes;
@@ -2618,89 +2635,6 @@ static cpu_alert_type dma_transfer_copy(
 cpu_alert_type dma_transfer(unsigned dma_chan, int *usedcycles)
 {
   dma_transfer_type *dmach = &dma[dma_chan];
-#if defined(CGBA_BULK_DMA) && CGBA_BULK_DMA
-  /* Ultra-fast path for repeating HBlank DMA into BG2 affine registers
-   * (0x04000020..0x0400002F) from contiguous IWRAM or EWRAM (e.g. Mode-7
-   * per-scanline HDMA): bypasses region splitting and dma_bulk_span(). */
-  if (__builtin_expect(dmach->start_type == DMA_START_HBLANK &&
-                       dmach->repeat_type != DMA_NO_REPEAT &&
-                       dmach->source_direction == 0 &&
-                       (dmach->dest_direction == 3 || dmach->dest_direction == 0), 0)) {
-    u32 is32 = (dmach->length_type != DMA_16BIT) ? 1u : 0u;
-    u32 len = dmach->length;
-    u32 bytes = len << (1u + is32);
-    u32 dst_ptr = 0x0FFFFFFFu & dmach->dest_address & (is32 ? ~3u : ~1u);
-    if (len > 0u && dst_ptr >= 0x04000020u && (dst_ptr + bytes) <= 0x04000030u) {
-      u32 src_ptr = 0x0FFFFFFFu & dmach->source_address & (is32 ? ~3u : ~1u);
-      u32 sreg = src_ptr >> 24;
-      const u8 *s = NULL;
-      if (sreg == 3u) {
-        u32 soff = src_ptr & 0x7FFFu;
-        if (soff + bytes <= 0x8000u)
-          s = iwram + 0x8000u + soff;
-      } else if (sreg == 2u) {
-        u32 soff = src_ptr & 0x3FFFFu;
-        if (soff + bytes <= 0x40000u)
-          s = ewram + soff;
-      }
-      if (s) {
-        u32 ioff = dst_ptr & 0xFFu;
-        u32 iend = ioff + bytes;
-        u8 *iod = (u8 *)io_registers + ioff;
-        cpu_alert_type ret = CPU_ALERT_NONE;
-        cgba_video_snapshot_bg2_before_write();
-        if (__builtin_expect(is32 && len == 4u && ioff == 0x20u, 1)) {
-          const u32 *s32 = (const u32 *)s;
-          u32 *d32 = (u32 *)iod;
-          u32 w0 = s32[0];
-          u32 w1 = s32[1];
-          u32 w2 = s32[2];
-          u32 w3 = s32[3];
-          d32[0] = w0;
-          d32[1] = w1;
-          d32[2] = w2;
-          d32[3] = w3;
-          dma_bus_val = eswap32(w3);
-#ifdef CGBA_VRAM_DIRTY_ACTIVE
-          cgba_video_io_dirty = 1;
-#endif
-          affine_reference_x[0] = signext28(eswap32(w2));
-          affine_reference_y[0] = signext28(eswap32(w3));
-        } else {
-          if (is32) {
-            const u32 *s32 = (const u32 *)s;
-            u32 *d32 = (u32 *)iod;
-            for (u32 i = 0u; i < len; i++)
-              d32[i] = s32[i];
-            dma_bus_val = readaddress32(s, bytes - 4u);
-          } else {
-            const u16 *s16 = (const u16 *)s;
-            u16 *d16 = (u16 *)iod;
-            for (u32 i = 0u; i < len; i++)
-              d16[i] = s16[i];
-            dma_bus_val = readaddress16(s, bytes - 2u);
-          }
-#ifdef CGBA_VRAM_DIRTY_ACTIVE
-          cgba_video_io_dirty = 1;
-#endif
-          if (ioff < 0x02Cu && iend > 0x028u)
-            affine_reference_x[0] = signext28(read_ioreg32(REG_BG2X_L));
-          if (ioff < 0x030u && iend > 0x02Cu)
-            affine_reference_y[0] = signext28(read_ioreg32(REG_BG2Y_L));
-        }
-        dmach->source_address = src_ptr + bytes;
-        if (dmach->dest_direction != 3)
-          dmach->dest_address = dst_ptr + bytes;
-        if (dmach->irq)
-          ret = flag_interrupt(IRQ_DMA0 << dma_chan);
-        if (usedcycles)
-          *usedcycles += len * (
-            def_seq_cycles[sreg][is32] + def_seq_cycles[4][is32]);
-        return ret;
-      }
-    }
-  }
-#endif
   u32 src_ptr = 0x0FFFFFFF & dmach->source_address & (
                    dmach->length_type == DMA_16BIT ? ~1U : ~3U);
   u32 dst_ptr = 0x0FFFFFFF & dmach->dest_address & (

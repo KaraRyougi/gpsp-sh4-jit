@@ -914,26 +914,36 @@ static inline int sh4g_registered_idle_signature_ok(const u8 *map,
  * up to the branch (a constant) plus the target-fetch refill, then exits. (An
  * unconditional branch uses generate_branch_cycle_update, which DOES zero, since
  * it always exits.) */
+SH4G_NOINLINE u8 *sh4g_generate_branch_taken(
+  u8 **tp, int cycle_type, u32 tgt, u32 pc, u32 block_start_pc,
+  u32 block_end_pc, u32 cycle_count, u8 *known_target,
+  const void *default_exit)
+{
+  u32 short_lim = cycle_type ? 48u : 56u;
+  int deb = (int)cycle_count + (int)ws_cyc_nseq[(tgt >> 24) & 0x0Fu][cycle_type];
+  if (!cgba_dynarec_single_block && tgt > pc && tgt < block_end_pc) {
+    if ((tgt - pc) <= short_lim && deb > 0 && deb <= 128)
+      return sh4g_emit_bra_debit(tp, deb);
+    sh4g_cycle_debit(tp, deb);
+    if ((tgt - pc) <= short_lim)
+      return sh4g_emit_bra_placeholder(tp);
+    return sh4g_emit_patch_jump(tp);
+  }
+  sh4g_cycle_debit(tp, deb);
+  if (!cgba_dynarec_single_block && tgt >= block_start_pc && tgt < block_end_pc)
+    return sh4g_branch_exit_internal_known(tp, tgt, known_target);
+  return sh4g_branch_exit(tp, tgt, default_exit);
+}
+
 #define generate_branch_taken(cycle_type, writeback_location, new_pc)         \
   do { u32 _gbt_tgt = (u32)(new_pc);                                          \
-       int _gbt_deb = (int)cycle_count +                                      \
-         (int)ws_cyc_nseq[(_gbt_tgt >> 24) & 0x0F][cycle_type];               \
-       if (!cgba_dynarec_single_block && (cycle_type) == 0 &&                 \
-           _gbt_tgt > (u32)pc && _gbt_tgt < block_end_pc) {                   \
-         if ((_gbt_tgt - (u32)pc) <= 56u && _gbt_deb > 0 && _gbt_deb <= 128) {\
-           (writeback_location) =                                             \
-             sh4g_emit_bra_debit(&translation_ptr, _gbt_deb);                 \
-         } else {                                                             \
-           sh4g_cycle_debit(&translation_ptr, _gbt_deb);                      \
-           if ((_gbt_tgt - (u32)pc) <= 56u)                                   \
-             (writeback_location) = sh4g_emit_bra_placeholder(&translation_ptr);\
-           else                                                               \
-             (writeback_location) = sh4g_emit_patch_jump(&translation_ptr);   \
-         }                                                                    \
-       } else {                                                               \
-         sh4g_cycle_debit(&translation_ptr, _gbt_deb);                        \
-         generate_branch_no_cycle_update(writeback_location, _gbt_tgt);       \
-       } } while(0)
+       u8 *_gbt_known = (!cgba_dynarec_single_block &&                        \
+           _gbt_tgt >= block_start_pc && _gbt_tgt < block_end_pc)             \
+         ? SH4_INTERNAL_KNOWN_TARGET(_gbt_tgt) : NULL;                        \
+       (writeback_location) = sh4g_generate_branch_taken(                     \
+         &translation_ptr, (cycle_type), _gbt_tgt, (u32)pc,                   \
+         block_start_pc, block_end_pc, (u32)cycle_count,                      \
+         _gbt_known, SH4_DEFAULT_BRANCH_EXIT(_gbt_tgt)); } while(0)
 
 #define generate_branch_cycle_update(cycle_type, writeback_location, new_pc)  \
   do { generate_branch_taken(cycle_type, writeback_location, new_pc);         \
@@ -1434,9 +1444,9 @@ static inline int sh4g_registered_idle_signature_ok(const u8 *map,
        } } while(0)
 #define arm_access_memory(access_type, direction, adjust_op, mem_type,        \
                           offset_type)                                        \
-  do { if(!sh4g_arm_ldst_native(&translation_ptr, (u32)opcode, (u32)pc,       \
-                                (int)cycle_count))                            \
-         SH4_CALL_OP2_PC_MEM(cgba_sh4_arm_ldst); } while(0)
+  sh4g_arm_access_memory_emit(&translation_ptr, (u32)opcode, (u32)pc,         \
+                              (u32)condition, &cycle_count, ram_region,       \
+                              pc_address_block)
 #define arm_block_memory(access_type, offset_type, writeback_type, s_bit)     \
   do { if(!sh4g_arm_block_native(&translation_ptr, (u32)opcode, (u32)pc,      \
                                  (int)cycle_count))                           \

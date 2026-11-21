@@ -81,43 +81,21 @@ static inline int sh4g_thumb_bbra_classify(u32 op, u32 *rmask, u32 *wmask)
   return 0;
 }
 
-static inline int sh4g_thumb_alu_run_native_ex(u8 **tp, const u16 *ops,
-                                               const u32 *rm_in, const u32 *wm_in,
-                                               int len, u32 *written_mask_out)
+/* Shared 4-slot BBRA register selector (top 4 unpinned guest regs with refs >= 2). */
+static inline int sh4g_bbra_pick_slots(const u32 *rm_in, const u32 *wm_in,
+                                       int len, u32 unpinned_mask,
+                                       s8 gslot[16], unsigned slot_guest[4],
+                                       u32 *wmask_all_out)
 {
-  static const unsigned slot_reg[4] = {
-    SH4_REG_ARG0, SH4_REG_ARG1, SH4_REG_ARG2, SH4_REG_ARG3
-  };
-  const u32 unpinned_mask = 0x7FFFu
-#if CGBA_SH4_PIN_GUEST_R0
-    & ~1u
-#endif
-#if CGBA_SH4_PIN_GUEST_R1
-    & ~2u
-#endif
-    ;
   u8 refs[16];
   u8 writes[16];
-  s8 gslot[16];
-  unsigned slot_guest[4];
-  int nslots = 0, i, s;
-  u32 slot_loaded = 0u, slot_dirty = 0u, wmask_all = 0u;
-  u32 seen_once = 0u, cand_mask = 0u;
-  u8 *start_tp;
+  u32 seen_once = 0u, cand_mask = 0u, wmask_all = 0u;
+  int i, s, nslots = 0;
 
-  if (len < 2 || len > 16)
-    return 0;
   memset(refs, 0, sizeof refs);
   memset(writes, 0, sizeof writes);
-
   for (i = 0; i < len; i++) {
-    u32 rm, wm, m;
-    if (rm_in) {
-      rm = rm_in[i];
-      wm = wm_in[i];
-    } else if (!sh4g_thumb_bbra_classify(ops[i], &rm, &wm)) {
-      return 0;
-    }
+    u32 rm = rm_in[i], wm = wm_in[i], m;
     wmask_all |= wm;
     rm &= unpinned_mask;
     wm &= unpinned_mask;
@@ -131,11 +109,12 @@ static inline int sh4g_thumb_alu_run_native_ex(u8 **tp, const u16 *ops,
       writes[g]++;
     }
   }
+  if (wmask_all_out)
+    *wmask_all_out = wmask_all;
   if (!cand_mask)
-    return 0;                                 /* no unpinned reuse: nothing to save */
+    return 0;
 
-  memset(gslot, -1, sizeof gslot);
-  /* Pick up to 4 hottest unpinned guest regs with refs >= 2. */
+  memset(gslot, -1, 16);
   for (s = 0; s < 4 && cand_mask; s++) {
     int best = -1;
     unsigned best_score = 1u;
@@ -155,6 +134,122 @@ static inline int sh4g_thumb_alu_run_native_ex(u8 **tp, const u16 *ops,
     slot_guest[nslots] = (unsigned)best;
     nslots++;
   }
+  return nslots;
+}
+
+static inline void sh4g_thumb_bbra_const_step(u32 op, u32 *cmask, u32 cval[16])
+{
+  unsigned hi = (op >> 8) & 0xFFu;
+  u32 m = *cmask;
+  if (hi <= 0x17u) {                          /* LSL/LSR/ASR Rd, Rm, #imm5 */
+    unsigned rd = op & 7u, rm = (op >> 3) & 7u;
+    unsigned imm5 = (op >> 6) & 31u, sub = (op >> 11) & 3u;
+    if (sub == 1u && imm5 == 0u) {
+      cval[rd] = 0u;
+      *cmask = m | (1u << rd);
+    } else if (m & (1u << rm)) {
+      u32 v = cval[rm];
+      if (sub == 0u)      v = v << imm5;
+      else if (sub == 1u) v = v >> imm5;
+      else                v = imm5 ? (u32)((s32)v >> imm5)
+                                   : ((v & 0x80000000u) ? 0xFFFFFFFFu : 0u);
+      cval[rd] = v;
+      *cmask = m | (1u << rd);
+    } else {
+      *cmask = m & ~(1u << rd);
+    }
+  } else if (hi <= 0x1Fu) {                   /* ADD/SUB Rd, Rn, Rm|#imm3 */
+    unsigned rd = op & 7u, rn = (op >> 3) & 7u, arg = (op >> 6) & 7u;
+    int is_sub = (op >> 9) & 1u, is_imm = (op >> 10) & 1u;
+    if ((m & (1u << rn)) && (is_imm || (m & (1u << arg)))) {
+      u32 rhs = is_imm ? arg : cval[arg];
+      cval[rd] = is_sub ? (cval[rn] - rhs) : (cval[rn] + rhs);
+      *cmask = m | (1u << rd);
+    } else {
+      *cmask = m & ~(1u << rd);
+    }
+  } else if (hi <= 0x27u) {                   /* MOV Rd, #imm8 */
+    unsigned rd = (op >> 8) & 7u;
+    cval[rd] = op & 0xFFu;
+    *cmask = m | (1u << rd);
+  } else if (hi >= 0x30u && hi <= 0x3Fu) {    /* ADD/SUB Rd, #imm8 */
+    unsigned rd = (op >> 8) & 7u;
+    u32 imm8 = op & 0xFFu;
+    if (m & (1u << rd)) {
+      cval[rd] = (hi >= 0x38u) ? (cval[rd] - imm8) : (cval[rd] + imm8);
+      *cmask = m | (1u << rd);
+    } else {
+      *cmask = m & ~(1u << rd);
+    }
+  } else if (hi >= 0x40u && hi <= 0x43u) {    /* ALU reg-reg */
+    unsigned alu = (op >> 6) & 0xFu, rs = (op >> 3) & 7u, rd = op & 7u;
+    if ((m & (1u << rs)) && (alu == 0x9u || alu == 0xFu || (m & (1u << rd)))) {
+      u32 a = cval[rd], b = cval[rs];
+      switch (alu) {
+      case 0x0u: cval[rd] = a & b; break;
+      case 0x1u: cval[rd] = a ^ b; break;
+      case 0x9u: cval[rd] = 0u - b; break;
+      case 0xCu: cval[rd] = a | b; break;
+      case 0xDu: cval[rd] = a * b; break;
+      case 0xEu: cval[rd] = a & ~b; break;
+      default:   cval[rd] = ~b; break;        /* 0xF MVN */
+      }
+      *cmask = m | (1u << rd);
+    } else {
+      *cmask = m & ~(1u << rd);
+    }
+  } else if (hi == 0x44u || hi == 0x46u) {    /* ADD/MOV Hd, Hm */
+    unsigned rd = (op & 7u) | ((op >> 4) & 8u);
+    unsigned rs = (op >> 3) & 0xFu;
+    if (hi == 0x46u) {
+      if (m & (1u << rs)) { cval[rd] = cval[rs]; *cmask = m | (1u << rd); }
+      else                { *cmask = m & ~(1u << rd); }
+    } else if ((m & (1u << rd)) && (m & (1u << rs))) {
+      cval[rd] = cval[rd] + cval[rs];
+      *cmask = m | (1u << rd);
+    } else {
+      *cmask = m & ~(1u << rd);
+    }
+  } else if (hi >= 0xA8u && hi <= 0xAFu) {    /* ADD Rd, SP, #imm8*4 */
+    *cmask = m & ~(1u << ((op >> 8) & 7u));
+  }
+}
+
+SH4G_NOINLINE int sh4g_thumb_alu_run_native_const(u8 **tp, const u16 *ops,
+                                                  const u32 *rm_in, const u32 *wm_in,
+                                                  int len, u32 *written_mask_out,
+                                                  u32 *const_mask_io, u32 const_val_io[16])
+{
+  static const unsigned slot_reg[4] = {
+    SH4_REG_ARG0, SH4_REG_ARG1, SH4_REG_ARG2, SH4_REG_ARG3
+  };
+  const u32 unpinned_mask = 0x7FFFu
+#if CGBA_SH4_PIN_GUEST_R0
+    & ~1u
+#endif
+#if CGBA_SH4_PIN_GUEST_R1
+    & ~2u
+#endif
+    ;
+  u32 rm_loc[16], wm_loc[16];
+  s8 gslot[16];
+  unsigned slot_guest[4];
+  int nslots = 0, i, s;
+  u32 slot_loaded = 0u, slot_dirty = 0u, wmask_all = 0u;
+  u8 *start_tp;
+
+  if (len < 2 || len > 16)
+    return 0;
+  if (!rm_in) {
+    for (i = 0; i < len; i++) {
+      if (!sh4g_thumb_bbra_classify(ops[i], &rm_loc[i], &wm_loc[i]))
+        return 0;
+    }
+    rm_in = rm_loc;
+    wm_in = wm_loc;
+  }
+  nslots = sh4g_bbra_pick_slots(rm_in, wm_in, len, unpinned_mask,
+                                gslot, slot_guest, &wmask_all);
   if (nslots == 0)
     return 0;
 
@@ -443,21 +538,371 @@ static inline int sh4g_thumb_alu_run_native_ex(u8 **tp, const u16 *ops,
   }
   sh4_greg_forward_finish(start_tp, *tp, 1);
 
-#undef BBRA_GET_SRC
-#undef BBRA_DST_REG
-#undef BBRA_COMMIT_DST
-
+  if (const_mask_io && const_val_io) {
+    for (i = 0; i < len; i++)
+      sh4g_thumb_bbra_const_step(ops[i], const_mask_io, const_val_io);
+  }
   if (written_mask_out)
     *written_mask_out = wmask_all;
   return 1;
 }
 
+static inline int sh4g_thumb_alu_run_native_ex(u8 **tp, const u16 *ops,
+                                               const u32 *rm_in, const u32 *wm_in,
+                                               int len, u32 *written_mask_out)
+{
+  return sh4g_thumb_alu_run_native_const(tp, ops, rm_in, wm_in, len,
+                                         written_mask_out, NULL, NULL);
+}
+
 static inline int sh4g_thumb_alu_run_native(u8 **tp, const u16 *ops, int len,
                                             u32 *written_mask_out)
 {
-  return sh4g_thumb_alu_run_native_ex(tp, ops, NULL, NULL, len,
-                                      written_mask_out);
+  return sh4g_thumb_alu_run_native_const(tp, ops, NULL, NULL, len,
+                                         written_mask_out, NULL, NULL);
 }
 
+/* ---- 4-slot intra-segment BBRA for straight-line ARM ALU/MUL/MLA runs -----
+ * Allocates the top 4 hot unpinned guest registers (r2..r14, refs >= 2) into
+ * SH-4 R4..R7 across 2..16 unconditional non-S / dead-flag ARM DP & MUL/MLA
+ * instructions in BOTH ROM and IWRAM. Also caches the last shift immediate in
+ * R0 across consecutive shifted ops, absorbing the old same-Rn and same-Rd
+ * ARM peepholes into one general register allocator. */
+static inline int sh4g_arm_bbra_maybe(u32 op)
+{
+  if ((op >> 28) != 0xEu)
+    return 0;
+  if ((op & 0x0E000000u) == 0x02000000u)      /* DP imm */
+    return 1;
+  if ((op & 0x0E000010u) == 0x00000000u)      /* DP reg (imm shift) */
+    return 1;
+  if ((op & 0x0FC000F0u) == 0x00000090u)      /* MUL / MLA */
+    return 1;
+  return 0;
+}
+
+static inline int sh4g_arm_bbra_classify(u32 op, u32 *rmask, u32 *wmask)
+{
+  *rmask = 0u;
+  *wmask = 0u;
+  if ((op >> 28) != 0xEu)
+    return 0;
+  if ((op & 0x0FC000F0u) == 0x00000090u) {    /* MUL / MLA (S ignored if caller proved dead) */
+    unsigned rd = (op >> 16) & 0xFu;
+    unsigned rn = (op >> 12) & 0xFu;
+    unsigned rs = (op >> 8)  & 0xFu;
+    unsigned rm = op & 0xFu;
+    int is_mla = (op >> 21) & 1;
+    if (rd == 15u || rm == 15u || rs == 15u || (is_mla && rn == 15u))
+      return 0;
+    *rmask = (1u << rm) | (1u << rs) | (is_mla ? (1u << rn) : 0u);
+    *wmask = 1u << rd;
+    return 1;
+  }
+  if ((op & 0x0E000000u) == 0x02000000u || (op & 0x0E000010u) == 0x00000000u) {
+    u32 alu = (op >> 21) & 0xFu;
+    unsigned rn = (op >> 16) & 0xFu;
+    unsigned rd = (op >> 12) & 0xFu;
+    int is_imm = (op >> 25) & 1;
+    int unary = (alu == 0xDu || alu == 0xFu);
+    if (alu == 0x5u || alu == 0x6u || alu == 0x7u ||
+        (alu >= 0x8u && alu <= 0xBu))
+      return 0;                               /* ADC/SBC/RSC/TST/TEQ/CMP/CMN */
+    if (rd == 15u || (!unary && rn == 15u))
+      return 0;
+    if (!is_imm) {
+      unsigned rm = op & 0xFu;
+      unsigned sh_type = (op >> 5) & 3u;
+      unsigned sh_imm = (op >> 7) & 31u;
+      if (rm == 15u || sh_type > 2u || (sh_type != 0u && sh_imm == 0u))
+        return 0;
+      *rmask = (unary ? 0u : (1u << rn)) | (1u << rm);
+    } else {
+      *rmask = unary ? 0u : (1u << rn);
+    }
+    *wmask = 1u << rd;
+    return 1;
+  }
+  return 0;
+}
+
+static inline void sh4g_bbra_emit_arm_shift(sh4_codegen *cg, unsigned sh_type,
+                                            unsigned sh_imm, unsigned r_in,
+                                            unsigned r_out, int *cached_sh)
+{
+  if (r_in != r_out)
+    sh4_emit_mov_reg(cg, r_in, r_out);
+  if (sh_imm == 0u)
+    return;
+  if (sh_type == 0u) {
+    switch (sh_imm) {
+    case 1:  sh4_emit_shll(cg, r_out); return;
+    case 2:  sh4_emit_shll2(cg, r_out); return;
+    case 3:  sh4_emit_shll2(cg, r_out); sh4_emit_shll(cg, r_out); return;
+    case 4:  sh4_emit_shll2(cg, r_out); sh4_emit_shll2(cg, r_out); return;
+    case 8:  sh4_emit_shll8(cg, r_out); return;
+    case 9:  sh4_emit_shll8(cg, r_out); sh4_emit_shll(cg, r_out); return;
+    case 10: sh4_emit_shll8(cg, r_out); sh4_emit_shll2(cg, r_out); return;
+    case 16: sh4_emit_shll16(cg, r_out); return;
+    case 17: sh4_emit_shll16(cg, r_out); sh4_emit_shll(cg, r_out); return;
+    case 18: sh4_emit_shll16(cg, r_out); sh4_emit_shll2(cg, r_out); return;
+    case 24: sh4_emit_shll16(cg, r_out); sh4_emit_shll8(cg, r_out); return;
+    default: break;
+    }
+    if (*cached_sh != (int)sh_imm) {
+      sh4_emit_mov_imm(cg, (int)sh_imm, SH4_REG_RET);
+      *cached_sh = (int)sh_imm;
+    }
+    sh4_emit_shld(cg, SH4_REG_RET, r_out);
+  } else if (sh_type == 1u) {
+    switch (sh_imm) {
+    case 1:  sh4_emit_shlr(cg, r_out); return;
+    case 2:  sh4_emit_shlr2(cg, r_out); return;
+    case 3:  sh4_emit_shlr2(cg, r_out); sh4_emit_shlr(cg, r_out); return;
+    case 4:  sh4_emit_shlr2(cg, r_out); sh4_emit_shlr2(cg, r_out); return;
+    case 8:  sh4_emit_shlr8(cg, r_out); return;
+    case 9:  sh4_emit_shlr8(cg, r_out); sh4_emit_shlr(cg, r_out); return;
+    case 10: sh4_emit_shlr8(cg, r_out); sh4_emit_shlr2(cg, r_out); return;
+    case 16: sh4_emit_shlr16(cg, r_out); return;
+    case 17: sh4_emit_shlr16(cg, r_out); sh4_emit_shlr(cg, r_out); return;
+    case 18: sh4_emit_shlr16(cg, r_out); sh4_emit_shlr2(cg, r_out); return;
+    case 24: sh4_emit_shlr16(cg, r_out); sh4_emit_shlr8(cg, r_out); return;
+    default: break;
+    }
+    if (*cached_sh != -(int)sh_imm) {
+      sh4_emit_mov_imm(cg, -(int)sh_imm, SH4_REG_RET);
+      *cached_sh = -(int)sh_imm;
+    }
+    sh4_emit_shld(cg, SH4_REG_RET, r_out);
+  } else { /* ASR */
+    if (sh_imm == 1u) { sh4_emit_shar(cg, r_out); return; }
+    if (sh_imm == 2u) { sh4_emit_shar(cg, r_out); sh4_emit_shar(cg, r_out); return; }
+    if (*cached_sh != -(int)sh_imm) {
+      sh4_emit_mov_imm(cg, -(int)sh_imm, SH4_REG_RET);
+      *cached_sh = -(int)sh_imm;
+    }
+    sh4_emit_shad(cg, SH4_REG_RET, r_out);
+  }
+}
+
+SH4G_NOINLINE int sh4g_arm_alu_run_native_ex(u8 **tp, const u32 *ops,
+                                             const u32 *rm_in, const u32 *wm_in,
+                                             int len)
+{
+  static const unsigned slot_reg[4] = {
+    SH4_REG_ARG0, SH4_REG_ARG1, SH4_REG_ARG2, SH4_REG_ARG3
+  };
+  const u32 unpinned_mask = 0x7FFFu
+#if CGBA_SH4_PIN_GUEST_R0
+    & ~1u
+#endif
+#if CGBA_SH4_PIN_GUEST_R1
+    & ~2u
+#endif
+    ;
+  u32 rm_loc[16], wm_loc[16];
+  s8 gslot[16];
+  unsigned slot_guest[4];
+  int nslots, i, s, cached_sh = 0;
+  u32 slot_loaded = 0u, slot_dirty = 0u;
+  u8 *start_tp;
+
+  if (len < 2 || len > 16)
+    return 0;
+  if (!rm_in) {
+    for (i = 0; i < len; i++) {
+      if (!sh4g_arm_bbra_classify(ops[i], &rm_loc[i], &wm_loc[i]))
+        return 0;
+    }
+    rm_in = rm_loc;
+    wm_in = wm_loc;
+  }
+  nslots = sh4g_bbra_pick_slots(rm_in, wm_in, len, unpinned_mask,
+                                gslot, slot_guest, NULL);
+  if (nslots == 0)
+    return 0;
+
+  sh4_greg_forward_reset();
+  start_tp = *tp;
+
+  for (i = 0; i < len; i++) {
+    u32 op = ops[i];
+    sh4g_litseg_reserve_bytes(tp, 2, 48u);
+
+    if ((op & 0x0FC000F0u) == 0x00000090u) {  /* MUL / MLA */
+      unsigned rd = (op >> 16) & 0xFu;
+      unsigned rn = (op >> 12) & 0xFu;
+      unsigned rs = (op >> 8)  & 0xFu;
+      unsigned rm = op & 0xFu;
+      int is_mla = (op >> 21) & 1;
+      sh4_codegen cg = sh4g_open(tp);
+      unsigned r_m = BBRA_GET_SRC(&cg, rm, SH4_REG_T0);
+      unsigned r_s = (rs == rm) ? r_m : BBRA_GET_SRC(&cg, rs, SH4_REG_T1);
+      unsigned r_dst = BBRA_DST_REG(rd, SH4_REG_T0);
+      sh4_emit_mul_l(&cg, r_m, r_s);
+      if (!is_mla) {
+        sh4_emit_sts_macl(&cg, r_dst);
+        BBRA_COMMIT_DST(&cg, rd, r_dst);
+      } else {
+        unsigned r_n = BBRA_GET_SRC(&cg, rn, SH4_REG_T2);
+        if (r_dst == r_n) {
+          sh4_emit_sts_macl(&cg, SH4_REG_T0);
+          sh4_emit_add_reg(&cg, SH4_REG_T0, r_dst);
+          BBRA_COMMIT_DST(&cg, rd, r_dst);
+        } else {
+          sh4_emit_sts_macl(&cg, r_dst);
+          sh4_emit_add_reg(&cg, r_n, r_dst);
+          BBRA_COMMIT_DST(&cg, rd, r_dst);
+        }
+      }
+      sh4g_close(tp, &cg);
+      continue;
+    }
+
+    {
+      u32 alu = (op >> 21) & 0xFu;
+      unsigned rn = (op >> 16) & 0xFu;
+      unsigned rd = (op >> 12) & 0xFu;
+      int is_imm = (op >> 25) & 1;
+      u32 imm = 0u;
+      unsigned rm = op & 0xFu;
+      unsigned sh_type = (op >> 5) & 3u;
+      unsigned sh_imm = (op >> 7) & 31u;
+
+      if (is_imm) {
+        u32 rot = ((op >> 8) & 0xFu) * 2u;
+        u32 v = op & 0xFFu;
+        imm = rot ? ((v >> rot) | (v << (32u - rot))) : v;
+      }
+
+      if (alu == 0xDu || alu == 0xFu) {       /* MOV / MVN */
+        unsigned r_dst = BBRA_DST_REG(rd, SH4_REG_T0);
+        if (is_imm) {
+          sh4g_const(tp, (alu == 0xFu) ? ~imm : imm, r_dst);
+          { sh4_codegen cg = sh4g_open(tp);
+            BBRA_COMMIT_DST(&cg, rd, r_dst);
+            sh4g_close(tp, &cg); }
+        } else {
+          sh4_codegen cg = sh4g_open(tp);
+          unsigned r_src = BBRA_GET_SRC(&cg, rm, SH4_REG_T0);
+          sh4g_bbra_emit_arm_shift(&cg, sh_type, sh_imm, r_src, r_dst, &cached_sh);
+          if (alu == 0xFu)
+            sh4_emit_not(&cg, r_dst, r_dst);
+          BBRA_COMMIT_DST(&cg, rd, r_dst);
+          sh4g_close(tp, &cg);
+        }
+        continue;
+      }
+
+      if (is_imm) {
+        if (alu == 0x0u && (imm == 0xFFu || imm == 0xFFFFu)) {
+          sh4_codegen cg = sh4g_open(tp);
+          unsigned r_n = BBRA_GET_SRC(&cg, rn, SH4_REG_T0);
+          unsigned r_dst = BBRA_DST_REG(rd, SH4_REG_T0);
+          if (imm == 0xFFu) sh4_emit_extu_b(&cg, r_n, r_dst);
+          else              sh4_emit_extu_w(&cg, r_n, r_dst);
+          BBRA_COMMIT_DST(&cg, rd, r_dst);
+          sh4g_close(tp, &cg);
+          continue;
+        }
+        if ((alu == 0x4u && (imm <= 127u || imm >= 0xFFFFFF80u)) ||
+            (alu == 0x2u && (imm <= 128u || imm >= 0xFFFFFF81u))) {
+          int d = (alu == 0x4u) ? (int)(s32)imm : (int)(s32)(0u - imm);
+          sh4_codegen cg = sh4g_open(tp);
+          unsigned r_n = BBRA_GET_SRC(&cg, rn, SH4_REG_T0);
+          unsigned r_dst = BBRA_DST_REG(rd, SH4_REG_T0);
+          if (r_n != r_dst)
+            sh4_emit_mov_reg(&cg, r_n, r_dst);
+          if (d != 0)
+            sh4_emit_add_imm(&cg, d, r_dst);
+          BBRA_COMMIT_DST(&cg, rd, r_dst);
+          sh4g_close(tp, &cg);
+          continue;
+        }
+        if (alu == 0xEu) {                    /* BIC imm -> AND ~imm */
+          imm = ~imm;
+          alu = 0x0u;
+        }
+      }
+
+      {
+        unsigned r_op2;
+        if (is_imm) {
+          sh4g_const(tp, imm, SH4_REG_T1);
+          r_op2 = SH4_REG_T1;
+        } else if (sh_imm != 0u) {
+          sh4_codegen cg = sh4g_open(tp);
+          unsigned r_src_m = BBRA_GET_SRC(&cg, rm, SH4_REG_T1);
+          sh4g_bbra_emit_arm_shift(&cg, sh_type, sh_imm, r_src_m, SH4_REG_T1, &cached_sh);
+          sh4g_close(tp, &cg);
+          r_op2 = SH4_REG_T1;
+        } else {
+          sh4_codegen cg = sh4g_open(tp);
+          r_op2 = BBRA_GET_SRC(&cg, rm, SH4_REG_T1);
+          sh4g_close(tp, &cg);
+        }
+
+        { sh4_codegen cg = sh4g_open(tp);
+          unsigned r_n = BBRA_GET_SRC(&cg, rn, SH4_REG_T0);
+          unsigned r_dst = BBRA_DST_REG(rd, SH4_REG_T0);
+          if (alu == 0x3u) {                  /* RSB: op2 - rn */
+            if (r_op2 != SH4_REG_T1)
+              sh4_emit_mov_reg(&cg, r_op2, SH4_REG_T1);
+            sh4_emit_sub(&cg, r_n, SH4_REG_T1);
+            BBRA_COMMIT_DST(&cg, rd, SH4_REG_T1);
+          } else if (r_dst == SH4_REG_T0 && r_op2 == SH4_REG_T1 &&
+                     (alu == 0x0u || alu == 0x1u || alu == 0x4u || alu == 0xCu)) {
+            if (alu == 0x0u)      sh4_emit_and(&cg, r_n, SH4_REG_T1);
+            else if (alu == 0x1u) sh4_emit_xor(&cg, r_n, SH4_REG_T1);
+            else if (alu == 0x4u) sh4_emit_add_reg(&cg, r_n, SH4_REG_T1);
+            else                  sh4_emit_or(&cg, r_n, SH4_REG_T1);
+            sh4_emit_store_greg(&cg, SH4_REG_T1, rd);
+          } else {
+            unsigned r_w = (r_dst == r_op2) ? SH4_REG_T0 : r_dst;
+            if (r_w != r_n)
+              sh4_emit_mov_reg(&cg, r_n, r_w);
+            if (alu == 0xEu) {                /* BIC reg */
+              sh4_emit_not(&cg, r_op2, SH4_REG_T1);
+              sh4_emit_and(&cg, SH4_REG_T1, r_w);
+            } else if (alu == 0x0u) {
+              sh4_emit_and(&cg, r_op2, r_w);
+            } else if (alu == 0x1u) {
+              sh4_emit_xor(&cg, r_op2, r_w);
+            } else if (alu == 0x2u) {
+              sh4_emit_sub(&cg, r_op2, r_w);
+            } else if (alu == 0x4u) {
+              sh4_emit_add_reg(&cg, r_op2, r_w);
+            } else {
+              sh4_emit_or(&cg, r_op2, r_w);
+            }
+            BBRA_COMMIT_DST(&cg, rd, r_w);
+          }
+          sh4g_close(tp, &cg); }
+      }
+    }
+  }
+
+  /* Flush dirty cached slots back to reg[]. */
+  if (slot_dirty) {
+    sh4_codegen cg = sh4g_open(tp);
+    for (s = 0; s < nslots; s++) {
+      if (slot_dirty & (1u << s))
+        sh4_emit_store_greg(&cg, slot_reg[s], slot_guest[s]);
+    }
+    sh4g_close(tp, &cg);
+  }
+  sh4_greg_forward_finish(start_tp, *tp,
+                          *tp > start_tp && (*tp)[-2] == 0x1Eu);
+  return 1;
+}
+
+static inline int sh4g_arm_alu_run_native(u8 **tp, const u32 *ops, int len)
+{
+  return sh4g_arm_alu_run_native_ex(tp, ops, NULL, NULL, len);
+}
+
+#undef BBRA_GET_SRC
+#undef BBRA_DST_REG
+#undef BBRA_COMMIT_DST
 
 #endif /* CGBA_SH4_BBRA_EMIT_H */

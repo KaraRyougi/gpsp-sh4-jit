@@ -427,6 +427,38 @@ typedef struct
                    (sh4_block_is_thumb ? 1 : 2)].body_offset                  \
       : NULL)
   #include "sh4/sh4_emit.h"
+
+SH4G_NOINLINE void sh4g_arm_access_memory_emit(
+  u8 **tp, u32 opcode, u32 pc, u32 condition, u32 *cycle_count_p,
+  bool ram_region, u8 *pc_address_block)
+{
+  if (!ram_region && ((opcode & 0x0F7F0000u) == 0x051F0000u)) {
+    u32 rd = (opcode >> 12) & 0xFu;
+    if (rd != 15u) {
+      u32 off = opcode & 0xFFFu;
+      u32 addr = (pc + 8u) + ((opcode & 0x00800000u) ? off : (u32)-(s32)off);
+      u32 reg_hi = addr >> 24;
+      if ((addr & 3u) == 0u && reg_hi >= 0x08u && reg_hi <= 0x0Du &&
+          (addr & 0x01FFFFFFu) >= 0x200u) {
+        u8 *blk = ((addr >> 12) == (pc >> 12))
+          ? pc_address_block : cgba_memory_map_read_4k(addr);
+        if (blk) {
+          u32 val = readaddress32(blk, addr & 0x0FFFu);
+          int ws = (int)ws_cyc_nseq[reg_hi][1];
+          if (condition == 0x0Eu) *cycle_count_p += (u32)ws;
+          else if (ws) sh4g_cycle_debit(tp, ws);
+          sh4g_const(tp, val, SH4_REG_T0);
+          sh4g_store_greg(tp, SH4_REG_T0, rd);
+          return;
+        }
+      }
+    }
+  }
+  if (!sh4g_arm_ldst_native(tp, opcode, pc, (int)*cycle_count_p))
+    sh4g_op2_tramp_call(tp, (const void *)sh4_op2_pc_mem_tramp,
+                        (const void *)cgba_sh4_arm_ldst, opcode, pc, 1,
+                        (int)*cycle_count_p);
+}
 #else
   #include "x86/x86_emit.h"
 #endif
@@ -4011,15 +4043,21 @@ bool translate_block_arm(u32 pc, bool ram_region)
      (branch_target < block_end_pc))
 #endif
     {
-      block_data[(branch_target - block_start_pc) /
-       arm_instruction_width].update_cycles = 1;
+      u32 seam_idx = (branch_target - block_start_pc) /
+                     arm_instruction_width;
 #ifdef SH4_ARCH
-      /* The SH4 port emits an update_gba-capable accounting flush + cycle
-         gate AT this position; an IRQ raised there latches CPSR into
-         SPSR_irq, so all flags must be live entering the seam — the linear
-         eliminate pass cannot see this exit on its own. */
-      block_data[(branch_target - block_start_pc) /
-       arm_instruction_width].flag_data |= 0xF00;
+      block_data[seam_idx].body_offset = NULL;
+      if (branch_target <= cgba_block_exit_pc[i] || cgba_dynarec_single_block) {
+        block_data[seam_idx].update_cycles |= 1u;
+        /* Backward/loop seam: the flush+gate at this seam can take an IRQ
+           with CPSR architecturally observable — keep flags live across it. */
+        block_data[seam_idx].flag_data |= 0xF00;
+      } else {
+        /* Forward-only join: syncs R13 without a loop-break IRQ gate. */
+        block_data[seam_idx].update_cycles |= 2u;
+      }
+#else
+      block_data[seam_idx].update_cycles = 1;
 #endif
     }
   }
@@ -4038,10 +4076,8 @@ bool translate_block_arm(u32 pc, bool ram_region)
   {
 #ifdef SH4_ARCH
     /* Block-entry (branch target). Force-close any open ARM conditional block so
-     * the flush is UNCONDITIONAL (fall-through must always charge+zero the
-     * pre-entry cycles, even when the surrounding condition is false). The flush
-     * sits before block_offset so a loop-back jump bypasses it (no re-charge);
-     * a gate-only check sits AT block_offset so loop-back can still break a spin. */
+     * the flush/debit is UNCONDITIONAL (fall-through must always charge+zero the
+     * pre-entry cycles, even when the surrounding condition is false). */
     if(block_data[block_data_position].update_cycles)
     {
       if((last_condition & 0x0F) != 0x0E)
@@ -4049,16 +4085,26 @@ bool translate_block_arm(u32 pc, bool ram_region)
         generate_branch_patch_conditional(backpatch_address, translation_ptr);
         last_condition = 0x0E;
       }
-      generate_cycle_update();
-      block_data[block_data_position].block_offset = translation_ptr;
-      generate_prof_block_entry(0);
-      generate_cycle_gate(1);
+      if (block_data[block_data_position].update_cycles & 1u) {
+        generate_cycle_update();
+        block_data[block_data_position].block_offset = translation_ptr;
+        generate_prof_block_entry(0);
+        generate_cycle_gate(1);
 #if defined(CGBA_SH4_BLOCK_PROFILE) && CGBA_SH4_BLOCK_PROFILE
-      block_data[block_data_position].body_offset =
-        block_data[block_data_position].block_offset;
+        block_data[block_data_position].body_offset =
+          block_data[block_data_position].block_offset;
 #else
-      block_data[block_data_position].body_offset = translation_ptr;
+        block_data[block_data_position].body_offset = translation_ptr;
 #endif
+      } else {
+        /* Forward-only join: debit accumulated cycles without an IRQ gate. */
+        if (cycle_count != 0) {
+          sh4g_cycle_debit(&translation_ptr, (int)cycle_count);
+          cycle_count = 0;
+        }
+        block_data[block_data_position].block_offset = translation_ptr;
+        block_data[block_data_position].body_offset = translation_ptr;
+      }
     }
     else
     {
@@ -4152,11 +4198,13 @@ bool translate_block_arm(u32 pc, bool ram_region)
                 : 0;
               s32 fall_idx = block_data_position + 2;
               int fall_dead = (fall_idx < num_insns &&
-                               !block_data[fall_idx].update_cycles)
+                               !(block_data[fall_idx].update_cycles & 1u))
                 ? sh4_flags_dead_from(block_data, fall_idx, num_insns, need_kill)
                 : 0;
               if (taken_dead || fall_dead) {
                 int taken_debit;
+                int internal_mode = 0;
+                u8 *known_target = NULL;
                 if (fkind == 0 && f_is_imm && f_imm == 0u &&
                     (next_cond <= 1u || next_cond >= 0xAu))
                   fkind = 4;                               /* CMP a, #0 -> TST/PZ/PL */
@@ -4177,16 +4225,21 @@ bool translate_block_arm(u32 pc, bool ram_region)
                 arm_base_cycles();                         /* Bcc fetch cycle */
                 taken_debit = (int)cycle_count +
                   (int)ws_cyc_nseq[(b_target >> 24) & 0x0Fu][1];
-                {
-                  u8 *known_target = (is_internal && tgt_idx <= (s32)block_data_position)
-                    ? block_data[tgt_idx].body_offset : NULL;
-                  block_exits[block_exit_position].branch_source =
-                    sh4g_emit_fused_cmp_bcc_known(
-                      &translation_ptr, fkind, f_rd, next_cond,
-                      taken_debit, b_target, is_internal,
-                      SH4_DEFAULT_BRANCH_EXIT(b_target),
-                      taken_dead, fall_dead, 0, known_target);
+                if (is_internal) {
+                  if (b_target > pc) {
+                    internal_mode = ((b_target - pc) <= 48u) ? 3 : 2;
+                  } else {
+                    internal_mode = 1;
+                    if (tgt_idx <= (s32)block_data_position)
+                      known_target = block_data[tgt_idx].body_offset;
+                  }
                 }
+                block_exits[block_exit_position].branch_source =
+                  sh4g_emit_fused_cmp_bcc_known(
+                    &translation_ptr, fkind, f_rd, next_cond,
+                    taken_debit, b_target, internal_mode,
+                    SH4_DEFAULT_BRANCH_EXIT(b_target),
+                    taken_dead, fall_dead, 0, known_target);
                 block_exit_position++;
                 block_data_position++;
                 pc += 4;
@@ -4308,242 +4361,125 @@ bool translate_block_arm(u32 pc, bool ram_region)
             cycle_count = save_cc;
           }
         }
-        /* General ARM IWRAM peephole 5: consecutive same-Rn same-shift AND/EOR/ADD/ORR
-         * run (2..8 ops, non-S, rd != rn) — caches reg[rn] and shift count across run. */
-        if (!arm_fused && (pc >> 24) == 0x03 &&
-            (cur_op & 0xFE100010u) == 0xE0000000u &&
-            (cur_op & 0xFFFF0FF0u) == (next_op & 0xFFFF0FF0u)) {
-          u32 run_alu = (cur_op >> 21) & 0xFu;
-          if (run_alu == 0x0u || run_alu == 0x1u || run_alu == 0x4u || run_alu == 0xCu) {
-            u32 run_ops[8];
-            u32 run_key = cur_op & 0xFFFF0FF0u;
-            unsigned run_rn = (cur_op >> 16) & 0xFu;
-            int rcnt = 0;
-            u32 save_pc = pc;
-            u32 save_cc = cycle_count;
-            if (run_rn != 15u && ((cur_op >> 12) & 0xFu) != run_rn &&
-                ((cur_op >> 12) & 0xFu) != 15u && (cur_op & 0xFu) != 15u) {
-              run_ops[0] = cur_op;
-              rcnt = 1;
-              while (rcnt < 8 &&
-                     block_data_position + rcnt < num_insns &&
-                     !block_data[block_data_position + rcnt].update_cycles &&
-                     (save_pc + (u32)(rcnt * 4)) != cheat_master_hook &&
-                     ((save_pc + (u32)(rcnt * 4)) >> 12) == pc_region) {
-                u32 rop = readaddress32(pc_address_block, (save_pc + (u32)(rcnt * 4)) & 0x0FFF);
-                unsigned rrd = (rop >> 12) & 0xFu;
-                unsigned rrm = rop & 0xFu;
-                if ((rop & 0xFFFF0FF0u) != run_key ||
-                    rrd == 15u || rrm == 15u || rrd == run_rn)
-                  break;
-                pc = save_pc + (u32)(rcnt * 4);
-                arm_base_cycles();
-                run_ops[rcnt++] = rop;
-              }
-              pc = save_pc;
-            }
-            if (rcnt >= 2) {
-              u8 *forward_start = translation_ptr;
-              if (sh4g_arm_dp_same_rn_run_native(&translation_ptr, run_ops, rcnt)) {
-                block_data_position += rcnt - 1;
-                pc += (u32)(rcnt * 4);
-                sh4_greg_forward_finish(forward_start, translation_ptr,
-                  translation_ptr > forward_start && translation_ptr[-2] == 0x1Eu);
-                sh4g_litseg_maybe_flush(&translation_ptr);
-                arm_fused = 1;
-              } else {
-                cycle_count = save_cc;
-              }
-            } else {
-              cycle_count = save_cc;
-            }
-          }
-        }
-        /* General ARM peephole 8: consecutive same-Rd accumulator DP run
-         * (2..8 ops, non-S, rd==rn==accum, rm!=accum, AND/EOR/SUB/ADD/ORR). */
+        /* General 4-slot R4..R7 BBRA for straight-line non-S / dead-flag ARM
+         * ALU & MUL/MLA runs (2..16 ops, BOTH ROM and IWRAM). Replaces the old
+         * same-Rn and same-Rd peepholes with one general register allocator. */
         if (!arm_fused &&
-            (cur_op & 0xFE100010u) == 0xE0000000u &&
-            (next_op & 0xFE100010u) == 0xE0000000u &&
-            ((cur_op >> 12) & 0xFu) == ((cur_op >> 16) & 0xFu) &&
-            ((next_op >> 12) & 0xFu) == ((cur_op >> 12) & 0xFu) &&
-            ((next_op >> 16) & 0xFu) == ((cur_op >> 12) & 0xFu)) {
-          unsigned acc_rd = (cur_op >> 12) & 0xFu;
-          if (acc_rd != 15u) {
-            u32 run_ops[8];
-            int rcnt = 0;
+            !(block_data[block_data_position].flag_data & 0xFu) &&
+            !(block_data[block_data_position + 1].flag_data & 0xFu) &&
+            sh4g_arm_bbra_maybe(cur_op) && sh4g_arm_bbra_maybe(next_op)) {
+          u32 rm_arr[16], wm_arr[16];
+          if (sh4g_arm_bbra_classify(cur_op, &rm_arr[0], &wm_arr[0]) &&
+              sh4g_arm_bbra_classify(next_op, &rm_arr[1], &wm_arr[1])) {
+            const u32 unpin = 0x7FFFu
+#if CGBA_SH4_PIN_GUEST_R0
+              & ~1u
+#endif
+#if CGBA_SH4_PIN_GUEST_R1
+              & ~2u
+#endif
+              ;
+            u32 run_ops[16];
+            int rlen = 2;
+            u32 t0 = (rm_arr[0] | wm_arr[0]) & unpin;
+            u32 t1 = (rm_arr[1] | wm_arr[1]) & unpin;
+            u32 seen = t0 | t1;
+            u32 dup  = (t0 & t1) | (rm_arr[0] & wm_arr[0] & unpin) |
+                       (rm_arr[1] & wm_arr[1] & unpin);
             u32 save_pc = pc;
             u32 save_cc = cycle_count;
             run_ops[0] = cur_op;
-            rcnt = 1;
-            while (rcnt < 8 &&
-                   block_data_position + rcnt < num_insns &&
-                   !block_data[block_data_position + rcnt].update_cycles &&
-                   (save_pc + (u32)(rcnt * 4)) != cheat_master_hook &&
-                   ((save_pc + (u32)(rcnt * 4)) >> 12) == pc_region) {
-              u32 rop = readaddress32(pc_address_block, (save_pc + (u32)(rcnt * 4)) & 0x0FFF);
-              u32 ralu = (rop >> 21) & 0xFu;
-              unsigned rrm = rop & 0xFu;
-              if ((rop & 0xFE100010u) != 0xE0000000u ||
-                  (ralu != 0x0u && ralu != 0x1u && ralu != 0x2u &&
-                   ralu != 0x4u && ralu != 0xCu) ||
-                  ((rop >> 12) & 0xFu) != acc_rd ||
-                  ((rop >> 16) & 0xFu) != acc_rd ||
-                  rrm == 15u || rrm == acc_rd)
+            run_ops[1] = next_op;
+            while (rlen < 16 &&
+                   block_data_position + rlen < num_insns &&
+                   !block_data[block_data_position + rlen].update_cycles &&
+                   !(block_data[block_data_position + rlen].flag_data & 0xFu) &&
+                   (save_pc + (u32)(rlen * 4)) != cheat_master_hook &&
+                   ((save_pc + (u32)(rlen * 4)) >> 12) == pc_region) {
+              u32 rop = readaddress32(pc_address_block,
+                                      (save_pc + (u32)(rlen * 4)) & 0x0FFF);
+              u32 tk;
+              if (!sh4g_arm_bbra_maybe(rop) ||
+                  !sh4g_arm_bbra_classify(rop, &rm_arr[rlen], &wm_arr[rlen]))
                 break;
-              pc = save_pc + (u32)(rcnt * 4);
-              arm_base_cycles();
-              run_ops[rcnt++] = rop;
+              tk = (rm_arr[rlen] | wm_arr[rlen]) & unpin;
+              dup |= (seen & tk) | (rm_arr[rlen] & wm_arr[rlen] & unpin);
+              seen |= tk;
+              run_ops[rlen++] = rop;
             }
-            pc = save_pc;
-            if (rcnt >= 2) {
-              u8 *forward_start = translation_ptr;
-              if (sh4g_arm_dp_same_rd_run_native(&translation_ptr, run_ops, rcnt)) {
-                block_data_position += rcnt - 1;
-                pc += (u32)(rcnt * 4);
-                sh4_greg_forward_finish(forward_start, translation_ptr,
-                  translation_ptr > forward_start && translation_ptr[-2] == 0x1Eu);
-                sh4g_litseg_maybe_flush(&translation_ptr);
-                arm_fused = 1;
-              } else {
-                cycle_count = save_cc;
+            /* Preserve trailing IWRAM RMW-MLA unit step lead-in if present. */
+            if (rlen >= 2 && (save_pc >> 24) == 0x03 &&
+                (run_ops[rlen - 1] & 0xFFFF0070u) == 0xE1A00020u &&
+                block_data_position + rlen < num_insns &&
+                ((save_pc + (u32)(rlen * 4)) >> 12) == pc_region) {
+              u32 after_op = readaddress32(pc_address_block,
+                                           (save_pc + (u32)(rlen * 4)) & 0x0FFF);
+              if ((after_op & 0xFFF00FF0u) == 0xE1B000D0u ||
+                  (after_op & 0xFFF00FF0u) == 0xE7F00000u)
+                rlen--;
+            }
+            if (rlen >= 2 && dup != 0u &&
+                sh4g_arm_alu_run_native_ex(&translation_ptr, run_ops,
+                                           rm_arr, wm_arr, rlen)) {
+              int k;
+              for (k = 1; k < rlen; k++) {
+                pc = save_pc + (u32)(k * 4);
+                arm_base_cycles();
               }
-            } else {
-              cycle_count = save_cc;
-            }
-          }
-        }
-        /* General ARM IWRAM peephole 4: consecutive same-base LDRB/LDRSB [rn, rm] run. */
-        if (!arm_fused && (pc >> 24) == 0x03 &&
-            (((cur_op & 0xFFF00FF0u) == 0xE7D00000u) ||
-             ((cur_op & 0xFFF00FF0u) == 0xE19000D0u)) &&
-            (((next_op & 0xFFF00FF0u) == 0xE7D00000u) ||
-             ((next_op & 0xFFF00FF0u) == 0xE19000D0u)) &&
-            ((cur_op >> 16) & 0xFu) == ((next_op >> 16) & 0xFu)) {
-          u32 run_ops[8];
-          int run_ccs[8];
-          u32 run_rn = (cur_op >> 16) & 0xFu;
-          int rcnt = 0;
-          u32 save_pc = pc;
-          u32 save_cc = cycle_count;
-          run_ops[0] = cur_op;
-          run_ccs[0] = (int)cycle_count;
-          rcnt = 1;
-          while (rcnt < 8 &&
-                 block_data_position + rcnt < num_insns &&
-                 !block_data[block_data_position + rcnt].update_cycles &&
-                 (save_pc + (u32)(rcnt * 4)) != cheat_master_hook &&
-                 ((save_pc + (u32)(rcnt * 4)) >> 12) == pc_region) {
-            u32 rop = readaddress32(pc_address_block, (save_pc + (u32)(rcnt * 4)) & 0x0FFF);
-            if (!(((rop & 0xFFF00FF0u) == 0xE7D00000u) ||
-                  ((rop & 0xFFF00FF0u) == 0xE19000D0u)) ||
-                ((rop >> 16) & 0xFu) != run_rn)
-              break;
-            pc = save_pc + (u32)(rcnt * 4);
-            arm_base_cycles();
-            run_ops[rcnt] = rop;
-            run_ccs[rcnt] = (int)cycle_count;
-            rcnt++;
-          }
-          pc = save_pc;
-          if (rcnt >= 2 &&
-              sh4g_arm_ldst_reg_run_native(&translation_ptr, run_ops, run_ccs,
-                                           rcnt, pc)) {
-            block_data_position += rcnt - 1;
-            pc += (u32)(rcnt * 4);
-            sh4_greg_forward_reset();
-            sh4g_litseg_maybe_flush(&translation_ptr);
-            arm_fused = 1;
-          } else {
-            cycle_count = save_cc;
-          }
-        }
-        /* General ARM IWRAM peephole 7: consecutive IWRAM byte-load run (2..8 ops,
-         * any mix of LDRB/LDRSB [rn,+rm], [rn],#+imm, [rn,#+imm]). */
-        if (!arm_fused && (pc >> 24) == 0x03 &&
-            (((cur_op & 0xFFF00FF0u) == 0xE19000D0u) ||
-             ((cur_op & 0xFFF00FF0u) == 0xE7D00000u) ||
-             ((cur_op & 0xFFF000F0u) == 0xE0D000D0u) ||
-             ((cur_op & 0xFFF00000u) == 0xE4D00000u) ||
-             ((cur_op & 0xFFF000F0u) == 0xE1D000D0u) ||
-             ((cur_op & 0xFFF00000u) == 0xE5D00000u)) &&
-            (((next_op & 0xFFF00FF0u) == 0xE19000D0u) ||
-             ((next_op & 0xFFF00FF0u) == 0xE7D00000u) ||
-             ((next_op & 0xFFF000F0u) == 0xE0D000D0u) ||
-             ((next_op & 0xFFF00000u) == 0xE4D00000u) ||
-             ((next_op & 0xFFF000F0u) == 0xE1D000D0u) ||
-             ((next_op & 0xFFF00000u) == 0xE5D00000u))) {
-          u32 run_ops[8];
-          int run_ccs[8];
-          int rcnt = 0;
-          u32 save_pc = pc;
-          u32 save_cc = cycle_count;
-          run_ops[0] = cur_op;
-          run_ccs[0] = (int)cycle_count;
-          rcnt = 1;
-          while (rcnt < 8 &&
-                 block_data_position + rcnt < num_insns &&
-                 !block_data[block_data_position + rcnt].update_cycles &&
-                 (save_pc + (u32)(rcnt * 4)) != cheat_master_hook &&
-                 ((save_pc + (u32)(rcnt * 4)) >> 12) == pc_region) {
-            u32 rop = readaddress32(pc_address_block, (save_pc + (u32)(rcnt * 4)) & 0x0FFF);
-            if (!(((rop & 0xFFF00FF0u) == 0xE19000D0u) ||
-                  ((rop & 0xFFF00FF0u) == 0xE7D00000u) ||
-                  ((rop & 0xFFF000F0u) == 0xE0D000D0u) ||
-                  ((rop & 0xFFF00000u) == 0xE4D00000u) ||
-                  ((rop & 0xFFF000F0u) == 0xE1D000D0u) ||
-                  ((rop & 0xFFF00000u) == 0xE5D00000u)))
-              break;
-            pc = save_pc + (u32)(rcnt * 4);
-            arm_base_cycles();
-            run_ops[rcnt] = rop;
-            run_ccs[rcnt] = (int)cycle_count;
-            rcnt++;
-          }
-          pc = save_pc;
-          if (rcnt >= 2 &&
-              sh4g_arm_iwram_byte_run_native(&translation_ptr, run_ops, run_ccs,
-                                             rcnt, pc)) {
-            block_data_position += rcnt - 1;
-            pc += (u32)(rcnt * 4);
-            sh4_greg_forward_reset();
-            sh4g_litseg_maybe_flush(&translation_ptr);
-            arm_fused = 1;
-          } else {
-            cycle_count = save_cc;
-          }
-        }
-        /* General ARM IWRAM peephole 1: same-page adjacent ROM8 load pair. */
-        if (!arm_fused && (pc >> 24) == 0x03 && (cur_op >> 28) == 0xEu &&
-            (((cur_op & 0x0C100000u) == 0x04100000u) ||
-             ((cur_op & 0x0E100090u) == 0x00100090u && (cur_op & 0x00000060u) != 0u)) &&
-            (((next_op & 0x0E100000u) == 0x04100000u) ||
-             ((next_op & 0x0E500090u) == 0x00500090u && (next_op & 0x00000060u) != 0u))) {
-          int cc1 = (int)cycle_count;
-          u32 save_pc = pc;
-          int fused_pair = 0;
-          pc += 4;
-          arm_base_cycles();
-          int cc2 = (int)cycle_count;
-          pc = save_pc;
-          u8 *save_tp = translation_ptr;
-          if (sh4g_arm_ldst_native_ex(&translation_ptr, cur_op, pc, cc1,
-                                      next_op, cc2, &fused_pair) && fused_pair) {
-            block_data_position++;
-            pc += 8;
-            sh4_greg_forward_reset();
-            sh4g_litseg_maybe_flush(&translation_ptr);
-            arm_fused = 1;
-          } else {
-            /* Didn't fuse as a pair: restore cycle_count and rewind only if
-             * op1 wasn't emitted (otherwise op1 already emitted!). */
-            cycle_count = (u32)cc1;
-            if (translation_ptr != save_tp) {
-              /* op1 was emitted normally without fusion — advance just op1! */
-              pc += 4;
-              sh4_greg_forward_reset();
+              pc = save_pc + (u32)(rlen * 4);
+              block_data_position += rlen - 1;
               sh4g_litseg_maybe_flush(&translation_ptr);
               arm_fused = 1;
+            } else {
+              cycle_count = save_cc;
+              pc = save_pc;
             }
+          }
+        }
+        /* Unified dual-region (IWRAM + ROM8) ARM load-run pass: replaces the
+         * old conflicting Peepholes 1, 4, and 7 with one pass handling both
+         * byte-load runs (2..8 ops) and same-base mixed-width bursts (2..4 ops). */
+        if (!arm_fused && (cur_op >> 28) == 0xEu && (next_op >> 28) == 0xEu &&
+            (((cur_op & 0x0C100000u) == 0x04100000u) ||
+             ((cur_op & 0x0E100090u) == 0x00100090u && (cur_op & 0x00000060u) != 0u)) &&
+            (((next_op & 0x0C100000u) == 0x04100000u) ||
+             ((next_op & 0x0E100090u) == 0x00100090u && (next_op & 0x00000060u) != 0u))) {
+          u32 run_ops[8];
+          int run_ccs[8];
+          int rcnt = 1, consumed;
+          u32 save_pc = pc;
+          u32 save_cc = cycle_count;
+          run_ops[0] = cur_op;
+          run_ccs[0] = (int)cycle_count;
+          while (rcnt < 8 &&
+                 block_data_position + rcnt < num_insns &&
+                 !block_data[block_data_position + rcnt].update_cycles &&
+                 (save_pc + (u32)(rcnt * 4)) != cheat_master_hook &&
+                 ((save_pc + (u32)(rcnt * 4)) >> 12) == pc_region) {
+            u32 rop = readaddress32(pc_address_block, (save_pc + (u32)(rcnt * 4)) & 0x0FFF);
+            if ((rop >> 28) != 0xEu ||
+                !(((rop & 0x0C100000u) == 0x04100000u) ||
+                  ((rop & 0x0E100090u) == 0x00100090u && (rop & 0x00000060u) != 0u)))
+              break;
+            pc = save_pc + (u32)(rcnt * 4);
+            arm_base_cycles();
+            run_ops[rcnt] = rop;
+            run_ccs[rcnt] = (int)cycle_count;
+            rcnt++;
+          }
+          pc = save_pc;
+          consumed = (rcnt >= 2)
+            ? sh4g_arm_load_run_native(&translation_ptr, run_ops, run_ccs, rcnt, pc)
+            : 0;
+          if (consumed >= 2) {
+            cycle_count = (u32)run_ccs[consumed - 1];
+            block_data_position += consumed - 1;
+            pc = save_pc + (u32)(consumed * 4);
+            sh4_greg_forward_reset();
+            sh4g_litseg_maybe_flush(&translation_ptr);
+            arm_fused = 1;
+          } else {
+            cycle_count = save_cc;
           }
         }
         /* General ARM IWRAM peephole 3: 1..2x LDMIA {4} + 2*(LDRSB/B + MLA + MLA + ADD #1) + STMIA{!}. */
@@ -4663,7 +4599,11 @@ bool translate_block_arm(u32 pc, bool ram_region)
               ((opcode & 0x02000000) || !(opcode & 0x00000010)) &&
               ((opcode >> 12) & 15) != 15 &&
               (((opcode >> 21) & 15) < 8 || ((opcode >> 21) & 15) >= 12)) ||
-             ((opcode & 0xFFD000F0) == 0xE0000090 && ((opcode >> 16) & 15) != 15)));
+             ((opcode & 0xFFD000F0) == 0xE0000090 && ((opcode >> 16) & 15) != 15) ||
+             ((pc >> 24) != 0x03 && CGBA_SH4_COMPACT_FASTMEM_TUPLE &&
+              cycle_count <= 0xFFFFu && ((opcode >> 12) & 15u) != 15u &&
+              (((opcode & 0x0D300000u) == 0x05100000u) ||
+               (((opcode & 0x0F300090u) == 0x01100090u) && (opcode & 0x60u) != 0u)))));
         } else {
           sh4_greg_forward_reset();
         }
@@ -4718,7 +4658,10 @@ bool translate_block_arm(u32 pc, bool ram_region)
 
 #ifdef SH4_ARCH
   sh4_greg_forward_reset();
-  sh4g_litseg_end(&translation_ptr);
+  if (ended_uncond && (last_condition & 0x0F) == 0x0E)
+    sh4g_litseg_end_tail(&translation_ptr);
+  else
+    sh4g_litseg_end(&translation_ptr);
 #endif
 
   /* This can happen if the last instruction is *not* inconditional */
@@ -5140,76 +5083,108 @@ cgba_thumb_try_peephole(
       }
     }
   }
-  /* General Thumb signed-bias / signed-div-pow2 idiom:
-   *   CMP rX, #0; BGE pc+6; ADD rX, (#imm8 | rH | rY)  (dead flags at pc+6).
-   * Eliminates the forward branch seam and executes in 2 insns (rX>=0) or
-   * 5 insns (rX<0) with exact GBA cycle accounting on both arms. */
+  /* General 1-insn Thumb forward-skip if-conversion:
+   *   (CMP rN,#imm | CMP rN,rM | CMP hN,hM | TST rN,rM); B<cc> pc+6; <1 ALU>
+   * when flags are dead at pc+6. Eliminates the forward branch seam and
+   * executes with exact GBA cycle accounting on both arms (handles min/max/
+   * abs/clamp/signed-div-pow2/cond-select across all games). */
   if (!thumb_fused &&
-      (cur_op & 0xF8FFu) == 0x2800u &&
-      next_op == 0xDA00u &&
+      next_hi >= 0xD0u && next_hi <= 0xDDu &&
+      (next_op & 0xFFu) == 0u &&
       block_data_position + 3 < num_insns &&
       !block_data[block_data_position + 2].update_cycles &&
       (u32)(pc + 4) != cheat_hook &&
       ((u32)(pc + 4) >> 12) == pc_region &&
       block_exits[block_exit_position].branch_target == (u32)(pc + 6)) {
+    u32 next_cond = next_hi & 0x0Fu;
     u32 op2 = readaddress16(pc_address_block, (pc + 4) & 0x0FFFu);
-    unsigned rx = (cur_op >> 8) & 7u;
-    int add_kind = 0; /* 1=imm8, 2=hi_reg/reg */
-    unsigned add_arg = 0;
-    if ((op2 & 0xFF00u) == (0x3000u | (rx << 8))) {
-      add_kind = 1;
-      add_arg = op2 & 0xFFu;
-    } else if ((op2 & 0xFF87u) == (0x4400u | rx)) {
-      unsigned rh = (op2 >> 3) & 0xFu;
-      if (rh != 15u) {
-        add_kind = 2;
-        add_arg = rh;
+    u32 op2_hi = (op2 >> 8) & 0xFFu;
+    u32 op2_rm = 0u, op2_wm = 0u;
+    int cmp_kind = -1; /* 0=CMP(a,b), 1=TST(a,b), 2=CMP(a,#0) */
+    int cmp_is_imm = 0;
+    unsigned cmp_rn = 0, cmp_rm = 0;
+    u32 cmp_imm = 0;
+    u32 cur_hi = (cur_op >> 8) & 0xFFu;
+
+    if (op2_hi <= 0x46u && sh4g_thumb_bbra_maybe(op2) &&
+        sh4g_thumb_bbra_classify(op2, &op2_rm, &op2_wm) &&
+        !(op2_wm & (1u << SH4_GREG_SP))) {
+      if ((cur_op & 0xF8FFu) == 0x2800u &&
+          (next_cond <= 1u || next_cond >= 0xAu)) {
+        cmp_kind = 2; cmp_rn = (cur_op >> 8) & 7u;
+      } else if (cur_hi >= 0x28u && cur_hi <= 0x2Fu &&
+                 (next_cond <= 3u || next_cond >= 8u)) {
+        cmp_kind = 0; cmp_rn = (cur_op >> 8) & 7u;
+        cmp_is_imm = 1; cmp_imm = cur_op & 0xFFu;
+      } else if ((cur_op & 0xFFC0u) == 0x4280u &&
+                 (next_cond <= 3u || next_cond >= 8u)) {
+        cmp_kind = 0; cmp_rn = cur_op & 7u; cmp_rm = (cur_op >> 3) & 7u;
+      } else if (cur_hi == 0x45u &&
+                 (next_cond <= 3u || next_cond >= 8u)) {
+        unsigned hrn = (cur_op & 7u) | ((cur_op >> 4) & 8u);
+        unsigned hrm = (cur_op >> 3) & 0xFu;
+        if (hrn != 15u && hrm != 15u) {
+          cmp_kind = 0; cmp_rn = hrn; cmp_rm = hrm;
+        }
+      } else if ((cur_op & 0xFFC0u) == 0x4200u && next_cond <= 1u) {
+        cmp_kind = 1; cmp_rn = cur_op & 7u; cmp_rm = (cur_op >> 3) & 7u;
       }
-    } else if ((op2 & 0xFE00u) == 0x1800u &&
-               (op2 & 7u) == rx && ((op2 >> 3) & 7u) == rx) {
-      add_kind = 2;
-      add_arg = (op2 >> 6) & 7u;
     }
-    if (add_kind &&
+
+    if (cmp_kind >= 0 &&
         sh4_flags_dead_from(block_data, block_data_position + 3, num_insns, 0xFu)) {
       u32 region = (pc >> 24) & 0x0Fu;
       int seq_c = (int)ws_cyc_seq[region][0];
       int nseq_c = (int)ws_cyc_nseq[region][0];
-      unsigned dst_r = SH4_REG_T0;
       u8 *skip_br;
-      sh4g_litseg_reserve(&translation_ptr, 1);
-      {
-        int pin = sh4_pinned_reg(rx);
-        if (pin >= 0)
-          dst_r = (unsigned)pin;
+
+      sh4g_litseg_reserve_bytes(&translation_ptr, 4, 56u);
+      { sh4_codegen cg = sh4g_open(&translation_ptr);
+        sh4_emit_load_greg(&cg, cmp_rn, SH4_REG_T0);
+        sh4g_close(&translation_ptr, &cg); }
+      if (cmp_kind != 2) {
+        if (cmp_is_imm) {
+          sh4g_const(&translation_ptr, cmp_imm, SH4_REG_T1);
+        } else {
+          sh4_codegen cg = sh4g_open(&translation_ptr);
+          sh4_emit_load_greg(&cg, cmp_rm, SH4_REG_T1);
+          sh4g_close(&translation_ptr, &cg);
+        }
       }
       { sh4_codegen cg = sh4g_open(&translation_ptr);
-        if (dst_r == SH4_REG_T0)
-          sh4_emit_load_greg(&cg, rx, SH4_REG_T0);
-        sh4_emit_cmppz(&cg, dst_r);                     /* T = (rX >= 0) */
-        sh4g_close(&translation_ptr, &cg); }
-      skip_br = sh4g_emit_bt_placeholder(&translation_ptr);
-      { sh4_codegen cg = sh4g_open(&translation_ptr);
-        if (add_kind == 1) {
-          if (add_arg <= 127u) {
-            if (add_arg) sh4_emit_add_imm(&cg, (int)add_arg, dst_r);
-          } else if (add_arg <= 254u) {
-            sh4_emit_add_imm(&cg, 127, dst_r);
-            sh4_emit_add_imm(&cg, (int)(add_arg - 127u), dst_r);
-          } else {
-            sh4_emit_add_imm(&cg, 127, dst_r);
-            sh4_emit_add_imm(&cg, 127, dst_r);
-            sh4_emit_add_imm(&cg, 1, dst_r);
-          }
+        if (cmp_kind == 2) {
+          if (next_cond <= 1u)       sh4_emit_tst(&cg, SH4_REG_T0, SH4_REG_T0);
+          else if (next_cond <= 0xBu) sh4_emit_cmppz(&cg, SH4_REG_T0);
+          else                       sh4_emit_cmppl(&cg, SH4_REG_T0);
+        } else if (cmp_kind == 1) {
+          sh4_emit_tst(&cg, SH4_REG_T1, SH4_REG_T0);
         } else {
-          sh4_emit_load_greg(&cg, add_arg, SH4_REG_T1);
-          sh4_emit_add_reg(&cg, SH4_REG_T1, dst_r);
+          switch (next_cond & 0xEu) {
+          case 0x0u: sh4_emit_cmpeq(&cg, SH4_REG_T1, SH4_REG_T0); break;
+          case 0x2u: sh4_emit_cmphs(&cg, SH4_REG_T1, SH4_REG_T0); break;
+          case 0x8u: sh4_emit_cmphi(&cg, SH4_REG_T1, SH4_REG_T0); break;
+          case 0xAu: sh4_emit_cmpge(&cg, SH4_REG_T1, SH4_REG_T0); break;
+          default:   sh4_emit_cmpgt(&cg, SH4_REG_T1, SH4_REG_T0); break;
+          }
         }
-        if (dst_r == SH4_REG_T0)
-          sh4_emit_store_greg(&cg, SH4_REG_T0, rx);
-        if (seq_c > 0 && seq_c <= 128)
-          sh4_emit_add_imm(&cg, -seq_c, SH4_REG_CYCLES);
         sh4g_close(&translation_ptr, &cg); }
+      /* Skip op2 when B<cc> IS taken: even cond -> BT, odd cond -> BF. */
+      skip_br = ((next_cond & 1u) == 0u)
+        ? sh4g_emit_bt_placeholder(&translation_ptr)
+        : sh4g_emit_bf_placeholder(&translation_ptr);
+      sh4_greg_forward_reset();
+      if (op2_hi <= 0x17u) {
+        sh4g_shift_imm(&translation_ptr, (int)((op2 >> 11) & 3u),
+                       (unsigned)(op2 & 7u), (unsigned)((op2 >> 3) & 7u),
+                       (unsigned)((op2 >> 6) & 31u), 0u);
+      } else {
+        sh4g_thumb_dp_native(&translation_ptr, op2, (u32)(pc + 4), 0u, 0);
+      }
+      if (seq_c > 0 && seq_c <= 128) {
+        sh4_codegen cg = sh4g_open(&translation_ptr);
+        sh4_emit_add_imm(&cg, -seq_c, SH4_REG_CYCLES);
+        sh4g_close(&translation_ptr, &cg);
+      }
       sh4g_patch_cond(skip_br, translation_ptr);
       cycle_count += (u32)(seq_c + nseq_c);
       block_exits[block_exit_position].branch_source = NULL;
@@ -5225,7 +5200,7 @@ cgba_thumb_try_peephole(
         if (!other)
           block_data[block_data_position + 3].update_cycles = 0;
       }
-      sh4_thumb_const_kill(rx);
+      sh4_thumb_const_mask &= ~op2_wm;
       block_exit_position++;
       block_data_position += 2;
       *last_op_p = op2;
@@ -5726,22 +5701,10 @@ bool translate_block_thumb(u32 pc, bool ram_region)
           (pc + 2) != cheat_hook &&
           ((pc + 2) & 0x0FFFu) != 0u) {
         u32 next_op = readaddress16(pc_address_block, (pc + 2) & 0x0FFF);
-        if ((cgba_thumb_hi_lut[cur_op >> 8] & 0x4000u) ||
-            (u32)(next_op - 0xD000u) < 0x0E00u ||
-            ((u32)(cur_op - 0x6000u) < 0x3000u &&
-             (u32)(next_op - 0x6000u) < 0x3000u &&
-             ((cur_op >> 3) & 7u) == ((next_op >> 3) & 7u))) {
-          thumb_fused = cgba_thumb_try_peephole(
-            &translation_ptr, cur_op, next_op,
-            &pc, &cycle_count, &block_data_position, &block_exit_position,
-            &last_opcode, &opcode,
-            &sh4_thumb_const_mask, sh4_thumb_const_val,
-            pc_address_block, pc_region,
-            block_start_pc, block_end_pc,
-            num_insns, total_exits, cheat_hook, ram_region);
-        }
-        /* 4-slot R4..R7 BBRA for straight-line dead-flag Thumb ALU runs. */
-        if (!thumb_fused && !(block_data[block_data_position].flag_data & 0xFu) &&
+        /* 4-slot R4..R7 BBRA runs BEFORE standalone LSL+LSR/ASR extend so
+         * dead-flag zero/sign-extends stay fused inside longer ALU runs, and
+         * propagates compile-time constants across the entire run. */
+        if (!(block_data[block_data_position].flag_data & 0xFu) &&
             !(block_data[block_data_position + 1].flag_data & 0xFu) &&
             sh4g_thumb_bbra_maybe(cur_op)) {
           u32 rm_arr[16], wm_arr[16];
@@ -5783,7 +5746,7 @@ bool translate_block_thumb(u32 pc, bool ram_region)
               seen |= tk;
               run_ops[rlen++] = rop;
             }
-            /* Preserve trailing const-RAM ADD+LDR peephole if present. */
+            /* Preserve trailing runtime-indexed const-RAM ADD+LDR peephole. */
             if (rlen >= 2 && sh4_thumb_const_mask != 0u &&
                 block_data_position + rlen < num_insns &&
                 ((run_ops[rlen - 1] & 0xFE00u) == 0x1800u ||
@@ -5798,9 +5761,10 @@ bool translate_block_thumb(u32 pc, bool ram_region)
             }
             if (rlen >= 2 && dup != 0u) {
               u32 wmask = 0u;
-              if (sh4g_thumb_alu_run_native_ex(&translation_ptr, run_ops,
-                                               rm_arr, wm_arr, rlen, &wmask)) {
-                sh4_thumb_const_mask &= ~wmask;
+              if (sh4g_thumb_alu_run_native_const(&translation_ptr, run_ops,
+                                                  rm_arr, wm_arr, rlen, &wmask,
+                                                  &sh4_thumb_const_mask,
+                                                  sh4_thumb_const_val)) {
                 if (wmask & (1u << SH4_GREG_SP))
                   sp_span_valid = 0;
                 pc += (u32)(rlen * 2);
@@ -5813,6 +5777,21 @@ bool translate_block_thumb(u32 pc, bool ram_region)
               }
             }
           }
+        }
+        if (!thumb_fused &&
+            ((cgba_thumb_hi_lut[cur_op >> 8] & 0x4000u) ||
+             (u32)(next_op - 0xD000u) < 0x0E00u ||
+             ((u32)(cur_op - 0x6000u) < 0x3000u &&
+              (u32)(next_op - 0x6000u) < 0x3000u &&
+              ((cur_op >> 3) & 7u) == ((next_op >> 3) & 7u)))) {
+          thumb_fused = cgba_thumb_try_peephole(
+            &translation_ptr, cur_op, next_op,
+            &pc, &cycle_count, &block_data_position, &block_exit_position,
+            &last_opcode, &opcode,
+            &sh4_thumb_const_mask, sh4_thumb_const_val,
+            pc_address_block, pc_region,
+            block_start_pc, block_end_pc,
+            num_insns, total_exits, cheat_hook, ram_region);
         }
       }
       /* Unified proven-IWRAM-SP span for both isolated and consecutive

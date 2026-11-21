@@ -162,7 +162,7 @@ static inline int sh4g_thumb_ldst_const_native(u8 **tp, u32 opcode,
  * fall back to cgba_sh4_thumb_ldst so DMA/IRQ alerts, I/O semantics, ROM paging
  * and backup stay helper-owned. RAM stores check the SMC tag mirror first and
  * fall back if they would overwrite translated guest code. */
-static inline int sh4g_thumb_ldst_native(u8 **tp, u32 opcode, u32 pc,
+SH4G_NOINLINE int sh4g_thumb_ldst_native(u8 **tp, u32 opcode, u32 pc,
   int cycle_count)
 {
 #ifndef CGBA_SH4_THUMB_LDST_NATIVE

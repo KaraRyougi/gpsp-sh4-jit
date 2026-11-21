@@ -36,7 +36,7 @@ void sh4_helper_exit(u32 pc);
 void sh4_op2_pc_mem_tramp(void);   /* compact slow-path call (sh4_stub.S) */
 
 /* Native ARM LDM/STM, or 0 to fall back to C. */
-static inline int sh4g_arm_block_native(u8 **tp, u32 opcode, u32 pc,
+SH4G_NOINLINE int sh4g_arm_block_native(u8 **tp, u32 opcode, u32 pc,
   int cycle_count)
 {
   u32 rn        = (opcode >> 16) & 0xF;
@@ -51,8 +51,8 @@ static inline int sh4g_arm_block_native(u8 **tp, u32 opcode, u32 pc,
   int fm;
 
   if (s_bit)                 return 0;         /* user-bank / SPSR restore -> C */
-  if (rlist & 0x8000)        return 0;         /* PC in list -> C (redispatch)  */
   if (rn == 15)              return 0;         /* base = PC -> C */
+  if (!is_load && (rlist & 0x8000)) return 0;  /* STM {...,pc} -> C */
 
   for (i = 0; i < 16; i++)
     if (rlist & (1u << i)) count++;
@@ -67,6 +67,18 @@ static inline int sh4g_arm_block_native(u8 **tp, u32 opcode, u32 pc,
   offset_a  = up ? (pre ? 4 : 0) : (pre ? -(int)(count * 4) : -(int)(count * 4) + 4);
   offset_nb = up ? (int)(count * 4) : -(int)(count * 4);
   do_wb = writeback && !(rlist & (1u << rn));
+
+  if (rlist & 0x8000) {
+    /* Native ARM LDM {..., pc} (non-S, non-PC base): RAM fast path + ib_arm. */
+    sh4g_emit_ram_ldm_pc(tp, rn, rlist, count,
+                         offset_a, offset_nb, do_wb, /*is_thumb=*/0,
+                         (const void *)memory_map_read,
+                         (const void *)sh4_op2_pc_mem_tramp,
+                         (const void *)cgba_sh4_arm_block,
+                         opcode, pc, cycle_count);
+    return 1;
+  }
+
   fm = (is_load ? CGBA_FMB_LDM : CGBA_FMB_STM) + (do_wb ? 2 : 0);
 
   if (count >= CGBA_SH4_FASTMEM_BLOCK_MIN &&
@@ -204,7 +216,7 @@ static inline int sh4g_arm_block_native(u8 **tp, u32 opcode, u32 pc,
  * happen ONCE and the two accumulators stay in registers across Load->MLA->Store
  * (35 fewer instructions and 11 fewer data accesses than emitting 4 separate ops).
  * Any miss falls cleanly through to the 4 individual exact operations. */
-static inline int sh4g_arm_rmw_block_mla_native(u8 **tp,
+SH4G_NOINLINE int sh4g_arm_rmw_block_mla_native(u8 **tp,
   u32 op0, u32 op1, u32 op2, u32 op3, u32 pc, int cc0, int cc3)
 {
   u32 rn, rlist, rA = 16, rB = 16, i;
@@ -376,7 +388,7 @@ static inline int sh4g_arm_rmw_block_mla_native(u8 **tp,
  * 4 SMC tag words BEFORE touching any guest state, then executes both byte
  * loads and all 4 word Load->MLA->Store updates in registers (~91 vs ~174 insns).
  * Any guard failure falls cleanly to the 10 individual exact operations. */
-static inline int sh4g_arm_rmw_block4_ldrsb_mla_native(u8 **tp, const u32 *ops,
+SH4G_NOINLINE int sh4g_arm_rmw_block4_ldrsb_mla_native(u8 **tp, const u32 *ops,
   const int *ccs, int reps, u32 pc)
 {
   u32 rn, rlist, regs[4], nreg = 0, i;
@@ -671,7 +683,7 @@ static inline int sh4g_arm_rmw_block4_ldrsb_mla_native(u8 **tp, const u32 *ops,
  * in registers (R3=nor_page, R5=idx0-off0, R6=iwram_dst, R7=rP, R12=count),
  * committing final architectural rS/rA/rB_w/rD/rP and combined waitstate
  * cycles once at exit. Any guard failure jumps cleanly to exact fallback. */
-static inline int sh4g_arm_interp_rmw_mla_native(u8 **tp, const u32 *ops,
+SH4G_NOINLINE int sh4g_arm_interp_rmw_mla_native(u8 **tp, const u32 *ops,
   const int *ccs, int count, int has_step, u32 pc,
   const u8 *unit_has_gate, const int *unit_pre_debit,
   u8 **unit_blk_off, u8 **unit_body_off)

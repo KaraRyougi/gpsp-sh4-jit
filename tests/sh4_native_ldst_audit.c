@@ -349,6 +349,8 @@ int main(void)
   expect_arm_block_fallback("STMIA r0!,{r0,r1}", 0xE8A00003u); /* wb base in list */
   expect_arm_block_fallback("STMIA r0,{r1,pc}", 0xE8808002u);  /* PC in list */
   expect_arm_block_native_load("LDMIA r0,{r1,r2}", 0xE8900006u);
+  expect_arm_block_native_load("LDMFD sp!,{r4,pc}", 0xE8BD8010u);
+  expect_arm_block_fallback("LDMFD sp!,{r4,pc}^", 0xE8FD8010u); /* S bit -> C */
 
   expect_thumb_block_native_transfer("PUSH {r0,r1}", 0xB403u);
   expect_thumb_block_native_transfer("PUSH {lr}", 0xB500u);

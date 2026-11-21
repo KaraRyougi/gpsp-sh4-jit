@@ -173,6 +173,66 @@ static bool run_tests()
   palette_ram_dirty = CGBA_PALETTE_DIRTY_ACTIVE;
   get_backdrop_shadow_palette();
   for (unsigned sub = 0; sub < 16; sub++) CHECK(!pair_palette_valid[sub]);
+
+  /* 8-bpp strip base & overlay differential against reference render_scanline_text. */
+  for (unsigned round = 0; round < 40; round++) {
+    randomize_vram(round);
+    /* Inject sparse 0 bytes into 8-bpp tile data so empty-tile & partial transparency trigger. */
+    for (unsigned i = 0; i < 0x4000u; i++) {
+      if ((rnd() & 3u) == 0u) vram[i] = 0u;
+    }
+    unsigned size = rnd() & 3u;
+    unsigned bgcnt = (size << 14) | ((16u + (rnd() & 7u)) << 8) | 0x0080u; /* 8-bpp, cbb=0 */
+    unsigned hofs = (round < 8) ? (round & 7u) : (rnd() & 511u);
+    unsigned vofs = rnd() & 511u;
+    unsigned sy0 = rnd() % 140u;
+    unsigned sy1 = sy0 + 1u + (rnd() % 20u);
+    if (sy1 > 160u) sy1 = 160u;
+
+    write_ioreg(REG_DISPCNT, 0x0100u);
+    write_ioreg(REG_MOSAIC, 0);
+    write_ioreg(REG_BG0CNT, bgcnt);
+    write_ioreg(REG_BG0HOFS, hofs);
+    write_ioreg(REG_BG0VOFS, vofs);
+
+    cgba_mode0_bg_plan p;
+    memset(&p, 0, sizeof(p));
+    u32 base_block = (bgcnt >> 8) & 0x1Fu;
+    u32 sb_bot = base_block + ((size & 2u) ? ((size & 1u) ? 2u : 1u) : 0u);
+    cgba_bg_hspan_plan sp;
+    cgba_build_bg_hspan_plan(hofs, size & 1u, 0u, 240u, &sp);
+    p.tile_charbase = vram;
+    p.sb_ptr[0] = (u16 *)&vram[base_block * 2048u];
+    p.sb_ptr[1] = (u16 *)&vram[sb_bot * 2048u];
+    p.counts_packed = sp.cp;
+    p.vofs = (u16)vofs;
+    p.first_byte_off = sp.first_byte_off;
+    p.map2_byte_off = sp.map2_byte_off;
+    p.tile_hoff = sp.thoff;
+    p.flags = 8u;
+
+    static u16 got_fb[20 * 240], want_fb[20 * 240];
+    for (unsigned is_over = 0; is_over < 2; is_over++) {
+      for (unsigned i = 0; i < (sy1 - sy0) * 240u; i++)
+        got_fb[i] = want_fb[i] = (u16)rnd();
+      if (is_over)
+        cgba_render_8bpp_bg_over_rows(&p, sy0, sy1, got_fb, palette_ram_converted);
+      else
+        cgba_render_8bpp_bg_base_rows(&p, sy0, sy1, got_fb, palette_ram_converted);
+      for (unsigned y = sy0; y < sy1; y++) {
+        write_ioreg(REG_VCOUNT, y);
+        if (is_over)
+          render_scanline_text<u16, FULLCOLOR, false>(
+            0, 0, 240, want_fb + (y - sy0) * 240u, palette_ram_converted);
+        else
+          render_scanline_text<u16, FULLCOLOR, true>(
+            0, 0, 240, want_fb + (y - sy0) * 240u, palette_ram_converted);
+      }
+      spans += (sy1 - sy0);
+      pixels += (sy1 - sy0) * 240u;
+      CHECK(!memcmp(got_fb, want_fb, (sy1 - sy0) * 240u * sizeof(u16)));
+    }
+  }
   return true;
 }
 

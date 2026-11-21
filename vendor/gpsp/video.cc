@@ -153,6 +153,9 @@ void cgba_merge_blend_sh4(
 void cgba_render_8bpp_strip_base_sh4(
   const u16 *map1, u32 counts, u16 *dst_top, const u8 *tile_charbase,
   u32 start_r_and_k, const u16 *pal256, const u16 *map2);
+void cgba_render_8bpp_strip_over_sh4(
+  const u16 *map1, u32 counts, u16 *dst_top, const u8 *tile_charbase,
+  u32 start_r_and_k, const u16 *pal256, const u16 *map2);
 void cgba_render_8bpp_strip_blend_sh4(
   const u16 *map1, u32 counts, u16 *dst_top, const u8 *tile_charbase,
   u32 rke_sat, const u32 *term_a256, const u16 *map2, const u16 *bd_pal256);
@@ -1811,10 +1814,13 @@ static __attribute__((noinline)) const u32 *cgba_fpal_dup_get(
   return dst + 128;
 }
 
-static inline void cgba_dispatch_affine_rot_base_sh4(
+static __attribute__((noinline)) void cgba_dispatch_affine_rot_base_sh4(
   u16 *dst_end, const u8 *map_base, const u8 *tile_base, const u16 *pal,
   s32 x0, s32 y0, s32 dx, s32 dy, u32 cnt, u32 map_size,
-  bool pal_has_signed_prefix = false)
+  bool pal_has_signed_prefix = false,
+  const u16 *cached_spal = NULL,
+  const u32 *cached_dpal = NULL,
+  u32 fpal_dup_ver = 0u)
 {
   const s32 sdx = -dx;
   const s32 sdy = -dy;
@@ -1835,9 +1841,13 @@ static inline void cgba_dispatch_affine_rot_base_sh4(
                          (adx < 48u || ady < 48u || (adx + ady) < 120u), 1)) {
       u32 tmp_dpal[256];
       const u32 *dpal;
-      if (pal == palette_ram_converted) {
+      if (cached_dpal != NULL) {
+        dpal = cached_dpal;
+      } else if (pal == palette_ram_converted) {
         (void)cgba_signed_bg_pal_get();
         dpal = cgba_signed_bg_pal_dup + 128;
+      } else if (pal_has_signed_prefix && fpal_dup_ver != 0u) {
+        dpal = cgba_fpal_dup_get(pal, fpal_dup_ver);
       } else if (pal_has_signed_prefix) {
         const u16 *src = pal - 128;
         for (u32 i = 0u; i < 256u; i++) {
@@ -1877,7 +1887,9 @@ static inline void cgba_dispatch_affine_rot_base_sh4(
     }
     u16 tmp_spal[256];
     const u16 *spal;
-    if (pal == palette_ram_converted) {
+    if (cached_spal != NULL) {
+      spal = cached_spal;
+    } else if (pal == palette_ram_converted) {
       spal = cgba_signed_bg_pal_get();
     } else if (pal_has_signed_prefix) {
       spal = pal;
@@ -6653,7 +6665,8 @@ static inline void cgba_render_4bpp_bg_blend_rows(
   cgba_render_4bpp_bg_blend_hspan_rows(p, &sp, sy0, sy1, dst_first_row, eva, evb);
 }
 
-static __attribute__((noinline)) void cgba_render_8bpp_part_base_strip(
+template<bool is_over>
+static __attribute__((noinline)) void cgba_render_8bpp_part_strip(
   u16 *dst_top, u32 k, u32 col_start, u32 col_end, u16 raw_map,
   const u8 *tile_charbase, u32 start_r, const u16 *pal256)
 {
@@ -6669,11 +6682,17 @@ static __attribute__((noinline)) void cgba_render_8bpp_part_base_strip(
   u16 *dst_row = dst_top;
   for (u32 r = 0; r < k; r++, row += row_step, dst_row += 240u) {
     if (__builtin_expect(hflip, 0)) {
-      for (u32 i = 0; i < width; i++)
-        dst_row[i] = pal256[row[7u - (col_start + i)]];
+      for (u32 i = 0; i < width; i++) {
+        u32 pix = row[7u - (col_start + i)];
+        if (!is_over || pix)
+          dst_row[i] = pal256[pix];
+      }
     } else {
-      for (u32 i = 0; i < width; i++)
-        dst_row[i] = pal256[row[col_start + i]];
+      for (u32 i = 0; i < width; i++) {
+        u32 pix = row[col_start + i];
+        if (!is_over || pix)
+          dst_row[i] = pal256[pix];
+      }
     }
   }
 }
@@ -6712,7 +6731,8 @@ static __attribute__((noinline)) void cgba_render_8bpp_part_blend_strip(
 }
 
 #ifndef CGBA_SH4_ASM_4BPP
-static __attribute__((noinline)) void cgba_render_8bpp_strip_base_c(
+template<bool is_over>
+static __attribute__((noinline)) void cgba_render_8bpp_strip_c(
   const u16 *map1, u32 counts_packed, u16 *dst_top,
   const u8 *tile_charbase, u32 start_r_and_k,
   const u16 *pal256, const u16 *map2)
@@ -6739,11 +6759,17 @@ static __attribute__((noinline)) void cgba_render_8bpp_strip_base_c(
       u16 *d = dst_tile;
       for (u32 r = 0; r < k; r++, row += row_step, d += 240u) {
         if (!hflip) {
-          for (u32 c = 0; c < 8u; c++)
-            d[c] = pal256[row[c]];
+          for (u32 c = 0; c < 8u; c++) {
+            u32 pix = row[c];
+            if (!is_over || pix)
+              d[c] = pal256[pix];
+          }
         } else {
-          for (u32 c = 0; c < 8u; c++)
-            d[c] = pal256[row[7u - c]];
+          for (u32 c = 0; c < 8u; c++) {
+            u32 pix = row[7u - c];
+            if (!is_over || pix)
+              d[c] = pal256[pix];
+          }
         }
       }
       dst_tile += 8;
@@ -6811,7 +6837,8 @@ static __attribute__((noinline)) void cgba_render_8bpp_strip_blend_c(
 }
 #endif
 
-static __attribute__((noinline)) void cgba_render_8bpp_bg_base_rows(
+template<bool is_over>
+static __attribute__((noinline)) void cgba_render_8bpp_bg_rows(
   const cgba_mode0_bg_plan *p, u32 sy0, u32 sy1, u16 *dst_first_row,
   const u16 *pal256)
 {
@@ -6833,10 +6860,14 @@ static __attribute__((noinline)) void cgba_render_8bpp_bg_base_rows(
 
     if (__builtin_expect(thoff == 0u, 1)) {
 #ifdef CGBA_SH4_ASM_4BPP
-      cgba_render_8bpp_strip_base_sh4(
-        map1, p->counts_packed, dst_top, p->tile_charbase, rk, pal256, map2);
+      if (is_over)
+        cgba_render_8bpp_strip_over_sh4(
+          map1, p->counts_packed, dst_top, p->tile_charbase, rk, pal256, map2);
+      else
+        cgba_render_8bpp_strip_base_sh4(
+          map1, p->counts_packed, dst_top, p->tile_charbase, rk, pal256, map2);
 #else
-      cgba_render_8bpp_strip_base_c(
+      cgba_render_8bpp_strip_c<is_over>(
         map1, p->counts_packed, dst_top, p->tile_charbase, rk, pal256, map2);
 #endif
     } else {
@@ -6847,20 +6878,38 @@ static __attribute__((noinline)) void cgba_render_8bpp_bg_base_rows(
       u32 mid_cp = (cp & 0xFFFFu) ? cp : (cp >> 16);
       u16 right_raw = *(map2 + (cp >> 16));
 #ifdef CGBA_SH4_ASM_4BPP
-      cgba_render_8bpp_strip_base_sh4(
-        mid_map1, mid_cp, dst_top + left_w, p->tile_charbase, rk, pal256, map2);
+      if (is_over)
+        cgba_render_8bpp_strip_over_sh4(
+          mid_map1, mid_cp, dst_top + left_w, p->tile_charbase, rk, pal256, map2);
+      else
+        cgba_render_8bpp_strip_base_sh4(
+          mid_map1, mid_cp, dst_top + left_w, p->tile_charbase, rk, pal256, map2);
 #else
-      cgba_render_8bpp_strip_base_c(
+      cgba_render_8bpp_strip_c<is_over>(
         mid_map1, mid_cp, dst_top + left_w, p->tile_charbase, rk, pal256, map2);
 #endif
-      cgba_render_8bpp_part_base_strip(
+      cgba_render_8bpp_part_strip<is_over>(
         dst_top, k, thoff, 8u, left_raw, p->tile_charbase, start_r, pal256);
-      cgba_render_8bpp_part_base_strip(
+      cgba_render_8bpp_part_strip<is_over>(
         dst_top + left_w + 232u, k, 0u, thoff, right_raw, p->tile_charbase, start_r, pal256);
     }
     y += k;
     dst_top += k * 240u;
   }
+}
+
+static inline void cgba_render_8bpp_bg_base_rows(
+  const cgba_mode0_bg_plan *p, u32 sy0, u32 sy1, u16 *dst_first_row,
+  const u16 *pal256)
+{
+  cgba_render_8bpp_bg_rows<false>(p, sy0, sy1, dst_first_row, pal256);
+}
+
+static inline void cgba_render_8bpp_bg_over_rows(
+  const cgba_mode0_bg_plan *p, u32 sy0, u32 sy1, u16 *dst_first_row,
+  const u16 *pal256)
+{
+  cgba_render_8bpp_bg_rows<true>(p, sy0, sy1, dst_first_row, pal256);
 }
 
 static __attribute__((noinline)) void cgba_render_8bpp_bg_blend_rows(
@@ -7222,9 +7271,13 @@ static __attribute__((noinline)) void render_mode0_fullcolor_scanline(
     }
     u8 pflags = p->flags;
     if (__builtin_expect(!(pflags & 1u), 0)) {
-      if ((pflags & 8u) && !base_done) {
-        cgba_render_8bpp_bg_base_rows(
-          p, vcount, vcount + 1u, screen_offset, pal_conv);
+      if (pflags & 8u) {
+        if (base_done)
+          cgba_render_8bpp_bg_over_rows(
+            p, vcount, vcount + 1u, screen_offset, pal_conv);
+        else
+          cgba_render_8bpp_bg_base_rows(
+            p, vcount, vcount + 1u, screen_offset, pal_conv);
         base_done = 1;
         continue;
       }
@@ -7544,13 +7597,21 @@ static __attribute__((noinline)) void cgba_snapshot_bg2_affine_mosaic(
   cgba_bg2_snap_count = count;
 }
 
+/* Mode 1, or Mode 2 with BG3 disabled (only BG2 + OBJ active — identical
+ * single-affine-BG surface to Mode 1 so BG2 snapshots/batching are safe). */
+static inline bool cgba_bg2_affine_mode_ok(u16 dispcnt)
+{
+  u32 m = dispcnt & 0x87u;
+  return m == 0x01u || (m == 0x02u && (dispcnt & 0x0800u) == 0u);
+}
+
 void cgba_snapshot_bg2_affine_pending(void)
 {
   u32 count = cgba_pending_sl_count;
   if (count == 0u)
     return;
   u32 y0 = cgba_pending_sl_start;
-  if (__builtin_expect((read_ioreg(REG_DISPCNT) & 0x87u) != 0x01u ||
+  if (__builtin_expect(!cgba_bg2_affine_mode_ok(read_ioreg(REG_DISPCNT)) ||
                        y0 + count > 160u || skip_next_frame != 0, 0)) {
     cgba_flush_pending_scanlines();
     return;
@@ -7622,7 +7683,7 @@ int cgba_try_hblank_bg2_dma0_fast(void)
     u32 y0 = cgba_pending_sl_start;
     u32 i = cgba_bg2_snap_count;
     if (__builtin_expect(
-          (io_registers[REG_DISPCNT] & eswap16(0x87u)) != eswap16(0x01u) ||
+          !cgba_bg2_affine_mode_ok(read_ioreg(REG_DISPCNT)) ||
           y0 + count > 160u ||
           ((io_registers[REG_BG2CNT] | io_registers[REG_BG3CNT]) & eswap16(0x40u)) != 0u ||
           (count - i) != 1u, 0))
@@ -7664,7 +7725,7 @@ int cgba_try_batch_hblank_bg2_dma0_fast(u32 start_y, u32 lines)
                        start_y + lines > 160u, 0))
     return 0;
   if (__builtin_expect(
-        (io_registers[REG_DISPCNT] & eswap16(0x87u)) != eswap16(0x01u) ||
+        !cgba_bg2_affine_mode_ok(read_ioreg(REG_DISPCNT)) ||
         ((io_registers[REG_BG2CNT] | io_registers[REG_BG3CNT]) &
          eswap16(0x40u)) != 0u, 0))
     return 0;
@@ -9050,7 +9111,7 @@ static __attribute__((noinline)) void cgba_folded_brightness_prepare(
 static __attribute__((noinline)) void cgba_render_4bpp_text_bg_strip_sh4(
   const cgba_mode0_bg_plan *p, u32 sy0, u32 sy1, u16 *screen_base,
   bool base_done, const u16 *cur_pal, const u16 *cur_base_pal,
-  const u32 *cur_pair_lut)
+  const u32 *cur_pair_lut, const u32 *row_empty = NULL)
 {
   cgba_bg_hspan_plan sp;
   cgba_bg_hspan_from_plan(p, &sp);
@@ -9063,9 +9124,16 @@ static __attribute__((noinline)) void cgba_render_4bpp_text_bg_strip_sh4(
     if (y + k > sy1)
       k = sy1 - y;
     u32 vhalf = voffset >> 8;
-    if (base_done && cgba_4bpp_strip_row_zero_skip(p, vhalf, voffset, start_r, k)) {
-      y += k;
-      continue;
+    if (base_done) {
+      if (row_empty != NULL &&
+          (row_empty[vhalf] & (1u << ((voffset & 255u) >> 3)))) {
+        y += k;
+        continue;
+      }
+      if (cgba_4bpp_strip_row_zero_skip(p, vhalf, voffset, start_r, k)) {
+        y += k;
+        continue;
+      }
     }
     u8 *map_row_b = (u8 *)p->sb_ptr[vhalf] + ((voffset & 0xF8u) << 3);
     u16 *dst_top = screen_base + y * 240u;
@@ -9512,9 +9580,13 @@ static __attribute__((noinline)) void render_mode0_fullcolor_strip_sh4(
 
     u8 pflags = p->flags;
     if (__builtin_expect(!(pflags & 1u), 0)) {
-      if ((pflags & 8u) && !layer_split && !base_done) {
-        cgba_render_8bpp_bg_base_rows(
-          p, sy0, sy1, screen_base + sy0 * 240u, l_pal);
+      if ((pflags & 8u) && !layer_split) {
+        if (base_done)
+          cgba_render_8bpp_bg_over_rows(
+            p, sy0, sy1, screen_base + sy0 * 240u, l_pal);
+        else
+          cgba_render_8bpp_bg_base_rows(
+            p, sy0, sy1, screen_base + sy0 * 240u, l_pal);
         base_done = 1;
         continue;
       }
@@ -9644,125 +9716,10 @@ static __attribute__((noinline)) void render_mode0_fullcolor_strip_sh4(
       }
     }
 
-    const u32 *const row_empty = cgba_m0.row_all_empty[layer];
-    u32 thoff = p->tile_hoff;
-    if (__builtin_expect(thoff == 0u, 1)) {
-      u32 y = sy0;
-      while (y < sy1) {
-        u32 voffset = (y + p->vofs) & 511u;
-        u32 start_r = voffset & 7u;
-        u32 k = 8u - start_r;
-        if (y + k > sy1)
-          k = sy1 - y;
-        u32 vhalf = voffset >> 8;
-        if (base_done) {
-          u32 vtile_row = (voffset & 255u) >> 3;
-          u32 rbit = 1u << vtile_row;
-          if (row_empty[vhalf] & rbit) {
-            y += k;
-            continue;
-          }
-          if ((pflags & 2u) && !(p->row_nonzero[vhalf] & rbit)) {
-            const u32 *t0 = (const u32 *)(p->tile_charbase + (start_r << 2));
-            u32 any = 0;
-            for (u32 r = 0; r < k; r++)
-              any |= t0[r];
-            if (any == 0u) {
-              y += k;
-              continue;
-            }
-          }
-        }
-        u8 *map_row_b = (u8 *)p->sb_ptr[vhalf] + ((voffset & 0xF8u) << 3);
-        u16 *map1 = (u16 *)(map_row_b + p->first_byte_off);
-        u16 *map2 = (u16 *)(map_row_b + p->map2_byte_off);
-        u16 *dst_top = screen_base + y * 240u;
-        u32 rk = (start_r << 8) | k;
-        if (base_done)
-          cgba_render_4bpp_strip_over_sh4(
-            map1, p->counts_packed, dst_top, p->tile_charbase, rk, l_plut, map2);
-        else
-          cgba_render_4bpp_strip_base_sh4(
-            map1, p->counts_packed, dst_top, p->tile_charbase, rk, l_plut, map2);
-        y += k;
-      }
-      base_done = 1;
-      continue;
-    }
-
-    {
-      /* Non-zero tile_hoff (1..7): use 4-byte aligned strip kernel for even
-       * tile_hoff (2, 4, 6) and 2-byte aligned strip kernel for odd (1, 3, 5, 7). */
-      u32 y = sy0;
-      u32 left_w = 8u - thoff;
-      u32 cp = p->counts_packed;
-      bool mid_aligned = !(thoff & 1u);
-      while (y < sy1) {
-        u32 voffset = (y + p->vofs) & 511u;
-        u32 start_r = voffset & 7u;
-        u32 k = 8u - start_r;
-        if (y + k > sy1)
-          k = sy1 - y;
-        u32 vhalf = voffset >> 8;
-        if (base_done) {
-          u32 vtile_row = (voffset & 255u) >> 3;
-          u32 rbit = 1u << vtile_row;
-          if (row_empty[vhalf] & rbit) {
-            y += k;
-            continue;
-          }
-          if ((pflags & 2u) && !(p->row_nonzero[vhalf] & rbit)) {
-            const u32 *t0 = (const u32 *)(p->tile_charbase + (start_r << 2));
-            u32 any = 0;
-            for (u32 r = 0; r < k; r++)
-              any |= t0[r];
-            if (any == 0u) {
-              y += k;
-              continue;
-            }
-          }
-        }
-        u8 *map_row_b = (u8 *)p->sb_ptr[vhalf] + ((voffset & 0xF8u) << 3);
-        u16 *map1 = (u16 *)(map_row_b + p->first_byte_off);
-        u16 *map2 = (u16 *)(map_row_b + p->map2_byte_off);
-        u16 *dst_top = screen_base + y * 240u;
-        u16 left_raw = *map1++;
-        u16 *mid_map1 = (cp & 0xFFFFu) ? map1 : map2;
-        u32 mid_cp = (cp & 0xFFFFu) ? cp : (cp >> 16);
-        u16 right_raw = *(map2 + (cp >> 16));
-        u32 rk = (start_r << 8) | k;
-        if (base_done) {
-          if (mid_aligned)
-            cgba_render_4bpp_strip_over_sh4(
-              mid_map1, mid_cp, dst_top + left_w, p->tile_charbase, rk, l_plut, map2);
-          else
-            cgba_render_4bpp_strip_over_u16_sh4(
-              mid_map1, mid_cp, dst_top + left_w, p->tile_charbase, rk, l_plut, map2);
-          cgba_render_4bpp_part_strip_fullcolor<false>(
-            dst_top, k, thoff, 8u, left_raw, p->tile_charbase, start_r, l_pal);
-          cgba_render_4bpp_part_strip_fullcolor<false>(
-            dst_top + left_w + 232u, k, 0u, thoff, right_raw, p->tile_charbase, start_r, l_pal);
-        } else {
-          if (mid_aligned) {
-            cgba_render_4bpp_strip_base_sh4(
-              mid_map1, mid_cp, dst_top + left_w, p->tile_charbase, rk, l_plut, map2);
-            cgba_render_4bpp_part_strip_even_base(
-              dst_top, k, thoff, 8u, left_raw, p->tile_charbase, start_r, l_plut);
-            cgba_render_4bpp_part_strip_even_base(
-              dst_top + left_w + 232u, k, 0u, thoff, right_raw, p->tile_charbase, start_r, l_plut);
-          } else {
-            cgba_render_4bpp_strip_base_u16_sh4(
-              mid_map1, mid_cp, dst_top + left_w, p->tile_charbase, rk, l_plut, map2);
-            cgba_render_4bpp_part_strip_fullcolor<true>(
-              dst_top, k, thoff, 8u, left_raw, p->tile_charbase, start_r, l_bpal);
-            cgba_render_4bpp_part_strip_fullcolor<true>(
-              dst_top + left_w + 232u, k, 0u, thoff, right_raw, p->tile_charbase, start_r, l_bpal);
-          }
-        }
-        y += k;
-      }
-      base_done = 1;
-    }
+    cgba_render_4bpp_text_bg_strip_sh4(
+      p, sy0, sy1, screen_base, base_done != 0u,
+      l_pal, l_bpal, l_plut, cgba_m0.row_all_empty[layer]);
+    base_done = 1;
   }
 
   if (!base_done)
@@ -9842,12 +9799,10 @@ static u32 cgba_build_win_hspans(u32 win_ctrl, u32 y, cgba_win_hspan out[5])
 }
 
 static __attribute__((noinline)) void cgba_render_4bpp_bg_hspan_strip_sh4(
-  u32 layer, u32 sy0, u32 sy1, u32 x0, u32 x1, u16 *screen_base, u32 base_done)
+  u32 layer, u32 sy0, u32 sy1, u32 x0, u32 x1, u16 *screen_base, u32 base_done,
+  const u16 *pal_conv, const u16 *base_pal, const u32 *pair_lut)
 {
   const cgba_mode0_bg_plan *const p = &cgba_m0.plans[layer];
-  const u16 *const pal_conv = palette_ram_converted;
-  const u16 *const base_pal = backdrop_shadow_palette;
-  const u32 *const pair_lut = (const u32 *)&pair_palette[0][0][0];
   cgba_bg_hspan_plan sp;
   cgba_build_bg_hspan_plan(cgba_m0.bg_hofs[layer], cgba_m0.bg_wide[layer],
                            x0, x1, &sp);
@@ -9888,7 +9843,17 @@ static __attribute__((noinline)) void cgba_render_win_multi_strip_sh4(
   const u32 mode_layers = active_layers[video_mode];
   const u32 disp_layers = (dispcnt >> 8) & mode_layers;
   const u16 bldcnt = read_ioreg(REG_BLDCNT);
+  const u32 bld_eff = (bldcnt >> 6) & 3u;
+  const u32 bld_evy = MIN(16u, (u32)(read_ioreg(REG_BLDY) & 0x1Fu));
+  const bool bld_is_bright =
+    (bld_eff == COL_EFFECT_BRIGHT || bld_eff == COL_EFFECT_DARK) &&
+    bld_evy > 0u;
+  const u32 bright_t1 = bldcnt & 0x3Fu;
+  bool bright_prepared = false;
   const u16 *const pal_conv = palette_ram_converted;
+  const u16 *const base_pal = backdrop_shadow_palette;
+  const u32 *const pair_lut = (const u32 *)&pair_palette[0][0][0];
+  const u32 *const fpair_lut = (const u32 *)&cgba_folded_pair_lut[0][0][0];
   const cgba_mode0_bg_plan *const plans = cgba_m0.plans;
   s32 strip_ax[2], strip_ay[2];
   if (__builtin_expect(video_mode != 0u, 0)) {
@@ -9905,14 +9870,16 @@ static __attribute__((noinline)) void cgba_render_win_multi_strip_sh4(
     u32 span_vis = disp_layers & (en & 0x1Fu);
     bool span_no_eff = (span_vis != 0u) &&
                        (!(en & 0x20u) || cgba_bldcnt_is_noop(bldcnt, span_vis));
+    bool span_bright = !span_no_eff && (span_vis != 0u) &&
+                       ((en & 0x20u) != 0u) && bld_is_bright;
     u32 span_omask = 0u;
     bool span_alpha_ok = true;
     u8 span_alpha_pmask = 0u;
     u32 span_eva = 0u, span_evb = 0u;
     bool span_alpha_can = (span_vis & 0x10u) != 0u &&
                           (((bldcnt >> 8) & (span_vis | 0x20u)) != 0u);
-    if (span_no_eff && (span_vis & 0x10u)) {
-      if (span_alpha_can) {
+    if ((span_no_eff || span_bright) && (span_vis & 0x10u)) {
+      if (span_no_eff && span_alpha_can) {
         u32 tgt2_raw = (bldcnt >> 8) & 0x3Fu;
         if (tgt2_raw & 0x20u) {
           for (u32 p = 0; p < 4u; p++) {
@@ -9934,7 +9901,7 @@ static __attribute__((noinline)) void cgba_render_win_multi_strip_sh4(
       for (u32 y = sy0; y < sy1; y++) {
         span_omask |= (u32)(obj_row_prio_mask[y] & 0x0Fu);
         if (span_alpha_can && obj_alpha_count[y]) {
-          if (!span_alpha_pmask || obj_alpha_complex[y] ||
+          if (span_bright || !span_alpha_pmask || obj_alpha_complex[y] ||
               (obj_alpha_prio_mask[y] & ~span_alpha_pmask) != 0u) {
             span_alpha_ok = false;
             break;
@@ -9943,7 +9910,7 @@ static __attribute__((noinline)) void cgba_render_win_multi_strip_sh4(
       }
     }
 
-    if (!span_no_eff || !span_alpha_ok) {
+    if ((!span_no_eff && !span_bright) || !span_alpha_ok) {
       if (video_mode != 0u) {
         affine_reference_x[0] = strip_ax[0];
         affine_reference_y[0] = strip_ay[0];
@@ -9959,6 +9926,13 @@ static __attribute__((noinline)) void cgba_render_win_multi_strip_sh4(
       }
       continue;
     }
+
+    if (span_bright && !bright_prepared) {
+      cgba_folded_brightness_prepare(bld_eff, bld_evy);
+      bright_prepared = true;
+    }
+    const bool bd_t1 = span_bright && ((bright_t1 & 0x20u) != 0u);
+    const u16 bd_col = bd_t1 ? cgba_folded_pal[0] : pal_conv[0];
 
     u8 slorder[8];
     u32 slcount = 0u;
@@ -9976,11 +9950,13 @@ static __attribute__((noinline)) void cgba_render_win_multi_strip_sh4(
       u32 layer = slorder[i];
       if (layer & 0x4u) {
         if (!base_done) {
-          u16 bd = pal_conv[0];
           for (u32 y = sy0; y < sy1; y++)
-            cgba_fill_span_u16(screen_base + y * 240u + sx0, sx1 - sx0, bd);
+            cgba_fill_span_u16(screen_base + y * 240u + sx0, sx1 - sx0, bd_col);
           base_done = 1u;
         }
+        const u16 *opal = (span_bright && (bright_t1 & 0x10u))
+                            ? (cgba_folded_pal + 0x100)
+                            : (pal_conv + 0x100);
         u32 prio = layer & 3u;
         u32 pbit = 1u << prio;
         for (u32 y = sy0; y < sy1; y++) {
@@ -9988,19 +9964,29 @@ static __attribute__((noinline)) void cgba_render_win_multi_strip_sh4(
             write_ioreg(REG_VCOUNT, y);
             if (__builtin_expect(span_alpha_can && (obj_alpha_prio_mask[y] & pbit), 0))
               cgba_render_scanline_objs_direct_alpha(
-                prio, sx0, sx1, screen_base + y * 240u, pal_conv + 0x100,
+                prio, sx0, sx1, screen_base + y * 240u, opal,
                 y, span_eva, span_evb);
             else
               render_scanline_objs<u16, FULLCOLOR>(
-                prio, sx0, sx1, screen_base + y * 240u, pal_conv + 0x100);
+                prio, sx0, sx1, screen_base + y * 240u, opal);
           }
         }
         continue;
       }
+      const bool bg_t1 = span_bright && (((bright_t1 >> layer) & 1u) != 0u);
+      if (__builtin_expect(!base_done && span_bright && bg_t1 != bd_t1, 0)) {
+        for (u32 y = sy0; y < sy1; y++)
+          cgba_fill_span_u16(screen_base + y * 240u + sx0, sx1 - sx0, bd_col);
+        base_done = 1u;
+      }
+      const u16 *l_pal = bg_t1 ? cgba_folded_pal : pal_conv;
+      const u16 *l_bpal = bg_t1 ? cgba_folded_bg_shadow : base_pal;
+      const u32 *l_plut = bg_t1 ? fpair_lut : pair_lut;
       const cgba_mode0_bg_plan *p = &plans[layer];
       if (p->flags & 1u) {
         cgba_render_4bpp_bg_hspan_strip_sh4(
-          layer, sy0, sy1, sx0, sx1, screen_base, base_done);
+          layer, sy0, sy1, sx0, sx1, screen_base, base_done,
+          l_pal, l_bpal, l_plut);
         base_done = 1u;
       } else if (p->flags & 4u) {
         u32 aidx = layer - 2u;
@@ -10010,10 +9996,10 @@ static __attribute__((noinline)) void cgba_render_win_multi_strip_sh4(
           write_ioreg(REG_VCOUNT, y);
           if (base_done)
             render_scanline_affine<u16, FULLCOLOR, false>(
-              layer, sx0, sx1, screen_base + y * 240u, pal_conv);
+              layer, sx0, sx1, screen_base + y * 240u, l_pal);
           else
             render_scanline_affine<u16, FULLCOLOR, true>(
-              layer, sx0, sx1, screen_base + y * 240u, pal_conv);
+              layer, sx0, sx1, screen_base + y * 240u, l_pal);
           cgba_update_affine_ref_single(aidx, y);
         }
         base_done = 1u;
@@ -10022,18 +10008,17 @@ static __attribute__((noinline)) void cgba_render_win_multi_strip_sh4(
           write_ioreg(REG_VCOUNT, y);
           if (base_done)
             render_scanline_text<u16, FULLCOLOR, false>(
-              layer, sx0, sx1, screen_base + y * 240u, pal_conv);
+              layer, sx0, sx1, screen_base + y * 240u, l_pal);
           else
             render_scanline_text<u16, FULLCOLOR, true>(
-              layer, sx0, sx1, screen_base + y * 240u, pal_conv);
+              layer, sx0, sx1, screen_base + y * 240u, l_pal);
         }
         base_done = 1u;
       }
     }
     if (!base_done) {
-      u16 bd = pal_conv[0];
       for (u32 y = sy0; y < sy1; y++)
-        cgba_fill_span_u16(screen_base + y * 240u + sx0, sx1 - sx0, bd);
+        cgba_fill_span_u16(screen_base + y * 240u + sx0, sx1 - sx0, bd_col);
     }
   }
 
@@ -10546,10 +10531,11 @@ static __attribute__((noinline)) void cgba_mode1_blend_evb16_strip(
 static __attribute__((noinline)) bool cgba_try_render_mode1_batch(
   u32 y0, u32 y_end, u16 *screen_base, u16 dispcnt, bool has_bg2_snaps)
 {
-  if ((dispcnt & 0xE087u) != 0x0001u || y_end > 160u || (y_end - y0) < 2u)
+  if ((dispcnt & 0xE000u) != 0u || !cgba_bg2_affine_mode_ok(dispcnt) ||
+      y_end > 160u || (y_end - y0) < 2u)
     return false;
 
-  const u32 vis_layers = (dispcnt >> 8) & 0x17u;
+  const u32 vis_layers = (dispcnt >> 8) & active_layers[dispcnt & 0x07u];
   const bool obj_en = (vis_layers & 0x10u) != 0u;
   u32 strip_omask = 0u;
   u32 alpha_or = 0u;
@@ -10805,15 +10791,8 @@ static __attribute__((noinline)) bool cgba_try_render_mode1_batch(
         ap.pix_shift = -(s32)(25u - bg2_map_size);
         ap.row_shift = (s32)(bg2_map_size + 1u);
         ap.tile_kind = isbase ? NULL : bg2_tkind;
-        cgba_aff_addc_params addc_p;
-        const u32 bg2_t_mask = (16u << bg2_map_size) - 1u;
         const u16 *const signed_bg_pal = isbase ? cgba_signed_bg_pal_get() : NULL;
         const u32 *const signed_bg_pal_dup = isbase ? (cgba_signed_bg_pal_dup + 128) : NULL;
-        addc_p.map_base = bg2_map_base;
-        addc_p.tile_base = bg2_tile_base;
-        addc_p.cnt = 240u;
-        addc_p.mask_x = bg2_t_mask;
-        addc_p.row_shift = (s32)bg2_map_size + 4;
 #endif
         const u16 saved_pa = read_ioreg(REG_BG2PA);
         const u16 saved_pc = read_ioreg(REG_BG2PC);
@@ -10840,78 +10819,14 @@ static __attribute__((noinline)) bool cgba_try_render_mode1_batch(
           if (__builtin_expect(dy != 0, 1)) {
             if (bg2_wrap) {
               if (isbase) {
-                const s32 sdx = -dx;
-                const s32 sdy = -dy;
-                const u32 adx = (u32)(sdx < 0 ? -sdx : sdx);
-                const u32 ady = (u32)(sdy < 0 ? -sdy : sdy);
-                const s32 x0 = ref_x + 239 * dx;
-                const s32 y0_a = ref_y + 239 * dy;
-                const u16 *spal = (rpal == pal_conv) ? signed_bg_pal : rpal;
-                if (__builtin_expect(adx < 256u && ady < 256u && (adx + ady) < 420u, 1)) {
-                  addc_p.dst_end = dst_row + 240u;
-                  addc_p.pix_x = (s32)(((u32)(x0 >> 11)) & bg2_t_mask);
-                  addc_p.pix_y_sh = (s32)(((u32)(y0_a >> 11)) & bg2_t_mask);
-                  if (sdx >= 0) {
-                    addc_p.f_x = ((u32)(x0 & 0xFF)) << 24;
-                    addc_p.step_x = 1;
-                  } else {
-                    addc_p.f_x = ((u32)(255 - (x0 & 0xFF))) << 24;
-                    addc_p.step_x = -1;
-                  }
-                  if (sdy >= 0) {
-                    addc_p.f_y = ((u32)(y0_a & 0xFF)) << 24;
-                    addc_p.step_y_sh = 8;
-                  } else {
-                    addc_p.f_y = ((u32)(255 - (y0_a & 0xFF))) << 24;
-                    addc_p.step_y_sh = -8;
-                  }
-                  addc_p.mask_y_sh = ((((u32)(y0_a >> 8)) & 7u) << 3) | (((u32)(x0 >> 8)) & 7u);
-                  if (__builtin_expect(adx < 128u && ady < 128u &&
-                         (adx < 48u || ady < 48u || (adx + ady) < 120u), 1)) {
-                    const u32 *dpal = (rpal == pal_conv)
-                      ? signed_bg_pal_dup
-                      : cgba_fpal_dup_get(rpal, cgba_m1_fpal_ver);
-                    addc_p.pal = (const u16 *)dpal;
-                    addc_p.step_fx = adx << 25;
-                    addc_p.step_fy = ady << 25;
-                    cgba_render_affine_rot_base_p2_sh4(&addc_p);
-                  } else {
-                    addc_p.pal = spal;
-                    addc_p.step_fx = adx << 24;
-                    addc_p.step_fy = ady << 24;
-                    cgba_render_affine_rot_base_addc_sh4(&addc_p, 0u);
-                  }
-                } else if (__builtin_expect(adx < 2048u && ady < 2048u, 1)) {
-                  addc_p.dst_end = dst_row + 240u;
-                  addc_p.pal = spal;
-                  addc_p.pix_x = (s32)(((u32)(x0 >> 11)) & bg2_t_mask);
-                  addc_p.pix_y_sh = (s32)(((u32)(y0_a >> 11)) & bg2_t_mask);
-                  u32 qflip = 0u;
-                  if (sdx >= 0) {
-                    addc_p.f_x = ((u32)(x0 & 0x7FF)) << 21;
-                    addc_p.step_x = 1;
-                  } else {
-                    addc_p.f_x = ((u32)(2047 - (x0 & 0x7FF))) << 21;
-                    addc_p.step_x = -1;
-                    qflip |= 7u;
-                  }
-                  addc_p.step_fx = adx << 21;
-                  if (sdy >= 0) {
-                    addc_p.f_y = ((u32)(y0_a & 0x7FF)) << 21;
-                    addc_p.step_y_sh = 1;
-                  } else {
-                    addc_p.f_y = ((u32)(2047 - (y0_a & 0x7FF))) << 21;
-                    addc_p.step_y_sh = -1;
-                    qflip |= 0x38u;
-                  }
-                  addc_p.step_fy = ady << 21;
-                  addc_p.mask_y_sh = qflip;
-                  cgba_render_affine_rot_base_addc_sh4(&addc_p, 1u);
-                } else {
-                  cgba_dispatch_affine_rot_base_sh4(
-                    dst_row + 240u, bg2_map_base, bg2_tile_base, rpal,
-                    x0, y0_a, dx, dy, 240u, bg2_map_size, rpal != pal_conv);
-                }
+                const bool is_folded = (rpal != pal_conv);
+                cgba_dispatch_affine_rot_base_sh4(
+                  dst_row + 240u, bg2_map_base, bg2_tile_base, rpal,
+                  ref_x + 239 * dx, ref_y + 239 * dy, dx, dy, 240u, bg2_map_size,
+                  is_folded,
+                  is_folded ? rpal : signed_bg_pal,
+                  is_folded ? NULL : signed_bg_pal_dup,
+                  is_folded ? cgba_m1_fpal_ver : 0u);
               } else {
                 u32 abs_step = (u32)(dx < 0 ? -dx : dx) + (u32)(dy < 0 ? -dy : dy);
                 ap.pal = rpal;
@@ -10944,10 +10859,14 @@ static __attribute__((noinline)) bool cgba_try_render_mode1_batch(
                     dst_row[i] = bgcol;
                 }
                 if (isbase) {
+                  const bool is_folded = (rpal != pal_conv);
                   cgba_dispatch_affine_rot_base_sh4(
                     dst_row + (u_lo + run_cnt), bg2_map_base, bg2_tile_base, rpal,
                     ref_x + hi * dx, ref_y + hi * dy, dx, dy, run_cnt, bg2_map_size,
-                    rpal != pal_conv);
+                    is_folded,
+                    is_folded ? rpal : signed_bg_pal,
+                    is_folded ? NULL : signed_bg_pal_dup,
+                    is_folded ? cgba_m1_fpal_ver : 0u);
                 } else {
                   u32 abs_step = (u32)(dx < 0 ? -dx : dx) + (u32)(dy < 0 ? -dy : dy);
                   ap.pal = rpal;
@@ -11142,7 +11061,7 @@ CGBA_HOT_TEXT void cgba_flush_pending_scanlines(void)
                       (((dispcnt & 0x1000) != 0) || ((dispcnt & 0x8000) != 0));
   const u16 saved_vc = read_ioreg(REG_VCOUNT);
 
-  if (__builtin_expect(video_mode == 1u && !(dispcnt & 0x80) &&
+  if (__builtin_expect(cgba_bg2_affine_mode_ok(dispcnt) &&
                        bg_dirty && pitch == 240u && (y_end - y0) >= 2u &&
                        y_end <= 160u, 0)) {
     if (cgba_try_render_mode1_batch(y0, y_end, screen_base, dispcnt, has_bg2_snaps)) {

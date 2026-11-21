@@ -212,7 +212,7 @@ static inline void sh4g_arm_shift_reg_op2_noflags(u8 **tp, u32 type,
  * for the rotated-immediate case. Register-specified shifts are accepted only
  * for dead-flag MOV/MVN without PC operands. Flags gated on the S bit AND the
  * per-instruction live mask from arm_flag_status/arm_dead_flag_eliminate. */
-static inline int sh4g_arm_dp_native(u8 **tp, u32 opcode, u32 pc, u32 flag_status)
+SH4G_NOINLINE int sh4g_arm_dp_native(u8 **tp, u32 opcode, u32 pc, u32 flag_status)
 {
   u32 op = (opcode >> 21) & 0xF;
   u32 S  = (opcode >> 20) & 1;
@@ -476,120 +476,6 @@ static inline int sh4g_arm_movs_cond_addsub_native(u8 **tp, u32 op0, u32 op1)
       sh4_emit_add_imm(&cg, delta, SH4_REG_T0);
     sh4g_close(tp, &cg); }
   sh4g_patch_cond(skip, *tp);
-  { sh4_codegen cg = sh4g_open(tp);
-    sh4_emit_store_greg(&cg, SH4_REG_T0, rd);
-    sh4g_close(tp, &cg); }
-  return 1;
-}
-
-/* General ARM IWRAM same-Rn same-shift DP run (2..8 ops, non-S, rd!=rn):
- * caches reg[rn] in R3 and shift amount in R0 across the run (-2 insns and
- * -1 greg load per op, e.g. audio packing `8x AND rX, r12, rX, LSR #7`). */
-static inline int sh4g_arm_dp_same_rn_run_native(u8 **tp, const u32 *ops, int cnt)
-{
-  u32 op0 = ops[0];
-  u32 alu = (op0 >> 21) & 0xFu;          /* 0x0=AND, 0x1=EOR, 0x4=ADD, 0xC=ORR */
-  unsigned rn = (op0 >> 16) & 0xFu;
-  unsigned sh_type = (op0 >> 5) & 3u;    /* 0=LSL, 1=LSR, 2=ASR */
-  unsigned sh_imm = (op0 >> 7) & 0x1Fu;
-  int i;
-
-  if (cnt < 2 || cnt > 8 || rn == 15u)
-    return 0;
-  if ((op0 & 0xFE100010u) != 0xE0000000u)
-    return 0;
-  if (alu != 0x0u && alu != 0x1u && alu != 0x4u && alu != 0xCu)
-    return 0;
-  if (sh_type > 2u || (sh_type != 0u && sh_imm == 0u))
-    return 0;
-
-  for (i = 0; i < cnt; i++) {
-    u32 op = ops[i];
-    unsigned rd = (op >> 12) & 0xFu;
-    unsigned rm = op & 0xFu;
-    if ((op & 0xFFFF0FF0u) != (op0 & 0xFFFF0FF0u) ||
-        rd == 15u || rm == 15u || rd == rn)
-      return 0;
-  }
-
-  sh4g_litseg_reserve_bytes(tp, 0, (u32)(8 + cnt * 8));
-  { sh4_codegen cg = sh4g_open(tp);
-    sh4_emit_load_greg(&cg, rn, SH4_REG_T2);         /* R3 = reg[rn] */
-    if (sh_imm != 0u)
-      sh4_emit_mov_imm(&cg, (sh_type == 0u) ? (int)sh_imm : -(int)sh_imm, SH4_REG_RET);
-    for (i = 0; i < cnt; i++) {
-      unsigned rd = (ops[i] >> 12) & 0xFu;
-      unsigned rm = ops[i] & 0xFu;
-      sh4_emit_load_greg(&cg, rm, SH4_REG_T0);       /* R1 = reg[rm] */
-      if (sh_imm != 0u) {
-        if (sh_type == 2u)
-          sh4_emit_shad(&cg, SH4_REG_RET, SH4_REG_T0);
-        else
-          sh4_emit_shld(&cg, SH4_REG_RET, SH4_REG_T0);
-      }
-      if (alu == 0x0u)      sh4_emit_and(&cg, SH4_REG_T2, SH4_REG_T0);
-      else if (alu == 0x1u) sh4_emit_xor(&cg, SH4_REG_T2, SH4_REG_T0);
-      else if (alu == 0x4u) sh4_emit_add_reg(&cg, SH4_REG_T2, SH4_REG_T0);
-      else                  sh4_emit_or(&cg, SH4_REG_T2, SH4_REG_T0);
-      sh4_emit_store_greg(&cg, SH4_REG_T0, rd);
-    }
-    sh4g_close(tp, &cg); }
-  return 1;
-}
-
-/* General ARM same-Rd accumulator DP run (2..8 ops, non-S, rd==rn==accum,
- * rm!=accum, register op2 with optional immediate LSL/LSR/ASR): keeps reg[rd]
- * live in R1 across the entire run, saving 2 greg memops per op (e.g.
- * `3x ADD r6, r6, rX` or `3x ORR r4, r4, rX, LSL #8/#16/#24`). */
-static inline int sh4g_arm_dp_same_rd_run_native(u8 **tp, const u32 *ops, int cnt)
-{
-  unsigned rd = (ops[0] >> 12) & 0xFu;
-  int i;
-
-  if (cnt < 2 || cnt > 8 || rd == 15u)
-    return 0;
-
-  for (i = 0; i < cnt; i++) {
-    u32 op = ops[i];
-    u32 alu = (op >> 21) & 0xFu;
-    unsigned rn = (op >> 16) & 0xFu;
-    unsigned rm = op & 0xFu;
-    unsigned sh_type = (op >> 5) & 3u;
-    unsigned sh_imm = (op >> 7) & 0x1Fu;
-    if ((op & 0xFE100010u) != 0xE0000000u) return 0;
-    if (alu != 0x0u && alu != 0x1u && alu != 0x2u && alu != 0x4u && alu != 0xCu)
-      return 0;
-    if (((op >> 12) & 0xFu) != rd || rn != rd || rm == 15u || rm == rd)
-      return 0;
-    if (sh_type > 2u || (sh_type != 0u && sh_imm == 0u))
-      return 0;
-  }
-
-  sh4g_litseg_reserve_bytes(tp, 0, (u32)(8 + cnt * 12));
-  { sh4_codegen cg = sh4g_open(tp);
-    sh4_emit_load_greg(&cg, rd, SH4_REG_T0);          /* R1 = accum */
-    sh4g_close(tp, &cg); }
-  for (i = 0; i < cnt; i++) {
-    u32 op = ops[i];
-    u32 alu = (op >> 21) & 0xFu;
-    unsigned rm = op & 0xFu;
-    unsigned sh_type = (op >> 5) & 3u;
-    unsigned sh_imm = (op >> 7) & 0x1Fu;
-    if (sh_imm != 0u) {
-      sh4g_arm_shift_imm_op2(tp, sh_type, sh_imm, rm); /* R2 = op2, R1 intact */
-    } else {
-      sh4_codegen cg = sh4g_open(tp);
-      sh4_emit_load_greg(&cg, rm, SH4_REG_T1);
-      sh4g_close(tp, &cg);
-    }
-    { sh4_codegen cg = sh4g_open(tp);
-      if (alu == 0x0u)      sh4_emit_and(&cg, SH4_REG_T1, SH4_REG_T0);
-      else if (alu == 0x1u) sh4_emit_xor(&cg, SH4_REG_T1, SH4_REG_T0);
-      else if (alu == 0x2u) sh4_emit_sub(&cg, SH4_REG_T1, SH4_REG_T0);
-      else if (alu == 0x4u) sh4_emit_add_reg(&cg, SH4_REG_T1, SH4_REG_T0);
-      else                  sh4_emit_or(&cg, SH4_REG_T1, SH4_REG_T0);
-      sh4g_close(tp, &cg); }
-  }
   { sh4_codegen cg = sh4g_open(tp);
     sh4_emit_store_greg(&cg, SH4_REG_T0, rd);
     sh4g_close(tp, &cg); }

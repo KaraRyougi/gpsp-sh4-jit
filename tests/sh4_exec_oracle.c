@@ -2025,6 +2025,207 @@ int main(void)
       memory_map_read[fpage] = rom;
     }
 
+    /* Unified dual-region ARM load-run oracle (IWRAM + ROM8 hits/misses) */
+    {
+      static u8 rom_p8[4096], rom_p9[4096];
+      static const u8 *frag_map[8192];
+      const u32 old_gp_size = gamepak_size;
+      const u8 * const *old_frags = cgba_gamepak_fragment_blocks;
+      u8 *old_m8 = memory_map_read[0x08008000u >> 15];
+      for (unsigned i = 0; i < 4096u; i++) {
+        rom_p8[i] = (u8)(0x5Au ^ (i * 13u + (i >> 4)));
+        rom_p9[i] = (u8)(0xC3u ^ (i * 17u + (i >> 3)));
+      }
+      memset(frag_map, 0, sizeof frag_map);
+      frag_map[8] = rom_p8;
+      frag_map[9] = rom_p9;
+      gamepak_size = 0x10000u;
+      cgba_gamepak_fragment_blocks = frag_map;
+      memory_map_read[0x08008000u >> 15] = NULL;
+      ws_cyc_nseq[8][0] = 3;
+      ws_cyc_nseq[8][1] = 6;
+
+      /* Path 1b: dual-region reg-offset byte run (ROM8 hit, ROM8 cross-page,
+       * IWRAM hit, EWRAM fallback). */
+      {
+        const u32 ops[3] = {
+          0xE7D01005u, /* LDRB  r1, [r0, r5] */
+          0xE19020D6u, /* LDRSB r2, [r0, r6] */
+          0xE7D03007u, /* LDRB  r3, [r0, r7] */
+        };
+        const int ccs[3] = { 1, 1, 1 };
+        const struct { u32 base, o5, o6, o7; const char *nm; } sub[] = {
+          { 0x08008100u, 0x04u, 0x15u, 0x22u, "rom8-hit" },
+          { 0x08008FE0u, 0x10u, 0x30u, 0x38u, "rom8-cross-page" },
+          { 0x03000200u, 0x03u, 0x0Au, 0x11u, "iwram-hit" },
+          { 0x02000400u, 0x01u, 0x07u, 0x0Eu, "ewram-miss" },
+        };
+        for (int in_iw = 0; in_iw <= 1; in_iw++) {
+          static u8 lbuf[2048];
+          u8 *sp = lbuf;
+          u32 lpc = in_iw ? 0x03000100u : 0x08000100u;
+          int got_n = sh4g_arm_load_run_native(&sp, ops, ccs, 3, lpc);
+          if (got_n != 3) {
+            printf("FAIL arm-load-run Path1b in_iw=%d got_n=%d\n", in_iw, got_n);
+            fails++;
+            continue;
+          }
+          for (unsigned si = 0; si < sizeof sub / sizeof *sub; si++) {
+            memset(g_reg, 0, sizeof g_reg);
+            g_reg[0] = sub[si].base;
+            g_reg[5] = sub[si].o5;
+            g_reg[6] = sub[si].o6;
+            g_reg[7] = sub[si].o7;
+            orc_reset_windows();
+            orc_add_window(lbuf, sizeof lbuf, ORC_WIN_BYTES);
+            orc_add_window(fm_buf, sizeof fm_buf, ORC_WIN_BYTES);
+            orc_add_window(memory_map_read, 8192 * 4, ORC_WIN_READ_MAP);
+            orc_add_window(giwram, giwram_size, ORC_WIN_BYTES);
+            orc_add_window(ewram, sizeof ewram, ORC_WIN_BYTES);
+            orc_add_window(rom_p8, sizeof rom_p8, ORC_WIN_BYTES);
+            orc_add_window(rom_p9, sizeof rom_p9, ORC_WIN_BYTES);
+            orc_add_window(frag_map, 8192 * 4, ORC_WIN_FRAGMENT_MAP);
+            orc_add_window(&gamepak_size, 4, ORC_WIN_HOST_U32);
+            orc_add_window(&cgba_gamepak_fragment_blocks, 4, ORC_WIN_HOST_PTR);
+            orc_add_window(ws_cyc_seq, sizeof ws_cyc_seq, ORC_WIN_BYTES);
+            orc_add_window(ws_cyc_nseq, sizeof ws_cyc_nseq, ORC_WIN_BYTES);
+            orc_add_window(orc_vec_table, sizeof orc_vec_table, ORC_WIN_BYTES);
+            orc_slow_target = (u32)(uintptr_t)sh4_op2_pc_mem_tramp;
+            orc_slow_target2 = (u32)(uintptr_t)sh4_op2_pc_tramp;
+            orc_slow_target3 = (u32)(uintptr_t)sh4_fastmem_pc_mem_tramp;
+            orc_slow_target4 = (u32)(uintptr_t)sh4_fastmem_compact8_tramp;
+            orc_slow_target5 = (u32)(uintptr_t)sh4_fastmem_compact8_load_tramp;
+            cases++;
+            if (!run_at((u32)(uintptr_t)lbuf, (u32)(uintptr_t)sp)) {
+              printf("FAIL arm-load-run Path1b %s in_iw=%d: %s\n",
+                     sub[si].nm, in_iw, unmodeled);
+              fails++;
+              continue;
+            }
+            u32 a1 = sub[si].base + sub[si].o5;
+            u32 a2 = sub[si].base + sub[si].o6;
+            u32 a3 = sub[si].base + sub[si].o7;
+            u8 b1 = (a1 >> 24) == 8 ? frag_map[(a1 - 0x08000000u) >> 12][a1 & 0xFFFu]
+                  : (a1 >> 24) == 3 ? giwram[0x8000u + (a1 & 0x7FFFu)]
+                  : ewram[a1 & 0x3FFFFu];
+            s8 b2 = (s8)((a2 >> 24) == 8 ? frag_map[(a2 - 0x08000000u) >> 12][a2 & 0xFFFu]
+                  : (a2 >> 24) == 3 ? giwram[0x8000u + (a2 & 0x7FFFu)]
+                  : ewram[a2 & 0x3FFFFu]);
+            u8 b3 = (a3 >> 24) == 8 ? frag_map[(a3 - 0x08000000u) >> 12][a3 & 0xFFFu]
+                  : (a3 >> 24) == 3 ? giwram[0x8000u + (a3 & 0x7FFFu)]
+                  : ewram[a3 & 0x3FFFFu];
+            if (g_reg[1] != (u32)b1 || g_reg[2] != (u32)(s32)b2 || g_reg[3] != (u32)b3) {
+              printf("FAIL arm-load-run Path1b %s in_iw=%d: got (%08X,%08X,%08X) want (%08X,%08X,%08X)\n",
+                     sub[si].nm, in_iw, g_reg[1], g_reg[2], g_reg[3],
+                     (u32)b1, (u32)(s32)b2, (u32)b3);
+              fails++;
+            }
+          }
+        }
+      }
+
+      /* Path 2: same-base adjacent mixed-width burst with writeback AND
+       * rd[last] == rn0 (verifies writeback ordering + ROM8/IWRAM/boundary/EWRAM). */
+      {
+        const u32 ops[4] = {
+          0xE5B01004u, /* LDR   r1, [r0, #4]! */
+          0xE1D020B4u, /* LDRH  r2, [r0, #4]  */
+          0xE1D030D7u, /* LDRSB r3, [r0, #7]  */
+          0xE5900008u, /* LDR   r0, [r0, #8]  (clobbers base r0 last!) */
+        };
+        const int ccs[4] = { 1, 1, 1, 1 };
+        const struct { u32 base; const char *nm; } sub[] = {
+          { 0x08008100u, "rom8-hit" },
+          { 0x08008FF0u, "rom8-cross-page" },
+          { 0x03000240u, "iwram-hit" },
+          { 0x03007FF0u, "iwram-wrap-miss" },
+          { 0x02000300u, "ewram-miss" },
+        };
+        for (int in_iw = 0; in_iw <= 1; in_iw++) {
+          static u8 lbuf[2048];
+          u8 *sp = lbuf;
+          u32 lpc = in_iw ? 0x03000100u : 0x08000100u;
+          int got_n = sh4g_arm_load_run_native(&sp, ops, ccs, 4, lpc);
+          if (got_n != 4) {
+            printf("FAIL arm-load-run Path2 in_iw=%d got_n=%d\n", in_iw, got_n);
+            fails++;
+            continue;
+          }
+          for (unsigned si = 0; si < sizeof sub / sizeof *sub; si++) {
+            memset(g_reg, 0, sizeof g_reg);
+            g_reg[0] = sub[si].base;
+            orc_reset_windows();
+            orc_add_window(lbuf, sizeof lbuf, ORC_WIN_BYTES);
+            orc_add_window(fm_buf, sizeof fm_buf, ORC_WIN_BYTES);
+            orc_add_window(memory_map_read, 8192 * 4, ORC_WIN_READ_MAP);
+            orc_add_window(giwram, giwram_size, ORC_WIN_BYTES);
+            orc_add_window(ewram, sizeof ewram, ORC_WIN_BYTES);
+            orc_add_window(rom_p8, sizeof rom_p8, ORC_WIN_BYTES);
+            orc_add_window(rom_p9, sizeof rom_p9, ORC_WIN_BYTES);
+            orc_add_window(frag_map, 8192 * 4, ORC_WIN_FRAGMENT_MAP);
+            orc_add_window(&gamepak_size, 4, ORC_WIN_HOST_U32);
+            orc_add_window(&cgba_gamepak_fragment_blocks, 4, ORC_WIN_HOST_PTR);
+            orc_add_window(ws_cyc_seq, sizeof ws_cyc_seq, ORC_WIN_BYTES);
+            orc_add_window(ws_cyc_nseq, sizeof ws_cyc_nseq, ORC_WIN_BYTES);
+            orc_add_window(orc_vec_table, sizeof orc_vec_table, ORC_WIN_BYTES);
+            orc_slow_target = (u32)(uintptr_t)sh4_op2_pc_mem_tramp;
+            orc_slow_target2 = (u32)(uintptr_t)sh4_op2_pc_tramp;
+            orc_slow_target3 = (u32)(uintptr_t)sh4_fastmem_pc_mem_tramp;
+            orc_slow_target4 = (u32)(uintptr_t)sh4_fastmem_compact8_tramp;
+            orc_slow_target5 = (u32)(uintptr_t)sh4_fastmem_compact8_load_tramp;
+            cases++;
+            if (!run_at((u32)(uintptr_t)lbuf, (u32)(uintptr_t)sp)) {
+              printf("FAIL arm-load-run Path2 %s in_iw=%d: %s\n",
+                     sub[si].nm, in_iw, unmodeled);
+              fails++;
+              continue;
+            }
+            u32 a0 = sub[si].base + 4u;
+            u32 want1 = 0, want2 = 0, want3 = 0, want0 = 0;
+            for (int k = 0; k < 4; k++) {
+              u32 a = a0 + (u32)k;
+              u8 bv = (a >> 24) == 8 ? frag_map[(a - 0x08000000u) >> 12][a & 0xFFFu]
+                    : (a >> 24) == 3 ? giwram[0x8000u + (a & 0x7FFFu)]
+                    : ewram[a & 0x3FFFFu];
+              want1 |= (u32)bv << (k * 8);
+            }
+            for (int k = 0; k < 2; k++) {
+              u32 a = a0 + 4u + (u32)k;
+              u8 bv = (a >> 24) == 8 ? frag_map[(a - 0x08000000u) >> 12][a & 0xFFFu]
+                    : (a >> 24) == 3 ? giwram[0x8000u + (a & 0x7FFFu)]
+                    : ewram[a & 0x3FFFFu];
+              want2 |= (u32)bv << (k * 8);
+            }
+            {
+              u32 a = a0 + 7u;
+              s8 bv = (s8)((a >> 24) == 8 ? frag_map[(a - 0x08000000u) >> 12][a & 0xFFFu]
+                    : (a >> 24) == 3 ? giwram[0x8000u + (a & 0x7FFFu)]
+                    : ewram[a & 0x3FFFFu]);
+              want3 = (u32)(s32)bv;
+            }
+            for (int k = 0; k < 4; k++) {
+              u32 a = a0 + 8u + (u32)k;
+              u8 bv = (a >> 24) == 8 ? frag_map[(a - 0x08000000u) >> 12][a & 0xFFFu]
+                    : (a >> 24) == 3 ? giwram[0x8000u + (a & 0x7FFFu)]
+                    : ewram[a & 0x3FFFFu];
+              want0 |= (u32)bv << (k * 8);
+            }
+            if (g_reg[1] != want1 || g_reg[2] != want2 ||
+                g_reg[3] != want3 || g_reg[0] != want0) {
+              printf("FAIL arm-load-run Path2 %s in_iw=%d: got (%08X,%08X,%08X,%08X) want (%08X,%08X,%08X,%08X)\n",
+                     sub[si].nm, in_iw, g_reg[0], g_reg[1], g_reg[2], g_reg[3],
+                     want0, want1, want2, want3);
+              fails++;
+            }
+          }
+        }
+      }
+
+      memory_map_read[0x08008000u >> 15] = old_m8;
+      gamepak_size = old_gp_size;
+      cgba_gamepak_fragment_blocks = old_frags;
+    }
+
     /* rn==15 literal-pool loads: address is a compile-time constant
      * (pc+8 +/- imm) synthesized into the site; lands in the rom page. */
     {
@@ -2764,80 +2965,123 @@ int main(void)
   }
   }
 
-  /* ---- ARM same-Rn same-shift DP run (peephole 5) ----
-   * Regression coverage for the 0xFFF00FF0u vs 0xFFFF0FF0u mask bug where ops
-   * with different Rn (e.g. Minish Cap 0x0300607c: ADD r3,r2,r3 + ADD r5,r4,r3)
-   * were wrongly fused into a single-Rn cached run. */
+  /* ---- 4-slot R4..R7 BBRA straight-line ARM ALU/MUL/MLA oracle (2000 runs) --- */
   {
-    static const struct {
-      const char *nm;
-      u32 ops[4];
-      int cnt;
-      int want_emit;
-    } rn_cases[] = {
-      { "diff-rn-minish",  { 0xE0823003u, 0xE0845003u }, 2, 0 },
-      { "diff-rn-lsr7",    { 0xE00213A3u, 0xE00543A6u }, 2, 0 },
-      { "s-bit-reject",    { 0xE0923003u, 0xE0925003u }, 2, 0 },
-      { "rd-eq-rn-reject", { 0xE0822003u, 0xE0825003u }, 2, 0 },
-      { "same-rn-add",     { 0xE0823003u, 0xE0825003u }, 2, 1 },
-      { "same-rn-and-lsr", { 0xE00C13A1u, 0xE00C43A4u, 0xE00C73A7u }, 3, 1 },
-      { "same-rn-orr-lsl", { 0xE1861182u, 0xE1863184u }, 2, 1 },
-      { "same-rn-eor-asr", { 0xE0281242u, 0xE0285243u }, 2, 1 },
+    static const u32 arm_alus[9] = { 0u, 1u, 2u, 3u, 4u, 0xCu, 0xDu, 0xEu, 0xFu };
+    static const u32 dir_cases[][4] = {
+      /* Minish Cap diff-Rn ADD regression (r3 reused, distinct r2/r4 bases) */
+      { 0xE0823003u, 0xE0845003u, 0u, 0u },
+      /* same-Rn LSR #7 packing (old Peephole 5) */
+      { 0xE00C13A1u, 0xE00C43A4u, 0xE00C73A7u, 0u },
+      /* same-Rd accumulator ORR with shifts (old Peephole 8) */
+      { 0xE1844405u, 0xE1844806u, 0xE1844C07u, 0u },
+      /* aliasing SUB r4, r5, r4 + RSB r5, r4, r5 + MLA r4, r6, r7, r4 + BIC */
+      { 0xE0454004u, 0xE0645005u, 0xE0244796u, 0xE1C44005u },
     };
-    for (size_t ci = 0; ci < sizeof(rn_cases) / sizeof(rn_cases[0]); ci++) {
-      static u8 sbuf[512] __attribute__((aligned(4)));
-      u8 *sp = sbuf;
-      int emitted = sh4g_arm_dp_same_rn_run_native(&sp, rn_cases[ci].ops,
-                                                   rn_cases[ci].cnt);
-      cases++;
-      if (emitted != rn_cases[ci].want_emit) {
-        printf("FAIL same-rn %s: emitted=%d want %d\n",
-               rn_cases[ci].nm, emitted, rn_cases[ci].want_emit);
-        fails++;
-        continue;
+    static const int dir_lens[4] = { 2, 3, 3, 4 };
+    u32 rng = 0xA1B2C3D4u;
+    for (int trial = 0; trial < 2000 + 4; trial++) {
+      u32 rops[16];
+      int rlen;
+      if (trial < 4) {
+        rlen = dir_lens[trial];
+        for (int k = 0; k < rlen; k++) rops[k] = dir_cases[trial][k];
+      } else {
+        rlen = 2 + (int)((rng = rng * 1664525u + 1013904223u) % 15u);
+        for (int k = 0; k < rlen; k++) {
+          u32 r = (rng = rng * 1664525u + 1013904223u);
+          unsigned kind = r & 7u;
+          unsigned rd = (r >> 3) % 10u; /* bias to r0..r9 for heavy reuse */
+          unsigned rn = (r >> 7) % 10u;
+          unsigned rm = (r >> 11) % 10u;
+          unsigned rs = (r >> 15) % 10u;
+          if (kind == 0u) {             /* MUL / MLA */
+            u32 is_mla = (r >> 19) & 1u;
+            rops[k] = 0xE0000090u | (is_mla << 21) | (rd << 16) |
+                      (rn << 12) | (rs << 8) | rm;
+          } else if (kind <= 3u) {      /* DP imm */
+            u32 alu = arm_alus[(r >> 19) % 9u];
+            u32 imm8 = (r >> 23) & 0xFFu;
+            u32 rot = ((r >> 15) & 0xFu);
+            if ((r & 0x10000000u) && alu == 0u) { imm8 = 0xFFu; rot = 0u; }
+            if ((r & 0x20000000u) && alu == 4u) { imm8 = (r >> 23) & 0x7Fu; rot = 0u; }
+            rops[k] = 0xE2000000u | (alu << 21) | (rn << 16) | (rd << 12) |
+                      (rot << 8) | imm8;
+          } else {                      /* DP reg (imm shift) */
+            u32 alu = arm_alus[(r >> 19) % 9u];
+            u32 st = (r >> 23) % 3u;
+            u32 si = (r >> 25) & 31u;
+            if (st != 0u && si == 0u) si = 1u + ((r >> 15) % 31u);
+            rops[k] = 0xE0000000u | (alu << 21) | (rn << 16) | (rd << 12) |
+                      (si << 7) | (st << 5) | rm;
+          }
+        }
       }
+      static u8 abuf[2048] __attribute__((aligned(4)));
+      u8 *sp = abuf;
+      sh4g_litseg_begin();
+      int emitted = sh4g_arm_alu_run_native(&sp, rops, rlen);
+      sh4g_litseg_end(&sp);
       if (!emitted) continue;
+      cases++;
       u32 want_reg[16];
       memset(g_reg, 0, sizeof g_reg);
       for (int i = 0; i < 16; i++) {
-        u32 v = (i == 2 || i == 3) ? (0x80012340u + (u32)i * 0x1111u)
-                                   : (0x13579BDFu ^ ((u32)i * 0x01010101u));
+        u32 v = (rng = rng * 1664525u + 1013904223u);
         g_reg[i] = want_reg[i] = v;
       }
-      for (int k = 0; k < rn_cases[ci].cnt; k++) {
-        u32 op = rn_cases[ci].ops[k];
-        u32 alu = (op >> 21) & 0xFu;
-        unsigned rn = (op >> 16) & 0xFu;
-        unsigned rd = (op >> 12) & 0xFu;
-        unsigned rm = op & 0xFu;
-        unsigned st = (op >> 5) & 3u;
-        unsigned si = (op >> 7) & 0x1Fu;
-        u32 op2 = want_reg[rm];
-        if (si != 0u) {
-          if (st == 0u)      op2 <<= si;
-          else if (st == 1u) op2 >>= si;
-          else               op2 = (u32)((s32)op2 >> si);
+      for (int k = 0; k < rlen; k++) {
+        u32 op = rops[k];
+        if ((op & 0x0FC000F0u) == 0x00000090u) {
+          unsigned rd = (op >> 16) & 0xFu, rn = (op >> 12) & 0xFu;
+          unsigned rs = (op >> 8) & 0xFu, rm = op & 0xFu;
+          u32 p = want_reg[rm] * want_reg[rs];
+          want_reg[rd] = ((op >> 21) & 1u) ? (p + want_reg[rn]) : p;
+        } else {
+          u32 alu = (op >> 21) & 0xFu;
+          unsigned rn = (op >> 16) & 0xFu, rd = (op >> 12) & 0xFu;
+          u32 op2;
+          if ((op >> 25) & 1u) {
+            u32 rot = ((op >> 8) & 0xFu) * 2u, v = op & 0xFFu;
+            op2 = rot ? ((v >> rot) | (v << (32u - rot))) : v;
+          } else {
+            unsigned rm = op & 0xFu, st = (op >> 5) & 3u, si = (op >> 7) & 31u;
+            op2 = want_reg[rm];
+            if (si != 0u) {
+              if (st == 0u)      op2 <<= si;
+              else if (st == 1u) op2 >>= si;
+              else               op2 = (u32)((s32)op2 >> si);
+            }
+          }
+          switch (alu) {
+          case 0x0u: want_reg[rd] = want_reg[rn] & op2; break;
+          case 0x1u: want_reg[rd] = want_reg[rn] ^ op2; break;
+          case 0x2u: want_reg[rd] = want_reg[rn] - op2; break;
+          case 0x3u: want_reg[rd] = op2 - want_reg[rn]; break;
+          case 0x4u: want_reg[rd] = want_reg[rn] + op2; break;
+          case 0xCu: want_reg[rd] = want_reg[rn] | op2; break;
+          case 0xDu: want_reg[rd] = op2; break;
+          case 0xEu: want_reg[rd] = want_reg[rn] & ~op2; break;
+          default:   want_reg[rd] = ~op2; break;
+          }
         }
-        if (alu == 0x0u)      want_reg[rd] = want_reg[rn] & op2;
-        else if (alu == 0x1u) want_reg[rd] = want_reg[rn] ^ op2;
-        else if (alu == 0x4u) want_reg[rd] = want_reg[rn] + op2;
-        else                  want_reg[rd] = want_reg[rn] | op2;
       }
       orc_reset_windows();
-      orc_add_window(sbuf, sizeof sbuf, 0);
-      if (!run_at((u32)(uintptr_t)sbuf, (u32)(uintptr_t)sp)) {
-        printf("FAIL same-rn %s: interpreter: %s\n", rn_cases[ci].nm, unmodeled);
+      orc_add_window(abuf, sizeof abuf, 0);
+      if (!run_at((u32)(uintptr_t)abuf, (u32)(uintptr_t)sp)) {
+        printf("FAIL arm-bbra trial=%d: interpreter: %s\n", trial, unmodeled);
         fails++;
-        continue;
+        break;
       }
       for (int i = 0; i < 15; i++) {
         if (g_reg[i] != want_reg[i]) {
-          printf("FAIL same-rn %s: r%d=%08X want %08X\n",
-                 rn_cases[ci].nm, i, g_reg[i], want_reg[i]);
+          printf("FAIL arm-bbra trial=%d rlen=%d: r%d=%08X want %08X\n",
+                 trial, rlen, i, g_reg[i], want_reg[i]);
           fails++;
           break;
         }
       }
+      if (fails) break;
     }
   }
 

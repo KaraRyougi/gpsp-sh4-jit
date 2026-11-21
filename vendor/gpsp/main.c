@@ -182,33 +182,36 @@ static __attribute__((noinline)) unsigned update_timers_slow(
 }
 
 #if defined(CGBA_SILENT_TIMERS) && CGBA_SILENT_TIMERS
-static __attribute__((noinline)) s32 cgba_timer0_refill_slow(s32 cnt, u32 period)
+static __attribute__((noinline)) s32 cgba_fast_timer_refill_slow(s32 cnt, u32 period)
 {
    u32 extra = (0u - (u32)cnt) / period + 1u;
    return cnt + (s32)(extra * period);
 }
-#endif
 
-extern u32 cgba_timer_active_mask;
-static u32 cgba_timer0_fast_only;
+/* Index (0..3) of the sole active silent prescale=1 non-IRQ timer, or -1. */
+static s32 cgba_fast_timer_idx = -1;
+
+static inline void cgba_fast_timer_step(unsigned idx, unsigned elapsed_cycles)
+{
+   s32 cnt = timer[idx].count - (s32)elapsed_cycles;
+   if (cnt <= 0)
+   {
+      u32 period = timer[idx].reload;
+      cnt += (s32)period;
+      if (__builtin_expect(cnt <= 0, 0))
+         cnt = cgba_fast_timer_refill_slow(cnt, period);
+   }
+   timer[idx].count = cnt;
+   write_ioreg(REG_TMXD(idx), -cnt);
+}
+#endif
 
 static inline unsigned update_timers(irq_type *irq_raised, unsigned completed_cycles)
 {
 #if defined(CGBA_SILENT_TIMERS) && CGBA_SILENT_TIMERS
-   /* Fast path for the common single-sound-timer configuration (Timer 0 only,
-    * prescale=1 (shift 0), no IRQ, no cascade). */
-   if (__builtin_expect(cgba_timer0_fast_only != 0u, 1))
+   if (__builtin_expect(cgba_fast_timer_idx >= 0, 1))
    {
-      s32 cnt = timer[0].count - (s32)completed_cycles;
-      if (cnt <= 0)
-      {
-         u32 period = timer[0].reload;
-         cnt += (s32)period;
-         if (__builtin_expect(cnt <= 0, 0))
-            cnt = cgba_timer0_refill_slow(cnt, period);
-      }
-      timer[0].count = cnt;
-      write_ioreg(REG_TMXD(0), -cnt);
+      cgba_fast_timer_step((unsigned)cgba_fast_timer_idx, completed_cycles);
       return 0;
    }
 #endif
@@ -280,10 +283,19 @@ void cgba_recompute_timer_cap_mask(void)
   }
   cgba_timer_cap_mask = m;
   cgba_timer_active_mask = active;
-  cgba_timer0_fast_only = (active == 1u &&
-                           timer[0].status == TIMER_PRESCALE &&
-                           !timer[0].irq &&
-                           timer[0].prescale == 0u);
+#if defined(CGBA_SILENT_TIMERS) && CGBA_SILENT_TIMERS
+  {
+    s32 fast_idx = -1;
+    if (active != 0u && (active & (active - 1u)) == 0u) {
+      unsigned idx = (unsigned)__builtin_ctz(active);
+      if (timer[idx].status == TIMER_PRESCALE &&
+          !timer[idx].irq &&
+          timer[idx].prescale == 0u)
+        fast_idx = (s32)idx;
+    }
+    cgba_fast_timer_idx = fast_idx;
+  }
+#endif
 }
 
 static __attribute__((noinline)) int cgba_poll_serial(u32 completed_cycles,
@@ -482,6 +494,77 @@ static __attribute__((noinline)) unsigned cgba_ugba_idle_fastforward(
 }
 #endif
 
+static inline void cgba_queue_single_scanline(u32 vcount)
+{
+#ifdef CGBA_VIDEO_DEFERRED_ACTIVE
+  if (__builtin_expect(skip_next_frame == 0, 1)) {
+    u32 pcnt = cgba_pending_sl_count;
+    if (__builtin_expect(pcnt != 0u && vcount == cgba_pending_sl_start + pcnt, 1)) {
+      cgba_pending_sl_count = pcnt + 1u;
+    } else {
+      if (pcnt != 0u)
+        cgba_flush_pending_scanlines();
+      cgba_pending_sl_start = vcount;
+      cgba_pending_sl_count = 1u;
+    }
+  }
+#else
+  (void)vcount;
+  update_scanline();
+#endif
+}
+
+static inline u32 cgba_update_vcount_match(u32 vcount, u32 *dispstat)
+{
+  if (__builtin_expect(vcount == (*dispstat >> 8), 0)) {
+    *dispstat |= 0x04u;
+    if (*dispstat & 0x20u)
+      return IRQ_VCOUNT;
+  } else {
+    *dispstat &= ~0x04u;
+  }
+  return 0u;
+}
+
+static inline void cgba_handle_dma_alert(cpu_alert_type dma_alert, u32 *changed_pc)
+{
+#ifdef HAVE_DYNAREC
+  /* Scheduled DMA runs while translated execution is parked here. A code
+   * overwrite invalidates RAM translations, and either SMC or a DMA write
+   * to WAITCNT must prevent the SH4 update stub from resuming its old block. */
+  if (__builtin_expect(dma_alert != CPU_ALERT_NONE, 0)) {
+    if (dma_alert & CPU_ALERT_SMC)
+      flush_translation_cache_ram();
+    if (dma_alert & (CPU_ALERT_SMC | CPU_ALERT_TIMING))
+      *changed_pc = 0x40000000;
+  }
+#else
+  (void)dma_alert;
+  (void)changed_pc;
+#endif
+}
+
+static inline u32 cgba_check_pending_irq(void)
+{
+  if (__builtin_expect((io_registers[REG_IE] & io_registers[REG_IF]) != 0 &&
+                       io_registers[REG_IME] != 0 &&
+                       !(reg[REG_CPSR] & 0x80), 0))
+    if (check_and_raise_interrupts())
+      return 0x40000000u;
+  return 0u;
+}
+
+static inline u32 cgba_finish_slice_cycles(u32 ec, int dma_cycles, u32 flags)
+{
+  // We voluntarily limit this. It is not accurate but it would be much harder.
+  if (__builtin_expect(dma_cycles != 0, 0)) {
+    if (dma_cycles > 64) dma_cycles = 64;
+    if ((u32)dma_cycles > ec) dma_cycles = (int)ec;
+    return (ec - (u32)dma_cycles) | flags;
+  }
+  return ec | flags;
+}
+
 static __attribute__((noinline)) u32 cgba_update_gba_slow(int remaining_cycles)
 {
   u32 changed_pc = 0;
@@ -521,26 +604,9 @@ static __attribute__((noinline)) u32 cgba_update_gba_slow(int remaining_cycles)
     remaining_cycles = 0;
 
     // Timers can trigger DMA (usually sound) and consume cycles.
-#if defined(CGBA_SILENT_TIMERS) && CGBA_SILENT_TIMERS
-    if (__builtin_expect(cgba_timer0_fast_only != 0u, 1))
-    {
-      s32 cnt = timer[0].count - (s32)elapsed_cycles;
-      if (cnt <= 0)
-      {
-        u32 period = timer[0].reload;
-        cnt += (s32)period;
-        if (__builtin_expect(cnt <= 0, 0))
-          cnt = cgba_timer0_refill_slow(cnt, period);
-      }
-      timer[0].count = cnt;
-      write_ioreg(REG_TMXD(0), -cnt);
-      dma_cycles = 0;
-    }
-    else
-#endif
     if (cgba_timer_active_mask) {
       irq_type t_irq = IRQ_NONE;
-      dma_cycles = update_timers_slow(&t_irq, elapsed_cycles);
+      dma_cycles = update_timers(&t_irq, elapsed_cycles);
       irq_raised |= t_irq;
     } else {
       dma_cycles = 0;
@@ -582,21 +648,7 @@ static __attribute__((noinline)) u32 cgba_update_gba_slow(int remaining_cycles)
           if(reg[OAM_UPDATED])
             oam_update_count++;
 
-#ifdef CGBA_VIDEO_DEFERRED_ACTIVE
-          if (__builtin_expect(skip_next_frame == 0, 1)) {
-            u32 pcnt = cgba_pending_sl_count;
-            if (__builtin_expect(pcnt != 0u && vcount == cgba_pending_sl_start + pcnt, 1)) {
-              cgba_pending_sl_count = pcnt + 1u;
-            } else {
-              if (pcnt != 0u)
-                cgba_flush_pending_scanlines();
-              cgba_pending_sl_start = vcount;
-              cgba_pending_sl_count = 1u;
-            }
-          }
-#else
-          update_scanline();
-#endif
+          cgba_queue_single_scanline(vcount);
 
           // Trigger the HBlank DMAs if enabled
           if (__builtin_expect(cgba_hblank_dma_mask != 0, 0)) {
@@ -638,33 +690,14 @@ static __attribute__((noinline)) u32 cgba_update_gba_slow(int remaining_cycles)
         }
 
         // Vcount trigger (flag) and IRQ if enabled
-        if (__builtin_expect(vcount == (dispstat >> 8), 0))
-        {
-          dispstat |= 0x04;
-          if(dispstat & 0x20)
-            irq_raised |= IRQ_VCOUNT;
-        }
-        else
-          dispstat &= ~0x04;
+        irq_raised |= (irq_type)cgba_update_vcount_match(vcount, &dispstat);
 
         write_ioreg(REG_VCOUNT, vcount);
       }
       write_ioreg(REG_DISPSTAT, dispstat);
     }
 
-#ifdef HAVE_DYNAREC
-    /* Scheduled DMA runs while translated execution is parked here. A code
-     * overwrite invalidates RAM translations, and either SMC or a DMA write
-     * to WAITCNT must prevent the SH4 update stub from resuming its old block. */
-    if (__builtin_expect(dma_alert != CPU_ALERT_NONE, 0)) {
-      if (dma_alert & CPU_ALERT_SMC)
-        flush_translation_cache_ram();
-      if (dma_alert & (CPU_ALERT_SMC | CPU_ALERT_TIMING))
-        changed_pc = 0x40000000;
-    }
-#else
-    (void)dma_alert;
-#endif
+    cgba_handle_dma_alert(dma_alert, &changed_pc);
 
     // Flag any V/H blank interrupts, DMA IRQs, Vcount, etc.
     if (__builtin_expect(irq_raised != IRQ_NONE, 0)) {
@@ -673,11 +706,7 @@ static __attribute__((noinline)) u32 cgba_update_gba_slow(int remaining_cycles)
     }
 
     // Raise any pending interrupts. This changes the CPU mode.
-    if (__builtin_expect((io_registers[REG_IE] & io_registers[REG_IF]) != 0 &&
-                         io_registers[REG_IME] != 0 &&
-                         !(reg[REG_CPSR] & 0x80), 0))
-      if (check_and_raise_interrupts())
-        changed_pc = 0x40000000;
+    changed_pc |= cgba_check_pending_irq();
 
     // Figure out when we need to stop CPU execution. The next event is
     // a video event or a timer event, whatever happens first.
@@ -728,14 +757,8 @@ static __attribute__((noinline)) u32 cgba_update_gba_slow(int remaining_cycles)
            (idle_pass && !changed_pc && read_ioreg(REG_IF) == idle_if_entry))
           && !frame_complete);
 
-  // We voluntarily limit this. It is not accurate but it would be much harder.
-  if (__builtin_expect(dma_cycles != 0, 0)) {
-    dma_cycles = MIN(64, dma_cycles);
-    dma_cycles = MIN(execute_cycles, dma_cycles);
-    return (execute_cycles - dma_cycles) | changed_pc | frame_complete;
-  }
-
-  return execute_cycles | changed_pc | frame_complete;
+  return cgba_finish_slice_cycles(
+    execute_cycles, dma_cycles, changed_pc | frame_complete);
 }
 
 #if defined(CGBA_SILENT_TIMERS) && CGBA_SILENT_TIMERS
@@ -743,20 +766,8 @@ static __attribute__((noinline)) u32 cgba_ugba_finish_cold_dma(
   cpu_alert_type dma_alert, u32 changed_pc, u32 frame_complete,
   int dma_cycles, unsigned completed_cycles)
 {
-#ifdef HAVE_DYNAREC
-  if (dma_alert != CPU_ALERT_NONE) {
-    if (dma_alert & CPU_ALERT_SMC)
-      flush_translation_cache_ram();
-    if (dma_alert & (CPU_ALERT_SMC | CPU_ALERT_TIMING))
-      changed_pc = 0x40000000;
-  }
-#else
-  (void)dma_alert;
-#endif
-  if ((io_registers[REG_IE] & io_registers[REG_IF]) != 0 &&
-      io_registers[REG_IME] != 0 && !(reg[REG_CPSR] & 0x80))
-    if (check_and_raise_interrupts())
-      changed_pc = 0x40000000;
+  cgba_handle_dma_alert(dma_alert, &changed_pc);
+  changed_pc |= cgba_check_pending_irq();
 
   execute_cycles = MAX(video_count, 0);
   if (reg[CPU_HALT_STATE] == CPU_DMA) {
@@ -777,12 +788,8 @@ static __attribute__((noinline)) u32 cgba_ugba_finish_cold_dma(
     u32 tail = cgba_update_gba_slow(execute_cycles);
     return tail | changed_pc | frame_complete;
   }
-  if (dma_cycles != 0) {
-    dma_cycles = MIN(64, dma_cycles);
-    dma_cycles = MIN(execute_cycles, dma_cycles);
-    return (execute_cycles - dma_cycles) | changed_pc | frame_complete;
-  }
-  return execute_cycles | changed_pc | frame_complete;
+  return cgba_finish_slice_cycles(
+    execute_cycles, dma_cycles, changed_pc | frame_complete);
 }
 #endif
 
@@ -804,10 +811,11 @@ CGBA_HOT_TEXT u32 function_cc update_gba(int remaining_cycles)
   {
     extern u32 serial_irq_cycles;
     extern int serial_mode;
+    s32 fast_tidx = cgba_fast_timer_idx;
     if (__builtin_expect((cgba_idle_wait | reg[CPU_HALT_STATE] |
                           cgba_timer_cap_mask | serial_irq_cycles |
                           (u32)serial_mode) != 0u ||
-                         cgba_timer0_fast_only == 0u, 0))
+                         (cgba_timer_active_mask != 0u && fast_tidx < 0), 0))
       return cgba_update_gba_slow(remaining_cycles);
 
 #if defined(CGBA_GPSP_HEADLESS_TEST) && defined(CGBA_SH4_DIAG_COUNTERS)
@@ -816,18 +824,9 @@ CGBA_HOT_TEXT u32 function_cc update_gba(int remaining_cycles)
     unsigned completed_cycles = execute_cycles - remaining_cycles;
     cpu_ticks += completed_cycles;
 
-    /* Fast single sound timer (Timer 0, prescale=1, no IRQ/cascade). */
-    {
-      s32 cnt = timer[0].count - (s32)completed_cycles;
-      if (cnt <= 0) {
-        u32 period = timer[0].reload;
-        cnt += (s32)period;
-        if (__builtin_expect(cnt <= 0, 0))
-          cnt = cgba_timer0_refill_slow(cnt, period);
-      }
-      timer[0].count = cnt;
-      write_ioreg(REG_TMXD(0), -cnt);
-    }
+    /* Fast single silent prescale=1 timer (TM0..TM3) or no active timers. */
+    if (__builtin_expect(fast_tidx >= 0, 1))
+      cgba_fast_timer_step((unsigned)fast_tidx, completed_cycles);
 
     int vc = video_count - (int)completed_cycles;
     video_count = vc;
@@ -849,21 +848,7 @@ CGBA_HOT_TEXT u32 function_cc update_gba(int remaining_cycles)
           if (reg[OAM_UPDATED])
             oam_update_count++;
 
-#ifdef CGBA_VIDEO_DEFERRED_ACTIVE
-          if (__builtin_expect(skip_next_frame == 0, 1)) {
-            u32 pcnt = cgba_pending_sl_count;
-            if (__builtin_expect(pcnt != 0u && vcount == cgba_pending_sl_start + pcnt, 1)) {
-              cgba_pending_sl_count = pcnt + 1u;
-            } else {
-              if (pcnt != 0u)
-                cgba_flush_pending_scanlines();
-              cgba_pending_sl_start = vcount;
-              cgba_pending_sl_count = 1u;
-            }
-          }
-#else
-          update_scanline();
-#endif
+          cgba_queue_single_scanline(vcount);
 
           if (__builtin_expect(cgba_hblank_dma_mask != 0, 0)) {
 #if defined(CGBA_BULK_DMA) && CGBA_BULK_DMA && defined(CGBA_VIDEO_DEFERRED_ACTIVE)
@@ -900,13 +885,7 @@ CGBA_HOT_TEXT u32 function_cc update_gba(int remaining_cycles)
           vcount = cgba_ugba_bres.vcount;
           dispstat = cgba_ugba_bres.dispstat;
           irq_raised = cgba_ugba_bres.irq_raised;
-          if (__builtin_expect(vcount == (dispstat >> 8), 0)) {
-            dispstat |= 0x04u;
-            if (dispstat & 0x20u)
-              irq_raised |= IRQ_VCOUNT;
-          } else {
-            dispstat &= ~0x04u;
-          }
+          irq_raised |= cgba_update_vcount_match(vcount, &dispstat);
           write_ioreg(REG_VCOUNT, vcount);
           write_ioreg(REG_DISPSTAT, dispstat);
           if (irq_raised != 0u)
@@ -916,13 +895,7 @@ CGBA_HOT_TEXT u32 function_cc update_gba(int remaining_cycles)
             cgba_ugba_bres.dma_cycles, completed_cycles);
         }
 
-        if (__builtin_expect(vcount == (dispstat >> 8), 0)) {
-          dispstat |= 0x04u;
-          if (dispstat & 0x20u)
-            irq_raised = IRQ_VCOUNT;
-        } else {
-          dispstat &= ~0x04u;
-        }
+        irq_raised = cgba_update_vcount_match(vcount, &dispstat);
         write_ioreg(REG_VCOUNT, vcount);
         write_ioreg(REG_DISPSTAT, dispstat);
       }
@@ -931,11 +904,7 @@ CGBA_HOT_TEXT u32 function_cc update_gba(int remaining_cycles)
     if (__builtin_expect(irq_raised != 0u, 0))
       io_registers[REG_IF] |= eswap16((u16)irq_raised);
 
-    if (__builtin_expect((io_registers[REG_IE] & io_registers[REG_IF]) != 0 &&
-                         io_registers[REG_IME] != 0 &&
-                         !(reg[REG_CPSR] & 0x80), 0))
-      if (check_and_raise_interrupts())
-        changed_pc = 0x40000000;
+    changed_pc = cgba_check_pending_irq();
 
     u32 ec = (vc > 0) ? (u32)vc : 0u;
     execute_cycles = ec;
@@ -944,12 +913,7 @@ CGBA_HOT_TEXT u32 function_cc update_gba(int remaining_cycles)
       cgba_cap_src[6] += ec;
       if (ec < 192) cgba_cap_src[7]++; }
 #endif
-    if (__builtin_expect(dma_cycles != 0, 0)) {
-      if (dma_cycles > 64) dma_cycles = 64;
-      if ((u32)dma_cycles > ec) dma_cycles = (int)ec;
-      return (ec - (u32)dma_cycles) | changed_pc;
-    }
-    return ec | changed_pc;
+    return cgba_finish_slice_cycles(ec, dma_cycles, changed_pc);
   }
 #else
   return cgba_update_gba_slow(remaining_cycles);
