@@ -4276,22 +4276,12 @@ bool translate_block_arm(u32 pc, bool ram_region)
             }
           }
         }
-        /* General ARM IWRAM peephole 6: 1..4 identical interpolated stereo
-         * RMW-MLA units (12-op stepped run or 10-op standalone unit). Allows
-         * internal branch targets at unit boundaries (u >= 1, k == 0) via an
-         * exact cycle-gate guard on the fast loop and unit entry points in
-         * the cold fallback. */
+#if defined(CGBA_SH4_M4A_MIX_SKIP) && CGBA_SH4_M4A_MIX_SKIP
+        /* Soundless skip for 1..4 identical stepped interpolated stereo IWRAM
+         * PCM mixer units (e.g. Metroid Fusion / IS / Camelot sound drivers). */
         if (!arm_fused && (pc >> 24) == 0x03 &&
-            (((cur_op & 0xFFFF0070u) == 0xE1A00020u &&
-              (((next_op & 0xFFF00FF0u) == 0xE1B000D0u) ||
-               ((next_op & 0xFFF00FF0u) == 0xE7F00000u))) ||
-             ((((cur_op & 0xFFF00FF0u) == 0xE1B000D0u) ||
-               ((cur_op & 0xFFF00FF0u) == 0xE7F00000u)) &&
-              (((next_op & 0xFFF00FFFu) == 0xE1D000D1u) ||
-               ((next_op & 0xFFF00FFFu) == 0xE5D00001u))))) {
-          int has_step = ((cur_op & 0xFFFF0070u) == 0xE1A00020u);
-          int ulen = has_step ? 12 : 10;
-          int max_units = has_step ? 4 : 1;
+            (cur_op & 0xFFFF0070u) == 0xE1A00020u &&
+            (next_op & 0xFFF00FF0u) == 0xE1B000D0u) {
           int nunits = 0;
           u32 ops48[48];
           int ccs48[48];
@@ -4301,13 +4291,13 @@ bool translate_block_arm(u32 pc, bool ram_region)
           u8 *unit_body_off[4] = { NULL, NULL, NULL, NULL };
           u32 save_pc = pc;
           u32 save_cc = cycle_count;
-          while (nunits < max_units) {
-            int bi = nunits * ulen;
+          while (nunits < 4) {
+            int bi = nunits * 12;
             int k, ok_u = 1;
-            if (block_data_position + bi + ulen - 1 >= num_insns ||
-                ((save_pc + (u32)((bi + ulen - 1) * 4)) >> 12) != pc_region)
+            if (block_data_position + bi + 11 >= num_insns ||
+                ((save_pc + (u32)((bi + 11) * 4)) >> 12) != pc_region)
               break;
-            for (k = 0; k < ulen; k++) {
+            for (k = 0; k < 12; k++) {
               int idx = bi + k;
               if ((save_pc + (u32)(idx * 4)) == cheat_master_hook) {
                 ok_u = 0; break;
@@ -4327,7 +4317,7 @@ bool translate_block_arm(u32 pc, bool ram_region)
               unit_pre_debit[nunits] = (int)cycle_count;
               cycle_count = 0;
             }
-            for (k = 0; k < ulen; k++) {
+            for (k = 0; k < 12; k++) {
               int idx = bi + k;
               if (idx == 0) {
                 ccs48[0] = (int)save_cc;
@@ -4341,14 +4331,14 @@ bool translate_block_arm(u32 pc, bool ram_region)
           }
           pc = save_pc;
           if (nunits >= 1 &&
-              sh4g_arm_interp_rmw_mla_native(&translation_ptr, ops48, ccs48,
-                                             nunits, has_step, pc,
-                                             unit_has_gate, unit_pre_debit,
-                                             unit_blk_off, unit_body_off)) {
+              sh4g_arm_interp_rmw_mla_skip(&translation_ptr, ops48, ccs48,
+                                           nunits, pc,
+                                           unit_has_gate, unit_pre_debit,
+                                           unit_blk_off, unit_body_off)) {
             int u;
-            int consumed_ops = nunits * ulen;
+            int consumed_ops = nunits * 12;
             for (u = 1; u < nunits; u++) {
-              int idx = block_data_position + u * ulen;
+              int idx = block_data_position + u * 12;
               block_data[idx].block_offset = unit_blk_off[u];
               block_data[idx].body_offset = unit_body_off[u];
             }
@@ -4361,6 +4351,7 @@ bool translate_block_arm(u32 pc, bool ram_region)
             cycle_count = save_cc;
           }
         }
+#endif
         /* General 4-slot R4..R7 BBRA for straight-line non-S / dead-flag ARM
          * ALU & MUL/MLA runs (2..16 ops, BOTH ROM and IWRAM). Replaces the old
          * same-Rn and same-Rd peepholes with one general register allocator. */
@@ -4407,17 +4398,18 @@ bool translate_block_arm(u32 pc, bool ram_region)
               seen |= tk;
               run_ops[rlen++] = rop;
             }
-            /* Preserve trailing IWRAM RMW-MLA unit step lead-in if present. */
+#if defined(CGBA_SH4_M4A_MIX_SKIP) && CGBA_SH4_M4A_MIX_SKIP
+            /* Preserve trailing IWRAM stereo PCM mixer step lead-in if present. */
             if (rlen >= 2 && (save_pc >> 24) == 0x03 &&
                 (run_ops[rlen - 1] & 0xFFFF0070u) == 0xE1A00020u &&
                 block_data_position + rlen < num_insns &&
                 ((save_pc + (u32)(rlen * 4)) >> 12) == pc_region) {
               u32 after_op = readaddress32(pc_address_block,
                                            (save_pc + (u32)(rlen * 4)) & 0x0FFF);
-              if ((after_op & 0xFFF00FF0u) == 0xE1B000D0u ||
-                  (after_op & 0xFFF00FF0u) == 0xE7F00000u)
+              if ((after_op & 0xFFF00FF0u) == 0xE1B000D0u)
                 rlen--;
             }
+#endif
             if (rlen >= 2 && dup != 0u &&
                 sh4g_arm_alu_run_native_ex(&translation_ptr, run_ops,
                                            rm_arr, wm_arr, rlen)) {
@@ -4482,11 +4474,12 @@ bool translate_block_arm(u32 pc, bool ram_region)
             cycle_count = save_cc;
           }
         }
-        /* General ARM IWRAM peephole 3: 1..2x LDMIA {4} + 2*(LDRSB/B + MLA + MLA + ADD #1) + STMIA{!}. */
+#if defined(CGBA_SH4_M4A_MIX_SKIP) && CGBA_SH4_M4A_MIX_SKIP
+        /* Soundless skip for 1..2x fixed-rate IWRAM stereo PCM mix units:
+         * LDMIA {4} + 2*(LDRSB + MLA + MLA + ADD #1) + STMIA!. */
         if (!arm_fused && (pc >> 24) == 0x03 &&
             (cur_op & 0xFFF00000u) == 0xE8900000u &&
-            (((next_op & 0xFFF00FF0u) == 0xE19000D0u) ||
-             ((next_op & 0xFFF00FF0u) == 0xE7D00000u)) &&
+            (next_op & 0xFFF00FF0u) == 0xE19000D0u &&
             block_data_position + 9 < num_insns &&
             ((pc + 36) >> 12) == pc_region) {
           int ok10 = 1, k10;
@@ -4537,8 +4530,8 @@ bool translate_block_arm(u32 pc, bool ram_region)
               }
             }
             pc = save_pc;
-            if (sh4g_arm_rmw_block4_ldrsb_mla_native(&translation_ptr,
-                                                     ops20, ccs20, reps, pc)) {
+            if (sh4g_arm_rmw_block4_ldrsb_mla_skip(&translation_ptr,
+                                                   ops20, ccs20, reps, pc)) {
               block_data_position += reps * 10 - 1;
               pc += (u32)(reps * 40);
               sh4_greg_forward_reset();
@@ -4549,40 +4542,7 @@ bool translate_block_arm(u32 pc, bool ram_region)
             }
           }
         }
-        /* General ARM IWRAM peephole 2: LDMIA {rA,rB} + MLA + MLA + STMIA{!}. */
-        if (!arm_fused && (pc >> 24) == 0x03 &&
-            (cur_op & 0xFFF00000u) == 0xE8900000u &&
-            (next_op & 0xFFF000F0u) == 0xE0200090u &&
-            block_data_position + 3 < num_insns &&
-            !block_data[block_data_position + 2].update_cycles &&
-            !block_data[block_data_position + 3].update_cycles &&
-            (pc + 8) != cheat_master_hook &&
-            (pc + 12) != cheat_master_hook &&
-            ((pc + 12) >> 12) == pc_region) {
-          u32 op2 = readaddress32(pc_address_block, (pc + 8) & 0x0FFF);
-          u32 op3 = readaddress32(pc_address_block, (pc + 12) & 0x0FFF);
-          if ((op2 & 0xFFF000F0u) == 0xE0200090u &&
-              (op3 & 0xFFD00000u) == 0xE8800000u) {
-            int cc0 = (int)cycle_count;
-            u32 save_pc = pc;
-            pc += 4; arm_base_cycles();
-            pc += 4; arm_base_cycles();
-            pc += 4; arm_base_cycles();
-            int cc3 = (int)cycle_count;
-            pc = save_pc;
-            if (sh4g_arm_rmw_block_mla_native(&translation_ptr,
-                                              cur_op, next_op, op2, op3,
-                                              pc, cc0, cc3)) {
-              block_data_position += 3;
-              pc += 16;
-              sh4_greg_forward_reset();
-              sh4g_litseg_maybe_flush(&translation_ptr);
-              arm_fused = 1;
-            } else {
-              cycle_count = (u32)cc0;
-            }
-          }
-        }
+#endif
       }
 #endif
       if (!arm_fused) {

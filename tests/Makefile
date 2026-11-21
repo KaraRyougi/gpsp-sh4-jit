@@ -30,11 +30,14 @@ all: smoke core litpool thumb cond native-ldst rtc pacing backup-dirty nor-world
 exec: $(ROOT)/tests/sh4_exec_oracle.c $(ROOT)/ports/fxcg100/sh4/sh4_thumb_dp_emit.h \
       $(ROOT)/ports/fxcg100/sh4/sh4_thumb_ldst_emit.h \
       $(ROOT)/ports/fxcg100/sh4/sh4_arm_dp_emit.h \
+      $(ROOT)/ports/fxcg100/sh4/sh4_arm_mul_emit.h \
+      $(ROOT)/ports/fxcg100/sh4/sh4_arm_block_emit.h \
       $(ROOT)/ports/fxcg100/sh4/sh4_bbra_emit.h \
       $(ROOT)/ports/fxcg100/sh4/sh4_emit_glue.h $(ROOT)/ports/fxcg100/sh4/sh4_fastmem.h \
       $(ROOT)/ports/fxcg100/sh4/sh4_fastmem_emit.h
 	$(CC) $(CFLAGS) -DCGBA_SH4_ARM_LDST_NATIVE=1 -DCGBA_SH4_THUMB_LDST_NATIVE=1 \
 	  -DCGBA_SH4_THUMB_BLOCK_NATIVE=1 -DCGBA_SH4_COMPACT_FASTMEM_TUPLE=1 \
+	  -DCGBA_SH4_M4A_MIX_SKIP=1 \
 	  -I$(ROOT) $(ROOT)/tests/sh4_exec_oracle.c -o $(BIN)-exec
 	$(BIN)-exec
 

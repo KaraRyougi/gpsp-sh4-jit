@@ -1467,34 +1467,21 @@ static void cgba_sh4_arm_mixer_run_prepared(
   }
 }
 
-/* All output tags are metadata bytes, so their byte order is immaterial.  The
- * array is 32-byte aligned and output offsets are halfword aligned; peel one
- * halfword when needed, then check four words per iteration. */
-static int cgba_sh4_arm_mixer_tags_zero(u32 offset, u32 bytes)
+/* Shared SMC-tag scan for sound-driver fast paths (mixer & PCM clamp): checks
+ * whether `len` bytes starting at `tags` are all zero (no translated RAM code). */
+static int cgba_sh4_tags_zero(const u8 *tags, u32 len)
 {
-  const u32 *words;
-
-  if (offset & 2u) {
-    if (address16(iwram, offset))
-      return 0;
-    offset += 2u;
-    bytes -= 2u;
+  u32 i = 0;
+  for (; i < len && (((uintptr_t)(tags + i)) & 3u); i++)
+    if (tags[i]) return 0;
+  for (; i + 16u <= len; i += 16u) {
+    const u32 *w = (const u32 *)(const void *)(tags + i);
+    if (w[0] | w[1] | w[2] | w[3]) return 0;
   }
-
-  words = (const u32 *)(const void *)(iwram + offset);
-  while (bytes >= 16u) {
-    if (words[0] | words[1] | words[2] | words[3])
-      return 0;
-    words += 4;
-    bytes -= 16u;
-  }
-  while (bytes >= 4u) {
-    if (*words++)
-      return 0;
-    bytes -= 4u;
-  }
-  if (bytes && *(const u16 *)(const void *)words)
-    return 0;
+  for (; i + 4u <= len; i += 4u)
+    if (*(const u32 *)(const void *)(tags + i)) return 0;
+  for (; i < len; i++)
+    if (tags[i]) return 0;
   return 1;
 }
 
@@ -1564,28 +1551,30 @@ static int __attribute__((noinline)) cgba_sh4_arm_mixer_run_whole(
   if (!cgba_sh4_arm_mixer_output_fast_ok(left_last) ||
       !cgba_sh4_arm_mixer_output_fast_ok(right_last) ||
       left_off + bytes > 0x8000u || right_off + bytes > 0x8000u ||
-      !cgba_sh4_arm_mixer_tags_zero(left_off, bytes) ||
-      !cgba_sh4_arm_mixer_tags_zero(right_off, bytes))
+      !cgba_sh4_tags_zero(iwram + left_off, bytes) ||
+      !cgba_sh4_tags_zero(iwram + right_off, bytes))
     return 0;
 
   left_ptr = (u16 *)(void *)(iwram + 0x8000u + left_off);
   right_ptr = (u16 *)(void *)(iwram + 0x8000u + right_off);
 #if defined(CGBA_SH4_M4A_MIX_SKIP) && CGBA_SH4_M4A_MIX_SKIP
-  /* When the sound backend is a no-op (CGBA_SH4_M4A_MIX_SKIP) and the PCM
-   * source is in ROM (cannot alias the IWRAM stereo output buffer), the
-   * mixed PCM samples written to left_ptr/right_ptr are discarded by audio
-   * DMA. Advance registers and cycle accounting in O(1), resolving fragmented
-   * NOR flash via 4 KiB blocks when the 32 KiB page is not direct-mapped. */
-  if (!CGBA_SH4_DIFF_ACTIVE() && source_region >= 8u) {
+  /* Soundless O(1) skip: when the sound backend is a no-op and the PCM source
+   * is outside IWRAM (ROM or EWRAM, cannot alias the IWRAM stereo output
+   * buffer), the mixed samples written to left_ptr/right_ptr are discarded by
+   * audio DMA. Advance registers and cycle accounting in O(1), evaluating only
+   * the final sample to keep r8/r12 exact. */
+  if (!CGBA_SH4_DIFF_ACTIVE() && source_region != 3u) {
     u8 *last_page = memory_map_read[last_source >> 15];
     u32 last_off;
     if (last_page) {
       last_off = last_source & 0x7FFFu;
-    } else {
+    } else if (source_region >= 8u) {
       last_page = cgba_gamepak_resolve_4k(last_source);
       if (!last_page)
         return 0;
       last_off = last_source & 0x0FFFu;
+    } else {
+      return 0;
     }
     s16 last_right = (s16)eswap16(right_ptr[samples - 1u]);
     sample32 = (u32)(s32)(s8)address8(last_page, last_off);
@@ -1732,22 +1721,13 @@ int cgba_sh4_arm_mixer_loop_try(u32 unused, u32 pc)
   return 1;
 }
 
-static int cgba_sh4_arm_pcm_clamp_tags_zero(const u8 *tags, u32 len)
-{
-  u32 i = 0;
-  for (; i < len && (((uintptr_t)tags + i) & 3u); i++)
-    if (tags[i]) return 0;
-  for (; i + 4u <= len; i += 4u)
-    if (*(const u32 *)(const void *)(tags + i)) return 0;
-  for (; i < len; i++)
-    if (tags[i]) return 0;
-  return 1;
-}
-
-/* Exact fast path for the 8-sample 16-bit -> 8-bit signed PCM clamp loop
- * (see sh4_arm_pcm_clamp.h).  Preserves every written output byte, register
- * (r0, r1, r3, r12), aliasing order, SMC tag guard, and cycle debit, and
- * returns to the untouched CMP/BNE loop tail. */
+/* Fast path for the 8-sample 16-bit -> 8-bit signed PCM clamp loop
+ * (see sh4_arm_pcm_clamp.h).  In soundless production builds
+ * (CGBA_SH4_M4A_MIX_SKIP && !CGBA_SH4_DIFF_ACTIVE()) with non-overlapping
+ * input/output buffers, skips writing the dead Direct Sound FIFO buffer in
+ * O(1) while computing exact final r3/r12, advancing r0/r1, and charging
+ * exact cycles.  In diff mode or overlapping buffers, executes every sample
+ * faithfully.  Returns to the untouched CMP/BNE loop tail. */
 int cgba_sh4_arm_pcm_clamp_loop_try(u32 unused, u32 pc)
 {
   u32 r0 = reg[0], r1 = reg[1], r2 = reg[2], r4 = reg[4], r5 = reg[5];
@@ -1812,26 +1792,46 @@ int cgba_sh4_arm_pcm_clamp_loop_try(u32 unused, u32 pc)
     out_tags = ewram + 0x40000u + out_off;
   }
 
-  if (!cgba_sh4_arm_pcm_clamp_tags_zero(out_tags, out_bytes))
+  if (!cgba_sh4_tags_zero(out_tags, out_bytes))
     return 0;
 
-  for (i = 0; i < samples; i++) {
-    u16 raw = src_ptr[i];
-    if (raw == 0u) {
-      r3 = 0u;
-      r12 = 0u;
-      dst_ptr[i] = 0u;
-      continue;
+#if defined(CGBA_SH4_M4A_MIX_SKIP) && CGBA_SH4_M4A_MIX_SKIP
+  if (!CGBA_SH4_DIFF_ACTIVE() &&
+      (in_region != out_region ||
+       in_off + in_bytes <= out_off || out_off + out_bytes <= in_off)) {
+    /* O(1) soundless skip: evaluate only the final sample for exact r3/r12. */
+    u16 raw = src_ptr[samples - 1u];
+    if (raw != 0u) {
+      int16_t sample = (int16_t)eswap16(raw);
+      r3 = (uint32_t)(int32_t)sample;
+      if (sample < 0)
+        r3 += 0x7Fu;
+      r3 = (r3 >> 7) | ((uint32_t)-(int32_t)(r3 >> 31) << 25);
+      r12 = r3 & r5;
+      if (r12 != 0u && r12 != r5)
+        r3 = r4 + (r3 >> 31);
     }
-    int16_t sample = (int16_t)eswap16(raw);
-    r3 = (uint32_t)(int32_t)sample;
-    if (sample < 0)
-      r3 += 0x7Fu;
-    r3 = (r3 >> 7) | ((uint32_t)-(int32_t)(r3 >> 31) << 25);
-    r12 = r3 & r5;
-    if (r12 != 0u && r12 != r5)
-      r3 = r4 + (r3 >> 31);
-    dst_ptr[i] = (u8)r3;
+  } else
+#endif
+  {
+    for (i = 0; i < samples; i++) {
+      u16 raw = src_ptr[i];
+      if (raw == 0u) {
+        r3 = 0u;
+        r12 = 0u;
+        dst_ptr[i] = 0u;
+        continue;
+      }
+      int16_t sample = (int16_t)eswap16(raw);
+      r3 = (uint32_t)(int32_t)sample;
+      if (sample < 0)
+        r3 += 0x7Fu;
+      r3 = (r3 >> 7) | ((uint32_t)-(int32_t)(r3 >> 31) << 25);
+      r12 = r3 & r5;
+      if (r12 != 0u && r12 != r5)
+        r3 = r4 + (r3 >> 31);
+      dst_ptr[i] = (u8)r3;
+    }
   }
 
   reg[0] = r0 + in_bytes;

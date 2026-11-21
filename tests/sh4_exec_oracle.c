@@ -134,6 +134,7 @@ volatile u32 cgba_vram_dirty;
 volatile u32 cgba_video_io_dirty;
 #define CGBA_SH4_REG_FORWARD 1
 #include "ports/fxcg100/sh4/sh4_thumb_dp_emit.h"
+#include "ports/fxcg100/sh4/sh4_arm_mul_emit.h"
 #include "ports/fxcg100/sh4/sh4_fastmem_emit.h"
 #include "ports/fxcg100/sh4/sh4_arm_ldst_emit.h"
 int cgba_sh4_arm_block(u32 o, u32 p);
@@ -2225,6 +2226,242 @@ int main(void)
       gamepak_size = old_gp_size;
       cgba_gamepak_fragment_blocks = old_frags;
     }
+
+#if defined(CGBA_SH4_M4A_MIX_SKIP) && CGBA_SH4_M4A_MIX_SKIP
+    /* Soundless IWRAM stereo PCM mixer skippers (Peepholes 3 & 6):
+     * verify both WS0+IWRAM soundless hit (advances live pointers/phase + exact
+     * cycle debit, leaves IWRAM untouched) and non-WS0 EWRAM exact fallback. */
+    {
+      static u8 mbuf[4096];
+      u32 iw_pc = 0x03000100u;
+      u32 old_code_end = cgba_iwram_code_end;
+      cgba_iwram_code_end = 0u; /* IWRAM mix region has zero SMC tags */
+      ws_cyc_nseq[8][0] = 3u;
+      ws_cyc_nseq[2][0] = 2u;
+
+      /* 1. sh4g_arm_rmw_block4_ldrsb_mla_skip (reps = 1 and 2). */
+      {
+        static const u32 unit10[10] = {
+          0xE890001Eu, /* LDMIA r0, {r1..r4} */
+          0xE19570D6u, /* LDRSB r7, [r5, r6] */
+          0xE0211897u, /* MLA r1, r7, r8, r1 */
+          0xE0222997u, /* MLA r2, r7, r9, r2 */
+          0xE2866001u, /* ADD r6, r6, #1 */
+          0xE19570D6u, /* LDRSB r7, [r5, r6] */
+          0xE0233897u, /* MLA r3, r7, r8, r3 */
+          0xE0244997u, /* MLA r4, r7, r9, r4 */
+          0xE2866001u, /* ADD r6, r6, #1 */
+          0xE8A0001Eu, /* STMIA r0!, {r1..r4} */
+        };
+        u32 ops20[20];
+        int ccs20[20];
+        for (int i = 0; i < 20; i++) { ops20[i] = unit10[i % 10]; ccs20[i] = 0; }
+        for (int reps = 1; reps <= 2; reps++) {
+          u8 *mp = mbuf;
+          sh4_greg_forward_reset();
+          if (!sh4g_arm_rmw_block4_ldrsb_mla_skip(&mp, ops20, ccs20, reps, iw_pc)) {
+            printf("FAIL mixer-skip block4 emit reject reps=%d\n", reps);
+            fails++; continue;
+          }
+          if ((size_t)(mp - mbuf) >= 3800u) {
+            printf("FAIL mixer-skip block4 size=%zu reps=%d\n", (size_t)(mp - mbuf), reps);
+            fails++; continue;
+          }
+          for (int mode = 0; mode < 2; mode++) {
+            u32 dst = 0x03000400u;
+            u32 src = mode == 0 ? 0x08000200u : 0x02000400u;
+            u32 idx0 = 4u;
+            u32 init_w[8];
+            for (int w = 0; w < 8; w++) {
+              u32 v = 0x00100000u + (u32)(w * 0x12345);
+              u8 *p = giwram + 0x8000u + (dst & 0x7FFFu) + (u32)(w * 4);
+              init_w[w] = v;
+              p[0] = (u8)v; p[1] = (u8)(v >> 8); p[2] = (u8)(v >> 16); p[3] = (u8)(v >> 24);
+            }
+            memset(g_reg, 0, sizeof g_reg);
+            g_reg[0] = dst; g_reg[5] = src; g_reg[6] = idx0;
+            g_reg[8] = 0x00000025u; g_reg[9] = 0xFFFFFFE3u;
+            orc_reset_windows();
+            orc_add_window(mbuf, sizeof mbuf, ORC_WIN_BYTES);
+            orc_add_window(fm_buf, sizeof fm_buf, ORC_WIN_BYTES);
+            orc_add_window(memory_map_read, 8192 * 4, ORC_WIN_READ_MAP);
+            orc_add_window(giwram, giwram_size, ORC_WIN_BYTES);
+            orc_add_window(ewram, sizeof ewram, ORC_WIN_BYTES);
+            orc_add_window(rom, sizeof rom, ORC_WIN_BYTES);
+            orc_add_window(ws_cyc_seq, sizeof ws_cyc_seq, ORC_WIN_BYTES);
+            orc_add_window(ws_cyc_nseq, sizeof ws_cyc_nseq, ORC_WIN_BYTES);
+            orc_add_window(orc_vec_table, sizeof orc_vec_table, ORC_WIN_BYTES);
+            orc_slow_target = (u32)(uintptr_t)sh4_op2_pc_mem_tramp;
+            orc_slow_target2 = (u32)(uintptr_t)sh4_op2_pc_tramp;
+            orc_slow_target3 = (u32)(uintptr_t)sh4_fastmem_pc_mem_tramp;
+            orc_slow_target4 = (u32)(uintptr_t)sh4_fastmem_compact8_tramp;
+            orc_slow_target5 = (u32)(uintptr_t)sh4_fastmem_compact8_load_tramp;
+            cases++;
+            if (!run_at((u32)(uintptr_t)mbuf, (u32)(uintptr_t)mp)) {
+              printf("FAIL mixer-skip block4 reps=%d mode=%d: %s\n", reps, mode, unmodeled);
+              fails++; continue;
+            }
+            if (g_reg[0] != dst + (u32)(reps * 16) || g_reg[6] != idx0 + (u32)(reps * 2)) {
+              printf("FAIL mixer-skip block4 ptrs reps=%d mode=%d: r0=%08X r6=%08X\n",
+                     reps, mode, g_reg[0], g_reg[6]);
+              fails++; continue;
+            }
+            if (mode == 0) {
+              /* WS0 hit: exact cycle debit, IWRAM untouched. */
+              u32 want_cyc = (u32)-(reps * (8 + 2 * (int)ws_cyc_nseq[8][0]));
+              if (orc_final_cycles != want_cyc) {
+                printf("FAIL mixer-skip block4 cyc reps=%d: got=%d want=%d\n",
+                       reps, (int)orc_final_cycles, (int)want_cyc);
+                fails++;
+              }
+              for (int w = 0; w < reps * 4; w++) {
+                const u8 *p = giwram + 0x8000u + (dst & 0x7FFFu) + (u32)(w * 4);
+                u32 got = p[0] | ((u32)p[1] << 8) | ((u32)p[2] << 16) | ((u32)p[3] << 24);
+                if (got != init_w[w]) {
+                  printf("FAIL mixer-skip block4 modified IWRAM on hit w=%d\n", w);
+                  fails++; break;
+                }
+              }
+            } else {
+              /* EWRAM fallback: exact RMW-MLA into IWRAM. */
+              for (int r = 0; r < reps; r++) {
+                s32 s0 = (s8)ewram[(src + idx0 + (u32)(r * 2)) & 0x3FFFFu];
+                s32 s1 = (s8)ewram[(src + idx0 + (u32)(r * 2 + 1)) & 0x3FFFFu];
+                u32 want[4];
+                want[0] = init_w[r * 4 + 0] + (u32)s0 * 0x00000025u;
+                want[1] = init_w[r * 4 + 1] + (u32)s0 * 0xFFFFFFE3u;
+                want[2] = init_w[r * 4 + 2] + (u32)s1 * 0x00000025u;
+                want[3] = init_w[r * 4 + 3] + (u32)s1 * 0xFFFFFFE3u;
+                for (int w = 0; w < 4; w++) {
+                  const u8 *p = giwram + 0x8000u + (dst & 0x7FFFu) + (u32)((r * 4 + w) * 4);
+                  u32 got = p[0] | ((u32)p[1] << 8) | ((u32)p[2] << 16) | ((u32)p[3] << 24);
+                  if (got != want[w]) {
+                    printf("FAIL mixer-skip block4 fallback r=%d w=%d got=%08X want=%08X\n",
+                           r, w, got, want[w]);
+                    fails++; break;
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+
+      /* 2. sh4g_arm_interp_rmw_mla_skip (count = 1 and 4). */
+      {
+        static const u32 unit12[12] = {
+          0xE1A00421u, /* MOV r0, r1, LSR #8 */
+          0xE1B020D4u, /* LDRSB r2, [r0, +r4]! */
+          0xE1D030D1u, /* LDRSB r3, [r0, #+1] */
+          0xE0433002u, /* SUB r3, r3, r2 */
+          0xE0010005u, /* AND r0, r1, r5 */
+          0xE0030390u, /* MUL r3, r0, r3 */
+          0xE0822443u, /* ADD r2, r2, r3, ASR #8 */
+          0xE8960009u, /* LDMIA r6, {r0, r3} */
+          0xE0200792u, /* MLA r0, r2, r7, r0 */
+          0xE0233892u, /* MLA r3, r2, r8, r3 */
+          0xE8A60009u, /* STMIA r6!, {r0, r3} */
+          0xE0811009u, /* ADD r1, r1, r9 */
+        };
+        u32 ops48[48];
+        int ccs48[48];
+        for (int i = 0; i < 48; i++) { ops48[i] = unit12[i % 12]; ccs48[i] = 0; }
+        static const int cnts[2] = { 1, 4 };
+        for (int ci = 0; ci < 2; ci++) {
+          int cnt = cnts[ci];
+          u8 *mp = mbuf;
+          sh4_greg_forward_reset();
+          if (!sh4g_arm_interp_rmw_mla_skip(&mp, ops48, ccs48, cnt, iw_pc,
+                                            NULL, NULL, NULL, NULL)) {
+            printf("FAIL mixer-skip interp emit reject cnt=%d\n", cnt);
+            fails++; continue;
+          }
+          if ((size_t)(mp - mbuf) >= 3800u) {
+            printf("FAIL mixer-skip interp size=%zu cnt=%d\n", (size_t)(mp - mbuf), cnt);
+            fails++; continue;
+          }
+          for (int mode = 0; mode < 2; mode++) {
+            u32 dst = 0x03000500u;
+            u32 src = mode == 0 ? 0x08000200u : 0x02000400u;
+            u32 p0 = 0x00000460u, step = 0x00000150u, mask = 0xFFu;
+            u32 v1 = 0x00000031u, v2 = 0xFFFFFFD9u;
+            u32 init_w[8];
+            for (int w = 0; w < 8; w++) {
+              u32 v = 0x00200000u + (u32)(w * 0x54321);
+              u8 *p = giwram + 0x8000u + (dst & 0x7FFFu) + (u32)(w * 4);
+              init_w[w] = v;
+              p[0] = (u8)v; p[1] = (u8)(v >> 8); p[2] = (u8)(v >> 16); p[3] = (u8)(v >> 24);
+            }
+            memset(g_reg, 0, sizeof g_reg);
+            g_reg[1] = p0; g_reg[4] = src; g_reg[5] = mask; g_reg[6] = dst;
+            g_reg[7] = v1; g_reg[8] = v2; g_reg[9] = step;
+            orc_reset_windows();
+            orc_add_window(mbuf, sizeof mbuf, ORC_WIN_BYTES);
+            orc_add_window(fm_buf, sizeof fm_buf, ORC_WIN_BYTES);
+            orc_add_window(memory_map_read, 8192 * 4, ORC_WIN_READ_MAP);
+            orc_add_window(giwram, giwram_size, ORC_WIN_BYTES);
+            orc_add_window(ewram, sizeof ewram, ORC_WIN_BYTES);
+            orc_add_window(rom, sizeof rom, ORC_WIN_BYTES);
+            orc_add_window(ws_cyc_seq, sizeof ws_cyc_seq, ORC_WIN_BYTES);
+            orc_add_window(ws_cyc_nseq, sizeof ws_cyc_nseq, ORC_WIN_BYTES);
+            orc_add_window(orc_vec_table, sizeof orc_vec_table, ORC_WIN_BYTES);
+            orc_slow_target = (u32)(uintptr_t)sh4_op2_pc_mem_tramp;
+            orc_slow_target2 = (u32)(uintptr_t)sh4_op2_pc_tramp;
+            orc_slow_target3 = (u32)(uintptr_t)sh4_fastmem_pc_mem_tramp;
+            orc_slow_target4 = (u32)(uintptr_t)sh4_fastmem_compact8_tramp;
+            orc_slow_target5 = (u32)(uintptr_t)sh4_fastmem_compact8_load_tramp;
+            cases++;
+            if (!run_at((u32)(uintptr_t)mbuf, (u32)(uintptr_t)mp)) {
+              printf("FAIL mixer-skip interp cnt=%d mode=%d: %s\n", cnt, mode, unmodeled);
+              fails++; continue;
+            }
+            if (g_reg[1] != p0 + (u32)cnt * step || g_reg[6] != dst + (u32)(cnt * 8)) {
+              printf("FAIL mixer-skip interp ptrs cnt=%d mode=%d: r1=%08X r6=%08X\n",
+                     cnt, mode, g_reg[1], g_reg[6]);
+              fails++; continue;
+            }
+            if (mode == 0) {
+              u32 want_cyc = (u32)-(cnt * (2 * (int)ws_cyc_nseq[8][0] + 4));
+              if (orc_final_cycles != want_cyc) {
+                printf("FAIL mixer-skip interp cyc cnt=%d: got=%d want=%d\n",
+                       cnt, (int)orc_final_cycles, (int)want_cyc);
+                fails++;
+              }
+              for (int w = 0; w < cnt * 2; w++) {
+                const u8 *p = giwram + 0x8000u + (dst & 0x7FFFu) + (u32)(w * 4);
+                u32 got = p[0] | ((u32)p[1] << 8) | ((u32)p[2] << 16) | ((u32)p[3] << 24);
+                if (got != init_w[w]) {
+                  printf("FAIL mixer-skip interp modified IWRAM on hit w=%d\n", w);
+                  fails++; break;
+                }
+              }
+            } else {
+              u32 cur_p = p0;
+              for (int u = 0; u < cnt; u++) {
+                u32 a = src + (cur_p >> 8);
+                s32 s0 = (s8)ewram[a & 0x3FFFFu];
+                s32 s1 = (s8)ewram[(a + 1u) & 0x3FFFFu];
+                s32 diff = (s32)((u32)(s1 - s0) * (cur_p & mask));
+                s32 samp = s0 + (diff >> 8);
+                u32 want0 = init_w[u * 2 + 0] + (u32)samp * v1;
+                u32 want1 = init_w[u * 2 + 1] + (u32)samp * v2;
+                const u8 *p = giwram + 0x8000u + (dst & 0x7FFFu) + (u32)(u * 8);
+                u32 got0 = p[0] | ((u32)p[1] << 8) | ((u32)p[2] << 16) | ((u32)p[3] << 24);
+                u32 got1 = p[4] | ((u32)p[5] << 8) | ((u32)p[6] << 16) | ((u32)p[7] << 24);
+                if (got0 != want0 || got1 != want1) {
+                  printf("FAIL mixer-skip interp fallback cnt=%d u=%d got=(%08X,%08X) want=(%08X,%08X)\n",
+                         cnt, u, got0, got1, want0, want1);
+                  fails++; break;
+                }
+                cur_p += step;
+              }
+            }
+          }
+        }
+      }
+      cgba_iwram_code_end = old_code_end;
+    }
+#endif
 
     /* rn==15 literal-pool loads: address is a compile-time constant
      * (pc+8 +/- imm) synthesized into the site; lands in the rom page. */
