@@ -18,12 +18,12 @@ DEAD_STRIP := $(if $(filter Darwin,$(shell uname -s)),\
 	-Wl$(comma)-dead_strip,-Wl$(comma)--gc-sections)
 
 .PHONY: all smoke audit core litpool thumb cond native-ldst input config-version storage lcd-cleanup backlight-overlay state-codec scale classpad fxcg-ui fxcg-sync txt-reader rtc backup-dirty nor-world-switch rom-library save-path overclock cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc \
-	swi-overlap swi-oam udiv udiv-emitter idle-signature video-opaque \
-	video-blend-cache video-backdrop-shadow video-sprite-decode video-tile-row-cache video-text-fastpaths video-dirty-scanline arm-mixer arm-pcm-clamp m4a-skip clean
+	swi-overlap swi-oam udiv udiv-emitter idle-signature \
+	video-backdrop-shadow video-sprite-decode video-text-fastpaths video-dirty-scanline arm-mixer arm-pcm-clamp m4a-skip clean
 
 all: smoke core litpool thumb cond native-ldst rtc pacing backup-dirty nor-world-switch rom-library save-path overclock input config-version storage lcd-cleanup backlight-overlay state-codec scale classpad fxcg-ui fxcg-sync txt-reader cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc swi-overlap swi-oam udiv \
-	udiv-emitter idle-signature video-opaque video-blend-cache \
-	video-backdrop-shadow video-sprite-decode video-tile-row-cache video-text-fastpaths video-dirty-scanline arm-mixer arm-pcm-clamp m4a-skip audit
+	udiv-emitter idle-signature \
+	video-backdrop-shadow video-sprite-decode video-text-fastpaths video-dirty-scanline arm-mixer arm-pcm-clamp m4a-skip audit
 
 # Execution oracle: run emitted native code in a mini SH4 interpreter against
 # the C-helper semantics (closes the pixel-soak blind spot on the audio path).
@@ -378,24 +378,6 @@ idle-signature: $(ROOT)/tests/sh4_idle_signature_test.c \
 	  -o $(BIN)-idle-signature
 	$(BIN)-idle-signature
 
-video-opaque: $(ROOT)/tests/video_opaque_tile_test.cc \
-	$(ROOT)/vendor/gpsp/video.cc
-	$(CXX) $(CXXFLAGS) -ffunction-sections -fdata-sections \
-	  -I$(ROOT)/vendor/gpsp -I$(ROOT)/vendor/gpsp/libretro \
-	  -I$(ROOT)/vendor/gpsp/libretro/libretro-common/include \
-	  $(DEAD_STRIP) $(ROOT)/tests/video_opaque_tile_test.cc \
-	  -o $(BIN)-video-opaque
-	$(BIN)-video-opaque
-
-video-blend-cache: $(ROOT)/tests/video_blend_palette_cache_test.cc \
-	$(ROOT)/vendor/gpsp/video.cc
-	$(CXX) $(CXXFLAGS) -ffunction-sections -fdata-sections \
-	  -I$(ROOT)/vendor/gpsp -I$(ROOT)/vendor/gpsp/libretro \
-	  -I$(ROOT)/vendor/gpsp/libretro/libretro-common/include \
-	  $(DEAD_STRIP) $(ROOT)/tests/video_blend_palette_cache_test.cc \
-	  -o $(BIN)-video-blend-cache
-	$(BIN)-video-blend-cache
-
 video-backdrop-shadow: $(ROOT)/tests/video_backdrop_shadow_test.cc \
 	$(ROOT)/vendor/gpsp/video.cc
 	$(CXX) $(CXXFLAGS) -ffunction-sections -fdata-sections \
@@ -412,14 +394,6 @@ video-sprite-decode: $(ROOT)/tests/video_sprite_decode_test.cc $(ROOT)/vendor/gp
 	  $(DEAD_STRIP) $(ROOT)/tests/video_sprite_decode_test.cc \
 	  -o $(BIN)-video-sprite-decode
 	$(BIN)-video-sprite-decode
-
-video-tile-row-cache: $(ROOT)/tests/video_tile_row_cache_test.cc $(ROOT)/vendor/gpsp/video.cc
-	$(CXX) $(CXXFLAGS) -ffunction-sections -fdata-sections \
-	  -I$(ROOT)/vendor/gpsp -I$(ROOT)/vendor/gpsp/libretro \
-	  -I$(ROOT)/vendor/gpsp/libretro/libretro-common/include \
-	  $(DEAD_STRIP) $(ROOT)/tests/video_tile_row_cache_test.cc \
-	  -o $(BIN)-video-tile-row-cache
-	$(BIN)-video-tile-row-cache
 
 video-dirty-scanline: $(ROOT)/tests/video_dirty_scanline_test.cc $(ROOT)/vendor/gpsp/video.cc
 	$(CXX) $(CXXFLAGS) -ffunction-sections -fdata-sections \

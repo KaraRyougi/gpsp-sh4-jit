@@ -3,16 +3,24 @@
 #include <string.h>
 
 /* Include the production templates so the test exercises the exact default
- * base-layer renderer. Enable the existing blend cache as well to verify the
+ * base-layer renderer. Enable dirty-scanline blending as well to verify the
  * two derived-palette consumers cannot clear each other's invalidation. */
-#define CGBA_VIDEO_BLEND_PALETTE_CACHE 1
+#define CGBA_VIDEO_DIRTY_SCANLINE 1
 #define CGBA_VIDEO_BACKDROP_SHADOW_PALETTE 1
 #define CGBA_VIDEO_OPAQUE_ROW_UNROLL 1
 #include "../vendor/gpsp/video.cc"
 
 u16 palette_ram_converted[512];
 u16 io_registers[512];
+u16 oam_ram[512];
+u8 vram[96 * 1024];
+u32 reg[64];
+u32 skip_next_frame;
+int sprite_limit = 1;
 volatile u32 palette_ram_dirty;
+volatile u32 cgba_vram_dirty;
+volatile u32 cgba_vram_sb_dirty;
+volatile u32 cgba_video_io_dirty;
 
 static uint32_t rng_state = 0x91e10da5u;
 static unsigned long pixel_cases;
@@ -53,8 +61,8 @@ static int test_invalidation(void)
     palette_ram_converted[i] =
       (u16)((i * 313u) ^ (i << 7) ^ 0x5a5au);
 
-  palette_ram_dirty = CGBA_PALETTE_DIRTY_ACTIVE;
-  blend_palette_cache_observe_writes();
+  palette_ram_dirty = CGBA_PALETTE_DIRTY_BLEND | CGBA_PALETTE_DIRTY_BACKDROP;
+  (void)cgba_bg_blend_term_a_get(8u);
   if (!check((palette_ram_dirty & CGBA_PALETTE_DIRTY_BLEND) == 0,
         "blend consumer did not clear its bit") ||
       !check((palette_ram_dirty & CGBA_PALETTE_DIRTY_BACKDROP) != 0,
@@ -74,14 +82,14 @@ static int test_invalidation(void)
   /* Observe the consumers in the opposite order after changing both the
    * backdrop and a regular color. */
   palette_ram_converted[0] ^= 0x4210u;
-  palette_ram_dirty = CGBA_PALETTE_DIRTY_ACTIVE;
+  palette_ram_dirty = CGBA_PALETTE_DIRTY_BLEND | CGBA_PALETTE_DIRTY_BACKDROP;
   if (!check_shadow_contents(get_backdrop_shadow_palette()) ||
       !check((palette_ram_dirty & CGBA_PALETTE_DIRTY_BACKDROP) == 0,
         "backdrop consumer did not clear its bit after rebuild") ||
       !check((palette_ram_dirty & CGBA_PALETTE_DIRTY_BLEND) != 0,
         "backdrop consumer cleared blend invalidation"))
     return 0;
-  blend_palette_cache_observe_writes();
+  (void)cgba_bg_blend_term_a_get(8u);
   return check(palette_ram_dirty == 0,
     "blend consumer left a dirty bit after opposite-order observation");
 }

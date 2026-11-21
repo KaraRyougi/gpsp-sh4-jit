@@ -22,9 +22,6 @@ extern "C" {
   #include "common.h"
 }
 
-#ifdef CGBA_LCD_SCANLINE_STREAM
-extern "C" void fxcg100_lcd_stream_scanline(const u16 *row, unsigned y, int dirty);
-#endif
 #ifdef CGBA_SH4_ASM_4BPP
 extern "C" {
 void cgba_render_4bpp_span_over_sh4(
@@ -135,7 +132,6 @@ struct cgba_aff_bg_params {
   u32 flags;          /* bit0 = isbase, bit1 = wrap, bits16..31 = bg_comb */
 };
 void cgba_render_affine_bg_scale_sh4(const cgba_aff_bg_params *p);
-void cgba_render_affine_bg_rot_sh4(const cgba_aff_bg_params *p);
 void cgba_render_affine_bg_rot_u32_sh4(const cgba_aff_bg_params *p);
 void cgba_render_obj_4bpp_tiles_blend_sh4(
   const u8 *tile_ptr, u32 num_tiles, u16 *dst_ptr,
@@ -472,106 +468,6 @@ static const u16 *get_backdrop_shadow_palette(void)
 }
 #endif
 
-#ifdef CGBA_VIDEO_TILE_ROW_CACHE
-#ifndef CGBA_VIDEO_TILE_ROW_CACHE_ENTRIES
-#define CGBA_VIDEO_TILE_ROW_CACHE_ENTRIES 128
-#endif
-static_assert(CGBA_VIDEO_TILE_ROW_CACHE_ENTRIES > 0 &&
-  !(CGBA_VIDEO_TILE_ROW_CACHE_ENTRIES & (CGBA_VIDEO_TILE_ROW_CACHE_ENTRIES - 1)),
-  "tile row cache size must be a power of two");
-
-/* Content keys observe all VRAM writers without instrumenting their hot paths.
- * One entry fits one SH4 cache line. Base and overlay layers share entries;
- * zero pixels contain the backdrop, and overlay writers honor the mask. */
-struct alignas(32) cgba_tile_row_entry {
-  u32 packed, tag;
-  u16 pixels[8];
-  u32 mask;
-  u32 padding;
-};
-static cgba_tile_row_entry tile_rows[CGBA_VIDEO_TILE_ROW_CACHE_ENTRIES];
-static u16 tile_row_palette[256] __attribute__((aligned(4)));
-static u32 tile_row_epoch = 0x10000;
-#ifdef CGBA_VIDEO_TILE_ROW_PROFILE
-extern "C" { u32 cgba_tile_row_hits, cgba_tile_row_misses; }
-#endif
-
-static void tile_row_observe_palette(void)
-{
-  if (!(palette_ram_dirty & CGBA_PALETTE_DIRTY_TILE_ROW)) return;
-  /* Repeated identical palette DMA and OBJ-only writes must not evict BG rows. */
-  if (!cgba_memeq_u32(tile_row_palette, palette_ram_converted, 128u)) {
-    memcpy(tile_row_palette, palette_ram_converted, sizeof(tile_row_palette));
-    tile_row_epoch += 0x10000;
-    if (!tile_row_epoch) {
-      memset(tile_rows, 0, sizeof(tile_rows));
-      tile_row_epoch = 0x10000;
-    }
-  }
-  palette_ram_dirty &= ~CGBA_PALETTE_DIRTY_TILE_ROW;
-}
-
-static __attribute__((noinline)) void tile_row_fill(cgba_tile_row_entry *row,
-                                                   u32 packed, u32 tag)
-{
-  u32 data = eswap32(packed), mask = 0;
-  const u16 *pal = tile_row_palette + ((tag >> 8) & 0xf0);
-  for (unsigned i = 0; i < 8; i++) {
-    unsigned color = tag & 0x400 ? data >> 28 : data & 15;
-    row->pixels[i] = color ? pal[color] : tile_row_palette[0];
-    if (color) mask |= 1u << i;
-    if (tag & 0x400) data <<= 4; else data >>= 4;
-  }
-  row->mask = mask == 255 ? ~0u : mask;
-  row->packed = packed;
-  row->tag = tag;
-}
-
-template<bool isbase>
-static inline __attribute__((always_inline)) void render_cached_tile_row(
-  u32 packed, unsigned tile, u16 *__restrict dst)
-{
-  /* Tile number is already decoded by the map walker. Use it only as a
-   * cheap index; raw VRAM content and palette/flip tags remain the key. */
-  unsigned index = tile & (CGBA_VIDEO_TILE_ROW_CACHE_ENTRIES - 1);
-  cgba_tile_row_entry &row = tile_rows[index];
-  u32 tag = tile_row_epoch | (tile & 0xf400);
-  if (row.tag != tag || row.packed != packed) {
-#ifdef CGBA_VIDEO_TILE_ROW_PROFILE
-    cgba_tile_row_misses++;
-#endif
-    tile_row_fill(&row, packed, tag);
-  } else {
-#ifdef CGBA_VIDEO_TILE_ROW_PROFILE
-    cgba_tile_row_hits++;
-#endif
-  }
-  const u32 mask = row.mask;
-  if (isbase || mask == ~0u) {
-    /* Scanline spans can start on an odd pixel. Never issue an unaligned
-     * SH4 longword store; the halfword fallback has the same pixel order. */
-    if (!((uintptr_t)dst & 3)) {
-      typedef u32 alias_u32 __attribute__((may_alias));
-      alias_u32 *out = (alias_u32 *)dst;
-      const alias_u32 *in = (const alias_u32 *)row.pixels;
-      out[0] = in[0]; out[1] = in[1]; out[2] = in[2]; out[3] = in[3];
-    } else {
-      dst[0] = row.pixels[0]; dst[1] = row.pixels[1];
-      dst[2] = row.pixels[2]; dst[3] = row.pixels[3];
-      dst[4] = row.pixels[4]; dst[5] = row.pixels[5];
-      dst[6] = row.pixels[6]; dst[7] = row.pixels[7];
-    }
-  } else {
-#define CGBA_TILE_ROW_PIXEL(i) if (mask & (1u << (i))) dst[i] = row.pixels[i]
-    CGBA_TILE_ROW_PIXEL(0); CGBA_TILE_ROW_PIXEL(1);
-    CGBA_TILE_ROW_PIXEL(2); CGBA_TILE_ROW_PIXEL(3);
-    CGBA_TILE_ROW_PIXEL(4); CGBA_TILE_ROW_PIXEL(5);
-    CGBA_TILE_ROW_PIXEL(6); CGBA_TILE_ROW_PIXEL(7);
-#undef CGBA_TILE_ROW_PIXEL
-  }
-}
-#endif
-
 // Renders non-affine tiled background layer.
 // Will process a full or partial tile (start and end within 0..8) and draw
 // it in either 8 or 4 bpp mode. Honors vertical and horizontal flip.
@@ -668,8 +564,7 @@ static inline void rend_part_tile_Nbpp(u32 bg_comb, u32 px_comb,
 }
 
 // Same as above, but optimized for full tiles. Skip comments here.
-#if defined(CGBA_VIDEO_OPAQUE_TILE_FASTPATH) || \
-    defined(CGBA_VIDEO_OPAQUE_ROW_UNROLL)
+#ifdef CGBA_VIDEO_OPAQUE_ROW_UNROLL
 static inline bool cgba_4bpp_row_is_opaque(u32 tilepix)
 {
   return ((tilepix - 0x11111111u) & ~tilepix & 0x88888888u) == 0;
@@ -806,16 +701,13 @@ static inline void render_tile_Nbpp(
       u16 tilepal = (tile >> 12) << 4;
       u16 pxflg = px_comb | tilepal;
       const u16 *subpal = &paltbl[tilepal];
-#if defined(CGBA_VIDEO_OPAQUE_TILE_FASTPATH) || \
-    defined(CGBA_VIDEO_OPAQUE_ROW_UNROLL)
+#ifdef CGBA_VIDEO_OPAQUE_ROW_UNROLL
       /* A 4-bpp color index of zero is the only transparent value.  Hoist the
        * eight per-pixel transparency branches when every nibble is nonzero.
        * The subtraction is lane-wise in base 16 whenever all nibbles are at
        * least one; if any lane is zero, its high bit (and possibly later
        * borrow-affected lanes) is caught by the mask. */
-      bool opaque = cgba_4bpp_row_is_opaque(tilepix);
-#ifdef CGBA_VIDEO_OPAQUE_ROW_UNROLL
-      if (opaque) {
+      if (cgba_4bpp_row_is_opaque(tilepix)) {
         /* Keep specialization to the two measured buffer shapes so other
          * renderer instantiations do not inflate the SH4 I-cache footprint. */
         if (sizeof(dtype) == sizeof(u32) &&
@@ -837,23 +729,6 @@ static inline void render_tile_Nbpp(
           return;
         }
       }
-#endif
-#ifdef CGBA_VIDEO_OPAQUE_TILE_FASTPATH
-      if (opaque) {
-        for (u32 i = 0; i < 8; i++, dest_ptr++) {
-          u8 pval = (hflip ? (tilepix >> 28) : tilepix) & 0xF;
-          if (hflip) tilepix <<= 4; else tilepix >>= 4;
-          if (rdtype == FULLCOLOR)
-            *dest_ptr = subpal[pval];
-          else if (rdtype == INDXCOLOR)
-            *dest_ptr = pxflg | pval;
-          else if (rdtype == STCKCOLOR)
-            *dest_ptr = pxflg | pval |
-              ((isbase ? bg_comb : *dest_ptr) << 16);
-        }
-        return;
-      }
-#endif
 #endif
       for (u32 i = 0; i < 8; i++, dest_ptr++) {
         u8 pval = (hflip ? (tilepix >> 28) : tilepix) & 0xF;
@@ -886,32 +761,6 @@ static inline void render_tile_Nbpp(
 }
 
 
-/* Keep the cached and generic full-row loops separate at compile time. */
-template<typename dtype, rendtype rdtype, bool is8bpp, bool isbase, bool hflip, bool cached>
-static inline __attribute__((always_inline)) void render_text_tile(
-  u32 bg_comb, u32 px_comb, dtype *dest_ptr, u16 tile,
-  const u8 *tile_base, int vertical_pixel_flip, const u16 *paltbl)
-{
-#ifdef CGBA_VIDEO_TILE_ROW_CACHE
-  if (cached) {
-    const u8 *tile_ptr = tile_base + (tile & 0x3ff) * 32;
-    if (tile & 0x800) tile_ptr += vertical_pixel_flip;
-    u32 raw = *(const u32 *)tile_ptr;
-    if (!raw) {
-      if (isbase) {
-        u16 backdrop = paltbl[0];
-        for (unsigned i = 0; i < 8; i++) dest_ptr[i] = backdrop;
-      }
-      return;
-    }
-    render_cached_tile_row<isbase>(raw, tile, (u16 *)dest_ptr);
-    return;
-  }
-#endif
-  render_tile_Nbpp<dtype, rdtype, is8bpp, isbase, hflip>(
-    bg_comb, px_comb, dest_ptr, tile, tile_base, vertical_pixel_flip, paltbl);
-}
-
 /* Full-tile run of one text-background scanline span.
  *
  * CGBA_VIDEO_EMPTY_RUN_SKIP: an overlay (non-base) 4-bpp tile row whose packed
@@ -920,14 +769,13 @@ static inline __attribute__((always_inline)) void render_text_tile(
  * Compare raw map entries to step over such runs instead of decoding each
  * tile again.  VRAM is read on every scanline, so there is no state to
  * invalidate. */
-template<typename stype, rendtype rdtype, bool is8bpp, bool isbase, bool cached>
+template<typename stype, rendtype rdtype, bool is8bpp, bool isbase>
 static inline __attribute__((always_inline)) void render_text_tile_run(
   u32 todraw, u16 *&map_ptr, stype *&dest_ptr, u32 bg_comb, u32 px_comb,
   const u8 *tile_base, s32 vflip_off, const u16 *paltbl)
 {
 #if defined(CGBA_SH4_ASM_4BPP) && defined(CGBA_VIDEO_BACKDROP_SHADOW_PALETTE)
-  if (sizeof(stype) == sizeof(u16) && rdtype == FULLCOLOR &&
-      !is8bpp && !cached) {
+  if (sizeof(stype) == sizeof(u16) && rdtype == FULLCOLOR && !is8bpp) {
     if (todraw) {
 #ifdef CGBA_VIDEO_PAIR_PALETTE
       const u32 *pair_lut = pair_palette_get_all_u32();
@@ -957,7 +805,7 @@ static inline __attribute__((always_inline)) void render_text_tile_run(
   }
 #endif
 #ifdef CGBA_VIDEO_EMPTY_RUN_SKIP
-  if (!isbase && !is8bpp && !cached) {
+  if (!isbase && !is8bpp) {
     u16 *map = map_ptr;
     u16 *map_end = map + todraw;
     stype *dst = dest_ptr;
@@ -991,10 +839,10 @@ static inline __attribute__((always_inline)) void render_text_tile_run(
   for (u32 i = 0; i < todraw; i++, dest_ptr += 8) {
     u16 tile = eswap16(*map_ptr++);
     if (tile & 0x400)   // Tile horizontal flip
-      render_text_tile<stype, rdtype, is8bpp, isbase, true, cached>(
+      render_tile_Nbpp<stype, rdtype, is8bpp, isbase, true>(
         bg_comb, px_comb, dest_ptr, tile, tile_base, vflip_off, paltbl);
     else
-      render_text_tile<stype, rdtype, is8bpp, isbase, false, cached>(
+      render_tile_Nbpp<stype, rdtype, is8bpp, isbase, false>(
         bg_comb, px_comb, dest_ptr, tile, tile_base, vflip_off, paltbl);
   }
 }
@@ -1360,13 +1208,10 @@ static __attribute__((noinline, unused)) bool cgba_mode0_try_merge_3(
 }
 #endif
 
-template<typename stype, rendtype rdtype, bool isbase, bool is8bpp, bool cached = false>
+template<typename stype, rendtype rdtype, bool isbase, bool is8bpp>
 static void render_scanline_text_fast(u32 layer,
  u32 start, u32 end, void *scanline, const u16 * paltbl)
 {
-#ifdef CGBA_VIDEO_TILE_ROW_CACHE
-  if (cached) tile_row_observe_palette();
-#endif
   u32 bg_control = read_ioreg(REG_BGxCNT(layer));
   u16 vcount = read_ioreg(REG_VCOUNT);
   u32 map_size = (bg_control >> 14) & 0x03;
@@ -1483,7 +1328,7 @@ static void render_scanline_text_fast(u32 layer,
   // Now render full tiles
   u32 todraw = MIN(end, pixel_run) / 8;
 
-  render_text_tile_run<stype, rdtype, is8bpp, isbase, cached>(
+  render_text_tile_run<stype, rdtype, is8bpp, isbase>(
     todraw, map_ptr, dest_ptr, bg_comb, px_comb, tile_base, vflip_off, paltbl);
 
   end -= todraw * 8;
@@ -1497,7 +1342,7 @@ static void render_scanline_text_fast(u32 layer,
     map_ptr = second_ptr;
 
   todraw = end / 8;
-  render_text_tile_run<stype, rdtype, is8bpp, isbase, cached>(
+  render_text_tile_run<stype, rdtype, is8bpp, isbase>(
     todraw, map_ptr, dest_ptr, bg_comb, px_comb, tile_base, vflip_off, paltbl);
 
   end -= todraw * 8;
@@ -1661,17 +1506,6 @@ static void render_scanline_text(u32 layer,
   u32 bg_control = read_ioreg(REG_BGxCNT(layer));
   bool is8bpp = (bg_control & 0x80);
   bool has_mosaic = (bg_control & 0x40) && ((read_ioreg(REG_MOSAIC) & 0xFF) != 0);
-
-#ifdef CGBA_VIDEO_TILE_ROW_CACHE
-  /* Dispatch once per span. A separate instantiation keeps the cache hit
-   * path inlined without pulling the generic renderer into every tile. */
-  if (sizeof(stype) == sizeof(u16) && rdtype == FULLCOLOR && !is8bpp &&
-      !has_mosaic && !(read_ioreg(REG_DISPCNT) & 7) && paltbl == palette_ram_converted) {
-    render_scanline_text_fast<stype, rdtype, isbase, false, true>(
-      layer, start, end, scanline, paltbl);
-    return;
-  }
-#endif
 
   if (__builtin_expect(has_mosaic, 0)) {
     if (is8bpp)
@@ -3973,89 +3807,6 @@ typedef enum
 
 static u32 cgba_term_a_epoch = 1u;
 
-#ifdef CGBA_VIDEO_BLEND_PALETTE_CACHE
-/* Cache the full, unshifted expanded-color product.  The two products must be
- * added before the >> 4 so rounding and the overflow bits used by saturation
- * remain identical to the original expression. */
-typedef struct {
-  u32 term[512];
-  u32 factor;
-  u32 pending_factor;
-  bool valid;
-  bool pending;
-} blend_palette_term_cache;
-
-static blend_palette_term_cache blend_palette_cache_a
-  __attribute__((aligned(32)));
-static blend_palette_term_cache blend_palette_cache_b
-  __attribute__((aligned(32)));
-
-static inline void blend_palette_cache_observe_writes(void)
-{
-  if (palette_ram_dirty & CGBA_PALETTE_DIRTY_BLEND) {
-    /* A changed palette gets one direct-render grace call.  If it remains
-     * stable, the following call builds the tables.  Raster effects which
-     * write the palette every scanline therefore stay on the direct path. */
-    blend_palette_cache_a.valid = false;
-    blend_palette_cache_a.pending = false;
-    blend_palette_cache_b.valid = false;
-    blend_palette_cache_b.pending = false;
-    cgba_term_a_epoch++;
-    palette_ram_dirty &= ~CGBA_PALETTE_DIRTY_BLEND;
-  }
-}
-
-static bool blend_palette_cache_get(blend_palette_term_cache *cache,
-                                    u32 factor, const u32 **term)
-{
-  if (cache->valid && cache->factor == factor) {
-    *term = cache->term;
-    return true;
-  }
-
-  /* Likewise, require a new factor to be observed twice before paying for a
-   * 512-entry rebuild.  This prevents scanline-varying BLDALPHA from turning
-   * the optimization into a regression. */
-  if (!cache->pending || cache->pending_factor != factor) {
-    cache->pending = true;
-    cache->pending_factor = factor;
-    return false;
-  }
-
-  for (u32 i = 0; i < 512; i++) {
-    u32 pixel = palette_ram_converted[i];
-    u32 expanded = (pixel | (pixel << 16)) & BLND_MSK;
-    cache->term[i] = expanded * factor;
-  }
-  cache->factor = factor;
-  cache->valid = true;
-  cache->pending = false;
-  *term = cache->term;
-  return true;
-}
-
-static const u32 *cgba_bg_blend_term_a_get(u32 eva)
-{
-  blend_palette_cache_observe_writes();
-  if (__builtin_expect(blend_palette_cache_a.valid &&
-                       blend_palette_cache_a.factor == eva, 1))
-    return blend_palette_cache_a.term;
-  for (u32 i = 0; i < 512u; i++) {
-    u32 pixel = palette_ram_converted[i];
-    u32 expanded = (pixel | (pixel << 16)) & BLND_MSK;
-    blend_palette_cache_a.term[i] = expanded * eva;
-  }
-  blend_palette_cache_a.factor = eva;
-  blend_palette_cache_a.valid = true;
-  blend_palette_cache_a.pending = false;
-  cgba_term_a_epoch++;
-  return blend_palette_cache_a.term;
-}
-static inline const u32 *cgba_obj_blend_term_a_get(u32 eva)
-{
-  return cgba_bg_blend_term_a_get(eva) + 256u;
-}
-#else
 #if CGBA_PALETTE_BLEND_BIT
 static u32 cgba_direct_term_a[256] __attribute__((aligned(32)));
 static u32 cgba_direct_term_a_eva = 0xFFFFFFFFu;
@@ -4120,7 +3871,6 @@ static const u32 *cgba_obj_blend_term_a_get(u32 eva)
   }
   return direct_obj_term_a;
 }
-#endif
 #endif
 
 #if defined(CGBA_SH4_ASM_4BPP) && !defined(USE_XBGR1555_FORMAT)
@@ -4191,17 +3941,6 @@ static void merge_blend(u32 start, u32 end, u16 *dst, u32 *src) {
   return;
 #endif
 
-#ifdef CGBA_VIDEO_BLEND_PALETTE_CACHE
-  const u32 *blend_term_a = NULL;
-  const u32 *blend_term_b = NULL;
-  blend_palette_cache_observe_writes();
-  bool cached_a =
-    blend_palette_cache_get(&blend_palette_cache_a, blend_a, &blend_term_a);
-  bool cached_b =
-    blend_palette_cache_get(&blend_palette_cache_b, blend_b, &blend_term_b);
-  bool cached_terms = cached_a && cached_b;
-#endif
-
   if (can_saturate) {
     // If blending can result in saturation, we need to clamp output values.
     while (start < end) {
@@ -4213,25 +3952,11 @@ static void merge_blend(u32 start, u32 end, u16 *dst, u32 *src) {
       bool do_blend    = (pixpair & 0x04000200) == 0x04000200;
       if ((st_objs && force_blend) || (do_blend && bldtype == BLEND_ONLY)) {
         // Top pixel is 1st target, pixel below is 2nd target. Blend!
-#ifdef CGBA_VIDEO_BLEND_PALETTE_CACHE
-        u32 pfe;
-        if (cached_terms) {
-          pfe = (blend_term_a[(pixpair >> 0) & 0x1FF] +
-                 blend_term_b[(pixpair >> 16) & 0x1FF]) >> 4;
-        } else {
-#endif
         u16 p1 = palette_ram_converted[(pixpair >>  0) & 0x1FF];
         u16 p2 = palette_ram_converted[(pixpair >> 16) & 0x1FF];
         u32 p1e = (p1 | (p1 << 16)) & BLND_MSK;
         u32 p2e = (p2 | (p2 << 16)) & BLND_MSK;
-#ifdef CGBA_VIDEO_BLEND_PALETTE_CACHE
-        pfe = (((p1e * blend_a) + (p2e * blend_b)) >> 4);
-#else
         u32 pfe = (((p1e * blend_a) + (p2e * blend_b)) >> 4);
-#endif
-#ifdef CGBA_VIDEO_BLEND_PALETTE_CACHE
-        }
-#endif
 
         // If the overflow bit is set, saturate (set) all bits to one.
         if (pfe & (OVFR_MSK | OVFG_MSK | OVFB_MSK)) {
@@ -4266,26 +3991,11 @@ static void merge_blend(u32 start, u32 end, u16 *dst, u32 *src) {
       bool force_blend = (pixpair & 0x04000800) == 0x04000800;
       if ((st_objs && force_blend) || (do_blend && bldtype == BLEND_ONLY)) {
         // Top pixel is 1st target, pixel below is 2nd target. Blend!
-#ifdef CGBA_VIDEO_BLEND_PALETTE_CACHE
-        u32 pfe;
-        if (cached_terms) {
-          pfe = (blend_term_a[(pixpair >> 0) & 0x1FF] +
-                 blend_term_b[(pixpair >> 16) & 0x1FF]) >> 4;
-        } else {
-#endif
         u16 p1 = palette_ram_converted[(pixpair >>  0) & 0x1FF];
         u16 p2 = palette_ram_converted[(pixpair >> 16) & 0x1FF];
         u32 p1e = (p1 | (p1 << 16)) & BLND_MSK;
         u32 p2e = (p2 | (p2 << 16)) & BLND_MSK;
-#ifdef CGBA_VIDEO_BLEND_PALETTE_CACHE
-        pfe = (((p1e * blend_a) + (p2e * blend_b)) >> 4) & BLND_MSK;
-#else
         u32 pfe = (((p1e * blend_a) + (p2e * blend_b)) >> 4) & BLND_MSK;
-#endif
-#ifdef CGBA_VIDEO_BLEND_PALETTE_CACHE
-        }
-        pfe &= BLND_MSK;
-#endif
         dst[start++] = (pfe >> 16) | pfe;
       }
       else if ((bldtype == BLEND_DARK || bldtype == BLEND_BRIGHT) &&
@@ -4562,6 +4272,7 @@ static inline void cgba_blend_4bpp_part_pixels(
   }
 }
 
+#if !defined(CGBA_SH4_ASM_4BPP) || defined(USE_XBGR1555_FORMAT)
 template<bool saturate>
 static inline void cgba_blend_4bpp_tile_run_c(
   u32 todraw, u16 *&map_ptr, u16 *&dst_ptr,
@@ -4608,6 +4319,7 @@ static inline void cgba_blend_4bpp_tile_run_c(
   map_ptr = map;
   dst_ptr = dst;
 }
+#endif
 
 static __attribute__((noinline)) void cgba_render_scanline_text_4bpp_blend(
   u32 layer, u32 start, u32 end, u16 *scanline, u32 eva, u32 evb)
@@ -4695,10 +4407,19 @@ static __attribute__((noinline)) void cgba_render_scanline_text_4bpp_blend(
     if (evb == 16u) {
       cgba_render_4bpp_span_blend_evb16_sh4(
         map_ptr, todraw, dest_ptr, tile_base, vflip_off, term_a_s4);
-      map_ptr += todraw;
-      dest_ptr += todraw * 8u;
-    } else
-#endif
+    } else {
+      u32 rke = (evb << 16) | ((voffset & 7u) << 8) | 1u;
+      const u8 *tile_charbase = &vram[tilecntrl * 16384u];
+      if (saturate)
+        cgba_render_4bpp_strip_blend_sat_sh4(
+          map_ptr, todraw, dest_ptr, tile_charbase, rke, term_a, second_ptr);
+      else
+        cgba_render_4bpp_strip_blend_sh4(
+          map_ptr, todraw, dest_ptr, tile_charbase, rke, term_a, second_ptr);
+    }
+    map_ptr += todraw;
+    dest_ptr += todraw * 8u;
+#else
     if (saturate) {
       cgba_blend_4bpp_tile_run_c<true>(
         todraw, map_ptr, dest_ptr, tile_base, vflip_off, term_a, evb);
@@ -4706,6 +4427,7 @@ static __attribute__((noinline)) void cgba_render_scanline_text_4bpp_blend(
       cgba_blend_4bpp_tile_run_c<false>(
         todraw, map_ptr, dest_ptr, tile_base, vflip_off, term_a, evb);
     }
+#endif
     rem -= todraw * 8u;
     pixel_run -= todraw * 8u;
     if (pixel_run == 0u) {
@@ -4808,7 +4530,7 @@ static __attribute__((noinline)) const u16 *cgba_fused_blend_lut_miss(
 static inline const u16 *cgba_fused_blend_lut_get(
   u32 sub_cand, u32 sub_base, u32 eva, u32 evb, bool bd_is_tgt2)
 {
-#if defined(CGBA_VIDEO_BLEND_PALETTE_CACHE) || CGBA_PALETTE_BLEND_BIT
+#if CGBA_PALETTE_BLEND_BIT
   const u32 key = (sub_cand & 0xFu) | ((sub_base & 0xFu) << 4) |
                   (eva << 8) | (evb << 13) | (bd_is_tgt2 ? (1u << 18) : 0u);
   cgba_fused_blend_lut_slot *last = cgba_fused_blend_last;
@@ -5348,11 +5070,41 @@ static void render_w_effects(
  }                                                                            \
 }
 
-static const bitmap_layer_render_struct idx32_bmrend[3][2] =
-{
-  bitmap_layer_render_functions(INDXCOLOR, u32, 3, u16, 240, 160),
-  bitmap_layer_render_functions(INDXCOLOR, u32, 4, u8,  240, 160),
-  bitmap_layer_render_functions(INDXCOLOR, u32, 5, u16, 160, 128)
+static const bitmap_layer_render_struct idx32_mode4_bmrend[2] =
+  bitmap_layer_render_functions(INDXCOLOR, u32, 4, u8, 240, 160);
+
+/* Modes 3 and 5 are direct-color and only ever dispatched through FULLCOLOR;
+ * specializing avoids instantiating 48 unreachable Mode 3/5 indexed/stacked
+ * template variants in .text. */
+template<rendtype bgmode, typename dsttype>
+struct bitmap_mode_lut {
+  static inline const bitmap_layer_render_struct *get(unsigned modeidx, u32 mmode) {
+    (void)modeidx;
+    static const bitmap_layer_render_struct mode4_renderers[2] =
+      bitmap_layer_render_functions(bgmode, dsttype, 4, u8, 240, 160);
+    return &mode4_renderers[mmode];
+  }
+};
+
+template<>
+struct bitmap_mode_lut<INDXCOLOR, u32> {
+  static inline const bitmap_layer_render_struct *get(unsigned modeidx, u32 mmode) {
+    (void)modeidx;
+    return &idx32_mode4_bmrend[mmode];
+  }
+};
+
+template<>
+struct bitmap_mode_lut<FULLCOLOR, u16> {
+  static inline const bitmap_layer_render_struct *get(unsigned modeidx, u32 mmode) {
+    static const bitmap_layer_render_struct renderers[3][2] =
+    {
+      bitmap_layer_render_functions(FULLCOLOR, u16, 3, u16, 240, 160),
+      bitmap_layer_render_functions(FULLCOLOR, u16, 4, u8,  240, 160),
+      bitmap_layer_render_functions(FULLCOLOR, u16, 5, u16, 160, 128)
+    };
+    return &renderers[modeidx][mmode];
+  }
 };
 
 // Render the BG and OBJ in a bitmap scanline from start to end ONLY if
@@ -5367,21 +5119,14 @@ static void bitmap_render_layers(
   bool objlayer_is_1st_tgt = (read_ioreg(REG_BLDCNT) & 0x10) != 0;
   bool bg2_is_1st_tgt = (read_ioreg(REG_BLDCNT) & 0x4) != 0;
 
-  // Fill in the renderers for a layer based on the mode type,
-  static const bitmap_layer_render_struct renderers[3][2] =
-  {
-    bitmap_layer_render_functions(bgmode, dsttype, 3, u16, 240, 160),
-    bitmap_layer_render_functions(bgmode, dsttype, 4, u8,  240, 160),
-    bitmap_layer_render_functions(bgmode, dsttype, 5, u16, 160, 128)
-  };
-
   const u32 mosamount = read_ioreg(REG_MOSAIC) & 0xFF;
   u32 bg_control = read_ioreg(REG_BG2CNT);
   u32 mmode = ((bg_control & 0x40) && (mosamount != 0)) ? 1 : 0;
 
   unsigned modeidx = (dispcnt & 0x07) - 3;
-  const bitmap_layer_render_struct *mode_rend = &renderers[modeidx][mmode];
-  const bitmap_layer_render_struct *idxm_rend = &idx32_bmrend[modeidx][mmode];
+  const bitmap_layer_render_struct *mode_rend =
+    bitmap_mode_lut<bgmode, dsttype>::get(modeidx, mmode);
+  const bitmap_layer_render_struct *idxm_rend = &idx32_mode4_bmrend[mmode];
 
   u32 current_layer;
   u32 layer_order_pos;
@@ -5856,7 +5601,6 @@ static inline bool cgba_sl_check_and_capture_frame_io(u32 video_mode, u16 dispcn
 }
 #endif /* CGBA_VIDEO_DIRTY_SCANLINE */
 
-#ifndef CGBA_VIDEO_TILE_ROW_CACHE
 /* Per-layer Mode-0 full-scanline (0..240) plan cache.  Recomputed once per
  * uniform frame (or after any mid-frame video IO write) instead of 160x/frame
  * per BG layer. */
@@ -7434,6 +7178,12 @@ static __attribute__((noinline)) void render_mode0_fullcolor_scanline(
     }
     u8 pflags = p->flags;
     if (__builtin_expect(!(pflags & 1u), 0)) {
+      if ((pflags & 8u) && !base_done) {
+        cgba_render_8bpp_bg_base_rows(
+          p, vcount, vcount + 1u, screen_offset, pal_conv);
+        base_done = 1;
+        continue;
+      }
       write_ioreg(REG_VCOUNT, vcount);
       if (pflags & 4u) {
         if (base_done)
@@ -7506,12 +7256,12 @@ static __attribute__((noinline)) void render_mode0_fullcolor_scanline(
         dst += 8u - thoff;
       }
       if (td1) {
-        render_text_tile_run<u16, FULLCOLOR, false, false, false>(
+        render_text_tile_run<u16, FULLCOLOR, false, false>(
           td1, map_ptr, dst, 0u, 0u, tile_base, vflip_off, pal_conv);
       }
       map_ptr = map2;
       if (td2) {
-        render_text_tile_run<u16, FULLCOLOR, false, false, false>(
+        render_text_tile_run<u16, FULLCOLOR, false, false>(
           td2, map_ptr, dst, 0u, 0u, tile_base, vflip_off, pal_conv);
       }
       if (thoff) {
@@ -7529,12 +7279,12 @@ static __attribute__((noinline)) void render_mode0_fullcolor_scanline(
         dst += 8u - thoff;
       }
       if (td1) {
-        render_text_tile_run<u16, FULLCOLOR, false, true, false>(
+        render_text_tile_run<u16, FULLCOLOR, false, true>(
           td1, map_ptr, dst, 0u, 0u, tile_base, vflip_off, base_pal);
       }
       map_ptr = map2;
       if (td2) {
-        render_text_tile_run<u16, FULLCOLOR, false, true, false>(
+        render_text_tile_run<u16, FULLCOLOR, false, true>(
           td2, map_ptr, dst, 0u, 0u, tile_base, vflip_off, base_pal);
       }
       if (thoff) {
@@ -7548,33 +7298,6 @@ static __attribute__((noinline)) void render_mode0_fullcolor_scanline(
   if (!base_done)
     fill_line_background<FULLCOLOR, u16>(0, 240, screen_offset);
 }
-#else
-static inline void cgba_bg_plan_invalidate_all(void)
-{
-#if defined(CGBA_VIDEO_DIRTY_SCANLINE) && CGBA_VIDEO_DIRTY_SCANLINE
-  cgba_tile4_invalidate_all();
-#endif
-}
-#if defined(CGBA_VIDEO_DIRTY_SCANLINE) && CGBA_VIDEO_DIRTY_SCANLINE
-static inline void cgba_bg_vram_invalidate(void)
-{
-#ifdef CGBA_VRAM_SB_DIRTY_ACTIVE
-  u32 sbd = cgba_vram_sb_dirty;
-  cgba_vram_sb_dirty = 0;
-  cgba_sb_valid_mask &= sbd ? ~sbd : 0u;
-  cgba_tile4_invalidate_sbd(sbd);
-#else
-  cgba_sb_valid_mask = 0;
-  cgba_tile4_invalidate_all();
-#endif
-  for (u32 c = 0; c < 4u; c++)
-    cgba_sb.opaque_valid[c] = 0u;
-#ifdef CGBA_SH4_ASM_4BPP
-  cgba_aff_tile_valid = 0u;
-#endif
-}
-#endif
-#endif /* !CGBA_VIDEO_TILE_ROW_CACHE */
 
 static inline void cgba_sync_mode0_palettes(void)
 {
@@ -7978,11 +7701,20 @@ int cgba_try_batch_hblank_bg2_dma0_fast(u32 start_y, u32 lines)
 }
 #endif
 
-#if !defined(CGBA_VIDEO_TILE_ROW_CACHE) && defined(CGBA_SH4_ASM_4BPP) && \
+#if defined(CGBA_SH4_ASM_4BPP) && \
     defined(CGBA_VIDEO_BACKDROP_SHADOW_PALETTE) && defined(CGBA_VIDEO_PAIR_PALETTE)
 static u16 cgba_folded_pal[512] __attribute__((aligned(32)));
 static u16 cgba_folded_bg_shadow[256] __attribute__((aligned(32)));
-static u16 cgba_folded_pair_lut[16][256][2] CGBA_HIGH_BSS;
+/* Mode 0 folded 4bpp pair LUT (16 KiB) and Mode 1 folded affine/BG/OBJ
+ * palettes (20 KiB) are never live simultaneously; sharing storage saves
+ * 16 KiB of .cgba.highbss. Ownership transitions invalidate the incoming side. */
+static union {
+  u16 pair_lut[16][256][2];
+  u16 m1_fpal[16][640];
+} cgba_folded_highbss CGBA_HIGH_BSS;
+#define cgba_folded_pair_lut (cgba_folded_highbss.pair_lut)
+#define cgba_m1_fpal_data    (cgba_folded_highbss.m1_fpal)
+static u8 cgba_folded_union_owner = 0u; /* 0 = none, 1 = m0 pair_lut, 2 = m1_fpal */
 static u16 cgba_folded_pal_snap[512] __attribute__((aligned(32)));
 static u32 cgba_folded_key = 0xFFFFFFFFu;
 static bool cgba_folded_valid = false;
@@ -9321,6 +9053,10 @@ static __attribute__((noinline)) void cgba_folded_palette_prepare(
                 "CGBA_PALETTE_DIRTY_ACTIVE must include CGBA_PALETTE_DIRTY_FOLDED");
   static_assert((CGBA_PALETTE_DIRTY_OBJ_ONLY & CGBA_PALETTE_DIRTY_FOLDED_OBJ) != 0u,
                 "CGBA_PALETTE_DIRTY_OBJ_ONLY must include CGBA_PALETTE_DIRTY_FOLDED_OBJ");
+  if (cgba_folded_union_owner != 1u) {
+    cgba_folded_valid = false;
+    cgba_folded_union_owner = 1u;
+  }
   u32 key = ((u32)p1 << 16) | (eva << 8) | evb;
   bool key_changed = !cgba_folded_valid || (cgba_folded_key != key);
   u32 dirty = palette_ram_dirty & (CGBA_PALETTE_DIRTY_FOLDED | CGBA_PALETTE_DIRTY_FOLDED_OBJ);
@@ -9398,6 +9134,10 @@ static __attribute__((noinline)) void cgba_folded_brightness_prepare(
 #if !CGBA_PALETTE_FOLDED_BIT
 #error "CGBA_PALETTE_FOLDED_BIT must be non-zero when cgba_folded_brightness_prepare is enabled"
 #endif
+  if (cgba_folded_union_owner != 1u) {
+    cgba_folded_valid = false;
+    cgba_folded_union_owner = 1u;
+  }
   /* Bit 15 is always 0 in alpha-blend keys (eva <= 16), keeping brightness
    * keys disjoint from alpha-blend keys in the shared folded-palette cache. */
   u32 key = 0x00008000u | (effect << 8) | evy;
@@ -10656,7 +10396,6 @@ static __attribute__((noinline)) void cgba_render_win_multi_strip_sh4(
 }
 #endif
 
-#ifndef CGBA_VIDEO_TILE_ROW_CACHE
 static inline void cgba_build_mode1_text_plan(u32 layer, cgba_mode0_bg_plan *p)
 {
   const u32 mos_bg = read_ioreg(REG_MOSAIC) & 0xFFu;
@@ -10741,10 +10480,10 @@ static inline bool cgba_tile_rows_all_zero(
 }
 
 #if defined(CGBA_SH4_ASM_4BPP) && defined(CGBA_VIDEO_BACKDROP_SHADOW_PALETTE) && defined(CGBA_VIDEO_PAIR_PALETTE)
-/* Layout per slot (640 u16): [0..127] = mirror of bg[128..255] for signed-byte
- * SH-4 affine indexing, [128..383] = bg[0..255], [384..639] = obj[0..255].
- * Returned pointers point to &cgba_m1_fpal_data[s][128]. */
-static u16 cgba_m1_fpal_data[16][640] CGBA_HIGH_BSS;
+/* Layout per slot (640 u16) in cgba_m1_fpal_data (shared with Mode 0
+ * cgba_folded_pair_lut in cgba_folded_highbss): [0..127] = mirror of
+ * bg[128..255] for signed-byte SH-4 affine indexing, [128..383] = bg[0..255],
+ * [384..639] = obj[0..255]. Returned pointers point to &cgba_m1_fpal_data[s][128]. */
 static u16 cgba_m1_pal_snap[512] __attribute__((aligned(32)));
 static u32 cgba_m1_fpal_key[16];
 static u32 cgba_m1_fpal_dirty[16]; /* bit s (0..31): 16-entry subpalette s needs rebuild */
@@ -10814,6 +10553,12 @@ static __attribute__((noinline)) void cgba_m1_fpal_sync_pal(u32 epoch)
 static __attribute__((noinline)) const u16 *cgba_m1_folded_pal_get(
   u16 p1, u32 eva, u32 evb, bool need_obj)
 {
+  if (cgba_folded_union_owner != 2u) {
+    cgba_m1_fpal_count = 0u;
+    cgba_m1_fpal_rr = 0u;
+    cgba_m1_fpal_ver++;
+    cgba_folded_union_owner = 2u;
+  }
   (void)cgba_bg_blend_term_a_get(eva);
   const u32 epoch = cgba_term_a_epoch;
   if (__builtin_expect(cgba_m1_fpal_epoch != epoch, 0))
@@ -11701,7 +11446,6 @@ static __attribute__((noinline)) bool cgba_try_render_mode1_batch(
   }
   return true;
 }
-#endif
 
 CGBA_HOT_TEXT void cgba_flush_pending_scanlines(void)
 {
@@ -11770,7 +11514,6 @@ CGBA_HOT_TEXT void cgba_flush_pending_scanlines(void)
                       (((dispcnt & 0x1000) != 0) || ((dispcnt & 0x8000) != 0));
   const u16 saved_vc = read_ioreg(REG_VCOUNT);
 
-#ifndef CGBA_VIDEO_TILE_ROW_CACHE
   if (__builtin_expect(video_mode == 1u && !(dispcnt & 0x80) &&
                        bg_dirty && pitch == 240u && (y_end - y0) >= 2u &&
                        y_end <= 160u, 0)) {
@@ -11999,7 +11742,6 @@ CGBA_HOT_TEXT void cgba_flush_pending_scanlines(void)
       cgba_sl_prev_uniform = cgba_sl_cur_uniform;
     return;
   }
-#endif
 
   {
     const u16 saved_pa = read_ioreg(REG_BG2PA);
@@ -12074,21 +11816,15 @@ static inline void cgba_blend_caches_invalidate(void)
 #ifdef CGBA_SH4_ASM_4BPP
   cgba_signed_bg_pal_valid = false;
 #endif
-#ifndef CGBA_VIDEO_TILE_ROW_CACHE
   cgba_bg_blend_bd_key = 0xFFFFFFFFu;
-#endif
-#if defined(CGBA_VIDEO_DEFERRED_ACTIVE) && !defined(CGBA_VIDEO_TILE_ROW_CACHE) && \
+#if defined(CGBA_VIDEO_DEFERRED_ACTIVE) && \
     defined(CGBA_SH4_ASM_4BPP) && defined(CGBA_VIDEO_BACKDROP_SHADOW_PALETTE) && \
     defined(CGBA_VIDEO_PAIR_PALETTE)
   cgba_folded_valid = false;
   cgba_m1_pal_snap_valid = false;
+  cgba_folded_union_owner = 0u;
 #endif
-#ifdef CGBA_VIDEO_BLEND_PALETTE_CACHE
-  blend_palette_cache_a.valid = false;
-  blend_palette_cache_a.pending = false;
-  blend_palette_cache_b.valid = false;
-  blend_palette_cache_b.pending = false;
-#elif CGBA_PALETTE_BLEND_BIT
+#if CGBA_PALETTE_BLEND_BIT
   cgba_direct_term_a_eva = 0xFFFFFFFFu;
   cgba_direct_obj_term_a_eva = 0xFFFFFFFFu;
 #endif
@@ -12145,7 +11881,6 @@ CGBA_HOT_TEXT void update_scanline(void)
     // If the screen is in forced blank draw pure white.
     if (__builtin_expect((dispcnt & 0x80) != 0, 0))
       memset(screen_offset, 0xff, 240*sizeof(u16));
-#ifndef CGBA_VIDEO_TILE_ROW_CACHE
     else if (__builtin_expect(video_mode <= 2u, 1)) {
       if (__builtin_expect(!cgba_bg_plan_valid || cgba_m0.video_mode != video_mode, 0)) {
         cgba_rebuild_bg_plans(video_mode, dispcnt);
@@ -12169,7 +11904,6 @@ CGBA_HOT_TEXT void update_scanline(void)
         render_scanline_window(screen_offset);
       }
     }
-#endif
     else {
       order_layers((dispcnt >> 8) & active_layers[video_mode], vcount);
       render_scanline_window(screen_offset);
@@ -12197,7 +11931,6 @@ CGBA_HOT_TEXT void update_scanline(void)
   // If the screen is in in forced blank draw pure white.
   if(dispcnt & 0x80)
     memset(screen_offset, 0xff, 240*sizeof(u16));
-#ifndef CGBA_VIDEO_TILE_ROW_CACHE
   else if (video_mode <= 2u) {
     cgba_rebuild_bg_plans(video_mode, dispcnt);
     u32 omask = cgba_mode0_obj_enabled ? (u32)(obj_row_prio_mask[vcount] & 0x0Fu) : 0u;
@@ -12209,21 +11942,10 @@ CGBA_HOT_TEXT void update_scanline(void)
       render_scanline_window(screen_offset);
     }
   }
-#endif
   else {
     order_layers((dispcnt >> 8) & active_layers[video_mode], vcount);
     render_scanline_window(screen_offset);
   }
-#endif
-
-#ifdef CGBA_LCD_SCANLINE_STREAM
-  /* The renderer has finished every write to this row. In unscaled streaming
-   * mode the platform batches it into a DMA-safe 16-row YRAM strip. */
-#if defined(CGBA_VIDEO_DIRTY_SCANLINE) && CGBA_VIDEO_DIRTY_SCANLINE
-  fxcg100_lcd_stream_scanline(screen_offset, vcount, row_dirty ? 1 : 0);
-#else
-  fxcg100_lcd_stream_scanline(screen_offset, vcount, 1);
-#endif
 #endif
 
   // Mode 0 does not use any affine params at all.

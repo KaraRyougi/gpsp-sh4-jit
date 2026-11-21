@@ -87,8 +87,6 @@ option(CGBA_SH4_PIN_GUEST_R0
   "Keep guest ARM r0 resident in callee-saved SH-4 R11" ON)
 option(CGBA_SH4_PIN_GUEST_R1
   "Keep guest ARM r1 resident in callee-saved SH-4 R12" ON)
-option(CGBA_SH4_FASTMEM_XYRAM
-  "Place generated resident fastmem routines in on-chip XYRAM (hardware A/B)" OFF)
 option(CGBA_SH4_FASTMEM_ILRAM
   "Pack hottest resident fastmem routines into free zero-wait-state ILRAM" ON)
 option(CGBA_SH4_LAZY_CHAIN
@@ -125,8 +123,6 @@ option(CGBA_SH4_M4A_MIX_SKIP
   "Skip discarded PCM arithmetic and buffer access in the signature-matched m4a mixer (only valid with the no-op sound backend)" ON)
 option(CGBA_SH4_M4A_LOOP_FOLD
   "Fold whole iterations of the elided m4a reverb/mix loops in C (needs CGBA_SH4_M4A_MIX_SKIP)" ON)
-option(CGBA_SH4_SWI_OBJAFFINE_HLE
-  "Experimental SH4 HLE for BIOS ObjAffineSet (SWI 0x0F); default off until event-slice parity is fixed" OFF)
 set(CGBA_SH4_HEAT_QUIET_FRAMES "180" CACHE STRING
   "Cold-gate: frames after a ROM flush before heating switches to the fast increment")
 set(CGBA_SH4_HEAT_SLOW "1" CACHE STRING
@@ -300,7 +296,6 @@ if(CGBA_DYNAREC)
     CGBA_SH4_BLOCK_PROFILE=$<BOOL:${CGBA_SH4_BLOCK_PROFILE}>
     CGBA_SH4_PIN_GUEST_R0=$<BOOL:${CGBA_SH4_PIN_GUEST_R0}>
     CGBA_SH4_PIN_GUEST_R1=$<BOOL:${CGBA_SH4_PIN_GUEST_R1}>
-    CGBA_SH4_FASTMEM_XYRAM=$<BOOL:${CGBA_SH4_FASTMEM_XYRAM}>
     CGBA_SH4_FASTMEM_ILRAM=$<BOOL:${CGBA_SH4_FASTMEM_ILRAM}>
     CGBA_SH4_LAZY_CHAIN=$<BOOL:${CGBA_SH4_LAZY_CHAIN}>
     CGBA_SH4_KNOWN_TARGET_CACHE=$<BOOL:${CGBA_SH4_KNOWN_TARGET_CACHE}>
@@ -331,10 +326,6 @@ if(CGBA_DYNAREC)
   endif()
   if(CGBA_SH4_DIAG_COUNTERS)
     target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_SH4_DIAG_COUNTERS=1)
-  endif()
-  if(DEFINED CGBA_SH4_SWI_MEM_HLE)
-    target_compile_definitions(cgba-gint-gpsp PRIVATE
-      CGBA_SH4_SWI_MEM_HLE=${CGBA_SH4_SWI_MEM_HLE})
   endif()
   if(DEFINED CGBA_SH4_SWI_CPUSET_FAITHFUL)
     target_compile_definitions(cgba-gint-gpsp PRIVATE
@@ -368,9 +359,6 @@ if(CGBA_DYNAREC)
     if(CGBA_SH4_M4A_LOOP_FOLD AND NOT CGBA_SH4_EXACT_CYCLE_BOUNDARIES)
       target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_SH4_M4A_LOOP_FOLD=1)
     endif()
-  endif()
-  if(CGBA_SH4_SWI_OBJAFFINE_HLE)
-    target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_SH4_SWI_OBJAFFINE_HLE=1)
   endif()
   target_compile_definitions(cgba-gint-gpsp PRIVATE
     CGBA_SH4_HEAT_QUIET_FRAMES=${CGBA_SH4_HEAT_QUIET_FRAMES}
@@ -415,51 +403,14 @@ if(CGBA_GPSP_DIAG)
   target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_GPSP_DIAG=1)
 endif()
 
-# Cache palette colors multiplied by the two alpha-blend factors.  This
-# removes two multiplies and two RGB565 expansion sequences per blended pixel
-# when the palette/factors are stable, while an adaptive fallback avoids table
-# rebuilds for raster effects which change them every scanline.
-option(CGBA_VIDEO_BLEND_PALETTE_CACHE
-  "Cache stable palette alpha-blend terms (experimental performance A/B)" OFF)
-if(CGBA_VIDEO_BLEND_PALETTE_CACHE)
-  target_compile_definitions(cgba-gint-gpsp PRIVATE
-    CGBA_VIDEO_BLEND_PALETTE_CACHE=1)
-endif()
-
 # Base-layer 4-bpp text backgrounds replace each sub-palette's transparent slot
 # with the backdrop in a lazily rebuilt shadow, removing the per-pixel
-# transparency branch from the common Mode 0 FULLCOLOR path. Exhaustive host
-# differentials and representative saved-game framebuffer A/Bs make this an
-# exact production path; keep the broader palette blend cache experimental.
+# transparency branch from the common Mode 0 FULLCOLOR path.
 option(CGBA_VIDEO_BACKDROP_SHADOW_PALETTE
   "Branchless base-layer 4-bpp backdrop lookup (exact production path)" ON)
 if(CGBA_VIDEO_BACKDROP_SHADOW_PALETTE)
   target_compile_definitions(cgba-gint-gpsp PRIVATE
     CGBA_VIDEO_BACKDROP_SHADOW_PALETTE=1)
-endif()
-
-option(CGBA_VIDEO_TILE_ROW_CACHE
-  "Experimental Mode 0 FULLCOLOR 4-bpp background tile-row cache" OFF)
-set(CGBA_VIDEO_TILE_ROW_CACHE_ENTRIES "128" CACHE STRING
-  "Number of direct-mapped tile row entries (power of two)")
-option(CGBA_VIDEO_TILE_ROW_PROFILE "Count tile-row cache hits and misses" OFF)
-if(CGBA_VIDEO_TILE_ROW_CACHE)
-  target_compile_definitions(cgba-gint-gpsp PRIVATE
-    CGBA_VIDEO_TILE_ROW_CACHE=1
-    CGBA_VIDEO_TILE_ROW_CACHE_ENTRIES=${CGBA_VIDEO_TILE_ROW_CACHE_ENTRIES})
-  if(CGBA_VIDEO_TILE_ROW_PROFILE)
-    target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_VIDEO_TILE_ROW_PROFILE=1)
-  endif()
-endif()
-
-# Fully opaque 4-bpp tile rows need neither transparency tests nor per-pixel
-# branches.  Keep the specialized renderer opt-in until representative-game
-# and device cache behavior have both been measured.
-option(CGBA_VIDEO_OPAQUE_TILE_FASTPATH
-  "Specialize fully opaque 4-bpp tile rows (experimental performance A/B)" OFF)
-if(CGBA_VIDEO_OPAQUE_TILE_FASTPATH)
-  target_compile_definitions(cgba-gint-gpsp PRIVATE
-    CGBA_VIDEO_OPAQUE_TILE_FASTPATH=1)
 endif()
 
 # Overlay text layers are mostly transparent: step over runs of identical map
@@ -486,17 +437,6 @@ if(CGBA_VIDEO_PAIR_PALETTE AND CGBA_VIDEO_BACKDROP_SHADOW_PALETTE AND
    CGBA_VIDEO_OPAQUE_ROW_UNROLL)
   target_compile_definitions(cgba-gint-gpsp PRIVATE
     CGBA_VIDEO_PAIR_PALETTE=1)
-endif()
-
-# Experimental unscaled-mode path that publishes each completed 16-row group
-# from the renderer to the double-buffered YRAM presenter. Physical Ace
-# Attorney A/B testing found this slower than the established end-of-frame DMA
-# presenter, so release builds keep it compiled out by default.
-option(CGBA_LCD_SCANLINE_STREAM
-  "Stream completed unscaled scanline groups to LCD DMA (hardware A/B)" OFF)
-if(CGBA_LCD_SCANLINE_STREAM)
-  target_compile_definitions(cgba-gint-gpsp PRIVATE
-    CGBA_LCD_SCANLINE_STREAM=1)
 endif()
 
 # Game-specific idle-loop metadata is isolated behind an option so the timing

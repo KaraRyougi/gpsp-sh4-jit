@@ -13,20 +13,12 @@
 #include "ports/fxcg100/sh4/sh4_emit_glue.h"
 #include "ports/fxcg100/sh4/sh4_fastmem.h"
 
-#ifndef CGBA_SH4_LDST_DETAIL_COUNTERS
-#define CGBA_SH4_LDST_DETAIL_COUNTERS 0
-#endif
-
 extern u8 *memory_map_read[];
-extern u8 iwram[];
 int  cgba_sh4_thumb_block(u32 opcode, u32 pc);
 void sh4_block_exit(u32 pc);
 void sh4_helper_exit(u32 pc);
 void sh4_op2_pc_mem_tramp(void);   /* compact slow-path call (sh4_stub.S) */
 void sh4_indirect_branch_thumb(u32 address);
-#if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
-extern u32 cgba_sh4_native_thumb_push_iwram_count;
-#endif
 
 static inline u8 *sh4g_thumb_block_guard(u8 **tp, int slow_if_t)
 {
@@ -35,117 +27,6 @@ static inline u8 *sh4g_thumb_block_guard(u8 **tp, int slow_if_t)
     else           sh4_emit_bt(&cg, 1);       /* T==1 -> stay fast */
     sh4g_close(tp, &cg); }
   return sh4g_emit_bra_placeholder(tp);
-}
-
-static inline void sh4g_thumb_push_store_word(sh4_codegen *cg, unsigned greg)
-{
-  sh4_emit_load_greg(cg, greg, SH4_REG_T1);
-  sh4_emit_swap_b(cg, SH4_REG_T1, SH4_REG_ARG0);
-  sh4_emit_swap_w(cg, SH4_REG_ARG0, SH4_REG_ARG0);
-  sh4_emit_swap_b(cg, SH4_REG_ARG0, SH4_REG_T1);
-  sh4_emit_mov_l_store_r0(cg, SH4_REG_T1, SH4_REG_T2);
-  sh4_emit_add_imm(cg, 4, SH4_REG_RET);
-}
-
-static inline int sh4g_thumb_push_iwram_native(u8 **tp, u32 opcode, u32 pc,
-  int cycle_count)
-{
-  u32 count;
-  u8 *guards[8];
-  int ng = 0;
-  u8 *bra_done;
-
-  if (opcode == 0xB500u) {              /* PUSH {lr} */
-    count = 1;
-  } else if (opcode == 0xB510u) {       /* PUSH {r4,lr} */
-    count = 2;
-  } else {
-    return 0;
-  }
-
-  { sh4_codegen cg = sh4g_open(tp);
-    sh4_emit_load_greg(&cg, 13, SH4_REG_T0);             /* old SP */
-    sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_ARG1);     /* first address */
-    sh4_emit_add_imm(&cg, -(int)(count * 4), SH4_REG_ARG1);
-    sh4g_close(tp, &cg); }
-
-  { sh4_codegen cg = sh4g_open(tp);
-    sh4_emit_mov_reg(&cg, SH4_REG_ARG1, SH4_REG_RET);
-    sh4_emit_tst_imm(&cg, 3);                            /* T = aligned */
-    sh4g_close(tp, &cg); }
-  guards[ng++] = sh4g_thumb_block_guard(tp, 0);
-
-  { sh4_codegen cg = sh4g_open(tp);
-    sh4_emit_mov_reg(&cg, SH4_REG_ARG1, SH4_REG_RET);
-    sh4_emit_shlr16(&cg, SH4_REG_RET);
-    sh4_emit_shlr8(&cg, SH4_REG_RET);
-    sh4_emit_cmpeq_imm(&cg, 3);                          /* T = IWRAM */
-    sh4g_close(tp, &cg); }
-  guards[ng++] = sh4g_thumb_block_guard(tp, 0);
-
-  { sh4_codegen cg = sh4g_open(tp);
-    sh4_emit_mov_reg(&cg, SH4_REG_ARG1, SH4_REG_RET);
-    sh4_emit_mov_imm(&cg, -15, SH4_REG_T1);
-    sh4_emit_shld(&cg, SH4_REG_T1, SH4_REG_RET);
-    sh4_emit_mov_reg(&cg, SH4_REG_ARG1, SH4_REG_T2);
-    sh4_emit_add_imm(&cg, (int)(count * 4) - 1, SH4_REG_T2);
-    sh4_emit_shld(&cg, SH4_REG_T1, SH4_REG_T2);
-    sh4_emit_cmpeq(&cg, SH4_REG_RET, SH4_REG_T2);        /* same 32K page */
-    sh4g_close(tp, &cg); }
-  guards[ng++] = sh4g_thumb_block_guard(tp, 0);
-
-  { sh4_codegen cg = sh4g_open(tp);
-    sh4_emit_mov_reg(&cg, SH4_REG_ARG1, SH4_REG_RET);
-    sh4_emit_shll16(&cg, SH4_REG_RET);
-    sh4_emit_shll(&cg, SH4_REG_RET);
-    sh4_emit_shlr16(&cg, SH4_REG_RET);
-    sh4_emit_shlr(&cg, SH4_REG_RET);                     /* R0 = off & 0x7fff */
-    sh4g_close(tp, &cg); }
-
-  sh4g_const(tp, (u32)(uintptr_t)iwram, SH4_REG_T2);
-  { sh4_codegen cg = sh4g_open(tp);
-    for (u32 i = 0; i < count; i++) {
-      sh4_emit_mov_l_load_r0(&cg, SH4_REG_T2, SH4_REG_ARG0);
-      sh4_emit_tst(&cg, SH4_REG_ARG0, SH4_REG_ARG0);     /* T = no SMC tag */
-      sh4g_close(tp, &cg);
-      guards[ng++] = sh4g_thumb_block_guard(tp, 0);
-      cg = sh4g_open(tp);
-      sh4_emit_add_imm(&cg, 4, SH4_REG_RET);
-    }
-    sh4_emit_add_imm(&cg, -(int)(count * 4), SH4_REG_RET);
-    sh4g_close(tp, &cg); }
-
-#if (defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)) && \
-  CGBA_SH4_LDST_DETAIL_COUNTERS
-  sh4g_const(tp, (u32)(uintptr_t)&cgba_sh4_native_thumb_push_iwram_count,
-             SH4_REG_T2);
-  { sh4_codegen cg = sh4g_open(tp);
-    sh4_emit_mov_l_load(&cg, SH4_REG_T2, SH4_REG_T1);
-    sh4_emit_add_imm(&cg, 1, SH4_REG_T1);
-    sh4_emit_mov_l_store(&cg, SH4_REG_T1, SH4_REG_T2);
-    sh4g_close(tp, &cg); }
-#endif
-
-  sh4g_const(tp, (u32)(uintptr_t)(iwram + 0x8000), SH4_REG_T2);
-  { sh4_codegen cg = sh4g_open(tp);
-    if (opcode == 0xB510u)
-      sh4g_thumb_push_store_word(&cg, 4);
-    sh4g_thumb_push_store_word(&cg, SH4_GREG_LR);
-    sh4_emit_store_greg(&cg, SH4_REG_ARG1, 13);
-    sh4g_close(tp, &cg); }
-
-  for (u32 i = 0; i < count; i++)
-    sh4g_charge_mem_cell(tp, &ws_cyc_seq[0x03][1]);
-  bra_done = sh4g_emit_bra_placeholder(tp);
-
-  for (int i = 0; i < ng; i++)
-    sh4g_patch_bra(guards[i], *tp);
-  sh4g_op2_tramp_call(tp, (const void *)sh4_op2_pc_mem_tramp,
-                      (const void *)cgba_sh4_thumb_block, (u32)opcode, (u32)pc,
-                      1, cycle_count);
-
-  sh4g_patch_bra(bra_done, *tp);
-  return 1;
 }
 
 static inline int sh4g_thumb_block_native(u8 **tp, u32 opcode, u32 pc,
@@ -162,12 +43,7 @@ static inline int sh4g_thumb_block_native(u8 **tp, u32 opcode, u32 pc,
   u32 rlist = opcode & 0xFF;
   u32 base_reg, load_pc = 0, push_lr = 0, is_push = 0, is_load = 1;
   u32 count = 0, i;
-  u8 *guards[16]; int ng = 0;
-  u8 *bra_done = NULL;
-
-  if (CGBA_SH4_FASTMEM_BLOCK_MIN > 2 &&
-      sh4g_thumb_push_iwram_native(tp, opcode, pc, cycle_count))
-    return 1;
+  u8 *guards[8]; int ng = 0;
 
   if (hi == 0xB4 || hi == 0xB5) {             /* PUSH {rlist[,lr]} */
     base_reg = 13;                            /* SP */
@@ -189,10 +65,10 @@ static inline int sh4g_thumb_block_native(u8 **tp, u32 opcode, u32 pc,
   if (load_pc || push_lr) count++;
   if (count == 0) return 0;
 
-  if (count >= CGBA_SH4_FASTMEM_BLOCK_MIN && !load_pc) {
-    /* Out-of-line fast path (sh4_fastmem.h). PUSH{..,lr} maps LR to rlist
-     * bit 14; POP{..,pc} keeps the inline path (its dispatch tail).
-     * LDMIA with the base in the list keeps the loaded value (no wb). */
+  if (!load_pc) {
+    /* All non-PC block transfers route through the resident fastmem routines
+     * (sh4_fastmem.h). PUSH{..,lr} maps LR to rlist bit 14; LDMIA with the
+     * base in the list keeps the loaded value (no writeback). */
     u32 rlist16 = rlist | (push_lr ? (1u << 14) : 0);
     int do_wb = !(is_load && !is_push && (rlist & (1u << base_reg)) &&
                   hi >= 0xC0);
@@ -215,12 +91,10 @@ static inline int sh4g_thumb_block_native(u8 **tp, u32 opcode, u32 pc,
     return 1;
   }
 
-  /* R1 = original base, R5 = first transfer address. PUSH starts below SP. */
+  /* Inline path: POP {rlist, pc} (base_reg == SP, load from EWRAM/IWRAM). */
   { sh4_codegen cg = sh4g_open(tp);
-    sh4_emit_load_greg(&cg, base_reg, SH4_REG_T0);
+    sh4_emit_load_greg(&cg, 13, SH4_REG_T0);
     sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_ARG1);
-    if (is_push)
-      sh4_emit_add_imm(&cg, -(int)(count * 4), SH4_REG_ARG1);
     sh4g_close(tp, &cg); }
 
   /* Native SH4 word transfers require alignment. The C helper handles odd cases. */
@@ -248,30 +122,15 @@ static inline int sh4g_thumb_block_native(u8 **tp, u32 opcode, u32 pc,
     sh4g_close(tp, &cg); }
   guards[ng++] = sh4g_thumb_block_guard(tp, 1);
 
-  /* RAM (0x02/0x03) for loads and stores; STORES also accept VRAM (region 6:
-   * plain word stores, mirroring in the read map, no side effects, no SMC
-   * tags) — Thumb STMIA blit loops into VRAM were dropping to the C helper. */
-  {
-    u8 *vram_ok = NULL;
-    { sh4_codegen cg = sh4g_open(tp);
-      sh4_emit_mov_reg(&cg, SH4_REG_ARG1, SH4_REG_RET);
-      sh4_emit_shlr16(&cg, SH4_REG_RET);
-      sh4_emit_shlr8(&cg, SH4_REG_RET);            /* R0 = A >> 24 */
-      sh4g_close(tp, &cg); }
-    if (!is_load) {
-      { sh4_codegen cg = sh4g_open(tp);
-        sh4_emit_cmpeq_imm(&cg, 6);                /* T = VRAM */
-        sh4g_close(tp, &cg); }
-      vram_ok = sh4g_emit_bt_placeholder(tp);
-    }
-    { sh4_codegen cg = sh4g_open(tp);
-      sh4_emit_shlr(&cg, SH4_REG_RET);             /* R0 = A >> 25 */
-      sh4_emit_cmpeq_imm(&cg, 1);
-      sh4g_close(tp, &cg); }
-    guards[ng++] = sh4g_thumb_block_guard(tp, 0);
-    if (vram_ok)
-      sh4g_patch_cond(vram_ok, *tp);
-  }
+  /* RAM (0x02/0x03) only. */
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_reg(&cg, SH4_REG_ARG1, SH4_REG_RET);
+    sh4_emit_shlr16(&cg, SH4_REG_RET);
+    sh4_emit_shlr8(&cg, SH4_REG_RET);            /* R0 = A >> 24 */
+    sh4_emit_shlr(&cg, SH4_REG_RET);             /* R0 = A >> 25 */
+    sh4_emit_cmpeq_imm(&cg, 1);
+    sh4g_close(tp, &cg); }
+  guards[ng++] = sh4g_thumb_block_guard(tp, 0);
 
   /* R3 = memory_map_read[A >> 15]. */
   { sh4_codegen cg = sh4g_open(tp);
@@ -294,161 +153,46 @@ static inline int sh4g_thumb_block_native(u8 **tp, u32 opcode, u32 pc,
     sh4_emit_shll(&cg, SH4_REG_RET);
     sh4_emit_shlr16(&cg, SH4_REG_RET);
     sh4_emit_shlr(&cg, SH4_REG_RET);
-    sh4g_close(tp, &cg); }
-
-  if (!is_load) {
-    u8 *bf_iwram, *bra_tag_ready, *vram_skip;
-    /* VRAM has no SMC tag mirror (region 6 is never translated code). */
-    { sh4_codegen cg = sh4g_open(tp);
-      sh4_emit_mov_reg(&cg, SH4_REG_ARG1, SH4_REG_T1);
-      sh4_emit_shlr16(&cg, SH4_REG_T1);
-      sh4_emit_shlr8(&cg, SH4_REG_T1);                  /* R2 = A >> 24 */
-      sh4_emit_mov_imm(&cg, 6, SH4_REG_ARG0);
-      sh4_emit_cmpeq(&cg, SH4_REG_ARG0, SH4_REG_T1);    /* T = VRAM */
-      sh4g_close(tp, &cg); }
-#if defined(CGBA_VIDEO_DEFERRED_ACTIVE) || defined(CGBA_VRAM_DIRTY_ACTIVE)
-    sh4g_litseg_reserve(tp, 4);
-    { u8 *not_vram = sh4g_emit_bf_placeholder(tp);
-#ifdef CGBA_VIDEO_DEFERRED_ACTIVE
-      /* Flush pending deferred scanlines via C fallback before mutating VRAM. */
-      sh4g_const(tp, (u32)(uintptr_t)&cgba_pending_sl_count, SH4_REG_ARG0);
-      { sh4_codegen cg = sh4g_open(tp);
-        sh4_emit_mov_l_load(&cg, SH4_REG_ARG0, SH4_REG_ARG0);
-        sh4_emit_tst(&cg, SH4_REG_ARG0, SH4_REG_ARG0);  /* T = none pending */
-        sh4g_close(tp, &cg); }
-      guards[ng++] = sh4g_thumb_block_guard(tp, 0);     /* pending -> slow */
-#endif
-#ifdef CGBA_VRAM_DIRTY_ACTIVE
-      sh4g_vec_load(tp, SH4G_VEC_vram_dirty, SH4_REG_T1);
-      { sh4_codegen cg = sh4g_open(tp);
-        sh4_emit_mov_imm(&cg, CGBA_VRAM_DIRTY_ALL, SH4_REG_ARG0);
-        sh4_emit_mov_l_store(&cg, SH4_REG_ARG0, SH4_REG_T1);
-        sh4g_close(tp, &cg); }
-#ifdef CGBA_VRAM_SB_DIRTY_ACTIVE
-      sh4g_const(tp, (u32)(uintptr_t)&cgba_vram_sb_dirty, SH4_REG_T1);
-      { sh4_codegen cg = sh4g_open(tp);
-        sh4_emit_mov_imm(&cg, -1, SH4_REG_ARG0);
-        sh4_emit_mov_l_store(&cg, SH4_REG_ARG0, SH4_REG_T1);
-        sh4g_close(tp, &cg); }
-#endif
-#endif
-      vram_skip = sh4g_emit_bra_placeholder(tp);
-      sh4g_patch_cond(not_vram, *tp); }
-#else
-    vram_skip = sh4g_emit_bt_placeholder(tp);
-#endif
-    /* Build SMC tag page in R6 from data page R3:
-     *   EWRAM data page + 0x40000, IWRAM data page - 0x8000. */
-    { sh4_codegen cg = sh4g_open(tp);
-      sh4_emit_mov_reg(&cg, SH4_REG_T2, SH4_REG_ARG2);
-      sh4_emit_mov_reg(&cg, SH4_REG_ARG1, SH4_REG_T1);
-      sh4_emit_shlr16(&cg, SH4_REG_T1);
-      sh4_emit_shlr8(&cg, SH4_REG_T1);                  /* R2 = A >> 24 */
-      sh4_emit_mov_imm(&cg, 2, SH4_REG_ARG0);
-      sh4_emit_cmpeq(&cg, SH4_REG_ARG0, SH4_REG_T1);    /* T = EWRAM */
-      sh4g_close(tp, &cg); }
-    bf_iwram = sh4g_emit_bf_placeholder(tp);
-    sh4g_const(tp, 0x40000u, SH4_REG_ARG0);
-    sh4g_add_reg(tp, SH4_REG_ARG0, SH4_REG_ARG2);
-    bra_tag_ready = sh4g_emit_bra_placeholder(tp);
-    sh4g_patch_cond(bf_iwram, *tp);
-    sh4g_const(tp, (u32)-0x8000, SH4_REG_ARG0);
-    sh4g_add_reg(tp, SH4_REG_ARG0, SH4_REG_ARG2);
-    sh4g_patch_bra(bra_tag_ready, *tp);
-
-    /* Scan all destination tag words before any store. */
-    { sh4_codegen cg = sh4g_open(tp);
-      for (i = 0; i < count; i++) {
-        sh4_emit_mov_l_load_r0(&cg, SH4_REG_ARG2, SH4_REG_ARG0);
-        sh4_emit_tst(&cg, SH4_REG_ARG0, SH4_REG_ARG0);  /* T = tag word == 0 */
-        sh4g_close(tp, &cg);
-        guards[ng++] = sh4g_thumb_block_guard(tp, 0);   /* SMC -> slow */
-        cg = sh4g_open(tp);
-        sh4_emit_add_imm(&cg, 4, SH4_REG_RET);
-      }
-      sh4_emit_add_imm(&cg, -(int)(count * 4), SH4_REG_RET);
-      sh4g_close(tp, &cg); }
-#ifdef CGBA_VRAM_DIRTY_ACTIVE
-    sh4g_patch_bra(vram_skip, *tp);                     /* VRAM: dirty marked, no tags */
-#else
-    sh4g_patch_cond(vram_skip, *tp);                    /* VRAM: no tags */
-#endif
-  }
-
-  { sh4_codegen cg = sh4g_open(tp);
     for (i = 0; i < 8; i++) {
       if (!(rlist & (1u << i))) continue;
-      if (is_load) {
-        sh4_emit_mov_l_load_r0(&cg, SH4_REG_T2, SH4_REG_T1);
-        sh4_emit_add_imm(&cg, 4, SH4_REG_RET);
-        sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_ARG0);
-        sh4_emit_swap_w(&cg, SH4_REG_ARG0, SH4_REG_ARG0);
-        sh4_emit_swap_b(&cg, SH4_REG_ARG0, SH4_REG_T1);
-        sh4_emit_store_greg(&cg, SH4_REG_T1, i);
-      } else {
-        sh4_emit_load_greg(&cg, i, SH4_REG_T1);
-        sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_ARG0);
-        sh4_emit_swap_w(&cg, SH4_REG_ARG0, SH4_REG_ARG0);
-        sh4_emit_swap_b(&cg, SH4_REG_ARG0, SH4_REG_T1);
-        sh4_emit_mov_l_store_r0(&cg, SH4_REG_T1, SH4_REG_T2);
-        sh4_emit_add_imm(&cg, 4, SH4_REG_RET);
-      }
-    }
-    if (load_pc) {
       sh4_emit_mov_l_load_r0(&cg, SH4_REG_T2, SH4_REG_T1);
       sh4_emit_add_imm(&cg, 4, SH4_REG_RET);
       sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_ARG0);
       sh4_emit_swap_w(&cg, SH4_REG_ARG0, SH4_REG_ARG0);
       sh4_emit_swap_b(&cg, SH4_REG_ARG0, SH4_REG_T1);
-      sh4_emit_mov_imm(&cg, 1, SH4_REG_ARG0);
-      sh4_emit_not(&cg, SH4_REG_ARG0, SH4_REG_ARG0);
-      sh4_emit_and(&cg, SH4_REG_ARG0, SH4_REG_T1);
-      sh4_emit_store_greg(&cg, SH4_REG_T1, SH4_GREG_PC);
+      sh4_emit_store_greg(&cg, SH4_REG_T1, i);
     }
-    if (push_lr) {
-      sh4_emit_load_greg(&cg, SH4_GREG_LR, SH4_REG_T1);
-      sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_ARG0);
-      sh4_emit_swap_w(&cg, SH4_REG_ARG0, SH4_REG_ARG0);
-      sh4_emit_swap_b(&cg, SH4_REG_ARG0, SH4_REG_T1);
-      sh4_emit_mov_l_store_r0(&cg, SH4_REG_T1, SH4_REG_T2);
-      sh4_emit_add_imm(&cg, 4, SH4_REG_RET);
-    }
-    if (is_push) {
-      sh4_emit_store_greg(&cg, SH4_REG_ARG1, base_reg);
-    } else if (!(is_load && (rlist & (1u << base_reg)))) {
-      /* LDMIA with the base in the rlist: the loaded value already landed in
-         base_reg during the loop and must win (interpreter/fastmem parity) —
-         skip the writeback. STMIA keeps it (stores saw the old base). */
-      sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_T1);
-      sh4_emit_add_imm(&cg, (int)(count * 4), SH4_REG_T1);
-      sh4_emit_store_greg(&cg, SH4_REG_T1, base_reg);
-    }
+    sh4_emit_mov_l_load_r0(&cg, SH4_REG_T2, SH4_REG_T1);
+    sh4_emit_add_imm(&cg, 4, SH4_REG_RET);
+    sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_ARG0);
+    sh4_emit_swap_w(&cg, SH4_REG_ARG0, SH4_REG_ARG0);
+    sh4_emit_swap_b(&cg, SH4_REG_ARG0, SH4_REG_T1);
+    sh4_emit_mov_imm(&cg, 1, SH4_REG_ARG0);
+    sh4_emit_not(&cg, SH4_REG_ARG0, SH4_REG_ARG0);
+    sh4_emit_and(&cg, SH4_REG_ARG0, SH4_REG_T1);
+    sh4_emit_store_greg(&cg, SH4_REG_T1, SH4_GREG_PC);
+    sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_T1);
+    sh4_emit_add_imm(&cg, (int)(count * 4), SH4_REG_T1);
+    sh4_emit_store_greg(&cg, SH4_REG_T1, 13);
     sh4g_close(tp, &cg); }
 
   sh4g_charge_mem_run(tp, SH4_REG_ARG1, /*seq=*/1, /*is_word=*/1, count);
-  if (load_pc) {
-    /* POP {..,pc}: a pure Thumb-mode return (ARMv4T LDM to PC does not switch
-     * mode). Dispatch through the inline ROM branch-hash trampoline — a hot,
-     * already-translated return target is one hash probe + JMP, with no
-     * update_gba pass and no C-resolver call. The stub handles the BIOS
-     * fallback, single-block diff mode, and hash misses; the cycle budget is
-     * re-checked at the target block's gates/branch exits. */
-    if (cycle_count)
-      sh4g_cycle_debit(tp, cycle_count);
-    sh4g_load_greg(tp, SH4_GREG_PC, SH4_REG_ARG0);
-    sh4g_vec_jmp(tp, SH4G_VEC_ib_thumb);
-  } else {
-    bra_done = sh4g_emit_bra_placeholder(tp);
-  }
+  /* POP {..,pc}: a pure Thumb-mode return (ARMv4T LDM to PC does not switch
+   * mode). Dispatch through the inline ROM branch-hash trampoline — a hot,
+   * already-translated return target is one hash probe + JMP, with no
+   * update_gba pass and no C-resolver call. The stub handles the BIOS
+   * fallback, single-block diff mode, and hash misses; the cycle budget is
+   * re-checked at the target block's gates/branch exits. */
+  if (cycle_count)
+    sh4g_cycle_debit(tp, cycle_count);
+  sh4g_load_greg(tp, SH4_GREG_PC, SH4_REG_ARG0);
+  sh4g_vec_jmp(tp, SH4G_VEC_ib_thumb);
 
   for (i = 0; i < (u32)ng; i++)
     sh4g_patch_bra(guards[i], *tp);
   sh4g_op2_tramp_call(tp, (const void *)sh4_op2_pc_mem_tramp,
                       (const void *)cgba_sh4_thumb_block, (u32)opcode, (u32)pc,
                       1, cycle_count);
-
-  if (bra_done)
-    sh4g_patch_bra(bra_done, *tp);
   return 1;
 #endif
 }

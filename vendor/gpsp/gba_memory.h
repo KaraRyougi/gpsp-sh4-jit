@@ -300,13 +300,11 @@ extern u16 oam_ram[512];
 extern u16 palette_ram_converted[512];
 #define CGBA_PALETTE_DIRTY_BLEND      0x01u
 #define CGBA_PALETTE_DIRTY_BACKDROP   0x02u
-#define CGBA_PALETTE_DIRTY_TILE_ROW   0x04u
 #define CGBA_PALETTE_DIRTY_SCANLINE   0x08u
 #define CGBA_PALETTE_DIRTY_FOLDED     0x10u
 #define CGBA_PALETTE_DIRTY_SIGNED     0x20u
 #define CGBA_PALETTE_DIRTY_FOLDED_OBJ 0x40u
-#if defined(CGBA_VIDEO_BLEND_PALETTE_CACHE) || \
-    (defined(CGBA_VIDEO_DIRTY_SCANLINE) && CGBA_VIDEO_DIRTY_SCANLINE)
+#if defined(CGBA_VIDEO_DIRTY_SCANLINE) && CGBA_VIDEO_DIRTY_SCANLINE
 #define CGBA_PALETTE_BLEND_BIT CGBA_PALETTE_DIRTY_BLEND
 #else
 #define CGBA_PALETTE_BLEND_BIT 0
@@ -315,11 +313,6 @@ extern u16 palette_ram_converted[512];
 #define CGBA_PALETTE_BACKDROP_BIT CGBA_PALETTE_DIRTY_BACKDROP
 #else
 #define CGBA_PALETTE_BACKDROP_BIT 0
-#endif
-#ifdef CGBA_VIDEO_TILE_ROW_CACHE
-#define CGBA_PALETTE_TILE_ROW_BIT CGBA_PALETTE_DIRTY_TILE_ROW
-#else
-#define CGBA_PALETTE_TILE_ROW_BIT 0
 #endif
 #if defined(CGBA_VIDEO_DIRTY_SCANLINE) && CGBA_VIDEO_DIRTY_SCANLINE
 #define CGBA_PALETTE_SCANLINE_BIT CGBA_PALETTE_DIRTY_SCANLINE
@@ -331,7 +324,7 @@ extern u16 palette_ram_converted[512];
      defined(__sh__)) && defined(MSB_FIRST)
 #define CGBA_SH4_ASM_4BPP 1
 #endif
-#if !defined(CGBA_VIDEO_TILE_ROW_CACHE) && defined(CGBA_SH4_ASM_4BPP) && \
+#if defined(CGBA_SH4_ASM_4BPP) && \
     defined(CGBA_VIDEO_BACKDROP_SHADOW_PALETTE) && defined(CGBA_VIDEO_PAIR_PALETTE)
 #define CGBA_PALETTE_FOLDED_BIT     CGBA_PALETTE_DIRTY_FOLDED
 #define CGBA_PALETTE_FOLDED_OBJ_BIT CGBA_PALETTE_DIRTY_FOLDED_OBJ
@@ -345,16 +338,16 @@ extern u16 palette_ram_converted[512];
 #define CGBA_PALETTE_SIGNED_BIT 0
 #endif
 #if CGBA_PALETTE_BLEND_BIT || CGBA_PALETTE_BACKDROP_BIT || \
-    CGBA_PALETTE_TILE_ROW_BIT || CGBA_PALETTE_SCANLINE_BIT || \
+    CGBA_PALETTE_SCANLINE_BIT || \
     CGBA_PALETTE_FOLDED_BIT || CGBA_PALETTE_SIGNED_BIT || \
     CGBA_PALETTE_FOLDED_OBJ_BIT
 #define CGBA_PALETTE_DIRTY_ACTIVE \
   (CGBA_PALETTE_BLEND_BIT | CGBA_PALETTE_BACKDROP_BIT | \
-   CGBA_PALETTE_TILE_ROW_BIT | CGBA_PALETTE_SCANLINE_BIT | \
+   CGBA_PALETTE_SCANLINE_BIT | \
    CGBA_PALETTE_FOLDED_BIT | CGBA_PALETTE_SIGNED_BIT | \
    CGBA_PALETTE_FOLDED_OBJ_BIT)
-/* OBJ palette (0x05000200..0x050003FF) cannot affect BG backdrop shadow, BG
- * tile-row cache, BG folded palettes, or Mode 1/2 BG signed palettes; it does
+/* OBJ palette (0x05000200..0x050003FF) cannot affect BG backdrop shadow,
+ * BG folded palettes, or Mode 1/2 BG signed palettes; it does
  * affect folded OBJ palettes (cgba_folded_pal[256..511]), blend caches, and
  * scanline change detection. */
 #define CGBA_PALETTE_DIRTY_OBJ_ONLY \
@@ -379,7 +372,6 @@ extern volatile u32 palette_ram_dirty;
 extern volatile u32 cgba_vram_dirty;
 extern volatile u32 cgba_vram_sb_dirty;
 extern volatile u32 cgba_video_io_dirty;
-#ifndef CGBA_LCD_SCANLINE_STREAM
 #define CGBA_VIDEO_DEFERRED_ACTIVE 1
 extern volatile u32 cgba_pending_sl_count;
 extern u32 cgba_pending_sl_start;
@@ -397,11 +389,6 @@ static inline void cgba_video_snapshot_bg2_before_write(void) {
   if (__builtin_expect(cgba_pending_sl_count != 0u, 0))
     cgba_snapshot_bg2_affine_pending();
 }
-#else
-static inline void cgba_video_flush_before_write(void) {}
-static inline void cgba_video_snapshot_bg2_before_write(void) {}
-static inline void cgba_discard_pending_scanlines(void) {}
-#endif
 #else
 static inline void cgba_video_flush_before_write(void) {}
 static inline void cgba_video_snapshot_bg2_before_write(void) {}

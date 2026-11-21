@@ -14,7 +14,6 @@
  * pixel counts that are multiples of 8 (n = 320 or 384).
  */
 
-	.text
 
 /* ============================================================================
  * void cgba_scale_row_240_384_sh4(const uint16_t *src, uint16_t *dst)
@@ -22,6 +21,7 @@
  *   24 groups x (10 src px -> 16 dst px):
  *     {a, ab, bc, c, cd, d, de, e} and {f, fh, hi, i, ij, j, jk, k}
  * ========================================================================== */
+	.section .text._cgba_scale_row_240_384_sh4,"ax",@progbits
 	.balign 4
 	.global _cgba_scale_row_240_384_sh4
 	.type   _cgba_scale_row_240_384_sh4, @function
@@ -130,6 +130,7 @@ _cgba_scale_row_240_384_sh4:
  *   24 groups x (10 src px -> 16 dst px):
  *     {a, ab, b, c, cd, d, e, e} and {f, fh, h, i, ij, j, k, k}
  * ========================================================================== */
+	.section .text._cgba_scale_row_240_384_sharp_sh4,"ax",@progbits
 	.balign 4
 	.global _cgba_scale_row_240_384_sharp_sh4
 	.type   _cgba_scale_row_240_384_sharp_sh4, @function
@@ -219,6 +220,7 @@ _cgba_scale_row_240_384_sharp_sh4:
  *   40 groups x (6 src px -> 8 dst px):
  *     {a, ab, bc, c, d, de, ef, f}
  * ========================================================================== */
+	.section .text._cgba_scale_row_240_320_sh4,"ax",@progbits
 	.balign 4
 	.global _cgba_scale_row_240_320_sh4
 	.type   _cgba_scale_row_240_320_sh4, @function
@@ -288,6 +290,7 @@ _cgba_scale_row_240_320_sh4:
  *   const uint16_t *a, const uint16_t *b, uint16_t *dst, unsigned n)
  *   r4 = a, r5 = b, r6 = dst, r7 = n (multiple of 8 pixels)
  * ========================================================================== */
+	.section .text._cgba_scale_row_avg_sh4,"ax",@progbits
 	.balign 4
 	.global _cgba_scale_row_avg_sh4
 	.type   _cgba_scale_row_avg_sh4, @function
@@ -358,6 +361,7 @@ _cgba_scale_row_avg_sh4:
  *   uint16_t *dst0, uint16_t *dst1, unsigned n)
  *   r4 = a, r5 = b, r6 = dst0, r7 = dst1, @(0, sp) = n (multiple of 8 pixels)
  * ========================================================================== */
+	.section .text._cgba_scale_row_avg_dup2_sh4,"ax",@progbits
 	.balign 4
 	.global _cgba_scale_row_avg_dup2_sh4
 	.type   _cgba_scale_row_avg_dup2_sh4, @function

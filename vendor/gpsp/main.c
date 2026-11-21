@@ -351,27 +351,6 @@ static __attribute__((noinline)) void cgba_ugba_vcount_boundary(
     video_reload_counters();
     if (dispstat & 0x8)
       irq_out |= IRQ_VBLANK;
-#if defined(CGBA_GPSP_HEADLESS_TEST) && defined(CGBA_SH4_VBEDGE_TRACE)
-    {
-      extern int cgba_intrwait_state;
-      static u32 vbn;
-      if (cgba_intrwait_state && vbn < 24) {
-        static const char h[] = "0123456789ABCDEF";
-        volatile unsigned char *port = (volatile unsigned char *)0xb7000000u;
-        u32 vals[6] = { dispstat, (u32)irq_out, read_ioreg(REG_IE),
-                        read_ioreg(REG_IF), read_ioreg(REG_IME),
-                        reg[REG_CPSR] };
-        int vi, bi;
-        vbn++;
-        *port='V';*port='B';*port=':';
-        for (vi = 0; vi < 6; vi++) {
-          for (bi = 7; bi >= 0; bi--) *port = h[(vals[vi]>>(bi*4))&0xF];
-          *port=' ';
-        }
-        *port='\n';
-      }
-    }
-#endif
     for (i = 0; i < 4; i++)
     {
       if (dma[i].start_type == DMA_START_VBLANK)

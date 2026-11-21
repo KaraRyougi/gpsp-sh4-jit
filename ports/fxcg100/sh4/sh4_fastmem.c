@@ -213,22 +213,17 @@ u8 *cgba_sh4_pop1_bx_routine CGBA_HIGH_BSS;
 u8 *cgba_sh4_thumb_bx_routine CGBA_HIGH_BSS;
 u8 *cgba_sh4_psr_rebank_routine CGBA_HIGH_BSS;
 
-#if CGBA_SH4_FASTMEM_XYRAM
-static u8 cgba_fastmem_buf[10240]
-  __attribute__((section(".xyram.fastmem"), aligned(32)));
-#else
 /* Place overflow/cold resident fastmem routines (io16_store, psr_rebank, WB
  * handlers that spill past 4 KiB ILRAM) in untranslated P1 .cgba.highbss so
  * calling them never consumes a P0 ITLB/UTLB entry. Co-locating the routine
  * table in .cgba.highbss also guarantees clear_gpsp_highbss() invalidates the
  * cached pointers whenever cgba_fastmem_buf is wiped on ROM switch. */
 static u8 cgba_fastmem_buf[10240] CGBA_HIGH_BSS;
-#endif
 
 #if (defined(CGBA_FXCG100) || defined(CGBA_FXCG50)) && !defined(CGBA_CLASSPAD) && \
-    (CGBA_SH4_FASTMEM_XYRAM || CGBA_SH4_FASTMEM_ILRAM)
+    CGBA_SH4_FASTMEM_ILRAM
 /* gint's default world-switch policy reloads linked on-chip constants and
- * clears everything else. Generated fastmem bodies in ILRAM/XYRAM are NOLOAD
+ * clears everything else. Generated fastmem bodies in ILRAM are NOLOAD
  * runtime state, so keep all 20 KiB of ILRAM/XYRAM across BFile/OS calls
  * instead of silently wiping them while leaving the routine pointer table live. */
 static u8 cgba_onchip_backup[CGBA_GINT_ONCHIP_BUFSIZE]
@@ -269,7 +264,7 @@ void cgba_sh4_fastmem_init(void)
   int i;
 
 #if (defined(CGBA_FXCG100) || defined(CGBA_FXCG50)) && !defined(CGBA_CLASSPAD) && \
-    (CGBA_SH4_FASTMEM_XYRAM || CGBA_SH4_FASTMEM_ILRAM)
+    CGBA_SH4_FASTMEM_ILRAM
   gint_set_onchip_save_mode(CGBA_GINT_ONCHIP_BACKUP, cgba_onchip_backup);
 #endif
   static const u8 * const *last_frag_blocks;

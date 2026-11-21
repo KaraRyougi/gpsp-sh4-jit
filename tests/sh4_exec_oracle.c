@@ -64,7 +64,7 @@ u8 vram[1024 * 96];
 u16 palette_ram[512];
 u16 palette_ram_converted[512];
 u8 ws_cyc_seq[16][2], ws_cyc_nseq[16][2];
-u32 cgba_sh4_native_thumb_const_io_count, cgba_sh4_native_thumb_runtime_io_count;
+u32 cgba_sh4_native_thumb_const_io_count;
 int cgba_sh4_extra_cycles;
 int cgba_sh4_thumb_ldst(u32 o, u32 p){(void)o;(void)p;return 0;}
 int cgba_sh4_thumb_ldst_run(u32 c, u32 p){(void)c;(void)p;return 0;}
@@ -122,9 +122,9 @@ static void orc_vec_put(unsigned idx, const void *pf)
 
 /* Exercise the renderer-cache invalidation ABI of native palette/VRAM stores.
  * This standalone emitter harness does not include the full memory header. */
-#define CGBA_VIDEO_TILE_ROW_CACHE 1
+#define CGBA_VIDEO_BACKDROP_SHADOW_PALETTE 1
 #define CGBA_VIDEO_DIRTY_SCANLINE 1
-#define CGBA_PALETTE_DIRTY_ACTIVE 15u
+#define CGBA_PALETTE_DIRTY_ACTIVE 11u
 volatile u32 palette_ram_dirty;
 #define CGBA_VRAM_DIRTY_BG 1u
 #define CGBA_VRAM_DIRTY_OBJ 2u
@@ -139,7 +139,6 @@ int cgba_sh4_arm_block(u32 o, u32 p);
 int cgba_sh4_thumb_block(u32 o, u32 p);
 int cgba_sh4_arm_block(u32 o, u32 p){(void)o;(void)p;return 0;}
 int cgba_sh4_thumb_block(u32 o, u32 p){(void)o;(void)p;return 0;}
-u32 cgba_sh4_native_thumb_push_iwram_count2;
 #include "ports/fxcg100/sh4/sh4_arm_block_emit.h"
 #include "ports/fxcg100/sh4/sh4_thumb_block_emit.h"
 

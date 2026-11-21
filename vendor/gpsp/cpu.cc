@@ -1524,13 +1524,6 @@ const u32 cpu_modes[16] =
 
 u32 instruction_count = 0;
 
-#ifdef CGBA_DYNAREC
-#ifdef __cplusplus
-extern "C"
-#endif
-int cgba_sh4_interp_swi_hle(s32 *spent);  /* sh4_interp_helpers.c */
-#endif
-
 void set_cpu_mode(cpu_mode_type new_mode)
 {
   cpu_mode_type cpu_mode = reg[CPU_MODE];
@@ -1669,7 +1662,6 @@ int cgba_diff_stop_on_budget;
 extern "C" {
 extern u8 cgba_hot_count[16384];
 extern u32 cgba_last_rom_flush_frame;   /* cpu_threaded.c, set on rom flush */
-extern int cgba_intrwait_state;         /* sh4_interp_helpers.c IntrWait park */
 }
 #ifndef CGBA_SH4_HOT_THRESHOLD
 #define CGBA_SH4_HOT_THRESHOLD 64
@@ -1761,11 +1753,7 @@ extern u32 cgba_interp_instr_bios, cgba_interp_instr_rom, cgba_interp_instr_ram;
              cgba_diff_stop_cycles_remaining = cycles_remaining; return;      \
            }                                                                  \
          } else if(cgba_diff_stop_on_bios_exit) {                             \
-           /* Also stop at the IntrWait park (BIOS pc 4): an interpreted    \
-              IRQ epilogue's subs pc lands there, and executing the real    \
-              vector instruction would run off into the undef handler. */   \
-           if(reg[REG_PC] >= 0x00004000u ||                                   \
-              (reg[REG_PC] == 0x00000004u && cgba_intrwait_state)) {          \
+           if(reg[REG_PC] >= 0x00004000u) {                                   \
              collapse_flags();                                                \
              cgba_diff_stop_cycles_remaining = cycles_remaining; return;      \
            }                                                                  \
@@ -3401,18 +3389,6 @@ arm_loop:
             // Move to ARM mode, Supervisor mode and disable IRQs
             reg[REG_CPSR] = (reg[REG_CPSR] & ~0x3F) | 0x13 | 0x80;
             set_cpu_mode(MODE_SUPERVISOR);
-#ifdef CGBA_DYNAREC
-            {
-              /* SWI HLE (shared with the JIT dispatch path); on success the
-                 return state is restored and execution resumes inline. */
-              s32 swi_spent;
-              if (cgba_sh4_interp_swi_hle(&swi_spent)) {
-                cycles_remaining -= swi_spent;
-                extract_flags();
-                break;
-              }
-            }
-#endif
             break;
        }
 
@@ -3885,18 +3861,6 @@ thumb_loop:
              reg[REG_CPSR] = (reg[REG_CPSR] & ~0x3F) | 0x13 | 0x80;
              set_cpu_mode(MODE_SUPERVISOR);
              reg[REG_BUS_VALUE] = 0xe3a02004;  // After SWI, we read bios[0xE4]
-#ifdef CGBA_DYNAREC
-             {
-               /* SWI HLE; on success SPSR (Thumb bit included) is restored
-                  and the caller's next Thumb instruction is at reg[REG_PC]. */
-               s32 swi_spent;
-               if (cgba_sh4_interp_swi_hle(&swi_spent)) {
-                 cycles_remaining -= swi_spent;
-                 extract_flags();
-                 break;
-               }
-             }
-#endif
              goto arm_loop;
              break;
 

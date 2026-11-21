@@ -35,17 +35,6 @@ void sh4_block_exit(u32 pc);                  /* redispatch entry (sh4_emit.h) *
 void sh4_helper_exit(u32 pc);
 void sh4_op2_pc_mem_tramp(void);   /* compact slow-path call (sh4_stub.S) */
 
-/* Emit "branch to the slow path if (T == slow_if_t)" with no disp8 range limit:
- * a short skip over a far BRA placeholder. Returns the BRA site to patch later. */
-static inline u8 *sh4g_block_guard(u8 **tp, int slow_if_t)
-{
-  { sh4_codegen cg = sh4g_open(tp);
-    if (slow_if_t) sh4_emit_bf(&cg, 1);       /* T==0 -> skip BRA (stay fast)   */
-    else           sh4_emit_bt(&cg, 1);       /* T==1 -> skip BRA               */
-    sh4g_close(tp, &cg); }
-  return sh4g_emit_bra_placeholder(tp);       /* BRA 0 + NOP delay -> slow      */
-}
-
 /* Native ARM LDM/STM, or 0 to fall back to C. */
 static inline int sh4g_arm_block_native(u8 **tp, u32 opcode, u32 pc,
   int cycle_count)

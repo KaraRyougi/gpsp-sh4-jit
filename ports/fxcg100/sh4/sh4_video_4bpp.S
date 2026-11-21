@@ -20,7 +20,6 @@
  * arbitrary 2-byte alignment of dest_ptr.
  */
 
-	.text
 	.balign 4
 
 /* ============================================================================
@@ -33,6 +32,8 @@
  *   const u16 *paltbl,    // @(4, sp_in)
  *   u32 skip_zero)        // @(8, sp_in)
  * ========================================================================== */
+	.section .text._cgba_render_4bpp_span_over_sh4,"ax",@progbits
+	.balign 4
 	.global _cgba_render_4bpp_span_over_sh4
 	.type   _cgba_render_4bpp_span_over_sh4, @function
 _cgba_render_4bpp_span_over_sh4:
@@ -385,6 +386,7 @@ _cgba_render_4bpp_span_over_sh4:
  *   s32 vflip_off,        // @(0, sp_in)
  *   const u16 *paltbl)    // @(4, sp_in) -- backdrop_shadow_palette
  * ========================================================================== */
+	.section .text._cgba_render_4bpp_span_base_sh4,"ax",@progbits
 	.balign 4
 	.global _cgba_render_4bpp_span_base_sh4
 	.type   _cgba_render_4bpp_span_base_sh4, @function
@@ -600,6 +602,7 @@ _cgba_render_4bpp_span_base_sh4:
  *   const u32 *pair_lut,  // @(4, sp_in)
  *   const u16 *map2)      // @(8, sp_in) (only when todraw2 != 0)
  * ========================================================================== */
+	.section .text._cgba_render_4bpp_plan_base_sh4,"ax",@progbits
 	.balign 4
 	.global _cgba_render_4bpp_plan_base_sh4
 	.type   _cgba_render_4bpp_plan_base_sh4, @function
@@ -1088,6 +1091,7 @@ _cgba_render_4bpp_span_base_pair_sh4:
  *   const u16 *paltbl,    // @(8, sp_in)
  *   const u16 *map2)      // @(12, sp_in) (only when todraw2 != 0)
  * ========================================================================== */
+	.section .text._cgba_render_4bpp_plan_over_sh4,"ax",@progbits
 	.balign 4
 	.global _cgba_render_4bpp_plan_over_sh4
 	.type   _cgba_render_4bpp_plan_over_sh4, @function
@@ -1914,6 +1918,7 @@ _cgba_render_4bpp_span_over_pair_sh4:
  * Zero callee-saved registers, zero stack traffic, and 32-byte subpal stays
  * pinned in a single D-cache line.
  * ========================================================================== */
+	.section .text._cgba_render_obj_4bpp_tiles_sh4,"ax",@progbits
 	.balign 4
 	.global _cgba_render_obj_4bpp_tiles_sh4
 	.type   _cgba_render_obj_4bpp_tiles_sh4, @function
@@ -1990,6 +1995,7 @@ _cgba_render_obj_4bpp_tiles_sh4:
 	nop
 	.size   _cgba_render_obj_4bpp_tiles_sh4, .-_cgba_render_obj_4bpp_tiles_sh4
 
+	.section .text._cgba_render_obj_4bpp_tiles_hf_sh4,"ax",@progbits
 	.balign 4
 	.global _cgba_render_obj_4bpp_tiles_hf_sh4
 	.type   _cgba_render_obj_4bpp_tiles_hf_sh4, @function
@@ -2075,6 +2081,7 @@ _cgba_render_obj_4bpp_tiles_hf_sh4:
  *     const u16 *subpal,     // r7: palptr + pal_off
  *     s32 row_step)          // @(0, sp_in): +4 (!vflip) or -4 (vflip)
  * ============================================================================ */
+	.section .text._cgba_render_obj_4bpp_tiles_strip_sh4,"ax",@progbits
 	.balign 4
 	.global _cgba_render_obj_4bpp_tiles_strip_sh4
 	.type   _cgba_render_obj_4bpp_tiles_strip_sh4, @function
@@ -2186,6 +2193,7 @@ _cgba_render_obj_4bpp_tiles_strip_sh4:
 	.word   480
 	.size   _cgba_render_obj_4bpp_tiles_strip_sh4, .-_cgba_render_obj_4bpp_tiles_strip_sh4
 
+	.section .text._cgba_render_obj_4bpp_tiles_strip_hf_sh4,"ax",@progbits
 	.balign 4
 	.global _cgba_render_obj_4bpp_tiles_strip_hf_sh4
 	.type   _cgba_render_obj_4bpp_tiles_strip_hf_sh4, @function
@@ -2304,6 +2312,7 @@ _cgba_render_obj_4bpp_tiles_strip_hf_sh4:
  * 64-byte unrolled dt loop (17.5 insns / 32 B vs newlib memcpy's 21 insns / 32 B)
  * with zero callee-saved register spills and grouped 4-word bursts.
  * ========================================================================== */
+	.section .text._cgba_copy_32b_sh4,"ax",@progbits
 	.balign 4
 	.global _cgba_copy_32b_sh4
 	.type   _cgba_copy_32b_sh4, @function
@@ -2389,6 +2398,7 @@ _cgba_copy_32b_sh4:
  *   const u32 *pair_lut,      // @(4, sp_in)
  *   const u16 *map2)          // @(8, sp_in) (only when todraw2 != 0)
  * ========================================================================== */
+	.section .text._cgba_render_4bpp_strip_base_sh4,"ax",@progbits
 	.balign 4
 	.global _cgba_render_4bpp_strip_base_sh4
 	.type   _cgba_render_4bpp_strip_base_sh4, @function
@@ -2821,6 +2831,8 @@ _cgba_render_4bpp_strip_base_sh4:
 1:
 .endm
 
+	.section .text._cgba_render_4bpp_strip_over_sh4,"ax",@progbits
+	.balign 4
 	.global _cgba_render_4bpp_strip_over_sh4
 	.type   _cgba_render_4bpp_strip_over_sh4, @function
 _cgba_render_4bpp_strip_over_sh4:
@@ -3370,6 +3382,7 @@ _cgba_render_4bpp_strip_over_sh4:
 	mov.w   r0, @(\disp, r6)
 .endm
 
+	.section .text._cgba_render_4bpp_strip_blend_sh4,"ax",@progbits
 	.balign 4
 	.global _cgba_render_4bpp_strip_blend_sh4
 	.type   _cgba_render_4bpp_strip_blend_sh4, @function
@@ -3848,6 +3861,7 @@ _cgba_render_4bpp_strip_blend_sh4:
  *     u32 term_a_val,      // r6: pre-scaled 1st-target term_a
  *     u32 evb)             // r7: 0..16
  * ========================================================================== */
+	.section .text._cgba_blend_solid_rect_sh4,"ax",@progbits
 	.balign 4
 	.global _cgba_blend_solid_rect_sh4
 	.type   _cgba_blend_solid_rect_sh4, @function
@@ -3926,6 +3940,7 @@ _cgba_blend_solid_rect_sh4:
  *   stack[0] = row_ptr (&vram[0x10000 + row_base])
  *   stack[4] = subpal  (palptr + palette)
  * ============================================================================ */
+	.section .text._cgba_render_obj_4bpp_affine_scale_sh4,"ax",@progbits
 	.balign 4
 	.global _cgba_render_obj_4bpp_affine_scale_sh4
 	.type   _cgba_render_obj_4bpp_affine_scale_sh4, @function
@@ -4089,6 +4104,7 @@ _cgba_render_obj_4bpp_affine_scale_sh4:
  *     @(36) ntiles          (1..8)
  *     @(40) tile_pitch_sh   (5, 6, 7, 8, or 10)
  * ============================================================================ */
+	.section .text._cgba_render_obj_4bpp_affine_scale_strip_sh4,"ax",@progbits
 	.balign 4
 	.global _cgba_render_obj_4bpp_affine_scale_strip_sh4
 	.type   _cgba_render_obj_4bpp_affine_scale_strip_sh4, @function
@@ -4271,7 +4287,6 @@ _cgba_render_obj_4bpp_affine_scale_strip_sh4:
 	.word (((_nib_i & 0x0F) << 9) | ((_nib_i & 0xF0) >> 3))
 	.set _nib_i, _nib_i + 1
 	.endr
-	.text
 
 /* ============================================================================
  * _cgba_render_obj_4bpp_affine_rot_sh4
@@ -4289,6 +4304,7 @@ _cgba_render_obj_4bpp_affine_scale_strip_sh4:
  *     +36 dimh (8..64)
  *     +40 row_shift (pitch_shift - 3: 2,3,4,5,7)
  * ============================================================================ */
+	.section .text._cgba_render_obj_4bpp_affine_rot_sh4,"ax",@progbits
 	.balign 4
 	.global _cgba_render_obj_4bpp_affine_rot_sh4
 	.type   _cgba_render_obj_4bpp_affine_rot_sh4, @function
@@ -4478,6 +4494,7 @@ _cgba_render_obj_4bpp_affine_rot_sh4:
 9:
 .endm
 
+	.section .text._cgba_render_4bpp_strip_blend_sat_sh4,"ax",@progbits
 	.balign 4
 	.global _cgba_render_4bpp_strip_blend_sat_sh4
 	.type   _cgba_render_4bpp_strip_blend_sat_sh4, @function
@@ -5012,6 +5029,7 @@ _cgba_render_4bpp_strip_blend_sat_sh4:
  *   +80: sample_obj_fn     (ctx_hi +16)
  *   +84: obj_ctx           (ctx_hi +20)
  * ========================================================================== */
+	.section .text._cgba_sparse_override_band_sh4,"ax",@progbits
 	.balign 4
 	.global _cgba_sparse_override_band_sh4
 	.type   _cgba_sparse_override_band_sh4, @function
@@ -5619,6 +5637,7 @@ _cgba_sparse_override_band_sh4:
  * classes in cls_tbl; returns 0 on UNKNOWN(0) or MIXED(3) so the C caller can
  * lazily classify unknown tiles or check MIXED-over-EMPTY.
  * ========================================================================== */
+	.section .text._cgba_mode0_merge2_seg_sh4,"ax",@progbits
 	.balign 4
 	.global _cgba_mode0_merge2_seg_sh4
 	.type   _cgba_mode0_merge2_seg_sh4, @function
@@ -5666,6 +5685,7 @@ _cgba_mode0_merge2_seg_sh4:
 	.word   0x03FF
 	.size   _cgba_mode0_merge2_seg_sh4, .-_cgba_mode0_merge2_seg_sh4
 
+	.section .text._cgba_mode0_merge3_seg_sh4,"ax",@progbits
 	.balign 4
 	.global _cgba_mode0_merge3_seg_sh4
 	.type   _cgba_mode0_merge3_seg_sh4, @function
@@ -5763,6 +5783,7 @@ _cgba_mode0_merge3_seg_sh4:
  *     +40 map_pitch     (u32, 4/5/6/7)
  *     +44 flags         (u32: bit0 = isbase, bit1 = wrap)
  * ========================================================================== */
+	.section .text._cgba_render_affine_bg_scale_sh4,"ax",@progbits
 	.balign 4
 	.global _cgba_render_affine_bg_scale_sh4
 	.type   _cgba_render_affine_bg_scale_sh4, @function
@@ -6029,290 +6050,6 @@ _cgba_render_affine_bg_scale_sh4:
 	.size   _cgba_render_affine_bg_scale_sh4, .-_cgba_render_affine_bg_scale_sh4
 
 /* ============================================================================
- * _cgba_render_affine_bg_rot_sh4
- *   Fast FULLCOLOR non-mosaic affine BG scanline (dy != 0).
- *   r4 = const cgba_aff_bg_params *p (same layout as scale above).
- * ========================================================================== */
-	.balign 4
-	.global _cgba_render_affine_bg_rot_sh4
-	.type   _cgba_render_affine_bg_rot_sh4, @function
-_cgba_render_affine_bg_rot_sh4:
-	mov.l   r8, @-r15
-	mov.l   r9, @-r15
-	mov.l   r10, @-r15
-	mov.l   r11, @-r15
-	mov.l   r12, @-r15
-	mov.l   r13, @-r15
-	mov.l   r14, @-r15
-
-	mov     r4, r0
-	mov.l   @(0, r0), r4                /* r4  = dst_ptr */
-	mov.l   @(4, r0), r5                /* r5  = map_base */
-	mov.l   @(8, r0), r11               /* r11 = tile_base */
-	mov.l   @(12, r0), r12              /* r12 = pal */
-	mov.l   @(16, r0), r6               /* r6  = source_x */
-	mov.l   @(20, r0), r7               /* r7  = source_y */
-	mov.l   @(24, r0), r8               /* r8  = dx */
-	mov.l   @(28, r0), r9               /* r9  = dy */
-	mov.l   @(32, r0), r10              /* r10 = cnt */
-	mov.l   @(36, r0), r13              /* r13 = width_height */
-	mov.l   @(40, r0), r14              /* r14 = map_pitch */
-	mov.l   @(44, r0), r2               /* r2  = flags */
-
-	mov     r2, r0
-	tst     #2, r0                      /* T = !wrap */
-	bt      .Labgr_nowrap
-
-	/* ---- wrap == true ---- */
-	add     #-1, r13                    /* r13 = mask = width_height - 1 */
-	mov     r2, r0
-	tst     #1, r0                      /* T = !isbase */
-	bt      .Labgr_wo_loop
-
-	.balign 4
-.Labgr_wb_loop:
-	mov     r7, r0
-	shlr8   r0
-	and     r13, r0                     /* py */
-	mov     r0, r3                      /* r3  = py */
-	and     #7, r0
-	shll2   r0
-	add     r0, r0
-	mov     r0, r1                      /* r1  = (py & 7) << 3 */
-	mov     r6, r0
-	shlr8   r0
-	and     r13, r0                     /* px */
-	mov     r0, r2                      /* r2  = px */
-	and     #7, r0
-	add     r0, r1                      /* r1  = intra-tile offset */
-	shlr2   r3
-	shlr    r3
-	shld    r14, r3                     /* (py >> 3) << map_pitch */
-	mov     r2, r0
-	shlr2   r0
-	shlr    r0
-	add     r3, r0                      /* mapoff */
-	mov.b   @(r0, r5), r0               /* tile_idx */
-	extu.b  r0, r0
-	shll2   r0
-	shll2   r0
-	shll2   r0
-	add     r1, r0
-	mov.b   @(r0, r11), r0              /* pval */
-	extu.b  r0, r0
-	shll    r0
-	mov.w   @(r0, r12), r0
-	mov.w   r0, @r4
-	add     r8, r6
-	add     r9, r7
-	dt      r10
-	bf.s    .Labgr_wb_loop
-	add     #2, r4
-	bra     .Labgr_done
-	nop
-
-	.balign 4
-.Labgr_wo_loop:
-	mov     r7, r0
-	shlr8   r0
-	and     r13, r0                     /* py */
-	mov     r0, r3
-	and     #7, r0
-	shll2   r0
-	add     r0, r0
-	mov     r0, r1
-	mov     r6, r0
-	shlr8   r0
-	and     r13, r0                     /* px */
-	mov     r0, r2
-	and     #7, r0
-	add     r0, r1
-	shlr2   r3
-	shlr    r3
-	shld    r14, r3
-	mov     r2, r0
-	shlr2   r0
-	shlr    r0
-	add     r3, r0
-	mov.b   @(r0, r5), r0
-	extu.b  r0, r0
-	shll2   r0
-	shll2   r0
-	shll2   r0
-	add     r1, r0
-	mov.b   @(r0, r11), r0
-	extu.b  r0, r0
-	tst     r0, r0
-	bt      1f
-	shll    r0
-	mov.w   @(r0, r12), r0
-	mov.w   r0, @r4
-1:	add     r8, r6
-	add     r9, r7
-	dt      r10
-	bf.s    .Labgr_wo_loop
-	add     #2, r4
-	bra     .Labgr_done
-	nop
-
-	/* ---- wrap == false ---- */
-	.balign 4
-.Labgr_nowrap:
-	mov     r2, r0
-	tst     #1, r0                      /* T = !isbase */
-	bt      .Labgr_nwo_skip
-
-	/* nowrap + isbase: leading OOB fills pal[0] */
-	.balign 4
-.Labgr_nwb_skip:
-	mov     #-8, r3
-	mov     r6, r2
-	shad    r3, r2                      /* r2 = px */
-	cmp/hs  r13, r2
-	bt      1f
-	mov     r7, r0
-	shad    r3, r0                      /* r0 = py */
-	cmp/hs  r13, r0
-	bf      .Labgr_nwb_draw
-1:	mov.w   @r12, r0                    /* pal[0] */
-	mov.w   r0, @r4
-	add     #2, r4
-	dt      r10
-	bt      .Labgr_done
-	add     r8, r6
-	bra     .Labgr_nwb_skip
-	add     r9, r7
-
-	.balign 4
-.Labgr_nwb_draw:
-	/* r2 = valid px, r0 = valid py */
-	mov     r0, r3
-	and     #7, r0
-	shll2   r0
-	add     r0, r0
-	mov     r0, r1                      /* (py & 7) << 3 */
-	mov     r2, r0
-	and     #7, r0
-	add     r0, r1                      /* intra-tile offset */
-	shlr2   r3
-	shlr    r3
-	shld    r14, r3                     /* (py >> 3) << map_pitch */
-	mov     r2, r0
-	shlr2   r0
-	shlr    r0
-	add     r3, r0
-	mov.b   @(r0, r5), r0
-	extu.b  r0, r0
-	shll2   r0
-	shll2   r0
-	shll2   r0
-	add     r1, r0
-	mov.b   @(r0, r11), r0
-	extu.b  r0, r0
-	shll    r0
-	mov.w   @(r0, r12), r0
-	mov.w   r0, @r4
-	add     #2, r4
-	dt      r10
-	bt      .Labgr_done
-	add     r8, r6
-	add     r9, r7
-	mov     #-8, r3
-	mov     r6, r2
-	shad    r3, r2
-	cmp/hs  r13, r2
-	bt      .Labgr_fill_bd
-	mov     r7, r0
-	shad    r3, r0
-	cmp/hs  r13, r0
-	bf      .Labgr_nwb_draw
-
-.Labgr_fill_bd:
-	mov.w   @r12, r0
-.Labgr_fill_bd_loop:
-	mov.w   r0, @r4
-	dt      r10
-	bf.s    .Labgr_fill_bd_loop
-	add     #2, r4
-	bra     .Labgr_done
-	nop
-
-	/* nowrap + !isbase: leading OOB skips */
-	.balign 4
-.Labgr_nwo_skip:
-	mov     #-8, r3
-	mov     r6, r2
-	shad    r3, r2
-	cmp/hs  r13, r2
-	bt      1f
-	mov     r7, r0
-	shad    r3, r0
-	cmp/hs  r13, r0
-	bf      .Labgr_nwo_draw
-1:	add     #2, r4
-	dt      r10
-	bt      .Labgr_done
-	add     r8, r6
-	bra     .Labgr_nwo_skip
-	add     r9, r7
-
-	.balign 4
-.Labgr_nwo_draw:
-	mov     r0, r3
-	and     #7, r0
-	shll2   r0
-	add     r0, r0
-	mov     r0, r1
-	mov     r2, r0
-	and     #7, r0
-	add     r0, r1
-	shlr2   r3
-	shlr    r3
-	shld    r14, r3
-	mov     r2, r0
-	shlr2   r0
-	shlr    r0
-	add     r3, r0
-	mov.b   @(r0, r5), r0
-	extu.b  r0, r0
-	shll2   r0
-	shll2   r0
-	shll2   r0
-	add     r1, r0
-	mov.b   @(r0, r11), r0
-	extu.b  r0, r0
-	tst     r0, r0
-	bt      2f
-	shll    r0
-	mov.w   @(r0, r12), r0
-	mov.w   r0, @r4
-2:	add     #2, r4
-	dt      r10
-	bt      .Labgr_done
-	add     r8, r6
-	add     r9, r7
-	mov     #-8, r3
-	mov     r6, r2
-	shad    r3, r2
-	cmp/hs  r13, r2
-	bt      .Labgr_done
-	mov     r7, r0
-	shad    r3, r0
-	cmp/hs  r13, r0
-	bf      .Labgr_nwo_draw
-
-.Labgr_done:
-	mov.l   @r15+, r14
-	mov.l   @r15+, r13
-	mov.l   @r15+, r12
-	mov.l   @r15+, r11
-	mov.l   @r15+, r10
-	mov.l   @r15+, r9
-	rts
-	mov.l   @r15+, r8
-	.size   _cgba_render_affine_bg_rot_sh4, .-_cgba_render_affine_bg_rot_sh4
-
-/* ============================================================================
  * _cgba_render_affine_bg_rot_u32_sh4
  *   2D DDA affine BG renderer for u32 INDXCOLOR and base STCKCOLOR (dy != 0,
  *   no mosaic). Accelerates Mode 1/2 affine layers under active BLDCNT.
@@ -6326,6 +6063,7 @@ _cgba_render_affine_bg_rot_sh4:
  *   p->map_pitch    = map_size + 4 (4..7)
  *   p->flags        = bit0=isbase, bit1=wrap, bits16..31=bg_comb
  * ========================================================================== */
+	.section .text._cgba_render_affine_bg_rot_u32_sh4,"ax",@progbits
 	.balign 4
 	.global _cgba_render_affine_bg_rot_u32_sh4
 	.type   _cgba_render_affine_bg_rot_u32_sh4, @function
@@ -6730,6 +6468,7 @@ _cgba_render_affine_bg_rot_u32_sh4:
  *     r7 = sub_term_a (16 u32 entries: expanded(pal[i]) * eva)
  *     @(0, sp) = evb_and_flags: bits 0..4 = evb (0..16), bit 8 = hflip, bit 9 = sat
  * ========================================================================== */
+	.section .text._cgba_render_obj_4bpp_tiles_blend_sh4,"ax",@progbits
 	.balign 4
 	.global _cgba_render_obj_4bpp_tiles_blend_sh4
 	.type   _cgba_render_obj_4bpp_tiles_blend_sh4, @function
@@ -6982,6 +6721,7 @@ _cgba_render_obj_4bpp_tiles_blend_sh4:
  *     u16 *srcdst, u32 count, const u16 *pal_conv, u32 pa, u32 inv_evy)
  *     r4 = srcdst, r5 = count, r6 = pal_conv, r7 = pa, @(0, sp) = inv_evy
  * ========================================================================== */
+	.section .text._cgba_merge_brightness_sh4,"ax",@progbits
 	.balign 4
 	.global _cgba_merge_brightness_sh4
 	.type   _cgba_merge_brightness_sh4, @function
@@ -7070,6 +6810,7 @@ _cgba_merge_brightness_sh4:
  *       +20 bright_pa      (BRIGHT ? ((BLND_MSK*brightf)>>4)&BLND_MSK : 0)
  *       +24 bright_inv     (16 - brightf)
  * ========================================================================== */
+	.section .text._cgba_merge_blend_sh4,"ax",@progbits
 	.balign 4
 	.global _cgba_merge_blend_sh4
 	.type   _cgba_merge_blend_sh4, @function
@@ -7228,6 +6969,7 @@ _cgba_merge_blend_sh4:
  *     const u8 *tile_charbase, u32 start_r_and_k,
  *     const u16 *pal256, const u16 *map2)
  * ========================================================================== */
+	.section .text._cgba_render_8bpp_strip_base_sh4,"ax",@progbits
 	.balign 4
 	.global _cgba_render_8bpp_strip_base_sh4
 	.type   _cgba_render_8bpp_strip_base_sh4, @function
@@ -7653,10 +7395,6 @@ _cgba_render_8bpp_strip_base_sh4:
 	rts
 	mov.l   @r15+, r8
 
-.L8b_early:
-	rts
-	nop
-
 	.balign 4
 .L8b_stride:    .word 480
 .L8b_tile_mask: .word 0xFFC0
@@ -7674,6 +7412,7 @@ _cgba_render_8bpp_strip_base_sh4:
  *     const u32 *term_a256, const u16 *map2, const u16 *bd_pal256)
  *   rke_sat = k | (start_r << 8) | (evb << 16) | (sat << 24)
  * ========================================================================== */
+	.section .text._cgba_render_8bpp_strip_blend_sh4,"ax",@progbits
 	.balign 4
 	.global _cgba_render_8bpp_strip_blend_sh4
 	.type   _cgba_render_8bpp_strip_blend_sh4, @function
@@ -8194,6 +7933,7 @@ _cgba_render_8bpp_strip_blend_sh4:
  * and cur_tile_ptr (r3) live in registers across pixels; map_base/tile_base
  * are only read from stack on 8x8 tile misses.
  * ============================================================================ */
+	.section .text._cgba_render_affine_rot_base_sh4,"ax",@progbits
 	.balign 4
 	.global _cgba_render_affine_rot_base_sh4
 	.type   _cgba_render_affine_rot_base_sh4, @function
@@ -8403,6 +8143,7 @@ _cgba_render_affine_rot_base_sh4:
  *   Uses 3.29 directional local-tile coordinates with clrt; addc for 20-insn
  *   same-tile hits and direct tx/ty +/-1 stepping on tile boundary crossings.
  * ============================================================================ */
+	.section .text._cgba_render_affine_rot_base_addc_sh4,"ax",@progbits
 	.balign 4
 	.global _cgba_render_affine_rot_base_addc_sh4
 	.type   _cgba_render_affine_rot_base_addc_sh4, @function
@@ -8789,6 +8530,7 @@ _cgba_render_affine_rot_base_addc_sh4:
  *     +32 cnt       +36 tx         +40 ty         +44 step_x (+1/-1)
  *     +48 step_y8   +52 t_mask     +56 cur_off    +60 row_shift
  * ============================================================================ */
+	.section .text._cgba_render_affine_rot_base_p2_sh4,"ax",@progbits
 	.balign 4
 	.global _cgba_render_affine_rot_base_p2_sh4
 	.type   _cgba_render_affine_rot_base_p2_sh4, @function
@@ -9307,6 +9049,7 @@ _cgba_render_affine_rot_base_p2_sh4:
 1:
 .endm
 
+	.section .text._cgba_render_4bpp_strip_over_u16_sh4,"ax",@progbits
 	.balign 4
 	.global _cgba_render_4bpp_strip_over_u16_sh4
 	.type   _cgba_render_4bpp_strip_over_u16_sh4, @function
@@ -9663,6 +9406,7 @@ _cgba_render_4bpp_strip_over_u16_sh4:
 	nop
 	.size   _cgba_render_4bpp_strip_over_u16_sh4, .-_cgba_render_4bpp_strip_over_u16_sh4
 
+	.section .text._cgba_render_affine_rot_over_sh4,"ax",@progbits
 	.balign 4
 	.global _cgba_render_affine_rot_over_sh4
 	.type   _cgba_render_affine_rot_over_sh4, @function
@@ -10016,6 +9760,7 @@ _cgba_render_affine_rot_over_sh4:
 	mov.w   r0, @(\disp, r6)
 .endm
 
+	.section .text._cgba_render_4bpp_span_blend_evb16_sh4,"ax",@progbits
 	.balign 4
 	.global _cgba_render_4bpp_span_blend_evb16_sh4
 	.type   _cgba_render_4bpp_span_blend_evb16_sh4, @function
@@ -10205,6 +9950,7 @@ _cgba_render_4bpp_span_blend_evb16_sh4:
  *   const u16 *unpack_lut,     // @(4, sp_in) 256-entry (p0<<1, p1<<1) pairs
  *   s32 expected_subpal)       // @(8, sp_in) -1 (unassigned) or 0..15
  * ============================================================================ */
+	.section .text._cgba_unpack_4bpp_nibs_sh4,"ax",@progbits
 	.balign 4
 	.global _cgba_unpack_4bpp_nibs_sh4
 	.type   _cgba_unpack_4bpp_nibs_sh4, @function
@@ -10440,6 +10186,7 @@ _cgba_unpack_4bpp_nibs_sh4:
 	mov.w   r0, @(\disp_hi, r6)
 .endm
 
+	.section .text._cgba_render_4bpp_span_fused_blend_sh4,"ax",@progbits
 	.balign 4
 	.global _cgba_render_4bpp_span_fused_blend_sh4
 	.type   _cgba_render_4bpp_span_fused_blend_sh4, @function
@@ -10615,6 +10362,7 @@ _cgba_render_4bpp_span_fused_blend_sh4:
  *   const u32 *pair_lut,      // @(4, sp_in)
  *   const u16 *map2)          // @(8, sp_in) (only when todraw2 != 0)
  * ============================================================================ */
+	.section .text._cgba_render_4bpp_strip_base_u16_sh4,"ax",@progbits
 	.balign 4
 	.global _cgba_render_4bpp_strip_base_u16_sh4
 	.type   _cgba_render_4bpp_strip_base_u16_sh4, @function
@@ -11047,6 +10795,7 @@ _cgba_render_4bpp_strip_base_u16_sh4:
  *     u32 start_r,             // @(0, sp_in)
  *     const u16 *paltbl)       // @(4, sp_in) (backdrop_shadow if isbase)
  * ========================================================================== */
+	.section .text._cgba_render_4bpp_part_strip_sh4,"ax",@progbits
 	.balign 4
 	.global _cgba_render_4bpp_part_strip_sh4
 	.type   _cgba_render_4bpp_part_strip_sh4, @function

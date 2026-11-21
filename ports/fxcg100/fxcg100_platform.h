@@ -246,12 +246,6 @@ void fxcg100_lcd_blit_gba(const uint16_t *pixels);
  * frame; falls back to a full blit otherwise. */
 void fxcg100_lcd_blit_gba_dirty(const uint16_t *pixels,
                                 const uint32_t *dirty_row_mask);
-/* Exact unscaled streaming presenter. begin() returns zero for a scaled mode;
- * scanline() is called after a completed GBA row; end() returns one only when
- * all 160 rows were queued, otherwise the caller performs the normal blit. */
-int fxcg100_lcd_stream_begin(void);
-void fxcg100_lcd_stream_scanline(const uint16_t *row, unsigned y, int dirty);
-int fxcg100_lcd_stream_end(void);
 int fxcg100_lcd_is_synced(void);
 /* Display scaling for the gameplay blit (menu DISPLAY SCALING):
  * 0 = 1:1 centered, 1 = 4:3 320x212, 2 = fullscreen 384x216. */

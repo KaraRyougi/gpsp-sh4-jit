@@ -121,9 +121,7 @@ enum {
   SH4G_VEC_ws_cyc_nseq,
   SH4G_VEC_iwram_data,
   SH4G_VEC_ewram_data,
-#if defined(CGBA_VIDEO_BLEND_PALETTE_CACHE) || \
-    defined(CGBA_VIDEO_BACKDROP_SHADOW_PALETTE) || \
-    defined(CGBA_VIDEO_TILE_ROW_CACHE) || \
+#if defined(CGBA_VIDEO_BACKDROP_SHADOW_PALETTE) || \
     (defined(CGBA_VIDEO_DIRTY_SCANLINE) && CGBA_VIDEO_DIRTY_SCANLINE)
   SH4G_VEC_palette_dirty,
 #endif
@@ -713,21 +711,10 @@ static inline void sh4g_set_flags(u8 **tp, unsigned result, unsigned rc,
   sh4g_close(tp, &cg);
 }
 
-/* Historical entry points, kept for the paths that always want the flags. */
-static inline void sh4g_set_nz(u8 **tp, unsigned result)
-{
-  sh4g_set_flags(tp, result, SH4_REG_ARG0, SH4_REG_ARG0, 0xC);
-}
-
 static inline void sh4g_set_nz_m(u8 **tp, unsigned result, u32 mask)
 {
   sh4g_set_flags(tp, result, SH4_REG_ARG0, SH4_REG_ARG0,
                  sh4g_flags_round(mask & 0xC));
-}
-
-static inline void sh4g_set_nzc(u8 **tp, unsigned result, unsigned carry)
-{
-  sh4g_set_flags(tp, result, carry, carry, 0xE);
 }
 
 /* ---- data-processing core ------------------------------------------------ */
@@ -737,10 +724,6 @@ enum {
   SH4DP_RSB, SH4DP_MOV, SH4DP_MVN, SH4DP_NEG, SH4DP_ADC, SH4DP_SBC,
   SH4DP_RSC, SH4DP_CMP, SH4DP_CMN, SH4DP_TST, SH4DP_TEQ, SH4DP_MUL
 };
-
-/* ops that consume only the second operand (no Rn load) */
-static inline int sh4g_dp_second_only(int op)
-{ return op == SH4DP_MOV || op == SH4DP_MVN || op == SH4DP_NEG; }
 
 /* Compute (op of Rn-value, second) into R1 (result). first in R1, second in R2.
  * C/V are not produced (bring-up). */
@@ -767,11 +750,6 @@ static inline void sh4g_dp_compute(sh4_codegen *cg, int op)
   case SH4DP_NEG: sh4_emit_neg(cg, b, a); break;       /* result = -second */
   default: break;
   }
-}
-
-static inline int sh4g_dp_is_test(int op)
-{
-  return op == SH4DP_CMP || op == SH4DP_CMN || op == SH4DP_TST || op == SH4DP_TEQ;
 }
 
 /* ---- shifts (LSL/LSR/ASR/ROR by imm or reg) ------------------------------ */
@@ -1002,18 +980,6 @@ static inline void sh4g_cycle_sub(u8 **tp, int n, uint32_t pc)
  * the exhausted path we still charge the target fetch before update_gba(),
  * matching the interpreter's taken-branch refill + sequential target fetch
  * before it checks the event boundary. */
-static inline void sh4g_charge_fetch_cell(u8 **tp, uint32_t pc, int is_word)
-{
-  int cell_off = (int)(((pc >> 24) & 0x0F) * 2 + (is_word ? 1 : 0));
-  sh4g_vec_load(tp, SH4G_VEC_ws_cyc_seq, SH4_REG_T2);
-  { sh4_codegen cg = sh4g_open(tp);
-    sh4_emit_add_imm(&cg, cell_off, SH4_REG_T2);   /* &seq[region][col] */
-    sh4_emit_mov_b_load(&cg, SH4_REG_T2, SH4_REG_T1);
-    sh4_emit_extu_b(&cg, SH4_REG_T1, SH4_REG_T1);
-    sh4_emit_sub(&cg, SH4_REG_T1, SH4_REG_CYCLES);
-    sh4g_close(tp, &cg); }
-}
-
 extern void sh4_cycle_gate_exit(void);
 
 static inline void sh4g_cycle_gate(u8 **tp, uint32_t pc, int is_word)
@@ -1228,11 +1194,6 @@ static inline u8 *sh4g_branch_exit_internal_known(u8 **tp, uint32_t new_pc,
   return site;
 }
 
-static inline u8 *sh4g_branch_exit_internal(u8 **tp, uint32_t new_pc)
-{
-  return sh4g_branch_exit_internal_known(tp, new_pc, NULL);
-}
-
 /* Idle-loop branch exit — the dynarec mirror of the interpreter's idle
  * handling (gba_over.h idle_loop_target_pc + the port's b-to-self detector,
  * cpu.cc) and of arm_emit.h's generate_branch_idle_eliminate: the branch burns
@@ -1273,48 +1234,6 @@ static inline u8 *sh4g_branch_exit_idle(u8 **tp, uint32_t new_pc,
 #endif
   sh4g_patch_jump(site, block_exit_fn);              /* default: full exit / lazy link */
   return site;
-}
-
-/* After a C handler that returns nonzero in R0 when it changed the guest PC
- * (1 = pure PC change, 2 = store alert; see sh4_interp_helpers.c), leave the
- * block: TST R0,R0 ; BT skip ; R4 = reg[REG_PC] ; R1 = code ; jmp helper_exit.
- * sh4_helper_exit (sh4_stub.S) reads the code from R1 and re-dispatches pure PC
- * changes without an update_gba pass; alerts exit through sh4_block_exit. */
-static inline void sh4g_redispatch_if_r0(u8 **tp)
-{
-  u8 *bt;
-  { sh4_codegen cg = sh4g_open(tp);
-    sh4_emit_tst(&cg, SH4_REG_RET, SH4_REG_RET);     /* T = (R0 == 0) */
-    sh4g_close(tp, &cg); }
-  bt = *tp;
-  sh4g_u16(tp, 0x8900);                               /* BT skip (no PC change) */
-  sh4g_load_greg(tp, SH4_GREG_PC, SH4_REG_ARG0);      /* R4 = reg[REG_PC] */
-  sh4g_mov_reg(tp, SH4_REG_RET, SH4_REG_T0);          /* R1 = helper code */
-  sh4g_vec_jmp(tp, SH4G_VEC_helper_exit);
-  { long d = ((long)(*tp) - ((long)bt + 4)) / 2; bt[1] = (uint8_t)(d & 0xFF); }
-}
-
-/* Same as sh4g_redispatch_if_r0(), but when the helper returns nonzero it first
- * debits the translated instructions accumulated since the previous cycle gate.
- * The no-PC-change path deliberately keeps accumulating: it skips this debit and
- * the normal block-end/branch gate will flush the full run later. */
-static inline void sh4g_redispatch_if_r0_debit(u8 **tp, int cycle_count)
-{
-  u8 *bt;
-  if (cycle_count == 0) {
-    sh4g_redispatch_if_r0(tp);
-    return;
-  }
-  { sh4_codegen cg = sh4g_open(tp);
-    sh4_emit_tst(&cg, SH4_REG_RET, SH4_REG_RET);     /* T = (R0 == 0) */
-    sh4g_close(tp, &cg); }
-  bt = *tp;
-  sh4g_u16(tp, 0x8900);                              /* BT skip (no PC change) */
-  sh4g_cycle_debit(tp, cycle_count);
-  sh4g_load_greg(tp, SH4_GREG_PC, SH4_REG_ARG0);     /* R4 = reg[REG_PC] */
-  sh4g_mov_reg(tp, SH4_REG_RET, SH4_REG_T0);         /* R1 = helper code */
-  sh4g_vec_jmp(tp, SH4G_VEC_helper_exit);
-  { long d = ((long)(*tp) - ((long)bt + 4)) / 2; bt[1] = (uint8_t)(d & 0xFF); }
 }
 
 /* ---- conditional skip (BT/BF over predicated body) ----------------------- *
@@ -1468,154 +1387,6 @@ static inline void sh4g_patch_bra(u8 *site, const void *target)
   site[0] = (uint8_t)(0xA0 | ((d >> 8) & 0x0F));
   site[1] = (uint8_t)(d & 0xFF);
   SH4G_RESYNC(site, 2);
-}
-
-/* Fixed GBA regions never change their wait-state costs. Avoid the vector load,
- * byte-table lookup, and zero extension for those regions; only Game Pak and
- * SRAM (8..15) need the live WAITCNT-derived table. The fastmem classifier has
- * already preserved address>>24 in `region_reg`, so this adds no address work.
- * Clobbers R0/T1/T2, like sh4g_charge_mem_region(). */
-static inline void sh4g_charge_mem_region_specialized(u8 **tp,
-                                                       unsigned region_reg,
-                                                       int seq, int is_word,
-                                                       unsigned count)
-{
-  u8 *ewram, *fixed_one, *fixed_two = NULL;
-  u8 *done[3];
-  int ndone = 0;
-
-  if (count == 0)
-    return;
-
-  { sh4_codegen cg = sh4g_open(tp);
-    sh4_emit_mov_reg(&cg, region_reg, SH4_REG_RET);
-    sh4_emit_cmpeq_imm(&cg, 2);                    /* EWRAM: 3/6 cycles */
-    sh4g_close(tp, &cg); }
-  ewram = sh4g_emit_bt_placeholder(tp);
-
-  if (is_word) {
-    { sh4_codegen cg = sh4g_open(tp);
-      sh4_emit_mov_imm(&cg, 5, SH4_REG_T1);
-      sh4_emit_cmphs(&cg, SH4_REG_T1, SH4_REG_RET); /* region >= 5 */
-      sh4g_close(tp, &cg); }
-    fixed_one = sh4g_emit_bf_placeholder(tp);      /* IWRAM / I/O */
-    { sh4_codegen cg = sh4g_open(tp);
-      sh4_emit_mov_imm(&cg, 8, SH4_REG_T1);
-      sh4_emit_cmphs(&cg, SH4_REG_T1, SH4_REG_RET); /* region >= 8 */
-      sh4g_close(tp, &cg); }
-    fixed_two = sh4g_emit_bf_placeholder(tp);      /* palette / VRAM / OAM */
-  } else {
-    { sh4_codegen cg = sh4g_open(tp);
-      sh4_emit_mov_imm(&cg, 8, SH4_REG_T1);
-      sh4_emit_cmphs(&cg, SH4_REG_T1, SH4_REG_RET); /* region >= 8 */
-      sh4g_close(tp, &cg); }
-    fixed_one = sh4g_emit_bf_placeholder(tp);      /* all fixed non-EWRAM */
-  }
-
-  sh4g_charge_mem_region(tp, region_reg, seq, is_word, count);
-  done[ndone++] = sh4g_emit_bra_placeholder(tp);
-
-  sh4g_patch_cond(ewram, *tp);
-  sh4g_cycle_debit(tp, (is_word ? 6 : 3) * (int)count);
-  done[ndone++] = sh4g_emit_bra_placeholder(tp);
-
-  if (fixed_two) {
-    sh4g_patch_cond(fixed_two, *tp);
-    sh4g_cycle_debit(tp, 2 * (int)count);
-    done[ndone++] = sh4g_emit_bra_placeholder(tp);
-  }
-
-  sh4g_patch_cond(fixed_one, *tp);
-  sh4g_cycle_debit(tp, (int)count);
-
-  while (ndone)
-    sh4g_patch_bra(done[--ndone], *tp);
-}
-
-/* Runtime-count twin used by shared LDM/STM routines. Fixed costs multiply by
- * a tiny immediate in registers; dynamic Game Pak costs retain the exact live
- * table lookup. `count_reg` is preserved on the fixed-one path and otherwise
- * may be clobbered only through MACL side effects. */
-static inline void sh4g_charge_mem_region_count_specialized(u8 **tp,
-                                                             unsigned region_reg,
-                                                             unsigned count_reg,
-                                                             int seq,
-                                                             int is_word)
-{
-  unsigned cmp_reg = (count_reg == SH4_REG_T1) ? SH4_REG_ARG3 : SH4_REG_T1;
-  u8 *ewram, *fixed_one, *fixed_two = NULL;
-  u8 *done[3];
-  int ndone = 0;
-
-  { sh4_codegen cg = sh4g_open(tp);
-    sh4_emit_mov_reg(&cg, region_reg, SH4_REG_RET);
-    sh4_emit_cmpeq_imm(&cg, 2);
-    sh4g_close(tp, &cg); }
-  ewram = sh4g_emit_bt_placeholder(tp);
-
-  if (is_word) {
-    { sh4_codegen cg = sh4g_open(tp);
-      sh4_emit_mov_imm(&cg, 5, cmp_reg);
-      sh4_emit_cmphs(&cg, cmp_reg, SH4_REG_RET);
-      sh4g_close(tp, &cg); }
-    fixed_one = sh4g_emit_bf_placeholder(tp);
-    { sh4_codegen cg = sh4g_open(tp);
-      sh4_emit_mov_imm(&cg, 8, cmp_reg);
-      sh4_emit_cmphs(&cg, cmp_reg, SH4_REG_RET);
-      sh4g_close(tp, &cg); }
-    fixed_two = sh4g_emit_bf_placeholder(tp);
-  } else {
-    { sh4_codegen cg = sh4g_open(tp);
-      sh4_emit_mov_imm(&cg, 8, cmp_reg);
-      sh4_emit_cmphs(&cg, cmp_reg, SH4_REG_RET);
-      sh4g_close(tp, &cg); }
-    fixed_one = sh4g_emit_bf_placeholder(tp);
-  }
-
-  /* Dynamic WAITCNT path. */
-  { sh4_codegen cg = sh4g_open(tp);
-    sh4_emit_mov_reg(&cg, region_reg, SH4_REG_RET);
-    sh4_emit_shll(&cg, SH4_REG_RET);
-    if (is_word)
-      sh4_emit_add_imm(&cg, 1, SH4_REG_RET);
-    sh4g_close(tp, &cg); }
-  sh4g_vec_load(tp, seq ? SH4G_VEC_ws_cyc_seq : SH4G_VEC_ws_cyc_nseq,
-                SH4_REG_T2);
-  { sh4_codegen cg = sh4g_open(tp);
-    sh4_emit_mov_b_load_r0(&cg, SH4_REG_T2, SH4_REG_ARG0);
-    sh4_emit_extu_b(&cg, SH4_REG_ARG0, SH4_REG_ARG0);
-    sh4_emit_mul_l(&cg, SH4_REG_ARG0, count_reg);
-    sh4_emit_sts_macl(&cg, SH4_REG_ARG0);
-    sh4_emit_sub(&cg, SH4_REG_ARG0, SH4_REG_CYCLES);
-    sh4g_close(tp, &cg); }
-  done[ndone++] = sh4g_emit_bra_placeholder(tp);
-
-  sh4g_patch_cond(ewram, *tp);
-  { sh4_codegen cg = sh4g_open(tp);
-    sh4_emit_mov_imm(&cg, is_word ? 6 : 3, SH4_REG_RET);
-    sh4_emit_mul_l(&cg, SH4_REG_RET, count_reg);
-    sh4_emit_sts_macl(&cg, SH4_REG_RET);
-    sh4_emit_sub(&cg, SH4_REG_RET, SH4_REG_CYCLES);
-    sh4g_close(tp, &cg); }
-  done[ndone++] = sh4g_emit_bra_placeholder(tp);
-
-  if (fixed_two) {
-    sh4g_patch_cond(fixed_two, *tp);
-    { sh4_codegen cg = sh4g_open(tp);
-      sh4_emit_mov_reg(&cg, count_reg, SH4_REG_RET);
-      sh4_emit_shll(&cg, SH4_REG_RET);
-      sh4_emit_sub(&cg, SH4_REG_RET, SH4_REG_CYCLES);
-      sh4g_close(tp, &cg); }
-    done[ndone++] = sh4g_emit_bra_placeholder(tp);
-  }
-
-  sh4g_patch_cond(fixed_one, *tp);
-  { sh4_codegen cg = sh4g_open(tp);
-    sh4_emit_sub(&cg, count_reg, SH4_REG_CYCLES);
-    sh4g_close(tp, &cg); }
-
-  while (ndone)
-    sh4g_patch_bra(done[--ndone], *tp);
 }
 
 #endif /* CGBA_SH4_EMIT_GLUE_H */

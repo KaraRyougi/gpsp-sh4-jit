@@ -113,8 +113,6 @@ extern uint32_t cgba_sh4_helper_thumb_ldst_sp_count;
 extern uint32_t cgba_sh4_helper_thumb_ldst_reg_count;
 extern uint32_t cgba_sh4_helper_thumb_ldst_imm_count;
 extern uint32_t cgba_sh4_native_thumb_const_io_count;
-extern uint32_t cgba_sh4_native_thumb_runtime_io_count;
-extern uint32_t cgba_sh4_native_thumb_push_iwram_count;
 extern uint32_t cgba_sh4_thumb_io16_store_count[512];
 extern uint32_t cgba_sh4_dma_ctl_count[4];
 extern uint32_t cgba_sh4_dma_ctl_enable_count[4];
@@ -539,8 +537,6 @@ static int start_gpsp(uint16_t *framebuffer, unsigned rom_id)
 	cgba_sh4_helper_thumb_ldst_reg_count = 0;
 	cgba_sh4_helper_thumb_ldst_imm_count = 0;
 	cgba_sh4_native_thumb_const_io_count = 0;
-	cgba_sh4_native_thumb_runtime_io_count = 0;
-	cgba_sh4_native_thumb_push_iwram_count = 0;
 	memset(cgba_sh4_thumb_io16_store_count, 0,
 		sizeof(uint32_t) * 512u);
 	memset(cgba_sh4_dma_ctl_count, 0, sizeof(uint32_t) * 4u);
@@ -1518,8 +1514,6 @@ static int cgba_headless_test(uint16_t *framebuffer)
 	cgba_sh4_helper_thumb_ldst_reg_count = 0;
 	cgba_sh4_helper_thumb_ldst_imm_count = 0;
 	cgba_sh4_native_thumb_const_io_count = 0;
-	cgba_sh4_native_thumb_runtime_io_count = 0;
-	cgba_sh4_native_thumb_push_iwram_count = 0;
 	memset(cgba_sh4_thumb_io16_store_count, 0,
 		sizeof(uint32_t) * 512u);
 	memset(cgba_sh4_dma_ctl_count, 0, sizeof(uint32_t) * 4u);
@@ -1652,15 +1646,6 @@ static int cgba_headless_test(uint16_t *framebuffer)
 		}
 		headless_log_phase(frame, "loop-end");
 	}
-
-#ifdef CGBA_VIDEO_TILE_ROW_PROFILE
-  {
-    extern uint32_t cgba_tile_row_hits, cgba_tile_row_misses;
-    snprintf(buf, sizeof buf, "@@CGBA_TILE_ROWS hits=%lu misses=%lu",
-      (unsigned long)cgba_tile_row_hits, (unsigned long)cgba_tile_row_misses);
-    hputs_dbg(buf);
-  }
-#endif
 
 #ifdef CGBA_GPSP_HEADLESS_PROFILE_STOP
 	/* casio-emu's PC profiler stops on the "=== done ===" suffix. Emit an
@@ -1902,7 +1887,7 @@ static int cgba_headless_test(uint16_t *framebuffer)
 		(unsigned long)cgba_sh4_helper_thumb_ldst_native_ready_count);
 	hputs_dbg(buf);
 	snprintf(buf, sizeof buf,
-		"jit thumb ldst kind word=%lu byte=%lu half=%lu src pc=%lu sp=%lu reg=%lu imm=%lu fast cio=%lu rio=%lu push=%lu",
+		"jit thumb ldst kind word=%lu byte=%lu half=%lu src pc=%lu sp=%lu reg=%lu imm=%lu fast cio=%lu",
 		(unsigned long)cgba_sh4_helper_thumb_ldst_word_count,
 		(unsigned long)cgba_sh4_helper_thumb_ldst_byte_count,
 		(unsigned long)cgba_sh4_helper_thumb_ldst_half_count,
@@ -1910,9 +1895,7 @@ static int cgba_headless_test(uint16_t *framebuffer)
 		(unsigned long)cgba_sh4_helper_thumb_ldst_sp_count,
 		(unsigned long)cgba_sh4_helper_thumb_ldst_reg_count,
 		(unsigned long)cgba_sh4_helper_thumb_ldst_imm_count,
-		(unsigned long)cgba_sh4_native_thumb_const_io_count,
-		(unsigned long)cgba_sh4_native_thumb_runtime_io_count,
-		(unsigned long)cgba_sh4_native_thumb_push_iwram_count);
+		(unsigned long)cgba_sh4_native_thumb_const_io_count);
 	hputs_dbg(buf);
 	cgba_print_thumb_io16_top();
 	cgba_print_prof_top();
@@ -2162,7 +2145,7 @@ static int cgba_headless_test(uint16_t *framebuffer)
 		(unsigned long)cgba_sh4_helper_thumb_ldst_native_ready_count);
 	hputs_dbg(buf);
 	snprintf(buf, sizeof buf,
-		"jit thumb ldst kind word=%lu byte=%lu half=%lu src pc=%lu sp=%lu reg=%lu imm=%lu fast cio=%lu rio=%lu push=%lu",
+		"jit thumb ldst kind word=%lu byte=%lu half=%lu src pc=%lu sp=%lu reg=%lu imm=%lu fast cio=%lu",
 		(unsigned long)cgba_sh4_helper_thumb_ldst_word_count,
 		(unsigned long)cgba_sh4_helper_thumb_ldst_byte_count,
 		(unsigned long)cgba_sh4_helper_thumb_ldst_half_count,
@@ -2170,9 +2153,7 @@ static int cgba_headless_test(uint16_t *framebuffer)
 		(unsigned long)cgba_sh4_helper_thumb_ldst_sp_count,
 		(unsigned long)cgba_sh4_helper_thumb_ldst_reg_count,
 		(unsigned long)cgba_sh4_helper_thumb_ldst_imm_count,
-		(unsigned long)cgba_sh4_native_thumb_const_io_count,
-		(unsigned long)cgba_sh4_native_thumb_runtime_io_count,
-		(unsigned long)cgba_sh4_native_thumb_push_iwram_count);
+		(unsigned long)cgba_sh4_native_thumb_const_io_count);
 	hputs_dbg(buf);
 	cgba_print_thumb_io16_top();
 	cgba_print_prof_top();
@@ -2677,39 +2658,34 @@ static int gpsp_main(void)
 		}
 
 		int overlay_active = menu_state.show_fps || fast_forward;
-		int streamed = render_video && !overlay_active &&
-				!ff_overlay_clear_pending
-			? fxcg100_lcd_stream_begin() : 0;
 		cgba_gpsp_run_frame(gba_buttons, render_video);
 		cgba_fps_tick(&cgba_fps, render_video);
 		if(render_video) {
-			if(!streamed || !fxcg100_lcd_stream_end()) {
-				if(overlay_active) {
-					if(menu_state.show_fps)
-						fxcg100_lcd_overlay_fps(framebuffer,
-							cgba_fps.emu_fps, cgba_fps.draw_fps);
-					if(fast_forward)
-						fxcg100_lcd_overlay_fast_forward(framebuffer,
-							menu_state.fast_forward_speed);
-					blit_gba_frame(framebuffer, frame, gba_buttons);
-					ff_overlay_clear_pending = 0;
-				}
-#if defined(CGBA_VIDEO_DIRTY_SCANLINE) && CGBA_VIDEO_DIRTY_SCANLINE
-				else if(ff_overlay_clear_pending ||
-					!fxcg100_lcd_is_synced()) {
-					blit_gba_frame(framebuffer, frame, gba_buttons);
-					ff_overlay_clear_pending = 0;
-				} else if(cgba_video_frame_dirty_rows != 0) {
-					fxcg100_lcd_blit_gba_dirty(framebuffer,
-						cgba_video_frame_dirty_row_mask);
-				}
-#else
-				else {
-					blit_gba_frame(framebuffer, frame, gba_buttons);
-					ff_overlay_clear_pending = 0;
-				}
-#endif
+			if(overlay_active) {
+				if(menu_state.show_fps)
+					fxcg100_lcd_overlay_fps(framebuffer,
+						cgba_fps.emu_fps, cgba_fps.draw_fps);
+				if(fast_forward)
+					fxcg100_lcd_overlay_fast_forward(framebuffer,
+						menu_state.fast_forward_speed);
+				blit_gba_frame(framebuffer, frame, gba_buttons);
+				ff_overlay_clear_pending = 0;
 			}
+#if defined(CGBA_VIDEO_DIRTY_SCANLINE) && CGBA_VIDEO_DIRTY_SCANLINE
+			else if(ff_overlay_clear_pending ||
+				!fxcg100_lcd_is_synced()) {
+				blit_gba_frame(framebuffer, frame, gba_buttons);
+				ff_overlay_clear_pending = 0;
+			} else if(cgba_video_frame_dirty_rows != 0) {
+				fxcg100_lcd_blit_gba_dirty(framebuffer,
+					cgba_video_frame_dirty_row_mask);
+			}
+#else
+			else {
+				blit_gba_frame(framebuffer, frame, gba_buttons);
+				ff_overlay_clear_pending = 0;
+			}
+#endif
 		}
 		previous_app_keys = app_keys;
 		previous_hotkeys = hotkeys;

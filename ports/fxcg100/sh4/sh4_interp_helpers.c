@@ -32,25 +32,14 @@
 
 u32 execute_arm_translate_internal(u32 cycles, void *reg_base);  /* sh4_stub.S */
 
-#ifndef CGBA_SH4_INTERP_SWI_HLE
-#define CGBA_SH4_INTERP_SWI_HLE 0   /* see cgba_sh4_interp_swi_hle */
-#endif
-#ifndef CGBA_SH4_SWI_MEM_HLE
-#define CGBA_SH4_SWI_MEM_HLE 0      /* see the demoted cases in cgba_hle_bios_swi */
-#endif
-#ifndef CGBA_SH4_SWI_CPUSET_FAITHFUL
 #ifndef CGBA_SH4_SWI_CPUSET_FAITHFUL
 #define CGBA_SH4_SWI_CPUSET_FAITHFUL 1  /* exact-model CpuSet/CpuFastSet HLE */
-#endif
 #endif
 #ifndef CGBA_SH4_SWI_FORWARD_OVERLAP
 #define CGBA_SH4_SWI_FORWARD_OVERLAP 0  /* opt-in forward pattern-copy HLE */
 #endif
 #ifndef CGBA_SH4_SWI_HLE_VERIFY
 #define CGBA_SH4_SWI_HLE_VERIFY 0   /* predict, then interp + compare (diag) */
-#endif
-#ifndef CGBA_SH4_SWI_OBJAFFINE_HLE
-#define CGBA_SH4_SWI_OBJAFFINE_HLE 0 /* experimental ObjAffineSet (SWI 0x0F) */
 #endif
 
 extern u32 cgba_diff_stop_pc;
@@ -228,8 +217,6 @@ u32 cgba_sh4_helper_thumb_ldst_sp_count;
 u32 cgba_sh4_helper_thumb_ldst_reg_count;
 u32 cgba_sh4_helper_thumb_ldst_imm_count;
 u32 cgba_sh4_native_thumb_const_io_count;
-u32 cgba_sh4_native_thumb_runtime_io_count;
-u32 cgba_sh4_native_thumb_push_iwram_count;
 u32 cgba_sh4_thumb_io16_store_count[512];
 u32 cgba_sh4_dma_ctl_count[4];
 u32 cgba_sh4_dma_ctl_enable_count[4];
@@ -2438,74 +2425,6 @@ static int cgba_swi_copy_overlap_ok(u32 src, u32 dst, u32 len)
 #endif
 }
 
-/* Word/halfword copy or fill, bulk when both sides resolve. Returns 1 when
- * handled (cycles charged, SMC alert accumulated), 0 to run the per-word
- * loop. size_index/width: 1/4 for 32-bit ops, 0/2 for 16-bit. */
-static int cgba_bulk_cpuset(u32 source, u32 dest, u32 count, int fill,
-                            unsigned size_index, u32 openbus)
-{
-  u32 width = size_index ? 4 : 2;
-  u32 len = count * width;
-  u8 *tags = NULL;
-  u8 *d;
-  const u8 *sp = NULL;
-
-  if (!count || len > 0x200000u)
-    return 0;
-  if ((dest & (width - 1)) || (!fill && (source & (width - 1))))
-    return 0;                        /* misaligned: keep per-word semantics */
-  d = cgba_bulk_ram_host(dest, len, &tags);
-  if (!d)
-    return 0;
-  if (!fill) {
-    sp = cgba_bulk_src_host(source, len);
-    if (!sp)
-      return 0;
-    /* Overlapping ranges: the BIOS copies FORWARD word-by-word, so a
-       destination inside the source re-reads freshly written words (the
-       classic GBA pattern-fill idiom); memmove would preserve the original
-       source bytes instead. Compare HOST pointers (mirrors alias) and keep
-       any overlap on the exact per-word path. */
-    if (cgba_bulk_ranges_overlap(sp, d, len))
-      return 0;
-  }
-
-  if (fill) {
-    u32 value = (source > 0x0EFFFFFF)
-      ? openbus
-      : (size_index ? execute_load_u32(source) : execute_load_u16(source));
-    u32 i;
-    if (size_index) {
-      u8 b[4] = { (u8)value, (u8)(value >> 8),
-                  (u8)(value >> 16), (u8)(value >> 24) };
-      for (i = 0; i < len; i += 4) memcpy(d + i, b, 4);
-    } else {
-      u8 b[2] = { (u8)value, (u8)(value >> 8) };
-      for (i = 0; i < len; i += 2) memcpy(d + i, b, 2);
-    }
-  } else {
-    memmove(d, sp, len);
-    /* charge the source side like count sequential loads */
-    if (source < 0x10000000u) {
-      u32 sr = source >> 24;
-      cgba_sh4_extra_cycles += (int)count *
-        (cgba_sh4_mem_cycle_seq ? ws_cyc_seq[sr][size_index]
-                                : ws_cyc_nseq[sr][size_index]);
-    }
-  }
-  /* charge the destination side like count stores */
-  {
-    u32 dr = dest >> 24;
-    cgba_sh4_extra_cycles += (int)count *
-      (cgba_sh4_mem_cycle_seq ? ws_cyc_seq[dr][size_index]
-                              : ws_cyc_nseq[dr][size_index]);
-  }
-  if (cgba_bulk_tags_smc(tags, len))
-    cgba_store_alert |= CPU_ALERT_SMC;
-  return 1;
-}
-
-
 /* ---- register- and cycle-faithful CpuSet / CpuFastSet ---------------------
  * Reproduces the open BIOS routines EXACTLY as the interpreter would run
  * them — post-SWI registers and cycle charge included — while doing the
@@ -4505,419 +4424,12 @@ static int cgba_swi_apply_faithful(u32 src, u32 dst, u32 cnt, int fastset,
   return 1;
 }
 
-#if CGBA_SH4_SWI_OBJAFFINE_HLE
-static int cgba_swi_objaffineset(u32 src, u32 dst, u32 count, u32 offset,
-                                 u32 budget)
-{
-  u32 spsr_v = REG_SPSR(MODE_SUPERVISOR);
-  u32 sp_r = reg[REG_SP] >> 24;
-  u32 lr_r = (reg[REG_LR] & ~1u) >> 24;
-  u32 S0 = CGBA_WS_S(0, 1), N0 = CGBA_WS_N(0, 1);
-  u32 routine, data_est, cycles;
-  u32 final_dst = dst;
-
-  if ((spsr_v & 0x20) == 0)
-    return 0;                         /* ARM callers need MOVS-pc modeling */
-  if (count > 1024u || ((src | dst | offset) & 1u) || offset > 256u)
-    return 0;
-  if (count) {
-    u32 src_len = count * 8u;
-    u32 max_delta = offset * (4u * count - 1u);
-    final_dst = dst + max_delta;
-    if (final_dst < dst || ((final_dst >> 24) != (dst >> 24)) ||
-        !cgba_swi_exact_src_host(src, src_len))
-      return 0;
-  }
-
-  /* Routine 0x8E0..0x97C from open_gba_bios.bin. Data loads/stores inside
-   * the loop are performed below via execute_* helpers, so only dispatcher,
-   * instruction fetches, literal-table load, and the private push/pop are
-   * added to cgba_sh4_extra_cycles here. */
-  routine = 7u * CGBA_WS_S(sp_r, 1);   /* PUSH {r4-r10} */
-  if (count == 0) {
-    routine += 4u * S0 + N0;           /* CMP, PUSH, SUB, BEQ taken */
-  } else {
-    routine += 9u * S0 + CGBA_WS_N(0, 1); /* setup + sine-table literal */
-    routine += count * 29u * S0;
-    routine += (count - 1u) * N0;
-  }
-  routine += 2u * S0 + 7u * CGBA_WS_S(sp_r, 1) + N0; /* POP + BX */
-
-  data_est = count *
-    (3u * CGBA_WS_N(src >> 24, 0) + 2u * CGBA_WS_N(0, 0) +
-     4u * CGBA_WS_N(dst >> 24, 0));
-  cycles = cgba_swi_dispatch_cycles(sp_r, lr_r, 1) + routine + data_est;
-  if (cycles + 64u > budget)
-    return 0;
-
-  for (u32 i = 0; i < count; i++) {
-    u32 theta = execute_load_u16(src + 4u) >> 8;
-    s32 rx = (s16)execute_load_u16(src + 0u);
-    s32 ry = (s16)execute_load_u16(src + 2u);
-    s32 a = (s16)execute_load_u16(0x00002150u + (((theta + 0x40u) & 255u) << 1));
-    s32 b = (s16)execute_load_u16(0x00002150u + ((theta & 255u) << 1));
-    s32 dmx = (rx * b) >> 14;
-    s32 dx  = (rx * a) >> 14;
-    s32 dy  = (ry * b) >> 14;
-    s32 dmy = (ry * a) >> 14;
-
-    execute_store_u16(dst, (u32)(u16)dx);
-    execute_store_u16(dst + offset, (u32)(u16)(-dmx));
-    execute_store_u16(dst + offset * 2u, (u32)(u16)dy);
-    execute_store_u16(dst + offset * 3u, (u32)(u16)dmy);
-    src += 8u;
-    dst += offset * 4u;
-  }
-
-  reg[0] = src;
-  reg[1] = dst;
-  cgba_sh4_extra_cycles += (int)(cycles - data_est);
-  return 1;
-}
-#endif
-
-static void cgba_swi_cpuset(u32 source, u32 dest, u32 cnt)
-{
-  u32 count = cnt & 0x1FFFFF;
-  if (((source & 0xe000000) == 0) ||
-      ((source + (((cnt << 11) >> 9) & 0x1fffff)) & 0xe000000) == 0)
-    return;
-  if ((cnt >> 26) & 1) {                          /* 32-bit */
-    source &= 0xFFFFFFFC; dest &= 0xFFFFFFFC;
-    if (cgba_bulk_cpuset(source, dest, count, (cnt >> 24) & 1, 1, 0x1CAD1CADu))
-      return;
-    if ((cnt >> 24) & 1) {
-      u32 value = (source > 0x0EFFFFFF) ? 0x1CAD1CAD : execute_load_u32(source);
-      while (count--) { execute_store_u32(dest, value); dest += 4; }
-    } else {
-      while (count--) {
-        execute_store_u32(dest, (source > 0x0EFFFFFF) ? 0x1CAD1CAD
-                                                      : execute_load_u32(source));
-        dest += 4; source += 4;
-      }
-    }
-  } else {                                        /* 16-bit */
-    if (cgba_bulk_cpuset(source, dest, count, (cnt >> 24) & 1, 0, 0x1CADu))
-      return;
-    if ((cnt >> 24) & 1) {
-      u32 value = (source > 0x0EFFFFFF) ? 0x1CAD : execute_load_u16(source);
-      while (count--) { execute_store_u16(dest, value); dest += 2; }
-    } else {
-      while (count--) {
-        execute_store_u16(dest, (source > 0x0EFFFFFF) ? 0x1CAD
-                                                      : execute_load_u16(source));
-        dest += 2; source += 2;
-      }
-    }
-  }
-}
-
-static void cgba_swi_cpufastset(u32 source, u32 dest, u32 cnt)
-{
-  s32 count;
-  if (((source & 0xe000000) == 0) ||
-      ((source + (((cnt << 11) >> 9) & 0x1fffff)) & 0xe000000) == 0)
-    return;
-  source &= 0xFFFFFFFC; dest &= 0xFFFFFFFC;
-  count = (s32)(cnt & 0x1FFFFF);
-  if (cgba_bulk_cpuset(source, dest, ((u32)count + 7u) & ~7u,
-                       (cnt >> 24) & 1, 1, 0xBAFFFFFBu))
-    return;
-  if ((cnt >> 24) & 1) {
-    u32 value = (source > 0x0EFFFFFF) ? 0xBAFFFFFB : execute_load_u32(source);
-    while (count > 0) {
-      int i;
-      for (i = 0; i < 8; i++) { execute_store_u32(dest, value); dest += 4; }
-      count -= 8;
-    }
-  } else {
-    while (count > 0) {
-      int i;
-      for (i = 0; i < 8; i++) {
-        execute_store_u32(dest, (source > 0x0EFFFFFF) ? 0xBAFFFFFB
-                                                      : execute_load_u32(source));
-        source += 4; dest += 4;
-      }
-      count -= 8;
-    }
-  }
-}
-
-static void cgba_swi_lz77_wram(u32 source, u32 dest)
-{
-  u32 header = execute_load_u32(source);
-  s32 len = (s32)(header >> 8);
-  source += 4;
-  if (((source & 0xe000000) == 0) ||
-      ((source + ((header >> 8) & 0x1fffff)) & 0xe000000) == 0)
-    return;
-  while (len > 0) {
-    u8 d = (u8)execute_load_u8(source++);
-    int i;
-    if (d) {
-      for (i = 0; i < 8; i++) {
-        if (d & 0x80) {
-          u16 data = (u16)(execute_load_u8(source++) << 8);
-          int length, i2; u32 windowOffset;
-          data |= (u16)execute_load_u8(source++);
-          length = (data >> 12) + 3;
-          windowOffset = dest - (data & 0x0FFF) - 1;
-          for (i2 = 0; i2 < length; i2++) {
-            execute_store_u8(dest++, execute_load_u8(windowOffset++));
-            if (--len == 0) return;
-          }
-        } else {
-          execute_store_u8(dest++, execute_load_u8(source++));
-          if (--len == 0) return;
-        }
-        d <<= 1;
-      }
-    } else {
-      for (i = 0; i < 8; i++) {
-        execute_store_u8(dest++, execute_load_u8(source++));
-        if (--len == 0) return;
-      }
-    }
-  }
-}
-
-static void cgba_swi_lz77_vram(u32 source, u32 dest)
-{
-  u32 header = execute_load_u32(source);
-  s32 len = (s32)(header >> 8);
-  int byteCount = 0, byteShift = 0;
-  u32 writeValue = 0;
-  source += 4;
-  if (((source & 0xe000000) == 0) ||
-      ((source + ((header >> 8) & 0x1fffff)) & 0xe000000) == 0)
-    return;
-#define CGBA_LZV_PUSH(b)                                                      \
-  do { writeValue |= ((u32)(b) << byteShift); byteShift += 8;                 \
-       if (++byteCount == 2) {                                                \
-         execute_store_u16(dest, writeValue); dest += 2;                      \
-         byteCount = 0; byteShift = 0; writeValue = 0;                        \
-       }                                                                      \
-       if (--len == 0) return;                                                \
-  } while (0)
-  while (len > 0) {
-    u8 d = (u8)execute_load_u8(source++);
-    int i;
-    if (d) {
-      for (i = 0; i < 8; i++) {
-        if (d & 0x80) {
-          u16 data = (u16)(execute_load_u8(source++) << 8);
-          int length, i2; u32 windowOffset;
-          data |= (u16)execute_load_u8(source++);
-          length = (data >> 12) + 3;
-          windowOffset = dest + (u32)byteCount - (data & 0x0FFF) - 1;
-          for (i2 = 0; i2 < length; i2++)
-            CGBA_LZV_PUSH(execute_load_u8(windowOffset++));
-        } else {
-          CGBA_LZV_PUSH(execute_load_u8(source++));
-        }
-        d <<= 1;
-      }
-    } else {
-      for (i = 0; i < 8; i++)
-        CGBA_LZV_PUSH(execute_load_u8(source++));
-    }
-  }
-#undef CGBA_LZV_PUSH
-}
-
-static void cgba_swi_rl_wram(u32 source, u32 dest)
-{
-  u32 header = execute_load_u32(source);
-  s32 len = (s32)(header >> 8);
-  source += 4;
-  if (((source & 0xe000000) == 0) ||
-      ((source + ((header >> 8) & 0x1fffff)) & 0xe000000) == 0)
-    return;
-  while (len > 0) {
-    u8 d = (u8)execute_load_u8(source++);
-    int l = d & 0x7F, i;
-    if (d & 0x80) {
-      u8 data = (u8)execute_load_u8(source++);
-      l += 3;
-      for (i = 0; i < l; i++) {
-        execute_store_u8(dest++, data);
-        if (--len == 0) return;
-      }
-    } else {
-      l++;
-      for (i = 0; i < l; i++) {
-        execute_store_u8(dest++, execute_load_u8(source++));
-        if (--len == 0) return;
-      }
-    }
-  }
-}
-
-static void cgba_swi_rl_vram(u32 source, u32 dest)
-{
-  u32 header = execute_load_u32(source & 0xFFFFFFFC);
-  s32 len = (s32)(header >> 8);
-  int byteCount = 0, byteShift = 0;
-  u32 writeValue = 0;
-  source += 4;
-  if (((source & 0xe000000) == 0) ||
-      ((source + ((header >> 8) & 0x1fffff)) & 0xe000000) == 0)
-    return;
-#define CGBA_RLV_PUSH(b)                                                      \
-  do { writeValue |= ((u32)(b) << byteShift); byteShift += 8;                 \
-       if (++byteCount == 2) {                                                \
-         execute_store_u16(dest, writeValue); dest += 2;                      \
-         byteCount = 0; byteShift = 0; writeValue = 0;                        \
-       }                                                                      \
-       if (--len == 0) return;                                                \
-  } while (0)
-  while (len > 0) {
-    u8 d = (u8)execute_load_u8(source++);
-    int l = d & 0x7F, i;
-    if (d & 0x80) {
-      u8 data = (u8)execute_load_u8(source++);
-      l += 3;
-      for (i = 0; i < l; i++)
-        CGBA_RLV_PUSH(data);
-    } else {
-      l++;
-      for (i = 0; i < l; i++)
-        CGBA_RLV_PUSH(execute_load_u8(source++));
-    }
-  }
-#undef CGBA_RLV_PUSH
-}
-
 #ifdef CGBA_GPSP_HEADLESS_TEST
 u32 cgba_bios_hle_swi_count;
 u32 cgba_swi_miss[48];
 u32 cgba_psr_fb[8];
 u32 cgba_cap_src[8];
 u32 cgba_bios_other_pc[8];
-#endif
-
-/* ---- IntrWait / VBlankIntrWait HLE ----------------------------------------
- * The BIOS wait loop `do { halt; CheckInterrupts } while (!flags)` re-enters
- * the interpreter on EVERY delivered IRQ (Zelda: HBlank IRQs -> ~160
- * wake/check round-trips per waited frame, 8-16%% of the whole frame). The
- * loop is a state machine here instead: the guest parks at magic BIOS pc 4
- * in SVC mode between wakes, checks run in C through the IO-side-effecting
- * accessors, and halts hand control to update_gba exactly like the
- * interpreter's halt branch. State 2 = must halt before the first check
- * (matches the do-while shape); state 1 = check-then-halt. */
-/* DISABLED pending debug. Progress so far: (1) park must run with IRQs
- * enabled (CPSR.I clear) or nothing can vector; (2) park must run in SYSTEM
- * mode with the return state saved OUTSIDE the banked SVC regs — Zelda's
- * VBlank ISR calls further SWIs (LZ77 VRAM streaming) which re-bank SVC and
- * clobber lr/SPSR; this fixed boot up to the title screen (f300 parity).
- * REMAINING wedge: the title screen's first VBlankIntrWait parks with
- * DISPSTAT.3=1, IE.0=1, IME=1, I=0 — yet REG_IF never flags VBLANK across
- * dozens of frames while frames complete inside the halt loop (single E,
- * zero R in a 600-frame trace). Next step: instrument update_gba's VBlank
- * edge (irq_raised / flag_interrupt) during the park to see why the event
- * doesn't flag. Traces: cgba_iw_trace E/R/N lines via 0xb7000000. */
-#ifndef CGBA_SH4_INTRWAIT_HLE
-#define CGBA_SH4_INTRWAIT_HLE 0
-#endif
-#if !CGBA_SH4_INTRWAIT_HLE
-int cgba_intrwait_state;              /* referenced by diag traces */
-#endif
-#if CGBA_SH4_INTRWAIT_HLE
-static u32 cgba_intrwait_mask;
-int cgba_intrwait_state;          /* 0 off / 1 check / 2 halt-first */
-static u32 cgba_intrwait_ret_pc;         /* saved lr_svc: nested SWIs from the
-                                            VBlank ISR (Zelda streams VRAM via
-                                            LZ77 in its handler) re-bank SVC
-                                            and clobber lr/SPSR — the real
-                                            BIOS runs this body in SYSTEM
-                                            mode for exactly this reason */
-static u32 cgba_intrwait_ret_cpsr;
-
-#ifdef CGBA_GPSP_HEADLESS_TEST
-static void cgba_iw_trace(char tag, u32 a, u32 b)
-{
-  static u32 n;
-  static const char h[] = "0123456789ABCDEF";
-  volatile unsigned char *port = (volatile unsigned char *)0xb7000000u;
-  u32 vals[8]; int vi, bi;
-  if (n >= 2500) return;
-  n++;
-  vals[0] = a; vals[1] = b;
-  {
-    extern u8 iwram[];
-    vals[2] = ((u32)iwram[0x7FF8] | ((u32)iwram[0x7FF9] << 8)) |
-              (((u32)iwram[0x8000+0x7FF8] | ((u32)iwram[0x8000+0x7FF9] << 8)) << 16);
-  }                                                /* low half | high half */
-  vals[3] = read_ioreg(REG_IE); vals[4] = read_ioreg(REG_IF);
-  vals[5] = read_ioreg(REG_IME); vals[6] = reg[REG_CPSR];
-  vals[7] = read_ioreg(REG_DISPSTAT);
-  *port='I';*port='W';*port=tag;*port=':';
-  for (vi = 0; vi < 8; vi++) {
-    for (bi = 7; bi >= 0; bi--) *port = h[(vals[vi]>>(bi*4))&0xF];
-    *port=' ';
-  }
-  *port='\n';
-}
-#else
-#define cgba_iw_trace(t,a,b) ((void)0)
-#endif
-
-static u32 cgba_bios_if_check(u32 mask)  /* CheckInterrupts(waitFlags) */
-{
-  u32 intflags, flags;
-  execute_store_u16(0x04000208u, 0);     /* REG_IME = 0 */
-  intflags = execute_load_u16(0x03FFFFF8u);
-  flags = intflags & mask;
-  if (flags)
-    execute_store_u16(0x03FFFFF8u, flags ^ intflags);
-  execute_store_u16(0x04000208u, 1);     /* REG_IME = 1 */
-  return flags;
-}
-
-static u32 cgba_intrwait_halt_wait(u32 cycles)
-{
-  s32 remaining = (s32)cycles;
-  reg[CPU_HALT_STATE] = CPU_HALT;
-  while (reg[CPU_HALT_STATE] != CPU_ACTIVE) {
-    u32 ret;
-#ifdef CGBA_GPSP_HEADLESS_TEST
-    {
-      static u32 dbg_n;
-      if ((++dbg_n & 0x3FFFF) == 0) {
-        static const char h[] = "0123456789ABCDEF";
-        volatile unsigned char *port = (volatile unsigned char *)0xb7000000u;
-        u32 vals[5] = { read_ioreg(REG_IE), read_ioreg(REG_IF),
-                        read_ioreg(REG_IME), reg[REG_CPSR], reg[REG_PC] };
-        int vi, bi;
-        *port='I';*port='W';*port=':';
-        for (vi = 0; vi < 5; vi++) {
-          for (bi = 7; bi >= 0; bi--) *port = h[(vals[vi]>>(bi*4))&0xF];
-          *port=' ';
-        }
-        *port='\n';
-      }
-    }
-#endif
-    ret = update_gba((u32)remaining);
-    if (completed_frame(ret))
-      return ret;                        /* tagged: frame done while parked */
-    remaining = (s32)cycles_to_run(ret);
-  }
-  (void)check_and_raise_interrupts();    /* vector a wake immediately */
-  return (u32)(remaining > 0 ? remaining : 1);
-}
-
-#endif /* CGBA_SH4_INTRWAIT_HLE */
-
-/* Return-from-SWI shared by the SWI HLEs (movs pc,lr from SVC). */
-#if CGBA_SH4_INTRWAIT_HLE
-static void cgba_swi_return(void)
-{
-  u32 spsr_v = REG_SPSR(MODE_SUPERVISOR);
-  reg[REG_PC] = reg[REG_LR];
-  reg[REG_CPSR] = spsr_v;
-  set_cpu_mode(cpu_modes[spsr_v & 0xF]);
-}
 #endif
 
 /* At the SWI vector in SVC mode: run the handled routines natively and
@@ -5163,39 +4675,7 @@ static int cgba_hle_bios_swi_num(u32 num, u32 budget)
   case 0x09:
   case 0x0A:
     return cgba_swi_arctan_try(num, budget);
-#if CGBA_SH4_INTRWAIT_HLE
-  case 0x04: case 0x05: {                /* IntrWait / VBlankIntrWait */
-    u32 mask = (num == 5) ? 1u : reg[1];
-    u32 discard = (num == 5) ? 1u : reg[0];
-    if (cgba_intrwait_state) {
-      cgba_iw_trace('N', num, reg[REG_LR]);
-      return 0;                          /* nested IntrWait: interpreter */
-    }
-    cgba_iw_trace('E', num, reg[REG_LR]);
-    cgba_intrwait_mask = mask;
-    cgba_intrwait_state = 2;             /* halt before the first check */
-    cgba_intrwait_ret_pc = reg[REG_LR];  /* save OUTSIDE banked SVC regs */
-    cgba_intrwait_ret_cpsr = REG_SPSR(MODE_SUPERVISOR);
-    /* Park in SYSTEM mode with IRQs enabled, like the real BIOS body: the
-       ISR may invoke further SWIs, which re-enter SVC. */
-    reg[REG_PC] = 0x00000004u;
-    reg[REG_CPSR] = (reg[REG_CPSR] & 0xF0000000u) | 0x1Fu;
-    set_cpu_mode(MODE_SYSTEM);
-    if (discard)
-      (void)cgba_bios_if_check(mask);
-    (void)check_and_raise_interrupts();  /* IME=1 with pending -> vector now */
-#ifdef CGBA_GPSP_HEADLESS_TEST
-    cgba_bios_hle_swi_count++;
-#endif
-    return 2;                            /* handled, but NOT a swi-return */
-  }
-#endif
-#if CGBA_SH4_SWI_OBJAFFINE_HLE
-  case 0x0F:
-    if (!cgba_swi_objaffineset(reg[0], reg[1], reg[2], reg[3], budget))
-      return 0;
-    break;
-#elif CGBA_SH4_SWI_CPUSET_FAITHFUL && !CGBA_SH4_SWI_HLE_VERIFY
+#if CGBA_SH4_SWI_CPUSET_FAITHFUL && !CGBA_SH4_SWI_HLE_VERIFY
   case 0x0F:
     if (budget > 0 && cgba_swi_objaffine_can_enter(reg[0], reg[1], reg[2], reg[3])) {
       cgba_swi_objaffine_materialize();
@@ -5306,25 +4786,6 @@ static int cgba_hle_bios_swi_num(u32 num, u32 budget)
 #endif
   }
 #endif
-#if CGBA_SH4_SWI_MEM_HLE
-  /* DEMOTED (default off): these HLEs reproduce the copy/decompress MEMORY
-   * effects but not the open BIOS routines' post-SWI scratch registers
-   * (CpuSet leaves r1 = dst-src, r2/r3 = cursor ends, r12 = last datum...)
-   * nor their instruction-fetch cycle cost. Once the cold gate started
-   * promoting SWI call sites (stop-on-hot), the JIT run serviced these via
-   * the HLE while the interpreter ran the real BIOS — Metroid's dense
-   * bit-exact soak diverged from frame ~420 on exactly that asymmetry.
-   * Interpreting the real BIOS is symmetric for both cores by construction.
-   * Re-enable only with register- AND cycle-faithful implementations
-   * (post-state formulas derivable from the blob: see the session notes /
-   * open_gba_bios.bin disassembly around 0x614/0x720). */
-  case 0x0B: cgba_swi_cpuset(reg[0], reg[1], reg[2]); break;
-  case 0x0C: cgba_swi_cpufastset(reg[0], reg[1], reg[2]); break;
-  case 0x11: cgba_swi_lz77_wram(reg[0], reg[1]); break;
-  case 0x12: cgba_swi_lz77_vram(reg[0], reg[1]); break;
-  case 0x14: cgba_swi_rl_wram(reg[0], reg[1]); break;
-  case 0x15: cgba_swi_rl_vram(reg[0], reg[1]); break;
-#endif
   default:
 #ifdef CGBA_GPSP_HEADLESS_TEST
     if (num < 48) cgba_swi_miss[num]++;
@@ -5347,73 +4808,6 @@ static int cgba_hle_bios_swi_num(u32 num, u32 budget)
   return 1;
 }
 
-/* Parked IntrWait re-entry (pc 4, SVC): check, complete, or halt again.
- * Returns the fallback's budget/tagged contract value. */
-#if CGBA_SH4_INTRWAIT_HLE
-static u32 cgba_hle_intrwait_step(u32 cycles)
-{
-  u32 flags;
-
-  /* S-trace disabled: too chatty for the long trace */
-  if (cgba_intrwait_state == 2) {
-    cgba_intrwait_state = 1;
-    return cgba_intrwait_halt_wait(cycles);   /* do { HALT; ... } shape */
-  }
-  flags = cgba_bios_if_check(cgba_intrwait_mask);
-  (void)check_and_raise_interrupts();
-  cgba_iw_trace('C', flags, reg[REG_PC]);
-  if (reg[REG_PC] != 0x00000004u)
-    return cycles;                       /* IRQ preempted at IME=1: vector */
-  if (flags) {
-    cgba_intrwait_state = 0;
-    reg[REG_PC] = cgba_intrwait_ret_pc;
-    reg[REG_CPSR] = cgba_intrwait_ret_cpsr;
-    set_cpu_mode(cpu_modes[cgba_intrwait_ret_cpsr & 0xF]);
-    cgba_iw_trace('R', reg[REG_PC], reg[REG_CPSR]);
-    return cycles;
-  }
-  return cgba_intrwait_halt_wait(cycles);
-}
-#endif /* CGBA_SH4_INTRWAIT_HLE */
-
-/* Interpreter SWI hook: cpu.cc calls this right after vectoring a guest SWI
- * to 0x08 (LR_svc/SPSR_svc/SVC mode already established — the same state the
- * JIT stub presents). Cold-gated code executing SWIs otherwise interprets
- * the REAL BIOS bodies (AW: 359 entries / 2.36M interpreted instructions per
- * 2000 frames, resumed mid-copy at 0x6B4/0x7A8 after IRQs). Returns nonzero
- * when serviced, with reg[REG_PC]/CPSR/mode restored to the caller and the
- * HLE's data-access wait states in *spent for the interpreter to debit (the
- * JIT path debits them from R13 via the stub instead). Only compiled-in HLE
- * cases return 1; the gated-off IntrWait park (return 2) cannot occur while
- * CGBA_SH4_INTRWAIT_HLE is 0, and must stay on the interpreted path if it is
- * ever enabled here. */
-int cgba_sh4_interp_swi_hle(s32 *spent)
-{
-  int saved = cgba_sh4_extra_cycles;
-  int handled;
-
-#if !CGBA_SH4_INTERP_SWI_HLE
-  /* DISABLED: servicing interpreter SWIs via the HLE measured +2.85 fps on
-   * AW but broke the Metroid dense JIT-vs-interp bit-exactness (boot-phase
-   * IRQ count shifted 1203 -> 1252; first pixel divergence by frame 200;
-   * bisect-confirmed). The HLE is cheaper than interpreting the real BIOS
-   * body (only data accesses are charged) and does not reproduce the real
-   * routines' post-SWI scratch-register state, so cold-context SWIs must
-   * keep interpreting the real BIOS until the HLE is made cycle- and
-   * register-faithful. Re-enable with CGBA_SH4_INTERP_SWI_HLE=1. */
-  (void)saved; (void)handled; (void)spent;
-  return 0;
-#else
-  if (CGBA_SH4_DIFF_ACTIVE())
-    return 0;
-  cgba_sh4_extra_cycles = 0;
-  handled = (cgba_hle_bios_swi(0) == 1);
-  *spent = handled ? cgba_sh4_extra_cycles : 0;
-  cgba_sh4_extra_cycles = saved;
-  return handled;
-#endif
-}
-
 u32 cgba_sh4_bios_fallback(u32 cycles)
 {
 #ifdef CGBA_GPSP_HEADLESS_TEST
@@ -5423,11 +4817,6 @@ u32 cgba_sh4_bios_fallback(u32 cycles)
    * before the C resolver can see it, so the vector/epilogue fast paths hook
    * the fallback itself. On success reg[REG_PC] is the game handler (or the
    * interrupted code) and the stub's lookup_pc redispatches natively. */
-#if CGBA_SH4_INTRWAIT_HLE
-  if (!CGBA_SH4_DIFF_ACTIVE() && cgba_intrwait_state &&
-      reg[REG_PC] == 0x00000004u && reg[CPU_MODE] == MODE_SYSTEM)
-    return cgba_hle_intrwait_step(cycles);
-#endif
   if (!CGBA_SH4_DIFF_ACTIVE() && reg[REG_PC] == 0x00000008u &&
       reg[CPU_MODE] == MODE_SUPERVISOR) {
     int h = cgba_hle_bios_swi(cycles);
@@ -5570,10 +4959,8 @@ u32 cgba_sh4_bios_fallback(u32 cycles)
   }
 #endif
 
-  if (reg[REG_PC] >= 0x00004000u ||
-      (reg[REG_PC] == 0x00000004u && cgba_intrwait_state)) {
-    /* Left the BIOS — or returned to the IntrWait park, which must
-       re-dispatch so the park hook runs instead of the real vector code. */
+  if (reg[REG_PC] >= 0x00004000u) {
+    /* Left the BIOS. */
     s32 remaining = cgba_diff_stop_cycles_remaining;
     if (remaining <= 0) {
       u32 ret = update_gba(remaining);

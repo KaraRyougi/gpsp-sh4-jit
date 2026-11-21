@@ -43,7 +43,6 @@ void sh4_op2_pc_mem_tramp(void);   /* compact slow-path call (sh4_stub.S) */
 void sh4_op2_pc_tramp(void);
 #if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
 extern u32 cgba_sh4_native_thumb_const_io_count;
-extern u32 cgba_sh4_native_thumb_runtime_io_count;
 #endif
 
 /* NZCV packing lives in sh4g_set_flags (sh4_emit_glue.h), masked by the
@@ -927,100 +926,6 @@ static inline int sh4g_thumb_ldst_const_native(u8 **tp, u32 opcode,
 #endif
 }
 
-static inline int sh4g_thumb_ldst_runtime_io_candidate(u32 opcode)
-{
-  return opcode == 0x6820u || opcode == 0x7820u || opcode == 0x8801u;
-}
-
-static inline u8 *sh4g_thumb_ldst_runtime_io_fast(u8 **tp, u32 opcode,
-  int kind, unsigned rd, int align_mask)
-{
-  u8 *miss[2];
-  int nmiss = 0;
-  u8 *done;
-
-  if (!sh4g_thumb_ldst_runtime_io_candidate(opcode))
-    return NULL;
-
-  { sh4_codegen cg = sh4g_open(tp);
-    sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
-    sh4_emit_shlr16(&cg, SH4_REG_RET);
-    sh4_emit_shlr8(&cg, SH4_REG_RET);
-    sh4_emit_cmpeq_imm(&cg, 4);                 /* T = GBA IO region */
-    sh4g_close(tp, &cg); }
-  miss[nmiss++] = sh4g_emit_bf_placeholder(tp);
-
-  if (align_mask) {
-    sh4_codegen cg = sh4g_open(tp);
-    sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
-    sh4_emit_tst_imm(&cg, align_mask);          /* T = aligned */
-    sh4g_close(tp, &cg);
-    miss[nmiss++] = sh4g_emit_bf_placeholder(tp);
-  }
-
-#if (defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)) && \
-  CGBA_SH4_LDST_DETAIL_COUNTERS
-  sh4g_const(tp, (u32)(uintptr_t)&cgba_sh4_native_thumb_runtime_io_count,
-             SH4_REG_T2);
-  { sh4_codegen cg = sh4g_open(tp);
-    sh4_emit_mov_l_load(&cg, SH4_REG_T2, SH4_REG_T1);
-    sh4_emit_add_imm(&cg, 1, SH4_REG_T1);
-    sh4_emit_mov_l_store(&cg, SH4_REG_T1, SH4_REG_T2);
-    sh4g_close(tp, &cg); }
-#endif
-
-  { sh4_codegen cg = sh4g_open(tp);
-    sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
-    sh4_emit_mov_imm(&cg, 22, SH4_REG_T1);
-    sh4_emit_shld(&cg, SH4_REG_T1, SH4_REG_RET);
-    sh4_emit_mov_imm(&cg, -22, SH4_REG_T1);
-    sh4_emit_shld(&cg, SH4_REG_T1, SH4_REG_RET); /* R0 = address & 0x3ff */
-    sh4g_close(tp, &cg); }
-  sh4g_const(tp, (u32)(uintptr_t)io_registers, SH4_REG_T2);
-  { sh4_codegen cg = sh4g_open(tp);
-    switch (kind) {
-    case SH4_THUMB_LDK_W:
-      sh4_emit_mov_l_load_r0(&cg, SH4_REG_T2, SH4_REG_T1);
-      sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_ARG0);
-      sh4_emit_swap_w(&cg, SH4_REG_ARG0, SH4_REG_ARG0);
-      sh4_emit_swap_b(&cg, SH4_REG_ARG0, SH4_REG_T1);
-      break;
-    case SH4_THUMB_LDK_B:
-      sh4_emit_mov_b_load_r0(&cg, SH4_REG_T2, SH4_REG_T1);
-      sh4_emit_extu_b(&cg, SH4_REG_T1, SH4_REG_T1);
-      break;
-    case SH4_THUMB_LDK_UH:
-      sh4_emit_mov_w_load_r0(&cg, SH4_REG_T2, SH4_REG_T1);
-      sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
-      sh4_emit_extu_w(&cg, SH4_REG_T1, SH4_REG_T1);
-      break;
-    default:
-      sh4_emit_mov_w_load_r0(&cg, SH4_REG_T2, SH4_REG_T1);
-      sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
-      sh4_emit_exts_w(&cg, SH4_REG_T1, SH4_REG_T1);
-      break;
-    }
-    sh4_emit_store_greg(&cg, SH4_REG_T1, rd);
-    sh4g_close(tp, &cg); }
-
-  sh4g_charge_mem_cell(tp, &ws_cyc_nseq[0x04][kind == SH4_THUMB_LDK_W]);
-  done = sh4g_emit_bra_placeholder(tp);
-  for (int i = 0; i < nmiss; i++)
-    sh4g_patch_cond(miss[i], *tp);
-  return done;
-}
-
-/* Emit "branch to the Thumb memory slow path if (T == slow_if_t)" without the
- * BT/BF disp8 range limit. The short conditional skips over a far BRA. */
-static inline u8 *sh4g_thumb_ldst_guard(u8 **tp, int slow_if_t)
-{
-  { sh4_codegen cg = sh4g_open(tp);
-    if (slow_if_t) sh4_emit_bf(&cg, 1);       /* T==0 -> stay fast */
-    else           sh4_emit_bt(&cg, 1);       /* T==1 -> stay fast */
-    sh4g_close(tp, &cg); }
-  return sh4g_emit_bra_placeholder(tp);
-}
-
 /* Native Thumb mapped loads and plain RAM stores. Side-effecting/open regions
  * fall back to cgba_sh4_thumb_ldst so DMA/IRQ alerts, I/O semantics, ROM paging
  * and backup stay helper-owned. RAM stores check the SMC tag mirror first and
@@ -1039,32 +944,30 @@ static inline int sh4g_thumb_ldst_native(u8 **tp, u32 opcode, u32 pc,
   u32 rd = opcode & 7, rb = (opcode >> 3) & 7;
   u32 offset = 0, ro = 0, reg_offset = 0;
   int pc_relative = 0;
-  int kind = SH4_THUMB_LDK_W, align_mask = 3, is_load = 1;
-  u8 *runtime_io_done = NULL;
+  int kind = SH4_THUMB_LDK_W, is_load = 1;
 
   if (hi >= 0x48 && hi <= 0x4F) {                    /* LDR Rd,[PC,#imm8*4] */
     rd = (opcode >> 8) & 7;
     offset = (opcode & 0xFF) << 2;
     pc_relative = 1;
     kind = SH4_THUMB_LDK_W;
-    align_mask = 3;
   } else if (hi >= 0x50 && hi <= 0x5F) {             /* register-offset forms */
     u32 op = (opcode >> 10) & 3;
     ro = (opcode >> 6) & 7;
     reg_offset = 1;
     if (opcode & 0x0200) {                            /* format 8: H/S */
       switch (op) {
-      case 0: kind = SH4_THUMB_LDK_UH; align_mask = 1; is_load = 0; break; /* STRH */
-      case 1: kind = SH4_THUMB_LDK_SB; align_mask = 0; break;  /* LDRSB */
-      case 2: kind = SH4_THUMB_LDK_UH; align_mask = 1; break;  /* LDRH */
-      case 3: kind = SH4_THUMB_LDK_SH; align_mask = 1; break;  /* LDRSH */
+      case 0: kind = SH4_THUMB_LDK_UH; is_load = 0; break; /* STRH */
+      case 1: kind = SH4_THUMB_LDK_SB; break;              /* LDRSB */
+      case 2: kind = SH4_THUMB_LDK_UH; break;              /* LDRH */
+      case 3: kind = SH4_THUMB_LDK_SH; break;              /* LDRSH */
       }
     } else {                                          /* format 7: L/B */
       switch (op) {
-      case 0: kind = SH4_THUMB_LDK_W; align_mask = 3; is_load = 0; break;  /* STR */
-      case 1: kind = SH4_THUMB_LDK_B; align_mask = 0; is_load = 0; break;  /* STRB */
-      case 2: kind = SH4_THUMB_LDK_W; align_mask = 3; break;   /* LDR */
-      case 3: kind = SH4_THUMB_LDK_B; align_mask = 0; break;   /* LDRB */
+      case 0: kind = SH4_THUMB_LDK_W; is_load = 0; break;  /* STR */
+      case 1: kind = SH4_THUMB_LDK_B; is_load = 0; break;  /* STRB */
+      case 2: kind = SH4_THUMB_LDK_W; break;               /* LDR */
+      case 3: kind = SH4_THUMB_LDK_B; break;               /* LDRB */
       }
     }
   } else if (hi >= 0x60 && hi <= 0x7F) {             /* imm5 word/byte */
@@ -1073,26 +976,22 @@ static inline int sh4g_thumb_ldst_native(u8 **tp, u32 opcode, u32 pc,
     is_load = (opcode >> 11) & 1;
     offset = imm5 << (is_byte ? 0 : 2);
     kind = is_byte ? SH4_THUMB_LDK_B : SH4_THUMB_LDK_W;
-    align_mask = is_byte ? 0 : 3;
   } else if (hi >= 0x80 && hi <= 0x8F) {             /* imm5 halfword */
     is_load = (opcode >> 11) & 1;
     offset = ((opcode >> 6) & 0x1F) << 1;
     kind = SH4_THUMB_LDK_UH;
-    align_mask = 1;
   } else if (hi >= 0x90 && hi <= 0x9F) {             /* SP-relative word */
     is_load = (opcode >> 11) & 1;
     rd = (opcode >> 8) & 7;
     rb = 13;                                         /* REG_SP */
     offset = (opcode & 0xFF) << 2;
     kind = SH4_THUMB_LDK_W;
-    align_mask = 3;
   } else {
     return 0;
   }
 
 #if CGBA_SH4_COMPACT_FASTMEM_TUPLE
-  if (is_load && !pc_relative &&
-      !(!reg_offset && sh4g_thumb_ldst_runtime_io_candidate(opcode))) {
+  if (is_load && !pc_relative) {
     uint16_t load_delay_op = 0x0009u;
     if (reg_offset) {
       sh4_codegen cg = sh4g_open(tp);
@@ -1181,11 +1080,7 @@ static inline int sh4g_thumb_ldst_native(u8 **tp, u32 opcode, u32 pc,
     }
   }
 
-  if (is_load && !pc_relative && !reg_offset)
-    runtime_io_done = sh4g_thumb_ldst_runtime_io_fast(tp, opcode, kind, rd,
-                                                      align_mask);
-
-  /* Out-of-line fast path (see sh4_fastmem.h): shared routine + 36-byte
+  /* Out-of-line fast path (see sh4_fastmem.h): shared routine + compact
    * site; guard failures fall to cgba_sh4_thumb_ldst via the tramp. */
   {
     int fm = is_load ? (int)kind
@@ -1195,8 +1090,6 @@ static inline int sh4g_thumb_ldst_native(u8 **tp, u32 opcode, u32 pc,
                       (const void *)cgba_sh4_thumb_ldst, (u32)opcode, (u32)pc,
                       cycle_count, rd, -1);
   }
-  if (runtime_io_done)
-    sh4g_patch_bra(runtime_io_done, *tp);
   return 1;
 #endif
 }
@@ -1352,127 +1245,6 @@ static inline int sh4g_thumb_ram_idx_load_native(u8 **tp, u32 op0, u32 op1,
   sh4g_patch_bra(bra_done, *tp);
   if (out_rA) *out_rA = rA;
   if (out_rD) *out_rD = rD;
-  return 1;
-}
-
-/* Fuse a run of 2..8 consecutive Thumb SP-relative word loads/stores
- * (`LDR/STR Rd, [SP, #imm8*4]`, 0x9000..0x9FFF) with max offset <= 60 bytes.
- * Validates canonical aligned IWRAM SP + straddle + store SMC tags ONCE,
- * then runs all loads/stores inline (5 insns each vs ~28 insns + JSR/JMP). */
-static inline int sh4g_thumb_sp_run_native(u8 **tp, const u32 *ops,
-  const int *ccs, int cnt, u32 pc)
-{
-  u8 is_load[8], rd[8], woff[8];
-  u32 max_off = 0u, store_wmask = 0u;
-  int has_store = 0, k;
-  u8 *miss[3], *bra_done;
-  int nmiss = 0;
-
-  if (cnt < 2 || cnt > 8) return 0;
-  for (k = 0; k < cnt; k++) {
-    u32 op = ops[k];
-    u32 off;
-    if ((op & 0xF000u) != 0x9000u) return 0;
-    off = (op & 0xFFu) << 2;
-    if (off > 60u) return 0;
-    is_load[k] = (u8)((op >> 11) & 1u);
-    rd[k] = (u8)((op >> 8) & 7u);
-    woff[k] = (u8)(off >> 2);
-    if (off > max_off) max_off = off;
-    if (!is_load[k]) {
-      has_store = 1;
-      store_wmask |= (1u << woff[k]);
-    }
-  }
-
-  sh4g_litseg_reserve_bytes(tp, 6, (u32)(88 + cnt * 16));
-
-  /* Guard 1: SP in canonical IWRAM [0x03000000, 0x03007FFF - max_off - 3] & aligned. */
-  { sh4_codegen cg = sh4g_open(tp);
-    sh4_emit_load_greg(&cg, 13, SH4_REG_T0);          /* R1 = reg[SP] */
-    sh4g_close(tp, &cg); }
-  sh4g_const(tp, 0x03000000u, SH4_REG_ARG0);
-  { sh4_codegen cg = sh4g_open(tp);
-    sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
-    sh4_emit_sub(&cg, SH4_REG_ARG0, SH4_REG_RET);     /* R0 = SP - 0x03000000 */
-    sh4g_close(tp, &cg); }
-  sh4g_const(tp, 0x8000u - (max_off + 3u), SH4_REG_T1);
-  { sh4_codegen cg = sh4g_open(tp);
-    sh4_emit_cmphs(&cg, SH4_REG_T1, SH4_REG_RET);     /* out of bounds? */
-    sh4g_close(tp, &cg); }
-  miss[nmiss++] = sh4g_emit_bt_placeholder(tp);
-
-  { sh4_codegen cg = sh4g_open(tp);
-    sh4_emit_tst_imm(&cg, 3);                         /* word aligned? */
-    sh4g_close(tp, &cg); }
-  miss[nmiss++] = sh4g_emit_bf_placeholder(tp);
-
-  /* Guard 2: if any store, fast-bypass via cgba_iwram_code_end, else check tags. */
-  if (has_store) {
-    u8 *smc_ok;
-    int first = 1, w;
-    sh4g_const(tp, (u32)(uintptr_t)&cgba_iwram_code_end, SH4_REG_T2);
-    { sh4_codegen cg = sh4g_open(tp);
-      sh4_emit_mov_l_load(&cg, SH4_REG_T2, SH4_REG_ARG0);
-      sh4_emit_cmphs(&cg, SH4_REG_ARG0, SH4_REG_RET); /* T = (sp_off >= code_end) */
-      sh4g_close(tp, &cg); }
-    smc_ok = sh4g_emit_bt_placeholder(tp);
-
-    sh4g_const(tp, (u32)(uintptr_t)iwram, SH4_REG_T2);
-    { sh4_codegen cg = sh4g_open(tp);
-      sh4_emit_add_reg(&cg, SH4_REG_RET, SH4_REG_T2); /* R3 = iwram + sp_off */
-      for (w = 0; w < 16; w++) {
-        if (!(store_wmask & (1u << w))) continue;
-        if (first) {
-          if (w == 0) sh4_emit_mov_l_load(&cg, SH4_REG_T2, SH4_REG_ARG0);
-          else        sh4_emit_mov_l_load_disp(&cg, SH4_REG_T2, SH4_REG_ARG0, (unsigned)w);
-          first = 0;
-        } else {
-          sh4_emit_mov_l_load_disp(&cg, SH4_REG_T2, SH4_REG_T1, (unsigned)w);
-          sh4_emit_or(&cg, SH4_REG_T1, SH4_REG_ARG0);
-        }
-      }
-      sh4_emit_tst(&cg, SH4_REG_ARG0, SH4_REG_ARG0);  /* T = all tags clear */
-      sh4g_close(tp, &cg); }
-    miss[nmiss++] = sh4g_emit_bf_placeholder(tp);
-    sh4g_patch_cond(smc_ok, *tp);
-  }
-
-  /* Hot body: zero guards, zero JSR/RTS, 5 insns per word load/store. */
-  sh4g_vec_load(tp, SH4G_VEC_iwram_data, SH4_REG_T2);
-  { sh4_codegen cg = sh4g_open(tp);
-    sh4_emit_add_reg(&cg, SH4_REG_RET, SH4_REG_T2);   /* R3 = iwram_data + sp_off */
-    for (k = 0; k < cnt; k++) {
-      unsigned w = woff[k];
-      if (is_load[k]) {
-        if (w == 0u) sh4_emit_mov_l_load(&cg, SH4_REG_T2, SH4_REG_T0);
-        else         sh4_emit_mov_l_load_disp(&cg, SH4_REG_T2, SH4_REG_T0, w);
-        sh4_emit_swap_b(&cg, SH4_REG_T0, SH4_REG_T1);
-        sh4_emit_swap_w(&cg, SH4_REG_T1, SH4_REG_T1);
-        sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T0);
-        sh4_emit_store_greg(&cg, SH4_REG_T0, rd[k]);
-      } else {
-        sh4_emit_load_greg(&cg, rd[k], SH4_REG_T0);
-        sh4_emit_swap_b(&cg, SH4_REG_T0, SH4_REG_T1);
-        sh4_emit_swap_w(&cg, SH4_REG_T1, SH4_REG_T1);
-        sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
-        if (w == 0u) sh4_emit_mov_l_store(&cg, SH4_REG_T1, SH4_REG_T2);
-        else         sh4_emit_mov_l_store_disp(&cg, SH4_REG_T1, SH4_REG_T2, w);
-      }
-    }
-    sh4g_close(tp, &cg); }
-  bra_done = *tp;
-  sh4g_u16(tp, 0xA000);                               /* BRA done */
-  sh4g_u16(tp, (uint16_t)(0x7000 | (SH4_REG_CYCLES << 8) | ((-cnt) & 0xFF)));
-
-  /* Cold fallback: exact normal emission (no guest state mutated on miss). */
-  while (nmiss)
-    sh4g_patch_cond(miss[--nmiss], *tp);
-  for (k = 0; k < cnt; k++) {
-    sh4_greg_forward_reset();
-    sh4g_thumb_ldst_native(tp, ops[k], pc + (u32)(k * 2), ccs[k]);
-  }
-  sh4g_patch_bra(bra_done, *tp);
   return 1;
 }
 
@@ -1830,9 +1602,16 @@ static inline int sh4g_thumb_base_run_native(u8 **tp, const u32 *ops,
   sh4g_u16(tp, 0xA000);                                 /* BRA done */
   sh4g_u16(tp, (uint16_t)(0x7000 | (SH4_REG_CYCLES << 8) | ((-cnt) & 0xFF)));
 
-  /* Cold fallback: fastmem sites for cnt<=3, compact 1-call helper for cnt>=4. */
+  /* Cold fallback: emit resident fastmem sites directly under compact8+OOL
+   * (8-10B each, keeping EWRAM/VRAM/IO on native fastmem instead of C interp). */
   while (nmiss)
     sh4g_patch_cond(miss[--nmiss], *tp);
+#if CGBA_SH4_COMPACT_FASTMEM_TUPLE && CGBA_SH4_FASTMEM_OOL_DESC
+  for (k = 0; k < cnt; k++) {
+    sh4_greg_forward_reset();
+    sh4g_thumb_ldst_native(tp, ops[k], pc + (u32)(k * 2), ccs[k]);
+  }
+#else
   if (cnt <= 3) {
     for (k = 0; k < cnt; k++) {
       sh4_greg_forward_reset();
@@ -1843,30 +1622,11 @@ static inline int sh4g_thumb_base_run_native(u8 **tp, const u32 *ops,
                         (const void *)cgba_sh4_thumb_ldst_run,
                         (u32)cnt, (u32)pc, 1, ccs[cnt - 1]);
   }
+#endif
   sh4g_patch_bra(bra_done, *tp);
   return 1;
 }
 #endif
-
-/* Set CPSR bit29 (C) to the constant c (0/1), preserving the rest. Used for the
- * ARM logical-with-immediate shifter carry, which is a translate-time constant. */
-static inline void sh4g_set_c_const(u8 **tp, unsigned c)
-{
-  sh4_codegen cg = sh4g_open(tp);
-  const unsigned cpsr = SH4_REG_T1;            /* R2 */
-  sh4_emit_load_greg(&cg, SH4_GREG_CPSR, cpsr);
-  sh4_emit_mov_imm(&cg, 1, SH4_REG_RET);
-  sh4_emit_rotr(&cg, SH4_REG_RET);             /* R0 = 0x80000000 */
-  sh4_emit_shlr2(&cg, SH4_REG_RET);            /* R0 = 0x20000000 (bit29) */
-  if (c) {
-    sh4_emit_or(&cg, SH4_REG_RET, cpsr);
-  } else {
-    sh4_emit_not(&cg, SH4_REG_RET, SH4_REG_RET);
-    sh4_emit_and(&cg, SH4_REG_RET, cpsr);
-  }
-  sh4_emit_store_greg(&cg, cpsr, SH4_GREG_CPSR);
-  sh4g_close(tp, &cg);
-}
 
 /* Load ARM operand2 into R2: an immediate constant, or a plain register.
  * rm == 15 (unshifted) reads pc+8 — a translate-time constant. */
@@ -1955,28 +1715,6 @@ static inline void sh4g_arm_shift_imm_reg(u8 **tp, u32 type, u32 amount,
 static inline void sh4g_arm_shift_imm_op2(u8 **tp, u32 type, u32 amount, unsigned rm)
 {
   sh4g_arm_shift_imm_reg(tp, type, amount, rm, SH4_REG_T1);
-}
-
-/* Set CPSR bit29 (C) from bit0 of creg (a 0/1 value), preserving the rest. For
- * the logical-with-S shifted-register path where the shifter carry is runtime.
- * creg must survive sh4g_set_nz (it uses R0/R2/R3 only) — pass a high ARG reg. */
-static inline void sh4g_set_c_reg(u8 **tp, unsigned creg)
-{
-  sh4_codegen cg = sh4g_open(tp);
-  const unsigned cpsr = SH4_REG_T1;                /* R2 */
-  const unsigned tmp  = SH4_REG_T2;                /* R3 */
-  sh4_emit_load_greg(&cg, SH4_GREG_CPSR, cpsr);
-  sh4_emit_mov_imm(&cg, 1, SH4_REG_RET);
-  sh4_emit_rotr(&cg, SH4_REG_RET);                 /* R0 = 0x80000000 */
-  sh4_emit_shlr2(&cg, SH4_REG_RET);                /* R0 = 0x20000000 (bit29) */
-  sh4_emit_not(&cg, SH4_REG_RET, tmp);             /* tmp = ~bit29 */
-  sh4_emit_and(&cg, tmp, cpsr);                    /* clear C */
-  sh4_emit_mov_reg(&cg, creg, tmp);
-  sh4_emit_mov_imm(&cg, 29, SH4_REG_RET);
-  sh4_emit_shld(&cg, SH4_REG_RET, tmp);            /* tmp = carry << 29 */
-  sh4_emit_or(&cg, tmp, cpsr);
-  sh4_emit_store_greg(&cg, cpsr, SH4_GREG_CPSR);
-  sh4g_close(tp, &cg);
 }
 
 /* operand2 = reg[rm] shifted by an immediate (LSL/LSR/ASR), into R2, AND the
@@ -2720,26 +2458,6 @@ fused_taken_done:
     sh4g_fused_mat_flags(tp, kind, extra);
 
   return site;
-}
-
-static inline u8 *sh4g_emit_fused_cmp_bcc_ex(
-  u8 **tp, int kind, unsigned rd, unsigned cond,
-  int taken_debit, uint32_t target_pc, int is_internal,
-  const void *block_exit_fn, int taken_dead, int fall_dead, int extra)
-{
-  return sh4g_emit_fused_cmp_bcc_known(
-    tp, kind, rd, cond, taken_debit, target_pc, is_internal,
-    block_exit_fn, taken_dead, fall_dead, extra, NULL);
-}
-
-static inline u8 *sh4g_emit_fused_cmp_bcc(
-  u8 **tp, int kind, unsigned rd, unsigned cond,
-  int taken_debit, uint32_t target_pc, int is_internal,
-  const void *block_exit_fn, int taken_dead, int fall_dead)
-{
-  return sh4g_emit_fused_cmp_bcc_known(
-    tp, kind, rd, cond, taken_debit, target_pc, is_internal,
-    block_exit_fn, taken_dead, fall_dead, 0, NULL);
 }
 
 /* ---- 4-slot intra-segment BBRA for straight-line dead-flag Thumb ALU runs ---

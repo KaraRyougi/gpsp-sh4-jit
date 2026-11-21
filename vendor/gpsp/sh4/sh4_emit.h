@@ -1135,42 +1135,6 @@ static inline int sh4g_registered_idle_signature_ok(const u8 *map,
   } while (0)
 
 /* ================================================================== */
-/* Data-processing op-id maps                                          */
-/* ================================================================== */
-
-#define SH4OP_and  SH4DP_AND
-#define SH4OP_ands SH4DP_AND
-#define SH4OP_eor  SH4DP_EOR
-#define SH4OP_eors SH4DP_EOR
-#define SH4OP_orr  SH4DP_ORR
-#define SH4OP_orrs SH4DP_ORR
-#define SH4OP_bic  SH4DP_BIC
-#define SH4OP_bics SH4DP_BIC
-#define SH4OP_add  SH4DP_ADD
-#define SH4OP_adds SH4DP_ADD
-#define SH4OP_adc  SH4DP_ADC
-#define SH4OP_adcs SH4DP_ADC
-#define SH4OP_sub  SH4DP_SUB
-#define SH4OP_subs SH4DP_SUB
-#define SH4OP_sbc  SH4DP_SBC
-#define SH4OP_sbcs SH4DP_SBC
-#define SH4OP_rsb  SH4DP_RSB
-#define SH4OP_rsbs SH4DP_RSB
-#define SH4OP_rsc  SH4DP_RSC
-#define SH4OP_rscs SH4DP_RSC
-#define SH4OP_mov  SH4DP_MOV
-#define SH4OP_movs SH4DP_MOV
-#define SH4OP_mvn  SH4DP_MVN
-#define SH4OP_mvns SH4DP_MVN
-#define SH4OP_cmp  SH4DP_CMP
-#define SH4OP_cmn  SH4DP_CMN
-#define SH4OP_tst  SH4DP_TST
-#define SH4OP_teq  SH4DP_TEQ
-#define SH4OP_muls SH4DP_MUL
-#define SH4OP_neg  SH4DP_NEG
-#define SH4OP_negs SH4DP_NEG
-
-/* ================================================================== */
 /* Thumb data-processing.                                              */
 /* ================================================================== */
 /*
@@ -1549,10 +1513,23 @@ static inline int sh4g_registered_idle_signature_ok(const u8 *map,
        if (sh4g_thumb_ldst_is_load((u32)opcode))                              \
          sh4_thumb_const_kill(sh4g_thumb_ldst_reg_index((u32)opcode)); } while(0)
 #define thumb_block_memory(access_type, pre_op, post_op, base_reg)            \
-  do { if(!sh4g_thumb_block_native(&translation_ptr, (u32)opcode, (u32)pc,    \
+  do { u32 _tb_op = (u32)opcode;                                              \
+       u32 _tb_hi = (_tb_op >> 8) & 0xFFu;                                    \
+       if(!sh4g_thumb_block_native(&translation_ptr, _tb_op, (u32)pc,         \
                                    (int)cycle_count))                         \
          SH4_CALL_OP2_PC_MEM(cgba_sh4_thumb_block);                           \
-       sh4_thumb_const_clear_all(); } while(0)
+       if (_tb_hi == 0xB4u || _tb_hi == 0xB5u) {                              \
+         sh4_thumb_const_kill(13);          /* PUSH only writes SP */         \
+       } else if (_tb_hi == 0xBCu) {                                          \
+         sh4_thumb_const_mask &= ~((_tb_op & 0xFFu) | (1u << 13));            \
+       } else if (_tb_hi >= 0xC0u && _tb_hi <= 0xC7u) {                       \
+         sh4_thumb_const_kill((_tb_op >> 8) & 7u); /* STMIA only writes Rb */ \
+       } else if (_tb_hi >= 0xC8u && _tb_hi <= 0xCFu) {                       \
+         sh4_thumb_const_mask &= ~((_tb_op & 0xFFu) |                         \
+                                   (1u << ((_tb_op >> 8) & 7u)));             \
+       } else {                                                               \
+         sh4_thumb_const_clear_all();                                         \
+       } } while(0)
 #define arm_access_memory(access_type, direction, adjust_op, mem_type,        \
                           offset_type)                                        \
   do { if(!sh4g_arm_ldst_native(&translation_ptr, (u32)opcode, (u32)pc,       \

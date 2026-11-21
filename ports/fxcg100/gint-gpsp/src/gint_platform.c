@@ -28,27 +28,13 @@
 #define GBA_FRAME_BYTES (GBA_W * GBA_H * (int)sizeof(uint16_t))
 #define GBA_FRAME_DMA_BLOCKS (GBA_FRAME_BYTES / 32)
 
-/*
- * The hardware-proven presenter gives each DMA buffer a full 8 KiB on-chip
- * bank. If the experimental resident fastmem image claims XRAM, fall back to
- * two 4 KiB halves of YRAM; that layout costs substantially more DMA launches
- * in the scaled modes and is therefore not the release default.
- */
-#if defined(CGBA_SH4_FASTMEM_XYRAM) && CGBA_SH4_FASTMEM_XYRAM
-# define STRIP_LINES 8
-# define STRIP_43_LINES 4
-# define STRIP_FULL_LINES 4
-# define STRIP_BANK_BYTES 0x1000
-# define STRIP_BUF0 ((uintptr_t)0xe5010000u)
-# define STRIP_BUF1 ((uintptr_t)0xe5011000u)
-#else
-# define STRIP_LINES 16
-# define STRIP_43_LINES 12
-# define STRIP_FULL_LINES 8
-# define STRIP_BANK_BYTES 0x2000
-# define STRIP_BUF0 ((uintptr_t)0xe5007000u)
-# define STRIP_BUF1 ((uintptr_t)0xe5017000u)
-#endif
+/* Give each DMA strip buffer a full 8 KiB on-chip XRAM/YRAM bank. */
+#define STRIP_LINES 16
+#define STRIP_43_LINES 12
+#define STRIP_FULL_LINES 8
+#define STRIP_BANK_BYTES 0x2000
+#define STRIP_BUF0 ((uintptr_t)0xe5007000u)
+#define STRIP_BUF1 ((uintptr_t)0xe5017000u)
 _Static_assert(STRIP_LINES * GBA_W * 2 <= STRIP_BANK_BYTES,
 	"GBA strip must fit its on-chip DMA bank");
 _Static_assert(STRIP_LINES % 4 == 0,
@@ -1493,82 +1479,3 @@ void fxcg100_lcd_blit_gba_dirty(const uint16_t *pixels,
 {
 	blit_gba_impl(pixels, dirty_row_mask);
 }
-
-/* ---- Scanline-streamed unscaled presentation ---------------------------
- * update_scanline() calls us only after a row is architecturally complete.
- * A 16-row group is therefore byte-for-byte the same data that the normal
- * end-of-frame blit copies, but its LCD DMA overlaps emulation of the next
- * group. The final DMA remains in flight under the same ownership contract as
- * fxcg100_lcd_blit_gba(). */
-#ifdef CGBA_LCD_SCANLINE_STREAM
-static int lcd_stream_active;
-static unsigned lcd_stream_next_y;
-static unsigned lcd_stream_bank;
-static int lcd_stream_strip_dirty;
-
-int fxcg100_lcd_stream_begin(void)
-{
-	if(lcd_scale_mode != 0 || cg_sync.enabled)
-		return 0;
-	wait_lcd_dma();
-	clear_os_overlay_before_blit();
-	lcd_stream_next_y = 0;
-	lcd_stream_bank = 0;
-	lcd_stream_strip_dirty = !lcd_frame_synced;
-	lcd_stream_active = 1;
-	return 1;
-}
-
-void fxcg100_lcd_stream_scanline(const uint16_t *row, unsigned y, int dirty)
-{
-	uint16_t *const strips[2] = {
-		(uint16_t *)STRIP_BUF0,
-		(uint16_t *)STRIP_BUF1,
-	};
-	unsigned rows;
-	int ox = (DWIDTH - GBA_W) / 2;
-	int oy = (DHEIGHT - GBA_H) / 2;
-
-	if(!lcd_stream_active || !row || y >= GBA_H)
-		return;
-	if(dirty)
-		lcd_stream_strip_dirty = 1;
-	if(y + 1 < lcd_stream_next_y + STRIP_LINES && y + 1 != GBA_H)
-		return;
-	if(y + 1 > lcd_stream_next_y + STRIP_LINES && y + 1 != GBA_H) {
-		lcd_stream_active = 0;       /* out-of-order/missing row: fall back */
-		return;
-	}
-
-	rows = y + 1 - lcd_stream_next_y;
-	if(rows == 0 || rows > STRIP_LINES) {
-		lcd_stream_active = 0;
-		return;
-	}
-	if(lcd_stream_strip_dirty) {
-		memcpy(strips[lcd_stream_bank], row - (rows - 1) * GBA_W,
-			(size_t)rows * GBA_W * sizeof(uint16_t));
-		wait_lcd_dma();
-		start_strip_dma(strips[lcd_stream_bank], ox,
-			oy + (int)lcd_stream_next_y, GBA_W, (int)rows);
-		lcd_stream_bank ^= 1;
-		lcd_window_partial = 1;
-	}
-	lcd_stream_next_y += rows;
-	lcd_stream_strip_dirty = !lcd_frame_synced;
-}
-
-int fxcg100_lcd_stream_end(void)
-{
-	int complete = lcd_stream_active && lcd_stream_next_y == GBA_H;
-	lcd_stream_active = 0;
-	if(complete)
-		lcd_frame_synced = 1;
-	return complete;
-}
-#else
-int fxcg100_lcd_stream_begin(void) { return 0; }
-void fxcg100_lcd_stream_scanline(const uint16_t *row, unsigned y, int dirty)
-{ (void)row; (void)y; (void)dirty; }
-int fxcg100_lcd_stream_end(void) { return 0; }
-#endif

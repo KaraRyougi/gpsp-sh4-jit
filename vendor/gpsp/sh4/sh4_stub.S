@@ -193,9 +193,7 @@ defsymbl(cgba_sh4_vec_table)
   .long   _ws_cyc_nseq                          /* 11 SH4G_VEC_ws_cyc_nseq   */
   .long   _iwram + 0x8000                       /* 12 SH4G_VEC_iwram_data    */
   .long   _ewram                                /* 13 SH4G_VEC_ewram_data    */
-#if defined(CGBA_VIDEO_BLEND_PALETTE_CACHE) || \
-    defined(CGBA_VIDEO_BACKDROP_SHADOW_PALETTE) || \
-    defined(CGBA_VIDEO_TILE_ROW_CACHE) || \
+#if defined(CGBA_VIDEO_BACKDROP_SHADOW_PALETTE) || \
     (defined(CGBA_VIDEO_DIRTY_SCANLINE) && CGBA_VIDEO_DIRTY_SCANLINE)
   .long   _palette_ram_dirty                    /* 14 SH4G_VEC_palette_dirty */
 #endif
@@ -1097,6 +1095,7 @@ defsymbl(sh4_op2_pc_mem_tramp)      /* + memory debit + PC redispatch */
   mov     #0, r7                    /* full-width cycle descriptor */
 
 #if CGBA_SH4_COMPACT_FASTMEM_TUPLE
+#if !CGBA_SH4_FASTMEM_OOL_DESC
 /* Compact fastmem descriptors pack the 16-bit cycle debit into the low half
  * of the word at PR+20. Single-transfer params occupy the high half; block
  * descriptors keep their full params word at PR+24. */
@@ -1117,6 +1116,7 @@ defsymbl(sh4_fastmem_pc_mem_tramp)
   sub     r1, r13
   bra     op2_pc_common
   mov     #1, r7                    /* low-16 cycle descriptor */
+#endif /* !CGBA_SH4_FASTMEM_OOL_DESC */
 
 #if CGBA_SH4_FASTMEM_OOL_DESC
 /* Out-of-line slow-path trampoline for fastmem sites (single + WB + block):

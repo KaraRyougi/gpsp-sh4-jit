@@ -2777,7 +2777,7 @@ void translate_icache_sync() {
 /* Combined Thumb high-byte scan/peephole LUT:
  *   bits  0..11: flag_data (1 = special-case sub-decode: 0x00..0x07,
  *                0x40..0x42, 0x44, 0x46, 0xDF)
- *   bit  14 (0x4000): cur_hi peephole candidate (0x04,0x06,0x18,0x19,0x44,0x80,0x90..0x9F)
+ *   bit  14 (0x4000): cur_hi peephole candidate (0x04,0x06,0x18,0x19,0x44,0x80)
  *   bit  15 (0x8000): thumb_exit_point (unconditional/conditional exit) */
 static const u16 cgba_thumb_hi_lut[256] = {
   /* 0x00..0x07: LSL imm (0x04/0x06 = LSL #16/#24 extend candidate) */
@@ -2806,9 +2806,9 @@ static const u16 cgba_thumb_hi_lut[256] = {
   /* 0x80..0x8F: STRH/LDRH (0x80 = STRH #0 stride candidate) */
   0x4000u, 0, 0, 0, 0, 0, 0, 0,
   0, 0, 0, 0, 0, 0, 0, 0,
-  /* 0x90..0x9F: SP-relative STR/LDR (SP-run candidates) */
-  0x4000u, 0x4000u, 0x4000u, 0x4000u, 0x4000u, 0x4000u, 0x4000u, 0x4000u,
-  0x4000u, 0x4000u, 0x4000u, 0x4000u, 0x4000u, 0x4000u, 0x4000u, 0x4000u,
+  /* 0x90..0x9F: SP-relative STR/LDR (handled by unified sp_span pass) */
+  0, 0, 0, 0, 0, 0, 0, 0,
+  0, 0, 0, 0, 0, 0, 0, 0,
   /* 0xA0..0xAF: ADD PC/SP imm */
   0, 0, 0, 0, 0, 0, 0, 0,
   0, 0, 0, 0, 0, 0, 0, 0,
@@ -4209,15 +4209,18 @@ bool translate_block_arm(u32 pc, bool ram_region)
                            !block_data[fall_idx].update_cycles)
             ? sh4_flags_dead_from(block_data, fall_idx, num_insns, need_kill)
             : 0;
-          if (fall_dead &&
-              sh4g_arm_movs_cond_addsub_native(&translation_ptr, cur_op, next_op)) {
-            pc += 4;
-            arm_base_cycles();
-            block_data_position++;
-            pc += 4;
-            sh4_greg_forward_reset();
-            sh4g_litseg_maybe_flush(&translation_ptr);
-            arm_fused = 1;
+          if (fall_dead) {
+            u8 *forward_start = translation_ptr;
+            if (sh4g_arm_movs_cond_addsub_native(&translation_ptr, cur_op, next_op)) {
+              pc += 4;
+              arm_base_cycles();
+              block_data_position++;
+              pc += 4;
+              sh4_greg_forward_finish(forward_start, translation_ptr,
+                translation_ptr > forward_start && translation_ptr[-2] == 0x1Eu);
+              sh4g_litseg_maybe_flush(&translation_ptr);
+              arm_fused = 1;
+            }
           }
         }
         /* General ARM IWRAM peephole 6: 1..4 identical interpolated stereo
@@ -4339,13 +4342,18 @@ bool translate_block_arm(u32 pc, bool ram_region)
               }
               pc = save_pc;
             }
-            if (rcnt >= 2 &&
-                sh4g_arm_dp_same_rn_run_native(&translation_ptr, run_ops, rcnt)) {
-              block_data_position += rcnt - 1;
-              pc += (u32)(rcnt * 4);
-              sh4_greg_forward_reset();
-              sh4g_litseg_maybe_flush(&translation_ptr);
-              arm_fused = 1;
+            if (rcnt >= 2) {
+              u8 *forward_start = translation_ptr;
+              if (sh4g_arm_dp_same_rn_run_native(&translation_ptr, run_ops, rcnt)) {
+                block_data_position += rcnt - 1;
+                pc += (u32)(rcnt * 4);
+                sh4_greg_forward_finish(forward_start, translation_ptr,
+                  translation_ptr > forward_start && translation_ptr[-2] == 0x1Eu);
+                sh4g_litseg_maybe_flush(&translation_ptr);
+                arm_fused = 1;
+              } else {
+                cycle_count = save_cc;
+              }
             } else {
               cycle_count = save_cc;
             }
@@ -4387,13 +4395,18 @@ bool translate_block_arm(u32 pc, bool ram_region)
               run_ops[rcnt++] = rop;
             }
             pc = save_pc;
-            if (rcnt >= 2 &&
-                sh4g_arm_dp_same_rd_run_native(&translation_ptr, run_ops, rcnt)) {
-              block_data_position += rcnt - 1;
-              pc += (u32)(rcnt * 4);
-              sh4_greg_forward_reset();
-              sh4g_litseg_maybe_flush(&translation_ptr);
-              arm_fused = 1;
+            if (rcnt >= 2) {
+              u8 *forward_start = translation_ptr;
+              if (sh4g_arm_dp_same_rd_run_native(&translation_ptr, run_ops, rcnt)) {
+                block_data_position += rcnt - 1;
+                pc += (u32)(rcnt * 4);
+                sh4_greg_forward_finish(forward_start, translation_ptr,
+                  translation_ptr > forward_start && translation_ptr[-2] == 0x1Eu);
+                sh4g_litseg_maybe_flush(&translation_ptr);
+                arm_fused = 1;
+              } else {
+                cycle_count = save_cc;
+              }
             } else {
               cycle_count = save_cc;
             }
@@ -4639,15 +4652,21 @@ bool translate_block_arm(u32 pc, bool ram_region)
       if (!arm_fused) {
         u8 *forward_start = translation_ptr;
         translate_arm_instruction();
-        /* Straight-line unconditional ALU (non-S, non-reg-shift, Rd!=PC)
-         * or MUL/MLA (non-S, Rd!=PC). */
-        sh4_greg_forward_finish(forward_start, translation_ptr,
-          (opcode >> 28) == 14 &&
-          (((opcode & 0x0C100000) == 0 &&
-            ((opcode & 0x02000000) || !(opcode & 0x00000010)) &&
-            ((opcode >> 12) & 15) != 15 &&
-            (((opcode >> 21) & 15) < 8 || ((opcode >> 21) & 15) >= 12)) ||
-           ((opcode & 0xFFD000F0) == 0xE0000090 && ((opcode >> 16) & 15) != 15)));
+        /* Straight-line unconditional ALU (non-S or dead-flag S, non-reg-shift,
+         * Rd!=PC) or MUL/MLA (non-S, Rd!=PC), ending at MOV.L Rm,@(disp,R14). */
+        if (__builtin_expect(translation_ptr > forward_start &&
+                             translation_ptr[-2] == 0x1Eu, 0)) {
+          sh4_greg_forward_finish(forward_start, translation_ptr,
+            (opcode >> 28) == 14 &&
+            (((opcode & 0x0C000000) == 0 &&
+              (!(opcode & 0x00100000) || !(flag_status & 15)) &&
+              ((opcode & 0x02000000) || !(opcode & 0x00000010)) &&
+              ((opcode >> 12) & 15) != 15 &&
+              (((opcode >> 21) & 15) < 8 || ((opcode >> 21) & 15) >= 12)) ||
+             ((opcode & 0xFFD000F0) == 0xE0000090 && ((opcode >> 16) & 15) != 15)));
+        } else {
+          sh4_greg_forward_reset();
+        }
         sh4g_litseg_maybe_flush(&translation_ptr);
       }
     }
@@ -4997,54 +5016,6 @@ cgba_thumb_try_peephole(
         cycle_count = save_cc;
       } }
   }
-  /* General Thumb peephole: consecutive SP-relative word load/store run
-   * (2..8 ops of LDR/STR Rd, [SP, #imm8*4], max offset <= 60). */
-  if (!thumb_fused &&
-      (cur_op & 0xF000u) == 0x9000u &&
-      (next_op & 0xF000u) == 0x9000u &&
-      ((cur_op & 0xFFu) <= 15u) && ((next_op & 0xFFu) <= 15u)) {
-    u32 run_ops[8];
-    int run_ccs[8];
-    int rcnt = 0;
-    u32 save_pc = pc;
-    u32 save_cc = cycle_count;
-    run_ops[0] = cur_op;
-    run_ccs[0] = (int)cycle_count;
-    rcnt = 1;
-    while (rcnt < 8 &&
-           block_data_position + rcnt < num_insns &&
-           !block_data[block_data_position + rcnt].update_cycles &&
-           (save_pc + (u32)(rcnt * 2)) != cheat_hook &&
-           ((save_pc + (u32)(rcnt * 2)) >> 12) == pc_region) {
-      u32 rop = readaddress16(pc_address_block, (save_pc + (u32)(rcnt * 2)) & 0x0FFF);
-      if ((rop & 0xF000u) != 0x9000u || (rop & 0xFFu) > 15u)
-        break;
-      pc = save_pc + (u32)(rcnt * 2);
-      thumb_base_cycles();
-      run_ops[rcnt] = rop;
-      run_ccs[rcnt] = (int)cycle_count;
-      rcnt++;
-    }
-    pc = save_pc;
-    if (rcnt >= 2 &&
-        sh4g_thumb_sp_run_native(&translation_ptr, run_ops, run_ccs,
-                                 rcnt, pc)) {
-      int k;
-      for (k = 0; k < rcnt; k++) {
-        if ((run_ops[k] >> 11) & 1u)
-          sh4_thumb_const_kill((run_ops[k] >> 8) & 7u);
-      }
-      block_data_position += rcnt - 1;
-      *last_op_p = run_ops[rcnt - 1];
-      *op_p = run_ops[rcnt - 1];
-      pc += (u32)(rcnt * 2);
-      sh4_greg_forward_reset();
-      sh4g_litseg_maybe_flush(&translation_ptr);
-      thumb_fused = 1;
-    } else {
-      cycle_count = save_cc;
-    }
-  }
   /* General Thumb peephole: consecutive `(STRH rD, [rB, #0]; ADD rB, #even)`
    * strided halfword store run (2..6 pairs, dead ADD flags). */
   if (!thumb_fused &&
@@ -5107,7 +5078,10 @@ cgba_thumb_try_peephole(
     }
   }
   /* General Thumb peephole: consecutive same-base immediate-offset load/store
-   * run (2..8 ops of 0x6000..0x8FFF sharing rB, no mid-run write to rB). */
+   * run (2..8 ops of 0x6000..0x8FFF sharing rB, no mid-run write to rB).
+   * Yield to zero-branch sh4g_thumb_ldst_const_native when rB is a known
+   * non-IWRAM constant (e.g. IO/EWRAM, which would miss the IWRAM-only guard
+   * 100% of the time) or a known IWRAM constant with loads only. */
   if (!thumb_fused &&
       cur_op >= 0x6000u && cur_op < 0x9000u &&
       next_op >= 0x6000u && next_op < 0x9000u &&
@@ -5116,49 +5090,54 @@ cgba_thumb_try_peephole(
     u32 run_ops[8];
     int run_ccs[8];
     unsigned run_rb = (cur_op >> 3) & 7u;
-    int rcnt = 0;
-    u32 save_pc = pc;
-    u32 save_cc = cycle_count;
-    run_ops[0] = cur_op;
-    run_ccs[0] = (int)cycle_count;
-    rcnt = 1;
-    while (rcnt < 8 &&
-           block_data_position + rcnt < num_insns &&
-           !block_data[block_data_position + rcnt].update_cycles &&
-           (save_pc + (u32)(rcnt * 2)) != cheat_hook &&
-           ((save_pc + (u32)(rcnt * 2)) >> 12) == pc_region) {
-      u32 rop = readaddress16(pc_address_block,
-                              (save_pc + (u32)(rcnt * 2)) & 0x0FFFu);
-      if (rop < 0x6000u || rop >= 0x9000u || ((rop >> 3) & 7u) != run_rb)
-        break;
-      /* Stop if previous op loaded into run_rb (only allowed as final op). */
-      if (rcnt > 1 && ((run_ops[rcnt - 1] >> 11) & 1u) &&
-          (run_ops[rcnt - 1] & 7u) == run_rb)
-        break;
-      pc = save_pc + (u32)(rcnt * 2);
-      thumb_base_cycles();
-      run_ops[rcnt] = rop;
-      run_ccs[rcnt] = (int)cycle_count;
-      rcnt++;
-    }
-    pc = save_pc;
-    if (rcnt >= 2 &&
-        sh4g_thumb_base_run_native(&translation_ptr, run_ops, run_ccs,
-                                   rcnt, pc)) {
-      int k;
-      for (k = 0; k < rcnt; k++) {
-        if ((run_ops[k] >> 11) & 1u)
-          sh4_thumb_const_kill(run_ops[k] & 7u);
+    int rb_is_const = (int)((sh4_thumb_const_mask >> run_rb) & 1u);
+    if (!rb_is_const || ((sh4_thumb_const_val[run_rb] >> 24) == 0x03u)) {
+      int rcnt = 0, has_store = !((cur_op >> 11) & 1u);
+      u32 save_pc = pc;
+      u32 save_cc = cycle_count;
+      run_ops[0] = cur_op;
+      run_ccs[0] = (int)cycle_count;
+      rcnt = 1;
+      while (rcnt < 8 &&
+             block_data_position + rcnt < num_insns &&
+             !block_data[block_data_position + rcnt].update_cycles &&
+             (save_pc + (u32)(rcnt * 2)) != cheat_hook &&
+             ((save_pc + (u32)(rcnt * 2)) >> 12) == pc_region) {
+        u32 rop = readaddress16(pc_address_block,
+                                (save_pc + (u32)(rcnt * 2)) & 0x0FFFu);
+        if (rop < 0x6000u || rop >= 0x9000u || ((rop >> 3) & 7u) != run_rb)
+          break;
+        /* Stop if previous op loaded into run_rb (only allowed as final op). */
+        if (rcnt > 1 && ((run_ops[rcnt - 1] >> 11) & 1u) &&
+            (run_ops[rcnt - 1] & 7u) == run_rb)
+          break;
+        pc = save_pc + (u32)(rcnt * 2);
+        thumb_base_cycles();
+        run_ops[rcnt] = rop;
+        run_ccs[rcnt] = (int)cycle_count;
+        if (!((rop >> 11) & 1u))
+          has_store = 1;
+        rcnt++;
       }
-      block_data_position += rcnt - 1;
-      *last_op_p = run_ops[rcnt - 1];
-      *op_p = run_ops[rcnt - 1];
-      pc += (u32)(rcnt * 2);
-      sh4_greg_forward_reset();
-      sh4g_litseg_maybe_flush(&translation_ptr);
-      thumb_fused = 1;
-    } else {
-      cycle_count = save_cc;
+      pc = save_pc;
+      if (rcnt >= 2 && (!rb_is_const || has_store) &&
+          sh4g_thumb_base_run_native(&translation_ptr, run_ops, run_ccs,
+                                     rcnt, pc)) {
+        int k;
+        for (k = 0; k < rcnt; k++) {
+          if ((run_ops[k] >> 11) & 1u)
+            sh4_thumb_const_kill(run_ops[k] & 7u);
+        }
+        block_data_position += rcnt - 1;
+        *last_op_p = run_ops[rcnt - 1];
+        *op_p = run_ops[rcnt - 1];
+        pc += (u32)(rcnt * 2);
+        sh4_greg_forward_reset();
+        sh4g_litseg_maybe_flush(&translation_ptr);
+        thumb_fused = 1;
+      } else {
+        cycle_count = save_cc;
+      }
     }
   }
   /* General Thumb signed-bias / signed-div-pow2 idiom:
@@ -5747,12 +5726,11 @@ bool translate_block_thumb(u32 pc, bool ram_region)
           (pc + 2) != cheat_hook &&
           ((pc + 2) & 0x0FFFu) != 0u) {
         u32 next_op = readaddress16(pc_address_block, (pc + 2) & 0x0FFF);
-        if (!(sp_span_valid && (cur_op & 0xF000u) == 0x9000u) &&
-            ((cgba_thumb_hi_lut[cur_op >> 8] & 0x4000u) ||
-             (u32)(next_op - 0xD000u) < 0x0E00u ||
-             ((u32)(cur_op - 0x6000u) < 0x3000u &&
-              (u32)(next_op - 0x6000u) < 0x3000u &&
-              ((cur_op >> 3) & 7u) == ((next_op >> 3) & 7u)))) {
+        if ((cgba_thumb_hi_lut[cur_op >> 8] & 0x4000u) ||
+            (u32)(next_op - 0xD000u) < 0x0E00u ||
+            ((u32)(cur_op - 0x6000u) < 0x3000u &&
+             (u32)(next_op - 0x6000u) < 0x3000u &&
+             ((cur_op >> 3) & 7u) == ((next_op >> 3) & 7u))) {
           thumb_fused = cgba_thumb_try_peephole(
             &translation_ptr, cur_op, next_op,
             &pc, &cycle_count, &block_data_position, &block_exit_position,
@@ -5837,20 +5815,20 @@ bool translate_block_thumb(u32 pc, bool ram_region)
           }
         }
       }
-      /* Proven-IWRAM-SP span for isolated `LDR/STR rd, [sp, #imm]` (off <= 60).
-       * Validates canonical aligned IWRAM SP ONCE at the first SP access in a
-       * straight-line span of >=2 SP accesses (deopting to cold interp on
-       * non-IWRAM/unaligned SP), turning each SP access into 8 branchless SH-4
-       * insns (16B, no JSR, compile-time cycle fold, full reg forwarding). */
+      /* Unified proven-IWRAM-SP span for both isolated and consecutive
+       * `LDR/STR rd, [sp, #imm]` (off <= 60). Validates canonical aligned
+       * IWRAM SP + store SMC tags ONCE at the first SP access in a straight-
+       * line span of >=2 SP accesses (deopting to cold interp on miss), then
+       * batches any consecutive covered SP ops under a single `iwram_bias + SP`
+       * pointer (5 insns/op, compile-time cycle fold, full reg forwarding). */
       if (!thumb_fused && allow_fuse &&
           (cur_op & 0xF000u) == 0x9000u &&
           ((cur_op & 0xFFu) <= 15u)) {
         u32 sp_off = (cur_op & 0xFFu) << 2;
         int sp_is_load = (int)((cur_op >> 11) & 1u);
-        unsigned sp_rd = (cur_op >> 8) & 7u;
         if (!sp_span_valid) {
-          /* Forward scan across straight-line instructions (peeking across
-           * short forward CMP+BGE+ADD joins whose update_cycles will clear). */
+          /* Forward scan across straight-line instructions up to any join
+           * seam, branch/SWI, SP write, cheat hook, or 4 KiB page boundary. */
           s32 scan = block_data_position;
           u32 scan_pc = pc;
           int sp_cnt = 0, sp_has_st = 0;
@@ -5859,8 +5837,7 @@ bool translate_block_thumb(u32 pc, bool ram_region)
                  scan_pc != cheat_hook) {
             u32 sop = readaddress16(pc_address_block, scan_pc & 0x0FFFu);
             u32 shi = sop >> 8;
-            if (scan > block_data_position &&
-                (block_data[scan].update_cycles & 1u))
+            if (scan > block_data_position && block_data[scan].update_cycles)
               break;
             if ((sop & 0xF000u) == 0x9000u) {
               u32 so = (sop & 0xFFu) << 2;
@@ -5876,12 +5853,9 @@ bool translate_block_thumb(u32 pc, bool ram_region)
                        shi == 0xBCu || shi == 0xBDu ||
                        (sop & 0xFF80u) == 0x4700u ||
                        ((shi == 0x44u || shi == 0x46u) &&
-                        (((sop & 7u) | ((sop >> 4) & 8u)) == 13u))) {
-              break; /* SP write or BX */
-            } else if (shi >= 0xD0u) {
-              /* Allow peeking over BGE +2 (0xDA00); stop at any other branch/SWI. */
-              if (sop != 0xDA00u)
-                break;
+                        (((sop & 7u) | ((sop >> 4) & 8u)) == 13u)) ||
+                       shi >= 0xD0u) {
+              break; /* SP write, BX, branch, or SWI */
             }
             scan++;
             scan_pc += 2u;
@@ -5954,47 +5928,76 @@ bool translate_block_thumb(u32 pc, bool ram_region)
         if (sp_span_valid && sp_off <= sp_span_max_off &&
             (sp_is_load ||
              (sp_span_valid == 2 && (sp_span_store_wmask & (1u << (sp_off >> 2)))))) {
-          u8 *forward_start = translation_ptr;
+          u32 batch_ops[8];
+          int rcnt = 1, k;
           u32 iwram_bias = (u32)(uintptr_t)(iwram + 0x8000) - 0x03000000u;
-          sh4g_litseg_reserve(&translation_ptr, 1);
+          u8 *forward_start;
+          batch_ops[0] = cur_op;
+          while (rcnt < 8 &&
+                 block_data_position + rcnt < num_insns &&
+                 !block_data[block_data_position + rcnt].update_cycles &&
+                 (pc + (u32)(rcnt * 2)) != cheat_hook &&
+                 ((pc + (u32)(rcnt * 2)) >> 12) == pc_region) {
+            u32 rop = readaddress16(pc_address_block, (pc + (u32)(rcnt * 2)) & 0x0FFFu);
+            u32 roff;
+            int ris_load;
+            if ((rop & 0xF000u) != 0x9000u)
+              break;
+            roff = (rop & 0xFFu) << 2;
+            ris_load = (int)((rop >> 11) & 1u);
+            if (roff > sp_span_max_off ||
+                (!ris_load && !(sp_span_valid == 2 &&
+                                (sp_span_store_wmask & (1u << (roff >> 2))))))
+              break;
+            batch_ops[rcnt++] = rop;
+          }
+          sh4g_litseg_reserve_bytes(&translation_ptr, 1, (u32)(16 + rcnt * 12));
+          forward_start = translation_ptr;
           if (!sp_is_load) {
-            /* Load store value FIRST so it can consume forwarding from prev op. */
+            /* Load first store value BEFORE iwram_bias so it can consume
+             * forwarding from the immediately preceding instruction. */
             sh4_codegen cg = sh4g_open(&translation_ptr);
-            sh4_emit_load_greg(&cg, sp_rd, SH4_REG_T1);
+            sh4_emit_load_greg(&cg, (cur_op >> 8) & 7u, SH4_REG_T1);
             sh4g_close(&translation_ptr, &cg);
           }
           sh4g_const(&translation_ptr, iwram_bias, SH4_REG_RET);
           { sh4_codegen cg = sh4g_open(&translation_ptr);
             sh4_emit_load_greg(&cg, 13, SH4_REG_T2);    /* R3 = SP */
             sh4_emit_add_reg(&cg, SH4_REG_RET, SH4_REG_T2);
-            if (sp_is_load) {
-              if (sp_off == 0u) sh4_emit_mov_l_load(&cg, SH4_REG_T2, SH4_REG_T1);
-              else              sh4_emit_mov_l_load_disp(&cg, SH4_REG_T2, SH4_REG_T1, sp_off >> 2);
-              sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
-              sh4_emit_swap_w(&cg, SH4_REG_T1, SH4_REG_T1);
-              sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
-              sh4_emit_store_greg(&cg, SH4_REG_T1, sp_rd);
-            } else {
-              sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
-              sh4_emit_swap_w(&cg, SH4_REG_T1, SH4_REG_T1);
-              sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
-              if (sp_off == 0u) sh4_emit_mov_l_store(&cg, SH4_REG_T1, SH4_REG_T2);
-              else              sh4_emit_mov_l_store_disp(&cg, SH4_REG_T1, SH4_REG_T2, sp_off >> 2);
+            for (k = 0; k < rcnt; k++) {
+              u32 opk = batch_ops[k];
+              u32 w = opk & 0xFFu;
+              unsigned rdk = (opk >> 8) & 7u;
+              if ((opk >> 11) & 1u) {
+                if (w == 0u) sh4_emit_mov_l_load(&cg, SH4_REG_T2, SH4_REG_T1);
+                else         sh4_emit_mov_l_load_disp(&cg, SH4_REG_T2, SH4_REG_T1, w);
+                sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
+                sh4_emit_swap_w(&cg, SH4_REG_T1, SH4_REG_T1);
+                sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
+                sh4_emit_store_greg(&cg, SH4_REG_T1, rdk);
+                sh4_thumb_const_kill(rdk);
+              } else {
+                if (k > 0)
+                  sh4_emit_load_greg(&cg, rdk, SH4_REG_T1);
+                sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
+                sh4_emit_swap_w(&cg, SH4_REG_T1, SH4_REG_T1);
+                sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
+                if (w == 0u) sh4_emit_mov_l_store(&cg, SH4_REG_T1, SH4_REG_T2);
+                else         sh4_emit_mov_l_store_disp(&cg, SH4_REG_T1, SH4_REG_T2, w);
+              }
             }
             sh4g_close(&translation_ptr, &cg); }
-          cycle_count += 1u; /* IWRAM nseq cost folded into compile-time budget */
-          if (sp_is_load) {
-            sh4_thumb_const_kill(sp_rd);
-            if (translation_ptr > forward_start && translation_ptr[-2] == 0x1Eu)
-              sh4_greg_forward_finish(forward_start, translation_ptr, 1);
-            else
-              sh4_greg_forward_reset();
-          } else {
+          /* Fold fetch cycles for ops 1..rcnt-1 and rcnt IWRAM nseq cycles. */
+          cycle_count += pc_seq_cycles * (u32)(rcnt - 1) + (u32)rcnt;
+          if (((batch_ops[rcnt - 1] >> 11) & 1u) &&
+              translation_ptr > forward_start && translation_ptr[-2] == 0x1Eu)
+            sh4_greg_forward_finish(forward_start, translation_ptr, 1);
+          else
             sh4_greg_forward_reset();
-          }
-          last_opcode = opcode;
-          opcode = cur_op;
-          pc += 2u;
+          last_opcode = (rcnt >= 2) ? batch_ops[rcnt - 2] : opcode;
+          opcode = batch_ops[rcnt - 1];
+          block_data_position += rcnt - 1;
+          pc += (u32)(rcnt * 2);
           sh4g_litseg_maybe_flush(&translation_ptr);
           thumb_fused = 1;
         }
@@ -6037,7 +6040,6 @@ bool translate_block_thumb(u32 pc, bool ram_region)
             (CGBA_SH4_COMPACT_FASTMEM_TUPLE &&
              cycle_count <= 0xFFFFu &&
              sh4g_thumb_ldst_is_load(opcode) &&
-             !sh4g_thumb_ldst_runtime_io_candidate(opcode) &&
              ((opcode & 0xF800u) == 0x4800u ||
               (opcode & 0xF000u) == 0x5000u ||
               (opcode & 0xF000u) == 0x6000u ||
