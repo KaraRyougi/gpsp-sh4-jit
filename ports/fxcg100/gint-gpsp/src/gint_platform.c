@@ -1180,20 +1180,31 @@ int fxcg100_lcd_is_synced(void)
 	return lcd_frame_synced && !lcd_os_overlay_dirty;
 }
 
+extern void cgba_copy_32b_sh4(void *dst, const void *src, uint32_t nbytes);
+
 typedef void (*cgba_hscale_fn)(const uint16_t *, uint16_t *);
 
 static cgba_hscale_fn hscale_320_for(uint32_t f)
 {
 	if (f == CGBA_SCALE_FILTER_CRISP) return cgba_scale_row_240_320_crisp;
 	if (f == CGBA_SCALE_FILTER_SHARP) return cgba_scale_row_240_320_sharp;
+#if defined(__sh__) && !defined(CGBA_HOST_TEST)
+	return cgba_scale_row_240_320_sh4;
+#else
 	return cgba_scale_row_240_320;
+#endif
 }
 
 static cgba_hscale_fn hscale_384_for(uint32_t f)
 {
 	if (f == CGBA_SCALE_FILTER_CRISP) return cgba_scale_row_240_384_crisp;
+#if defined(__sh__) && !defined(CGBA_HOST_TEST)
+	if (f == CGBA_SCALE_FILTER_SHARP) return cgba_scale_row_240_384_sharp_sh4;
+	return cgba_scale_row_240_384_sh4;
+#else
 	if (f == CGBA_SCALE_FILTER_SHARP) return cgba_scale_row_240_384_sharp;
 	return cgba_scale_row_240_384;
+#endif
 }
 
 /* One 320px scratch row (4:3 middle row) + two cached hscaled rows with
@@ -1203,11 +1214,33 @@ static uint16_t scale_hrow[2][LCD_W] __attribute__((aligned(4)));
 static int scale_hrow_idx[2];
 static cgba_hscale_fn scale_hrow_fn;   /* selected fullscreen hscaler */
 
+static int dirty_rows_any(const uint32_t *mask, unsigned y0, unsigned y1)
+{
+	if (!mask)
+		return 1;
+	if (y1 > GBA_H)
+		y1 = GBA_H;
+	while (y0 < y1) {
+		unsigned w = y0 >> 5;
+		unsigned lo = y0 & 31u;
+		unsigned hi = (w + 1u) << 5;
+		if (hi > y1)
+			hi = y1;
+		unsigned n = hi - y0;
+		uint32_t bits = (n == 32u) ? 0xFFFFFFFFu : (((1u << n) - 1u) << lo);
+		if (mask[w] & bits)
+			return 1;
+		y0 = hi;
+	}
+	return 0;
+}
+
 /* 4:3: 53 groups of 3 source rows -> 4 output rows. Horizontal filter via
  * the selected 240->320 scaler; vertical taps {A, .75, 1.5, 2.25} composed
  * per filter (SMOOTH blends r1+r2, SHARP only r2, CRISP neither). 320px
  * wide, centered (ox=32), top-aligned; the window stays 4-row aligned. */
-static void blit_gba_scaled_43(const uint16_t *pixels)
+static void blit_gba_scaled_43(const uint16_t *pixels,
+	const uint32_t *dirty_mask)
 {
 	uint16_t *const strips[2] = {
 		(uint16_t *)STRIP_BUF0,
@@ -1217,16 +1250,25 @@ static void blit_gba_scaled_43(const uint16_t *pixels)
 	uint32_t filter = lcd_scale_filter;
 	int ox = (DWIDTH - 320) / 2;
 	int oy = ((DHEIGHT - 212) / 2) & ~3;    /* 4-aligned DMA window */
-	int group = 0, y = 0, bi = 0;
+	int group = 0, y = 0, bi = 0, started = 0;
 	uint32_t sync_t0 = 0;
 
-	wait_lcd_dma();
 	while (y < 212) {
 		int rows = (212 - y < STRIP_43_LINES) ? 212 - y : STRIP_43_LINES;
+		int groups_here = rows / 4;
+		if (dirty_mask && !dirty_rows_any(dirty_mask,
+				(unsigned)(group * 3),
+				(unsigned)((group + groups_here) * 3))) {
+			group += groups_here;
+			y += rows;
+			continue;
+		}
+		if (!started)
+			wait_lcd_dma();
 		uint16_t *sp = strips[bi];
 		int g;
 
-		for (g = 0; g < rows / 4; g++, group++) {
+		for (g = 0; g < groups_here; g++, group++) {
 			const uint16_t *A = pixels + (group * 3 + 0) * GBA_W;
 			const uint16_t *B = pixels + (group * 3 + 1) * GBA_W;
 			const uint16_t *C = pixels + (group * 3 + 2) * GBA_W;
@@ -1246,20 +1288,24 @@ static void blit_gba_scaled_43(const uint16_t *pixels)
 				cgba_scale_row_avg(r1, r3, r2, 320);
 			} else {                               /* CRISP: A,B,C,C */
 				hs(B, r1);
-				memcpy(r2, r3, 320 * sizeof(uint16_t));
+				cgba_copy_32b_sh4(r2, r3, 320 * sizeof(uint16_t));
 			}
 		}
-		if (y == 0)
-			sync_t0 = cg_sync_before_frame(1u, (uint32_t)oy, 212u);
-		else
+		if (!started) {
+			if (!dirty_mask)
+				sync_t0 = cg_sync_before_frame(1u, (uint32_t)oy, 212u);
+			started = 1;
+		} else {
 			wait_lcd_dma();
-		if (y + rows >= 212)
+		}
+		if (!dirty_mask && y + rows >= 212)
 			cg_sync_after_frame(1u, sync_t0, 212u, (uint32_t)y);
 		start_strip_dma(strips[bi], ox, oy + y, 320, rows);
 		bi ^= 1;
 		y += rows;
 	}
-	lcd_window_partial = 1;
+	if (started)
+		lcd_window_partial = 1;
 	lcd_frame_synced = 1;
 }
 
@@ -1276,7 +1322,8 @@ static const uint16_t *fs_hrow(const uint16_t *pixels, unsigned s)
 	return scale_hrow[slot];
 }
 
-static void blit_gba_scaled_full(const uint16_t *pixels)
+static void blit_gba_scaled_full(const uint16_t *pixels,
+	const uint32_t *dirty_mask)
 {
 	static uint16_t vmap[216];
 	static int vmap_filter = -1;
@@ -1286,7 +1333,7 @@ static void blit_gba_scaled_full(const uint16_t *pixels)
 	};
 	int ox = (DWIDTH - LCD_W) / 2;
 	int oy = ((DHEIGHT - LCD_H) / 2) & ~3;  /* 4-aligned DMA window */
-	int y = 0, bi = 0;
+	int y = 0, bi = 0, started = 0;
 	uint32_t sync_t0 = 0;
 
 	if (vmap_filter != (int)lcd_scale_filter) {
@@ -1296,11 +1343,22 @@ static void blit_gba_scaled_full(const uint16_t *pixels)
 	scale_hrow_fn = hscale_384_for(lcd_scale_filter);
 	scale_hrow_idx[0] = scale_hrow_idx[1] = -1;   /* new frame contents */
 
-	wait_lcd_dma();
 	while (y < LCD_H) {
-		uint16_t *sp = strips[bi];
 		int rows = (LCD_H - y < STRIP_FULL_LINES)
 			? LCD_H - y : STRIP_FULL_LINES;
+		if (dirty_mask) {
+			unsigned s0 = vmap[y] & CGBA_SCALE_VROW;
+			uint16_t vlast = vmap[y + rows - 1];
+			unsigned s1 = (vlast & CGBA_SCALE_VROW) +
+				((vlast & CGBA_SCALE_VBLEND) ? 2u : 1u);
+			if (!dirty_rows_any(dirty_mask, s0, s1)) {
+				y += rows;
+				continue;
+			}
+		}
+		if (!started)
+			wait_lcd_dma();
+		uint16_t *sp = strips[bi];
 		int r;
 
 		for (r = 0; r < rows; r++) {
@@ -1308,30 +1366,46 @@ static void blit_gba_scaled_full(const uint16_t *pixels)
 			unsigned src = v & CGBA_SCALE_VROW;
 			uint16_t *out = sp + r * LCD_W;
 
-			if (v & CGBA_SCALE_VBLEND)
-				cgba_scale_row_avg(fs_hrow(pixels, src),
-					fs_hrow(pixels, src + 1), out, LCD_W);
-			else
-				memcpy(out, fs_hrow(pixels, src),
+			if (v & CGBA_SCALE_VBLEND) {
+				const uint16_t *a = fs_hrow(pixels, src);
+				const uint16_t *b = fs_hrow(pixels, src + 1);
+				if (r + 1 < rows && vmap[y + r + 1] == v) {
+					cgba_scale_row_avg_dup2(a, b, out,
+						out + LCD_W, LCD_W);
+					r++;
+				} else {
+					cgba_scale_row_avg(a, b, out, LCD_W);
+				}
+			} else if (scale_hrow_idx[src & 1] != (int)src &&
+				   (y + r + 1 >= LCD_H ||
+				    (vmap[y + r + 1] & CGBA_SCALE_VROW) != src)) {
+				/* Single-use unblended row: scale straight into
+				 * the DMA strip without touching scale_hrow. */
+				scale_hrow_fn(pixels + src * GBA_W, out);
+			} else {
+				cgba_copy_32b_sh4(out, fs_hrow(pixels, src),
 					LCD_W * sizeof(uint16_t));
+			}
 		}
-		if (y == 0)
-			sync_t0 = cg_sync_before_frame(2u, (uint32_t)oy, LCD_H);
-		else
+		if (!started) {
+			if (!dirty_mask)
+				sync_t0 = cg_sync_before_frame(2u, (uint32_t)oy, LCD_H);
+			started = 1;
+		} else {
 			wait_lcd_dma();
-		if (y + rows >= LCD_H)
+		}
+		if (!dirty_mask && y + rows >= LCD_H)
 			cg_sync_after_frame(2u, sync_t0, LCD_H, (uint32_t)y);
 		start_strip_dma(strips[bi], ox, oy + y, LCD_W, rows);
 		bi ^= 1;
 		y += rows;
 	}
-	lcd_window_partial = 1;
+	if (started)
+		lcd_window_partial = 1;
 	lcd_frame_synced = 1;
 }
 
-extern void cgba_copy_32b_sh4(void *dst, const void *src, uint32_t nbytes);
-
-void fxcg100_lcd_blit_gba(const uint16_t *pixels)
+static void blit_gba_impl(const uint16_t *pixels, const uint32_t *dirty_mask)
 {
 	int ox = (DWIDTH - GBA_W) / 2;   /* 78 */
 	int oy = (DHEIGHT - GBA_H) / 2;  /* 32 (4-aligned) */
@@ -1339,18 +1413,20 @@ void fxcg100_lcd_blit_gba(const uint16_t *pixels)
 		(uint16_t *)STRIP_BUF0,
 		(uint16_t *)STRIP_BUF1,
 	};
-	int y, bi;
+	int y, bi, started;
 	int rows;
 
 	if(!pixels)
 		return;
+	if(!lcd_frame_synced || lcd_os_overlay_dirty || cg_sync.enabled)
+		dirty_mask = NULL;
 	clear_os_overlay_before_blit();
 	if(lcd_scale_mode == 1) {
-		blit_gba_scaled_43(pixels);
+		blit_gba_scaled_43(pixels, dirty_mask);
 		return;
 	}
 	if(lcd_scale_mode == 2) {
-		blit_gba_scaled_full(pixels);
+		blit_gba_scaled_full(pixels, dirty_mask);
 		return;
 	}
 
@@ -1358,28 +1434,37 @@ void fxcg100_lcd_blit_gba(const uint16_t *pixels)
 	 * Present the frame as strips DMA'd out of the on-chip banks selected above.
 	 * Double-buffered: prepare the next strip while the current DMA runs.
 	 */
-	wait_lcd_dma();
 	{
-		uint32_t sync_t0;
+		uint32_t sync_t0 = 0;
 
 		y = 0;
-		rows = STRIP_LINES;
-		cgba_copy_32b_sh4(strips[0], &pixels[y * GBA_W],
-			(uint32_t)(rows * GBA_W * sizeof(uint16_t)));
-		sync_t0 = cg_sync_before_frame(0u, (uint32_t)oy, GBA_H);
-		start_strip_dma(strips[0], ox, oy + y, GBA_W, rows);
-
-		bi = 1;
-		y += rows;
+		bi = 0;
+		started = 0;
 		while(y < GBA_H) {
 			rows = (y + STRIP_LINES > GBA_H) ? (GBA_H - y) : STRIP_LINES;
-			cgba_copy_32b_sh4(strips[bi], &pixels[y * GBA_W],
-				(uint32_t)(rows * GBA_W * sizeof(uint16_t)));
-			wait_lcd_dma();   /* wait for the previous strip's DMA */
-			if(y + rows >= GBA_H)
-				cg_sync_after_frame(0u, sync_t0, GBA_H, (uint32_t)y);
-			start_strip_dma(strips[bi], ox, oy + y, GBA_W, rows);
-			bi ^= 1;
+			if(dirty_mask && !dirty_rows_any(dirty_mask,
+					(unsigned)y, (unsigned)(y + rows))) {
+				y += rows;
+				continue;
+			}
+			if(!started) {
+				wait_lcd_dma();
+				cgba_copy_32b_sh4(strips[0], &pixels[y * GBA_W],
+					(uint32_t)(rows * GBA_W * sizeof(uint16_t)));
+				if(!dirty_mask)
+					sync_t0 = cg_sync_before_frame(0u, (uint32_t)oy, GBA_H);
+				start_strip_dma(strips[0], ox, oy + y, GBA_W, rows);
+				bi = 1;
+				started = 1;
+			} else {
+				cgba_copy_32b_sh4(strips[bi], &pixels[y * GBA_W],
+					(uint32_t)(rows * GBA_W * sizeof(uint16_t)));
+				wait_lcd_dma();   /* wait for the previous strip's DMA */
+				if(!dirty_mask && y + rows >= GBA_H)
+					cg_sync_after_frame(0u, sync_t0, GBA_H, (uint32_t)y);
+				start_strip_dma(strips[bi], ox, oy + y, GBA_W, rows);
+				bi ^= 1;
+			}
 			y += rows;
 		}
 	}
@@ -1393,8 +1478,20 @@ void fxcg100_lcd_blit_gba(const uint16_t *pixels)
 	 * menu/status path's restore_full_window() before any gint push. The frame
 	 * buffer itself is free to be overwritten (the DMA reads on-chip RAM).
 	 */
-	lcd_window_partial = 1;   /* window narrowed; menu restores it */
+	if(started)
+		lcd_window_partial = 1;   /* window narrowed; menu restores it */
 	lcd_frame_synced = 1;
+}
+
+void fxcg100_lcd_blit_gba(const uint16_t *pixels)
+{
+	blit_gba_impl(pixels, NULL);
+}
+
+void fxcg100_lcd_blit_gba_dirty(const uint16_t *pixels,
+	const uint32_t *dirty_row_mask)
+{
+	blit_gba_impl(pixels, dirty_row_mask);
 }
 
 /* ---- Scanline-streamed unscaled presentation ---------------------------

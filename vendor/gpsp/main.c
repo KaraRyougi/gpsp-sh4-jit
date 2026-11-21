@@ -481,7 +481,7 @@ static __attribute__((noinline)) unsigned cgba_ugba_idle_fastforward(
 }
 #endif
 
-u32 function_cc update_gba(int remaining_cycles)
+CGBA_HOT_TEXT u32 function_cc update_gba(int remaining_cycles)
 {
   u32 changed_pc = 0;
   u32 frame_complete = 0;

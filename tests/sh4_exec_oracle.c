@@ -74,6 +74,20 @@ void sh4_helper_exit(u32 pc){(void)pc;}
 void sh4_op2_pc_mem_tramp(void){}
 void sh4_fastmem_pc_mem_tramp(void){}
 void sh4_fastmem_compact8_tramp(void){}
+static struct { u32 ret_pc, pc_flags, opcode, cycle_count; } orc_fm_ool[64];
+static unsigned orc_fm_ool_n;
+int cgba_sh4_fm_ool_can_record(const u8 *tp){(void)tp;return 1;}
+void cgba_sh4_fm_ool_push(u32 r, u32 p, u32 o, u32 c){
+  unsigned idx = orc_fm_ool_n++ & 63u;
+  orc_fm_ool[idx].ret_pc = r; orc_fm_ool[idx].pc_flags = p;
+  orc_fm_ool[idx].opcode = o; orc_fm_ool[idx].cycle_count = c;
+}
+void cgba_sh4_fm_ool_reset_rom(void){ orc_fm_ool_n = 0; }
+void cgba_sh4_fm_ool_reset_ram(void){ orc_fm_ool_n = 0; }
+u8 *cgba_sh4_fm_ool_rom_limit(u32 t){(void)t;return NULL;}
+struct cgba_sh4_fm_desc;
+const struct cgba_sh4_fm_desc *cgba_sh4_fm_ool_cache[256];
+const struct cgba_sh4_fm_desc *cgba_sh4_fastmem_ool_lookup(u32 r){(void)r;return 0;}
 void sh4_op2_pc_tramp(void){}
 void sh4_op2_tramp(void){}
 void sh4_indirect_branch_thumb(u32 a){(void)a;}
@@ -289,6 +303,9 @@ static int run_at(u32 pc, u32 pc_end)
 #if CGBA_SH4_PIN_GUEST_R0
   R[SH4_REG_GUEST_R0] = g_reg[0];
 #endif
+#if CGBA_SH4_PIN_GUEST_R1
+  R[SH4_REG_GUEST_R1] = g_reg[1];
+#endif
   R[SH4_REG_VEC] = (u32)(uintptr_t)orc_vec_table;
   R[SH4_REG_BEXIT] = (u32)(uintptr_t)sh4_block_exit;
   unmodeled[0] = 0;
@@ -348,6 +365,9 @@ static int run_at(u32 pc, u32 pc_end)
         g_reg[SH4_GREG_CPSR] = R[SH4_REG_CPSR];
 #if CGBA_SH4_PIN_GUEST_R0
         g_reg[0] = R[SH4_REG_GUEST_R0];
+#endif
+#if CGBA_SH4_PIN_GUEST_R1
+        g_reg[1] = R[SH4_REG_GUEST_R1];
 #endif
         orc_final_cycles = R[SH4_REG_CYCLES];
         return 1;                                      /* expected PC redispatch */
@@ -426,6 +446,7 @@ static int run_at(u32 pc, u32 pc_end)
     }
     else if ((op & 0xF0FF) == 0x4000) { T = (int)(R[nn] >> 31); R[nn] <<= 1; }
     else if ((op & 0xF0FF) == 0x4001) { T = (int)(R[nn] & 1); R[nn] >>= 1; }
+    else if ((op & 0xF0FF) == 0x4021) { T = (int)(R[nn] & 1); R[nn] = (u32)((s32)R[nn] >> 1); }
     else if ((op & 0xF0FF) == 0x4008) R[nn] <<= 2;
     else if ((op & 0xF0FF) == 0x4009) R[nn] >>= 2;
     else if ((op & 0xF0FF) == 0x4018) R[nn] <<= 8;
@@ -542,6 +563,9 @@ static int run_at(u32 pc, u32 pc_end)
   g_reg[SH4_GREG_CPSR] = R[SH4_REG_CPSR];
 #if CGBA_SH4_PIN_GUEST_R0
   g_reg[0] = R[SH4_REG_GUEST_R0];
+#endif
+#if CGBA_SH4_PIN_GUEST_R1
+  g_reg[1] = R[SH4_REG_GUEST_R1];
 #endif
   orc_final_cycles = R[SH4_REG_CYCLES];
   return 1;
@@ -813,7 +837,7 @@ static void check_register_forwarding(void)
                    rd, v, boundary, enabled); fails++;
           }
         }
-        if (sizes[0] - sizes[1] != (rd && !boundary ? 2u : 0u)) {
+        if (sizes[0] - sizes[1] != (sh4_pinned_reg(rd) < 0 && !boundary ? 2u : 0u)) {
           printf("FAIL register forwarding size rd=%u boundary=%u\n", rd, boundary); fails++;
         }
       }
@@ -2509,6 +2533,123 @@ int main(void)
         if (g_reg[i] != want_reg[i]) {
           printf("FAIL same-rn %s: r%d=%08X want %08X\n",
                  rn_cases[ci].nm, i, g_reg[i], want_reg[i]);
+          fails++;
+          break;
+        }
+      }
+    }
+  }
+
+  /* ---- 4-slot R4..R7 BBRA straight-line Thumb ALU run oracle (2000 runs) --- */
+  {
+    u32 rng = 0xC0FFEE42u;
+    for (int trial = 0; trial < 2000; trial++) {
+      u16 rops[16];
+      int rlen = 2 + (int)((rng = rng * 1664525u + 1013904223u) % 15u);
+      for (int k = 0; k < rlen; k++) {
+        rng = rng * 1664525u + 1013904223u;
+        unsigned kind = rng % 10u;
+        unsigned rd = (rng >> 4) & 7u, rn = (rng >> 7) & 7u, rm = (rng >> 10) & 7u;
+        unsigned imm8 = (rng >> 16) & 0xFFu;
+        if (kind == 0) {                      /* LSL/LSR/ASR #imm5 */
+          unsigned sub = (rng >> 13) % 3u;
+          unsigned imm5 = (rng >> 15) & 31u;
+          rops[k] = (u16)((sub << 11) | (imm5 << 6) | (rm << 3) | rd);
+        } else if (kind == 1 && k + 1 < rlen) { /* LSL+LSR/ASR extend pair */
+          unsigned is_b = (rng >> 13) & 1u;
+          unsigned is_s = (rng >> 14) & 1u;
+          rops[k] = (u16)((is_b ? 0x0600u : 0x0400u) | (rm << 3) | rd);
+          rops[k + 1] = (u16)((is_s ? (is_b ? 0x1600u : 0x1400u)
+                                    : (is_b ? 0x0E00u : 0x0C00u)) | (rd << 3) | rd);
+          k++;
+        } else if (kind == 2) {               /* ADD/SUB reg */
+          unsigned is_sub = (rng >> 13) & 1u;
+          rops[k] = (u16)(0x1800u | (is_sub << 9) | (rm << 6) | (rn << 3) | rd);
+        } else if (kind == 3) {               /* ADD/SUB imm3 */
+          unsigned is_sub = (rng >> 13) & 1u;
+          unsigned imm3 = (rng >> 14) & 7u;
+          rops[k] = (u16)(0x1C00u | (is_sub << 9) | (imm3 << 6) | (rn << 3) | rd);
+        } else if (kind == 4) {               /* MOV imm8 */
+          rops[k] = (u16)(0x2000u | (rd << 8) | imm8);
+        } else if (kind == 5) {               /* ADD/SUB imm8 */
+          unsigned is_sub = (rng >> 13) & 1u;
+          if ((rng & 0x300000u) == 0u) imm8 = 255u;
+          else if ((rng & 0x300000u) == 0x100000u) imm8 = 128u;
+          rops[k] = (u16)(0x3000u | (is_sub << 11) | (rd << 8) | imm8);
+        } else if (kind == 6) {               /* ALU reg-reg */
+          static const u8 alus[7] = { 0x0, 0x1, 0x9, 0xC, 0xD, 0xE, 0xF };
+          unsigned alu = alus[(rng >> 13) % 7u];
+          rops[k] = (u16)(0x4000u | (alu << 6) | (rm << 3) | rd);
+        } else if (kind == 7) {               /* ADD/MOV Hd, Hm */
+          unsigned hd = (rng >> 4) % 15u, hs = (rng >> 8) % 15u;
+          unsigned is_mov = (rng >> 13) & 1u;
+          rops[k] = (u16)((is_mov ? 0x4600u : 0x4400u) |
+                          ((hd & 8u) << 4) | (hs << 3) | (hd & 7u));
+        } else {                              /* ADD Rd, SP, #imm8*4 */
+          rops[k] = (u16)(0xA800u | (rd << 8) | imm8);
+        }
+      }
+      static u8 bbuf[4096];
+      u8 *bp = bbuf;
+      u32 wmask = 0u;
+      if (!sh4g_thumb_alu_run_native(&bp, rops, rlen, &wmask))
+        continue;
+      cases++;
+      u32 want[16];
+      memset(g_reg, 0, sizeof g_reg);
+      for (int i = 0; i < 16; i++) {
+        rng = rng * 1664525u + 1013904223u;
+        g_reg[i] = want[i] = rng;
+      }
+      g_reg[SH4_GREG_CPSR] = 0xA000003Fu;
+      for (int k = 0; k < rlen; k++) {
+        u32 op = rops[k];
+        unsigned hi = (op >> 8) & 0xFFu;
+        if (hi <= 0x17u) {
+          unsigned rd = op & 7u, rm = (op >> 3) & 7u;
+          unsigned imm5 = (op >> 6) & 31u, sub = (op >> 11) & 3u;
+          if (sub == 0u)      want[rd] = want[rm] << imm5;
+          else if (sub == 1u) want[rd] = imm5 ? (want[rm] >> imm5) : 0u;
+          else                want[rd] = imm5 ? (u32)((s32)want[rm] >> imm5)
+                                              : (u32)((s32)want[rm] >> 31);
+        } else if (hi <= 0x1Fu) {
+          unsigned rd = op & 7u, rn = (op >> 3) & 7u, arg = (op >> 6) & 7u;
+          unsigned is_sub = (op >> 9) & 1u, is_imm = (op >> 10) & 1u;
+          u32 rhs = is_imm ? arg : want[arg];
+          want[rd] = is_sub ? (want[rn] - rhs) : (want[rn] + rhs);
+        } else if (hi <= 0x27u) {
+          want[(op >> 8) & 7u] = op & 0xFFu;
+        } else if (hi >= 0x30u && hi <= 0x3Fu) {
+          unsigned rd = (op >> 8) & 7u, is_sub = (op >> 11) & 1u;
+          want[rd] = is_sub ? (want[rd] - (op & 0xFFu)) : (want[rd] + (op & 0xFFu));
+        } else if (hi >= 0x40u && hi <= 0x43u) {
+          unsigned alu = (op >> 6) & 0xFu, rs = (op >> 3) & 7u, rd = op & 7u;
+          switch (alu) {
+          case 0x0u: want[rd] &= want[rs]; break;
+          case 0x1u: want[rd] ^= want[rs]; break;
+          case 0x9u: want[rd] = 0u - want[rs]; break;
+          case 0xCu: want[rd] |= want[rs]; break;
+          case 0xDu: want[rd] *= want[rs]; break;
+          case 0xEu: want[rd] &= ~want[rs]; break;
+          case 0xFu: want[rd] = ~want[rs]; break;
+          }
+        } else if (hi == 0x44u || hi == 0x46u) {
+          unsigned rd = (op & 7u) | ((op >> 4) & 8u), rs = (op >> 3) & 0xFu;
+          want[rd] = (hi == 0x46u) ? want[rs] : (want[rd] + want[rs]);
+        } else {
+          want[(op >> 8) & 7u] = want[13] + ((op & 0xFFu) << 2);
+        }
+      }
+      if (!run_sh4x(bbuf, (size_t)(bp - bbuf)) ||
+          g_reg[SH4_GREG_CPSR] != 0xA000003Fu) {
+        printf("FAIL bbra trial=%d: interpreter=%s\n", trial, unmodeled);
+        fails++;
+        continue;
+      }
+      for (int i = 0; i < 15; i++) {
+        if (g_reg[i] != want[i]) {
+          printf("FAIL bbra trial=%d len=%d r%d=%08X want %08X\n",
+                 trial, rlen, i, g_reg[i], want[i]);
           fails++;
           break;
         }

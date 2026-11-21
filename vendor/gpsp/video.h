@@ -25,6 +25,7 @@ void video_reload_counters(void);
 #if defined(CGBA_VIDEO_DIRTY_SCANLINE) && CGBA_VIDEO_DIRTY_SCANLINE
 void video_invalidate_scanline_cache(u32 start_y, u32 end_y);
 extern u32 cgba_video_frame_dirty_rows;
+extern u32 cgba_video_frame_dirty_row_mask[5];
 #else
 static inline void video_invalidate_scanline_cache(u32 start_y, u32 end_y)
 { (void)start_y; (void)end_y; }

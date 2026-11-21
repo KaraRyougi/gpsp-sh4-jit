@@ -1485,7 +1485,11 @@ static void blit_portrait_1x(const uint16_t *pixels, cp_rect img)
  * 4:3 mode, composed in place in the strip. */
 static void blit_portrait_43(const uint16_t *pixels, cp_rect img)
 {
+#if defined(__sh__) && !defined(CGBA_HOST_TEST)
+	void (*hs)(const uint16_t *, uint16_t *) = cgba_scale_row_240_320_sh4;
+#else
 	void (*hs)(const uint16_t *, uint16_t *) = cgba_scale_row_240_320;
+#endif
 	int groups = img.h / 4, group;
 	int strips = (groups + 2) / 3, s;
 	int in_order = cp_view_is_flipped(cp_view, cp_rotation)
@@ -2279,6 +2283,13 @@ void fxcg100_lcd_blit_gba(const uint16_t *pixels)
 	/* The last strip is left in flight on purpose: its data is in on-chip
 	 * RAM, and every later panel access goes through lcd_begin(), which
 	 * waits for it. The next frame's emulation overlaps the transfer. */
+}
+
+void fxcg100_lcd_blit_gba_dirty(const uint16_t *pixels,
+	const uint32_t *dirty_row_mask)
+{
+	(void)dirty_row_mask;
+	fxcg100_lcd_blit_gba(pixels);
 }
 
 /* Scanline streaming (an fx-CG experiment) is not implemented here. */

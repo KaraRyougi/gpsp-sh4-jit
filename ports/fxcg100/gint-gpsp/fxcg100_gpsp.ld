@@ -58,6 +58,20 @@ SECTIONS
 		_gint_tlbh_end = . ;
 		_gint_tlbh_size = ABSOLUTE(. - _gint_tlbh_start);
 
+		/*
+			Co-locate the hottest per-frame emulation loops into the lowest
+			1-2 64 KiB P0 pages so the SH7305's 4-entry hardware ITLB does not
+			thrash bouncing across the ~650 KiB add-in .text image.
+		*/
+		*(.text.cgba.hot .text.cgba.hot.*)
+		*sh4_stub.S.obj(.text .text.*)
+		*gpsp/main.c.obj(.text .text.*)
+		*sh4_video_4bpp.S.obj(.text .text.*)
+		*sh4_scale.S.obj(.text .text.*)
+		*sh4_interp_helpers.c.obj(.text .text.*)
+		*gba_memory.c.obj(.text .text.*)
+		*video.cc.obj(.text .text.*)
+		*cpu_threaded.c.obj(.text .text.*)
 		*(.text .text.*)
 	} > rom
 

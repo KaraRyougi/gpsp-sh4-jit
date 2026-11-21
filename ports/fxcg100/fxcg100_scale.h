@@ -30,11 +30,24 @@ static inline uint32_t cgba_avg565x2(uint32_t x, uint32_t y)
 	return (x & y) + (((x ^ y) & 0xF7DEF7DEu) >> 1);
 }
 
+#if defined(__sh__) && !defined(CGBA_HOST_TEST)
+extern void cgba_scale_row_240_384_sh4(const uint16_t *src, uint16_t *dst);
+extern void cgba_scale_row_240_384_sharp_sh4(const uint16_t *src, uint16_t *dst);
+extern void cgba_scale_row_240_320_sh4(const uint16_t *src, uint16_t *dst);
+extern void cgba_scale_row_avg_sh4(const uint16_t *a, const uint16_t *b,
+	uint16_t *dst, unsigned n);
+extern void cgba_scale_row_avg_dup2_sh4(const uint16_t *a, const uint16_t *b,
+	uint16_t *dst0, uint16_t *dst1, unsigned n);
+#endif
+
 /* dst[i] = avg(a[i], b[i]) - vertical blend of two already-scaled rows.
- * n must be even; a/b/dst 4-byte aligned. */
+ * n must be a multiple of 8; a/b/dst 4-byte aligned. */
 static inline void cgba_scale_row_avg(const uint16_t *a, const uint16_t *b,
 	uint16_t *dst, unsigned n)
 {
+#if defined(__sh__) && !defined(CGBA_HOST_TEST)
+	cgba_scale_row_avg_sh4(a, b, dst, n);
+#else
 	const uint32_t *a32 = (const uint32_t *)(const void *)a;
 	const uint32_t *b32 = (const uint32_t *)(const void *)b;
 	uint32_t *d32 = (uint32_t *)(void *)dst;
@@ -46,6 +59,34 @@ static inline void cgba_scale_row_avg(const uint16_t *a, const uint16_t *b,
 		d32[i + 2] = cgba_avg565x2(a32[i + 2], b32[i + 2]);
 		d32[i + 3] = cgba_avg565x2(a32[i + 3], b32[i + 3]);
 	}
+#endif
+}
+
+/* Fused duplicate vertical blend: writes avg(a, b) to both dst0 and dst1 in
+ * a single pass (used when consecutive vmap216 entries share the same pair). */
+static inline void cgba_scale_row_avg_dup2(const uint16_t *a, const uint16_t *b,
+	uint16_t *dst0, uint16_t *dst1, unsigned n)
+{
+#if defined(__sh__) && !defined(CGBA_HOST_TEST)
+	cgba_scale_row_avg_dup2_sh4(a, b, dst0, dst1, n);
+#else
+	const uint32_t *a32 = (const uint32_t *)(const void *)a;
+	const uint32_t *b32 = (const uint32_t *)(const void *)b;
+	uint32_t *d0 = (uint32_t *)(void *)dst0;
+	uint32_t *d1 = (uint32_t *)(void *)dst1;
+	unsigned i;
+
+	for (i = 0; i < n / 2; i += 4) {
+		uint32_t v0 = cgba_avg565x2(a32[i + 0], b32[i + 0]);
+		uint32_t v1 = cgba_avg565x2(a32[i + 1], b32[i + 1]);
+		uint32_t v2 = cgba_avg565x2(a32[i + 2], b32[i + 2]);
+		uint32_t v3 = cgba_avg565x2(a32[i + 3], b32[i + 3]);
+		d0[i + 0] = v0; d1[i + 0] = v0;
+		d0[i + 1] = v1; d1[i + 1] = v1;
+		d0[i + 2] = v2; d1[i + 2] = v2;
+		d0[i + 3] = v3; d1[i + 3] = v3;
+	}
+#endif
 }
 
 #if defined(__BIG_ENDIAN__) || \

@@ -235,6 +235,13 @@ void fxcg100_lcd_blit_gba(const uint16_t *pixels)
     lcd_data(pixels[i]);
 }
 
+void fxcg100_lcd_blit_gba_dirty(const uint16_t *pixels,
+                                const uint32_t *dirty_row_mask)
+{
+  (void)dirty_row_mask;
+  fxcg100_lcd_blit_gba(pixels);
+}
+
 uint32_t fxcg100_frame_hash(const uint16_t *pixels)
 {
   uint32_t hash = 2166136261u;

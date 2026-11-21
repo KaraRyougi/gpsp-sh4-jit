@@ -241,6 +241,11 @@ void fxcg100_lcd_status(const char *text);
  * activity so the next gameplay presentation removes any stale border pixels. */
 void fxcg100_lcd_note_os_activity(void);
 void fxcg100_lcd_blit_gba(const uint16_t *pixels);
+/* Present only strips overlapping the 160-bit GBA dirty-row bitmap (5 x u32)
+ * when the LCD GRAM is already synced and VSync timing is not measuring a full
+ * frame; falls back to a full blit otherwise. */
+void fxcg100_lcd_blit_gba_dirty(const uint16_t *pixels,
+                                const uint32_t *dirty_row_mask);
 /* Exact unscaled streaming presenter. begin() returns zero for a scaled mode;
  * scanline() is called after a completed GBA row; end() returns one only when
  * all 160 rows were queued, otherwise the caller performs the normal blit. */

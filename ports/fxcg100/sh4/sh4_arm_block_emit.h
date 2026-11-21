@@ -491,7 +491,7 @@ static inline int sh4g_arm_rmw_block4_ldrsb_mla_native(u8 **tp, const u32 *ops,
         if (mla_rd[j] == regs[i]) {
           word_rs[i] = mla_rs[j];
           word_samp[i]     = (j < 2u) ? SH4_REG_ARG1 : SH4_REG_ARG2;      /* R5=s0, R6=s1 */
-          word_samp[4 + i] = (j < 2u) ? SH4_REG_ARG3 : SH4_REG_FM_REGION; /* R7=s2, R12=s3 */
+          word_samp[4 + i] = (j < 2u) ? SH4_REG_ARG3 : SH4_REG_ARG2;      /* R7=s2, R6=s3 (reloaded after r=0) */
           break;
         }
       }
@@ -551,11 +551,13 @@ static inline int sh4g_arm_rmw_block4_ldrsb_mla_native(u8 **tp, const u32 *ops,
     }
     if (reps == 2) {
       sh4_emit_mov_b_load_inc(&cg, SH4_REG_T2, SH4_REG_ARG3); /* R7 = s2 */
-      sh4_emit_mov_b_load(&cg, SH4_REG_T2, SH4_REG_FM_REGION); /* R12 = s3 */
+      sh4_emit_mov_b_load(&cg, SH4_REG_T2, SH4_REG_T0);       /* R1 = s3 */
       if (!is_signed) {
         sh4_emit_extu_b(&cg, SH4_REG_ARG3, SH4_REG_ARG3);
-        sh4_emit_extu_b(&cg, SH4_REG_FM_REGION, SH4_REG_FM_REGION);
+        sh4_emit_extu_b(&cg, SH4_REG_T0, SH4_REG_T0);
       }
+      /* Stash s3 in reg[SH4_GREG_SAVE] (never live across insns) so R12 stays pinned. */
+      sh4_emit_store_greg(&cg, SH4_REG_T0, SH4_GREG_SAVE);
     }
     sh4g_close(tp, &cg); }
 
@@ -609,6 +611,8 @@ static inline int sh4g_arm_rmw_block4_ldrsb_mla_native(u8 **tp, const u32 *ops,
     }
     for (r = 0; r < reps; r++) {
       int is_last = (r == reps - 1);
+      if (r == 1)
+        sh4_emit_load_greg(&cg, SH4_GREG_SAVE, SH4_REG_ARG2); /* R6 = s3 (s1 dead) */
       for (i = 0; i < 4u; i++) {
         u32 disp = (u32)(r * 4) + i;
         unsigned rs_host;
@@ -635,8 +639,9 @@ static inline int sh4g_arm_rmw_block4_ldrsb_mla_native(u8 **tp, const u32 *ops,
         else            sh4_emit_mov_l_store_disp(&cg, SH4_REG_T1, SH4_REG_T2, disp);
       }
     }
-    /* Commit rTmp = last sample, rI += reps*2, and (if do_wb) rn += reps*16. */
-    sh4_emit_store_greg(&cg, reps == 2 ? SH4_REG_FM_REGION : SH4_REG_ARG2, rTmp);
+    /* Commit rTmp = last sample (R6 holds s1 for reps==1, s3 for reps==2),
+     * rI += reps*2, and (if do_wb) rn += reps*16. */
+    sh4_emit_store_greg(&cg, SH4_REG_ARG2, rTmp);
     sh4_emit_load_greg(&cg, rI, SH4_REG_T0);
     sh4_emit_add_imm(&cg, reps * 2, SH4_REG_T0);
     sh4_emit_store_greg(&cg, SH4_REG_T0, rI);
@@ -1001,8 +1006,10 @@ static inline int sh4g_arm_interp_rmw_mla_native(u8 **tp, const u32 *ops,
   sh4g_vec_load(tp, SH4G_VEC_iwram_data, SH4_REG_ARG2);
   { sh4_codegen cg = sh4g_open(tp);
     sh4_emit_add_reg(&cg, SH4_REG_RET, SH4_REG_ARG2); /* R6 = iwram_dst */
-    if (count > 1)
-      sh4_emit_mov_imm(&cg, count, SH4_REG_FM_REGION);/* R12 = count */
+    if (count > 1) {
+      sh4_emit_mov_imm(&cg, count, SH4_REG_RET);
+      sh4_emit_mov_l_store_dec(&cg, SH4_REG_RET, 15); /* push count on host stack */
+    }
     sh4g_close(tp, &cg); }
 
   loop_head = *tp;
@@ -1068,11 +1075,14 @@ static inline int sh4g_arm_interp_rmw_mla_native(u8 **tp, const u32 *ops,
     }
     if (count > 1) {
       int disp8;
-      sh4_emit_dt(&cg, SH4_REG_FM_REGION);
+      sh4_emit_mov_l_load(&cg, 15, SH4_REG_RET);
+      sh4_emit_dt(&cg, SH4_REG_RET);
+      sh4_emit_mov_l_store(&cg, SH4_REG_RET, 15);
       disp8 = (int)(((long)(uintptr_t)loop_head -
                      ((long)(uintptr_t)cg.ptr + 4)) >> 1);
       sh4_emit_bf_s(&cg, disp8);
       sh4_emit_add_imm(&cg, 8, SH4_REG_ARG2);         /* delay slot: R6 += 8 */
+      sh4_emit_add_imm(&cg, 4, 15);                   /* pop count */
     }
 
     /* Final architectural register commit (once after all count samples). */

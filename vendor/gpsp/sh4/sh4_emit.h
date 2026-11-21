@@ -34,6 +34,7 @@
 #endif
 #ifdef CGBA_SH4_ARM_MIXER_FASTPATH
 #include "ports/fxcg100/sh4/sh4_arm_mixer.h"
+#include "ports/fxcg100/sh4/sh4_arm_pcm_clamp.h"
 #endif
 #ifdef CGBA_GBA_OVER_AZLE_IDLE
 #include "ports/fxcg100/sh4/sh4_idle_signature.h"
@@ -119,6 +120,7 @@ int cgba_sh4_thumb_udiv_loop_try(u32 unused, u32 pc);
 #ifdef CGBA_SH4_ARM_MIXER_FASTPATH
 extern volatile s32 cgba_sh4_arm_mixer_budget;
 int cgba_sh4_arm_mixer_loop_try(u32 unused, u32 pc);
+int cgba_sh4_arm_pcm_clamp_loop_try(u32 unused, u32 pc);
 #endif
 
 extern void *tmemld[11][16];
@@ -268,6 +270,7 @@ static inline void sh4g_arm_mixer_entry(u8 **tp, const u8 *map, u32 pc)
   sh4g_op2_tramp_call(tp, (const void *)sh4_op2_tramp,
                       (const void *)cgba_sh4_arm_mixer_loop_try,
                       cgba_sh4_arm_mixer_pattern[0], pc, 0, 0);
+  sh4g_litseg_reserve(tp, 8);
   {
     sh4_codegen cg = sh4g_open(tp);
     sh4_emit_tst(&cg, SH4_REG_RET, SH4_REG_RET); /* T = helper declined */
@@ -279,14 +282,75 @@ static inline void sh4g_arm_mixer_entry(u8 **tp, const u8 *map, u32 pc)
   sh4g_vec_jmp(tp, SH4G_VEC_pc_redispatch);
   sh4g_patch_cond_skip(fallback, *tp);
 }
+
+static inline int sh4g_arm_pcm_clamp_match_map(const u8 *map, u32 pc)
+{
+  u32 off = pc & 0x0FFFu;
+  u32 i;
+  if (!map || off + CGBA_SH4_ARM_PCM_CLAMP_BYTES > 0x1000u)
+    return 0;
+  if (readaddress32(map, off) != cgba_sh4_arm_pcm_clamp_step_pattern[0])
+    return 0;
+  for (i = 1; i < CGBA_SH4_ARM_PCM_CLAMP_WORDS; i++) {
+    if (readaddress32(map, off + i * 4u) != cgba_sh4_arm_pcm_clamp_word(i))
+      return 0;
+  }
+  return 1;
+}
+
+static inline int sh4g_arm_pcm_clamp_has_observer(u32 pc)
+{
+  u32 end = pc + CGBA_SH4_ARM_PCM_CLAMP_BYTES;
+  u32 i;
+  if ((cheat_master_hook >= pc && cheat_master_hook < end) ||
+      (idle_loop_target_pc >= pc && idle_loop_target_pc < end))
+    return 1;
+  for (i = 0; i < translation_gate_targets; i++) {
+    if (translation_gate_target_pc[i] >= pc &&
+        translation_gate_target_pc[i] < end)
+      return 1;
+  }
+  return 0;
+}
+
+static inline void sh4g_arm_pcm_clamp_entry(u8 **tp, const u8 *map, u32 pc)
+{
+  u8 *fallback;
+  if (!sh4g_arm_pcm_clamp_match_map(map, pc) ||
+      sh4g_arm_pcm_clamp_has_observer(pc))
+    return;
+
+  sh4g_const(tp, (u32)(uintptr_t)&cgba_sh4_arm_mixer_budget, SH4_REG_T0);
+  {
+    sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_l_store(&cg, SH4_REG_CYCLES, SH4_REG_T0);
+    sh4g_close(tp, &cg);
+  }
+  sh4g_op2_tramp_call(tp, (const void *)sh4_op2_tramp,
+                      (const void *)cgba_sh4_arm_pcm_clamp_loop_try,
+                      cgba_sh4_arm_pcm_clamp_step_pattern[0], pc, 0, 0);
+  sh4g_litseg_reserve(tp, 8);
+  {
+    sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_tst(&cg, SH4_REG_RET, SH4_REG_RET); /* T = helper declined */
+    sh4g_close(tp, &cg);
+  }
+  fallback = sh4g_emit_bt_placeholder(tp);
+  sh4g_cycle_debit_from_global(tp, &cgba_sh4_extra_cycles);
+  sh4g_const(tp, pc + CGBA_SH4_ARM_PCM_CLAMP_BODY_BYTES, SH4_REG_ARG0);
+  sh4g_vec_jmp(tp, SH4G_VEC_pc_redispatch);
+  sh4g_patch_cond_skip(fallback, *tp);
+}
 #endif /* CGBA_SH4_ARM_MIXER_FASTPATH */
 
 #ifdef CGBA_SH4_M4A_MIX_SKIP
-/* See sh4_m4a_skip.h.  The image is re-hashed for every ARM RAM block that
- * could lie inside it, so a block is only ever specialized against the bytes
- * it is being translated from; later guest writes go through the ordinary SMC
- * invalidation and retranslate (and re-verify). */
-static u32 sh4g_m4a_skip_base;         /* last verified image base, 0 = none */
+/* See sh4_m4a_skip.h.  Structural loop-level matcher: every self-contained
+ * MP2K/m4a ARM inner loop (reverb, fixed-rate main/tail, interpolating Flavor A
+ * and Flavor B, with any stereo buffer stride) is re-verified against live RAM
+ * words when translating ARM RAM blocks.  Later guest writes trigger ordinary
+ * SMC invalidation and re-verification. */
+static cgba_sh4_m4a_match sh4g_m4a_cache[4];
+static unsigned sh4g_m4a_cache_next;
 #if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
 u32 cgba_sh4_m4a_skip_drop_count;
 u32 cgba_sh4_m4a_skip_mem_count;
@@ -295,75 +359,174 @@ u32 cgba_sh4_m4a_skip_mem_count;
 #define SH4G_M4A_SKIP_STAT(expr) ((void)0)
 #endif
 
-static inline int sh4g_m4a_skip_verify(u32 base)
+static inline int sh4g_m4a_read_word(u32 addr, uint32_t *out)
 {
-  u32 hash = CGBA_SH4_M4A_SKIP_HASH_INIT;
-  u32 page = 0xFFFFFFFFu;
-  const u8 *map = NULL;
-  u32 i;
-
-  if ((base & 3u) || ((base >> 24) != 0x02u && (base >> 24) != 0x03u) ||
-      ((base + CGBA_SH4_M4A_SKIP_BYTES - 1u) >> 24) != (base >> 24))
+  const u8 *map = cgba_memory_map_read_4k(addr);
+  if (!map)
     return 0;
-  for (i = 0; i < CGBA_SH4_M4A_SKIP_WORDS; i++) {
-    u32 address = base + i * 4u;
-    u32 word;
-    if ((address >> 12) != page) {
-      page = address >> 12;
-      map = cgba_memory_map_read_4k(address);
-      if (!map)
-        return 0;
-    }
-    word = readaddress32(map, address & 0x0FFFu);
-    if (i == 0 && word != CGBA_SH4_M4A_SKIP_FIRST_WORD)
-      return 0;
-    hash = cgba_sh4_m4a_skip_hash_word(hash, word);
-  }
-  return hash == CGBA_SH4_M4A_SKIP_HASH;
+  *out = (uint32_t)readaddress32(map, addr & 0x0FFFu);
+  return 1;
 }
 
-/* Image base for an ARM block starting at `pc`, or 0.  A block can start
- * anywhere inside the routine (budget exits redispatch at loop heads), and
- * those inner blocks usually turn hot before the BX entries do, so search
- * backwards for the first word rather than relying on the entry offsets. */
-static inline u32 sh4g_m4a_skip_locate(u32 pc)
+static inline int sh4g_m4a_in_match(const cgba_sh4_m4a_match *m, u32 pc)
 {
-  u32 base, lowest;
+  s32 rel;
+  if (!m || m->kind == CGBA_SH4_M4A_KIND_NONE)
+    return 0;
+  rel = (s32)(pc - m->head_pc);
+  return rel >= -(s32)m->pre_bytes && rel < (s32)m->body_bytes;
+}
+
+static inline void sh4g_m4a_cache_put(const cgba_sh4_m4a_match *m)
+{
+  unsigned i;
+  for (i = 0; i < 4u; i++) {
+    if (sh4g_m4a_cache[i].kind != CGBA_SH4_M4A_KIND_NONE &&
+        sh4g_m4a_cache[i].head_pc == m->head_pc) {
+      sh4g_m4a_cache[i] = *m;
+      return;
+    }
+  }
+  sh4g_m4a_cache[sh4g_m4a_cache_next & 3u] = *m;
+  sh4g_m4a_cache_next++;
+}
+
+static inline int sh4g_m4a_skip_match_head(u32 head_pc, cgba_sh4_m4a_match *out)
+{
+  uint32_t w[CGBA_SH4_M4A_MAX_LOOP_WORDS];
+  u32 page = 0xFFFFFFFFu;
+  const u8 *map = NULL;
+  u32 i, n, max_w, reg;
+  int has_pre = 0;
+
+  if ((head_pc & 3u) ||
+      ((reg = head_pc >> 24) != 0x02u && reg != 0x03u))
+    return 0;
+  if (!sh4g_m4a_read_word(head_pc, &w[0]))
+    return 0;
+  if (w[0] == 0xE19500D6u)
+    max_w = 17u;
+  else if (w[0] == 0xE5956000u)
+    max_w = CGBA_SH4_M4A_MAX_LOOP_WORDS;
+  else
+    return 0;
+
+  n = (0x01000000u - (head_pc & 0x00FFFFFFu)) >> 2;
+  if (n > max_w)
+    n = max_w;
+  if (n < 15u)
+    return 0;
+
+  for (i = 1u; i < n; i++) {
+    u32 addr = head_pc + (i << 2);
+    if ((addr >> 12) != page) {
+      page = addr >> 12;
+      map = cgba_memory_map_read_4k(addr);
+      if (!map) {
+        n = i;
+        break;
+      }
+    }
+    w[i] = (uint32_t)readaddress32(map, addr & 0x0FFFu);
+  }
+  if (n < 15u)
+    return 0;
+
+  if (w[0] == 0xE5956000u && (head_pc & 0x00FFFFFFu) >= 12u) {
+    uint32_t p0, p1, p2;
+    if (sh4g_m4a_read_word(head_pc - 12u, &p0) && p0 == 0xE1D300D0u &&
+        sh4g_m4a_read_word(head_pc - 8u, &p1)  && p1 == 0xE1F310D1u &&
+        sh4g_m4a_read_word(head_pc - 4u, &p2)  && p2 == 0xE0411000u)
+      has_pre = 1;
+  }
+
+  return cgba_sh4_m4a_match_loop_words(w, n, head_pc, has_pre, out);
+}
+
+static inline cgba_sh4_m4a_match sh4g_m4a_skip_locate(u32 pc)
+{
+  cgba_sh4_m4a_match out;
+  cgba_sh4_m4a_match tmp;
+  u32 reg, hi, lo, cand;
+  unsigned i;
+
+  out.kind = CGBA_SH4_M4A_KIND_NONE;
+  out.head_pc = 0;
+  out.pre_bytes = 0;
+  out.body_bytes = 0;
+  out.stride = 0;
 
   pc &= ~3u;
-  if (cgba_dynarec_single_block ||
-      ((pc >> 24) != 0x02u && (pc >> 24) != 0x03u))
-    return 0;
-  base = sh4g_m4a_skip_base;
-  if (base && pc - base < CGBA_SH4_M4A_SKIP_BYTES) {
-    if (sh4g_m4a_skip_verify(base))
-      return base;
-    sh4g_m4a_skip_base = 0;
-  }
-  lowest = pc - (CGBA_SH4_M4A_SKIP_BYTES - 4u);
-  if ((lowest >> 24) != (pc >> 24))
-    lowest = pc & 0xFF000000u;
-  for (base = pc; ; base -= 4u) {
-    if (sh4g_m4a_skip_verify(base)) {
-      sh4g_m4a_skip_base = base;
-      return base;
+  reg = pc >> 24;
+  if (cgba_dynarec_single_block || (reg != 0x02u && reg != 0x03u))
+    return out;
+
+  for (i = 0; i < 4u; i++) {
+    if (sh4g_m4a_in_match(&sh4g_m4a_cache[i], pc)) {
+      if (sh4g_m4a_skip_match_head(sh4g_m4a_cache[i].head_pc, &tmp) &&
+          sh4g_m4a_in_match(&tmp, pc)) {
+        sh4g_m4a_cache[i] = tmp;
+        return tmp;
+      }
+      sh4g_m4a_cache[i].kind = CGBA_SH4_M4A_KIND_NONE;
     }
-    if (base == lowest)
+  }
+
+  hi = pc + 12u;
+  if ((hi >> 24) != reg)
+    hi = (pc & 0xFF000000u) | 0x00FFFFFCu;
+  lo = ((pc & 0x00FFFFFFu) >= 26u * 4u) ? (pc - 26u * 4u) : (pc & 0xFF000000u);
+  for (cand = hi; ; cand -= 4u) {
+    if (sh4g_m4a_skip_match_head(cand, &tmp) && sh4g_m4a_in_match(&tmp, pc)) {
+      sh4g_m4a_cache_put(&tmp);
+      return tmp;
+    }
+    if (cand == lo)
       break;
   }
-  return 0;
+  return out;
+}
+
+static inline void sh4g_m4a_skip_step(cgba_sh4_m4a_match *m, const u8 *map,
+                                      u32 pc, u32 pos)
+{
+  u32 op;
+  cgba_sh4_m4a_match tmp;
+
+  if (pos == 0u || cgba_dynarec_single_block)
+    return;
+  if (sh4g_m4a_in_match(m, pc))
+    return;
+  m->kind = CGBA_SH4_M4A_KIND_NONE;
+  if (((pc >> 24) != 0x02u && (pc >> 24) != 0x03u) || !map)
+    return;
+  op = readaddress32(map, pc & 0x0FFFu);
+  if (op == 0xE19500D6u || op == 0xE5956000u) {
+    if (sh4g_m4a_skip_match_head(pc, &tmp)) {
+      sh4g_m4a_cache_put(&tmp);
+      *m = tmp;
+    }
+  } else if (op == 0xE1D300D0u) {
+    u32 head = pc + 12u;
+    if ((head >> 24) == (pc >> 24) &&
+        sh4g_m4a_skip_match_head(head, &tmp) && tmp.pre_bytes == 12u) {
+      sh4g_m4a_cache_put(&tmp);
+      *m = tmp;
+    }
+  }
 }
 
 /* Returns 1 when the instruction at `pc` was handled here (nothing, or
  * writeback + memory cycle charge, emitted); 0 to translate it normally. */
-static inline int sh4g_m4a_skip_emit(u8 **tp, u32 base, u32 pc, u32 opcode)
+static inline int sh4g_m4a_skip_emit(u8 **tp, const cgba_sh4_m4a_match *match,
+                                     u32 pc, u32 opcode)
 {
   cgba_sh4_m4a_skip_mem m;
   unsigned cls;
 
-  if (!base)
+  if (!match || match->kind == CGBA_SH4_M4A_KIND_NONE)
     return 0;
-  cls = cgba_sh4_m4a_skip_class(pc - base, opcode);
+  cls = cgba_sh4_m4a_match_class(match, pc, opcode);
   if (cls == CGBA_SH4_M4A_SKIP_DROP) {
     SH4G_M4A_SKIP_STAT(cgba_sh4_m4a_skip_drop_count++);
     return 1;
@@ -405,43 +568,102 @@ static inline int sh4g_m4a_skip_emit(u8 **tp, u32 base, u32 pc, u32 opcode)
 
 #ifdef CGBA_SH4_M4A_LOOP_FOLD
 extern volatile s32 cgba_sh4_m4a_loop_budget;
-int cgba_sh4_m4a_loop_try(u32 kind, u32 pc);
+int cgba_sh4_m4a_loop_try(u32 packed, u32 pc);
 
-/* Prefix at a loop head inside the verified image.  `at_seam` is the
- * translator's guarantee that every earlier instruction's cycles have been
- * debited (block start or a branch-target flush), so R13 is the true budget.
- * The helper leaves guest state at the same loop head; the ordinary
- * translation follows and runs whatever was not folded. */
-static inline void sh4g_m4a_loop_entry(u8 **tp, u32 base, u32 pc, int at_seam)
+static inline int sh4g_m4a_loop_has_observer(u32 start, u32 end)
 {
-  u32 kind;
-  if (!base || !at_seam)
+  u32 i;
+  if ((cheat_master_hook >= start && cheat_master_hook < end) ||
+      (idle_loop_target_pc >= start && idle_loop_target_pc < end))
+    return 1;
+  for (i = 0; i < translation_gate_targets; i++) {
+    if (translation_gate_target_pc[i] >= start &&
+        translation_gate_target_pc[i] < end)
+      return 1;
+  }
+  return 0;
+}
+
+/* Prefix at a verified loop head.  `at_seam` is the translator's guarantee
+ * that every earlier instruction's cycles have been debited (block start or a
+ * branch-target flush), so R13 is the true budget.  The helper leaves guest
+ * state at the same loop head; the ordinary translation follows and runs
+ * whatever was not folded. */
+static inline void sh4g_m4a_loop_entry(u8 **tp, const cgba_sh4_m4a_match *m,
+                                       u32 pc, int at_seam)
+{
+  u32 packed;
+  if (!m || m->kind == CGBA_SH4_M4A_KIND_NONE || !at_seam || pc != m->head_pc)
     return;
-  kind = pc - base;
-  if (kind != CGBA_SH4_M4A_LOOP_REVERB && kind != CGBA_SH4_M4A_LOOP_INTERP)
+  if (m->kind != CGBA_SH4_M4A_KIND_REVERB &&
+      m->kind != CGBA_SH4_M4A_KIND_FIXED &&
+      m->kind != CGBA_SH4_M4A_KIND_INTERP_A &&
+      m->kind != CGBA_SH4_M4A_KIND_INTERP_B)
     return;
+  if (sh4g_m4a_loop_has_observer(m->head_pc, m->head_pc + m->body_bytes))
+    return;
+  packed = (u32)m->kind | ((u32)m->stride << 8);
   sh4g_const(tp, (u32)(uintptr_t)&cgba_sh4_m4a_loop_budget, SH4_REG_T0);
   { sh4_codegen cg = sh4g_open(tp);
     sh4_emit_mov_l_store(&cg, SH4_REG_CYCLES, SH4_REG_T0);
     sh4g_close(tp, &cg); }
   sh4g_op2_tramp_call(tp, (const void *)sh4_op2_tramp,
-                      (const void *)cgba_sh4_m4a_loop_try, kind, pc, 0, 0);
+                      (const void *)cgba_sh4_m4a_loop_try, packed, pc, 0, 0);
   sh4g_cycle_debit_from_global(tp, &cgba_sh4_extra_cycles);
 }
-#define arm_instruction_prefix()                                             \
-  sh4g_m4a_loop_entry(&translation_ptr, sh4_m4a_skip_image, (u32)pc,         \
-    block_data_position == 0 ||                                              \
-    block_data[block_data_position].update_cycles)
 #endif
 
+#define sh4_m4a_skip_active() (sh4_m4a_cur_match.kind != CGBA_SH4_M4A_KIND_NONE)
 #define arm_translate_override()                                             \
-  sh4g_m4a_skip_emit(&translation_ptr, sh4_m4a_skip_image, (u32)pc,          \
+  sh4g_m4a_skip_emit(&translation_ptr, &sh4_m4a_cur_match, (u32)pc,          \
                      (u32)opcode)
 #define SH4_M4A_SKIP_BLOCK_VARS                                              \
-  ; u32 sh4_m4a_skip_image = sh4g_m4a_skip_locate((u32)pc)
+  ; cgba_sh4_m4a_match sh4_m4a_cur_match = sh4g_m4a_skip_locate((u32)pc)
 #else
 #define SH4_M4A_SKIP_BLOCK_VARS
 #endif /* CGBA_SH4_M4A_MIX_SKIP */
+
+#if defined(CGBA_SH4_M4A_MIX_SKIP) || defined(CGBA_SH4_M4A_LOOP_FOLD) || \
+    defined(CGBA_SH4_ARM_MIXER_FASTPATH)
+static inline void sh4g_arm_seam_fastpaths(u8 **tp, const u8 *map, u32 pc,
+#ifdef CGBA_SH4_M4A_MIX_SKIP
+                                           cgba_sh4_m4a_match *m4a_match,
+#else
+                                           void *m4a_match,
+#endif
+                                           u32 pos, int update_cycles)
+{
+#ifdef CGBA_SH4_M4A_MIX_SKIP
+  sh4g_m4a_skip_step(m4a_match, map, pc, pos);
+#ifdef CGBA_SH4_M4A_LOOP_FOLD
+  sh4g_m4a_loop_entry(tp, m4a_match, pc, pos == 0u || update_cycles);
+#endif
+#else
+  (void)m4a_match;
+#endif
+#ifdef CGBA_SH4_ARM_MIXER_FASTPATH
+  /* Block start (pos == 0) already runs entry fastpaths in
+   * sh4g_block_entry_fastpaths(); catch mid-block loop heads (e.g. a mixer
+   * or PCM clamp prologue falling straight into the loop body) at their
+   * cycle seam too. */
+  if (pos > 0u && update_cycles) {
+    sh4g_arm_mixer_entry(tp, map, pc);
+    sh4g_arm_pcm_clamp_entry(tp, map, pc);
+  }
+#else
+  (void)tp; (void)map; (void)pc; (void)pos; (void)update_cycles;
+#endif
+}
+#ifdef CGBA_SH4_M4A_MIX_SKIP
+#define SH4_M4A_SKIP_MATCH_ARG (&sh4_m4a_cur_match)
+#else
+#define SH4_M4A_SKIP_MATCH_ARG ((void *)0)
+#endif
+#define arm_instruction_prefix()                                             \
+  sh4g_arm_seam_fastpaths(&translation_ptr, pc_address_block, (u32)pc,       \
+    SH4_M4A_SKIP_MATCH_ARG, (u32)block_data_position,                        \
+    (int)block_data[block_data_position].update_cycles)
+#endif
 
 static inline void sh4g_block_entry_fastpaths(u8 **tp, const u8 *map,
                                                u32 pc, int thumb)
@@ -451,8 +673,10 @@ static inline void sh4g_block_entry_fastpaths(u8 **tp, const u8 *map,
     sh4g_thumb_udiv_loop_entry(tp, map, pc);
 #endif
 #ifdef CGBA_SH4_ARM_MIXER_FASTPATH
-  if (!thumb)
+  if (!thumb) {
     sh4g_arm_mixer_entry(tp, map, pc);
+    sh4g_arm_pcm_clamp_entry(tp, map, pc);
+  }
 #endif
 #if !defined(CGBA_SH4_THUMB_UDIV_FASTPATH) && \
     !defined(CGBA_SH4_ARM_MIXER_FASTPATH)

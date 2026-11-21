@@ -61,12 +61,12 @@ SECTIONS
 			unique within this target; port startup/main code deliberately stays
 			in ROM so it can perform the copy before any relocated function runs.
 		*/
-		*(EXCLUDE_FILE (*cpu_threaded.c.obj *cpu.cc.obj
+		*(EXCLUDE_FILE (*cpu_threaded.c.obj *cpu.cc.obj *gpsp/main.c.obj
 			*gba_memory.c.obj *video.cc.obj *sh4_interp_helpers.c.obj
-			*sh4_stub.S.obj *sh4_video_4bpp.S.obj) .text)
-		*(EXCLUDE_FILE (*cpu_threaded.c.obj *cpu.cc.obj
+			*sh4_stub.S.obj *sh4_video_4bpp.S.obj *sh4_scale.S.obj) .text)
+		*(EXCLUDE_FILE (*cpu_threaded.c.obj *cpu.cc.obj *gpsp/main.c.obj
 			*gba_memory.c.obj *video.cc.obj *sh4_interp_helpers.c.obj
-			*sh4_stub.S.obj *sh4_video_4bpp.S.obj) .text.*)
+			*sh4_stub.S.obj *sh4_video_4bpp.S.obj *sh4_scale.S.obj) .text.*)
 	} > rom
 
 	.gint.blocks : {
@@ -173,13 +173,16 @@ SECTIONS
 	.cgba.hottext ALIGN(32) : ALIGN(32) {
 		_lcgba_hottext = LOADADDR(.cgba.hottext);
 		_rcgba_hottext = . ;
-		*cpu_threaded.c.obj(.text .text.*)
-		*cpu.cc.obj(.text .text.*)
+		*(.text.cgba.hot .text.cgba.hot.*)
+		*sh4_stub.S.obj(.text .text.*)
+		*gpsp/main.c.obj(.text .text.*)
+		*sh4_video_4bpp.S.obj(.text .text.*)
+		*sh4_scale.S.obj(.text .text.*)
+		*sh4_interp_helpers.c.obj(.text .text.*)
 		*gba_memory.c.obj(.text .text.*)
 		*video.cc.obj(.text .text.*)
-		*sh4_interp_helpers.c.obj(.text .text.*)
-		*sh4_stub.S.obj(.text .text.*)
-		*sh4_video_4bpp.S.obj(.text .text.*)
+		*cpu_threaded.c.obj(.text .text.*)
+		*cpu.cc.obj(.text .text.*)
 		. = ALIGN(32);
 		_ecgba_hottext = . ;
 	} > highram AT> rom

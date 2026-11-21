@@ -26,6 +26,7 @@ extern int cgba_hottext_init(void);
 #endif
 #if defined(CGBA_VIDEO_DIRTY_SCANLINE) && CGBA_VIDEO_DIRTY_SCANLINE
 extern uint32_t cgba_video_frame_dirty_rows;
+extern uint32_t cgba_video_frame_dirty_row_mask[5];
 #endif
 #ifdef CGBA_GPSP_HEADLESS_TEST
 #define CGBA_HEADLESS_STATE_SIZE CGBA_STATE_RAW_SIZE
@@ -2693,10 +2694,12 @@ static int gpsp_main(void)
 				}
 #if defined(CGBA_VIDEO_DIRTY_SCANLINE) && CGBA_VIDEO_DIRTY_SCANLINE
 				else if(ff_overlay_clear_pending ||
-					cgba_video_frame_dirty_rows != 0 ||
 					!fxcg100_lcd_is_synced()) {
 					blit_gba_frame(framebuffer, frame, gba_buttons);
 					ff_overlay_clear_pending = 0;
+				} else if(cgba_video_frame_dirty_rows != 0) {
+					fxcg100_lcd_blit_gba_dirty(framebuffer,
+						cgba_video_frame_dirty_row_mask);
 				}
 #else
 				else {

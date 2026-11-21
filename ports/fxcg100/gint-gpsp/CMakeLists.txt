@@ -85,6 +85,8 @@ option(CGBA_SH4_BLOCK_PROFILE
   "Emit block-entry counters in profiling/headless builds" ON)
 option(CGBA_SH4_PIN_GUEST_R0
   "Keep guest ARM r0 resident in callee-saved SH-4 R11" ON)
+option(CGBA_SH4_PIN_GUEST_R1
+  "Keep guest ARM r1 resident in callee-saved SH-4 R12" ON)
 option(CGBA_SH4_FASTMEM_XYRAM
   "Place generated resident fastmem routines in on-chip XYRAM (hardware A/B)" OFF)
 option(CGBA_SH4_FASTMEM_ILRAM
@@ -97,6 +99,8 @@ option(CGBA_SH4_SEGMENTED_LITERAL_POOL
   "Deduplicate large SH-4 constants in bounded per-block literal segments" ON)
 option(CGBA_SH4_COMPACT_FASTMEM_TUPLE
   "Pack single-fastmem params with a 16-bit cycle field to shrink JIT sites" ON)
+option(CGBA_SH4_FASTMEM_OOL_DESC
+  "Place non-WB fastmem slow descriptors out-of-line so fast hits return via RTS" ON)
 option(CGBA_SH4_INTERP_STATS
   "Count interpreted guest instructions by region (diag; ~4.5% overhead)" OFF)
 option(CGBA_SH4_DIAG_COUNTERS
@@ -175,12 +179,11 @@ set(CGBA_GPSP_ROM_BRANCH_HASH_BITS "${_CGBA_DEFAULT_ROM_HASH_BITS}" CACHE STRING
   "SH4 dynarec ROM branch-hash = 2^N u32 entries (12 = 16 KiB, 13 = 32 KiB)")
 if(CGBA_CLASSPAD)
   # The ClassPad II arena is in the OS heap and not under the fx-CG ceiling
-  # above, so the ROM cache is 2.0625 MiB (2112 KiB) there: Pokemon Emerald was
+  # above, so the ROM cache is 2 MiB (2048 KiB) there: Pokemon Emerald was
   # seen to fill the 1 MiB one 11 times in a session, while leaving ~58 KiB
-  # headroom in the 5.5 MiB arena for .cgba.core and .cgba.bss. The hash table
-  # is doubled to keep its chains about the same length. See classpad_gpsp.ld
-  # for the room.
-  set(CGBA_GPSP_ROM_TRANSLATION_CACHE_SIZE 2162688)
+  # headroom in the 5.5 MiB arena for .cgba.core (incl. main.c + Phase 3 ASM)
+  # and .cgba.highbss. The hash table is doubled to keep chains short.
+  set(CGBA_GPSP_ROM_TRANSLATION_CACHE_SIZE 2097152)
   set(CGBA_GPSP_ROM_BRANCH_HASH_BITS 13)
 endif()
 if(CGBA_DYNAREC)
@@ -202,6 +205,7 @@ set(GPSP_CXX_SOURCES
 set(GPSP_ASM_SOURCES
   ${GPSP}/bios_data.S
   ${FXCG100}/sh4/sh4_video_4bpp.S
+  ${FXCG100}/sh4/sh4_scale.S
 )
 if(CGBA_DYNAREC)
   list(APPEND GPSP_ASM_SOURCES ${GPSP}/sh4/sh4_stub.S)
@@ -295,12 +299,14 @@ if(CGBA_DYNAREC)
     CGBA_SH4_REG_FORWARD=$<BOOL:${CGBA_SH4_REG_FORWARD}>
     CGBA_SH4_BLOCK_PROFILE=$<BOOL:${CGBA_SH4_BLOCK_PROFILE}>
     CGBA_SH4_PIN_GUEST_R0=$<BOOL:${CGBA_SH4_PIN_GUEST_R0}>
+    CGBA_SH4_PIN_GUEST_R1=$<BOOL:${CGBA_SH4_PIN_GUEST_R1}>
     CGBA_SH4_FASTMEM_XYRAM=$<BOOL:${CGBA_SH4_FASTMEM_XYRAM}>
     CGBA_SH4_FASTMEM_ILRAM=$<BOOL:${CGBA_SH4_FASTMEM_ILRAM}>
     CGBA_SH4_LAZY_CHAIN=$<BOOL:${CGBA_SH4_LAZY_CHAIN}>
     CGBA_SH4_KNOWN_TARGET_CACHE=$<BOOL:${CGBA_SH4_KNOWN_TARGET_CACHE}>
     CGBA_SH4_SEGMENTED_LITERAL_POOL=$<BOOL:${CGBA_SH4_SEGMENTED_LITERAL_POOL}>
     CGBA_SH4_COMPACT_FASTMEM_TUPLE=$<BOOL:${CGBA_SH4_COMPACT_FASTMEM_TUPLE}>
+    CGBA_SH4_FASTMEM_OOL_DESC=$<BOOL:${CGBA_SH4_FASTMEM_OOL_DESC}>
     SMALL_TRANSLATION_CACHE=1
     ROM_TRANSLATION_CACHE_SIZE=${CGBA_GPSP_ROM_TRANSLATION_CACHE_SIZE}
     RAM_TRANSLATION_CACHE_SIZE=${CGBA_GPSP_RAM_TRANSLATION_CACHE_SIZE}

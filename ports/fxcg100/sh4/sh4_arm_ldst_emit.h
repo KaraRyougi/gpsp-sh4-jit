@@ -726,7 +726,6 @@ static inline int sh4g_arm_iwram_byte_run_native(u8 **tp, const u32 *ops,
 
       sh4g_litseg_reserve_bytes(tp, 4, 200u);
       sh4g_vec_load(tp, SH4G_VEC_iwram_data, SH4_REG_T2);    /* R3 = iwram_data */
-      sh4g_const(tp, 0x03000000u, SH4_REG_FM_REGION);        /* R12 = 0x03000000 */
       sh4g_const(tp, 0x8000u - (u32)max_all, SH4_REG_T1);    /* R2 = limit */
 
       /* Single-subtract canonical IWRAM + straddle guard per active pointer:
@@ -737,9 +736,10 @@ static inline int sh4g_arm_iwram_byte_run_native(u8 **tp, const u32 *ops,
           sh4_emit_load_greg(&cg, bases[b], SH4_REG_T0);     /* R1 = reg[base] */
           sh4g_close(tp, &cg); }
         if (used_plain[b]) {
+          sh4g_const(tp, 0x03000000u, ptr_regs[b][0]);
           { sh4_codegen cg = sh4g_open(tp);
             sh4_emit_mov_reg(&cg, SH4_REG_T0, SH4_REG_RET);
-            sh4_emit_sub(&cg, SH4_REG_FM_REGION, SH4_REG_RET);
+            sh4_emit_sub(&cg, ptr_regs[b][0], SH4_REG_RET);
             sh4_emit_cmphs(&cg, SH4_REG_T1, SH4_REG_RET);
             sh4g_close(tp, &cg); }
           gmiss[ng++] = sh4g_emit_bt_placeholder(tp);
@@ -749,10 +749,11 @@ static inline int sh4g_arm_iwram_byte_run_native(u8 **tp, const u32 *ops,
             sh4g_close(tp, &cg); }
         }
         if (used_rm[b]) {
+          sh4g_const(tp, 0x03000000u, ptr_regs[b][1]);
           { sh4_codegen cg = sh4g_open(tp);
             sh4_emit_load_greg(&cg, shared_rm, SH4_REG_RET);
             sh4_emit_add_reg(&cg, SH4_REG_T0, SH4_REG_RET);  /* R0 = base + rm */
-            sh4_emit_sub(&cg, SH4_REG_FM_REGION, SH4_REG_RET);
+            sh4_emit_sub(&cg, ptr_regs[b][1], SH4_REG_RET);
             sh4_emit_cmphs(&cg, SH4_REG_T1, SH4_REG_RET);
             sh4g_close(tp, &cg); }
           gmiss[ng++] = sh4g_emit_bt_placeholder(tp);
@@ -777,12 +778,11 @@ static inline int sh4g_arm_iwram_byte_run_native(u8 **tp, const u32 *ops,
         }
         for (b = 0; b < nbases; b++) {
           if (cur_delta[b] > 0) {
-#if CGBA_SH4_PIN_GUEST_R0
-            if (bases[b] == 0u) {
-              sh4_emit_add_imm(&cg, cur_delta[b], SH4_REG_GUEST_R0);
+            int pin = sh4_pinned_reg(bases[b]);
+            if (pin >= 0) {
+              sh4_emit_add_imm(&cg, cur_delta[b], (unsigned)pin);
               continue;
             }
-#endif
             sh4_emit_load_greg(&cg, bases[b], SH4_REG_T0);
             sh4_emit_add_imm(&cg, cur_delta[b], SH4_REG_T0);
             sh4_emit_store_greg(&cg, SH4_REG_T0, bases[b]);

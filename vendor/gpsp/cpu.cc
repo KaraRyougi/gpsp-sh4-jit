@@ -1609,11 +1609,11 @@ cpu_alert_type flag_interrupt(irq_type irq_raised)
 
 // When switching modes set spsr[new_mode] to cpsr. Modifying PC as the
 // target of a data proc instruction will set cpsr to spsr[cpu_mode].
-u32 reg[64];
-u32 spsr[6];
-u32 reg_mode[7][7];
+u32 reg[64] CGBA_HIGH_BSS;
+u32 spsr[6] CGBA_HIGH_BSS;
+u32 reg_mode[7][7] CGBA_HIGH_BSS;
 
-u8 *memory_map_read [8 * 1024];
+u8 *memory_map_read [8 * 1024] CGBA_HIGH_BSS;
 u16 oam_ram[512] CGBA_HIGH_BSS;
 u16 palette_ram[512] CGBA_HIGH_BSS;
 u16 palette_ram_converted[512] CGBA_HIGH_BSS;

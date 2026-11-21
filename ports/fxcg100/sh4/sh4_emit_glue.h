@@ -1149,16 +1149,15 @@ static inline u8 *sh4g_emit_cond_skip_far(u8 **tp)
 static inline u8 *sh4g_branch_exit(u8 **tp, uint32_t new_pc,
                                    const void *block_exit_fn)
 {
-  u8 *bt, *site;
+  u8 *bf, *site;
+  sh4g_litseg_reserve_bytes(tp, 1, 32u);
   sh4g_const(tp, new_pc, SH4_REG_ARG0);         /* R4 = new_pc */
 
   { sh4_codegen cg = sh4g_open(tp);
     sh4_emit_cmppl(&cg, SH4_REG_CYCLES);        /* T = (cycles > 0) */
     sh4g_close(tp, &cg); }
-  bt = *tp;
-  sh4g_u16(tp, 0x8900);                          /* BT over (skip exit if budget left) */
-  sh4g_block_exit_jmp(tp);                       /* exhausted: events + redispatch */
-  { long d = ((long)(*tp) - ((long)bt + 4)) / 2; bt[1] = (uint8_t)(d & 0xFF); }
+  bf = *tp;
+  sh4g_u16(tp, 0x8B00);                          /* BF cold_exit (hot fallthrough: 1 cyc) */
 
 #if CGBA_SH4_LAZY_CHAIN
   site = sh4g_emit_patch_call(tp);               /* chain to target block (patched or lazy-linked) */
@@ -1166,25 +1165,28 @@ static inline u8 *sh4g_branch_exit(u8 **tp, uint32_t new_pc,
   site = sh4g_emit_patch_jump(tp);               /* chain to target block (patched) */
 #endif
   sh4g_patch_jump(site, block_exit_fn);          /* default: redispatch / lazy link */
+  { long d = ((long)(*tp) - ((long)bf + 4)) / 2; bf[1] = (uint8_t)(d & 0xFF); }
+  sh4g_block_exit_jmp(tp);                       /* cold: exhausted -> events + redispatch */
   return site;
 }
 
 /* Internal intra-block branch exit: always patched to the target's body_offset
  * before the block runs, so R4 = new_pc is only needed on the cold R13 <= 0
- * exit path. Saves a literal D-load on every taken loop back-edge and skips
- * the duplicate CMP/PL R13 gate at the target. */
+ * exit path. Hot budget-remaining path falls straight through BF (1 cyc) into
+ * the patched BRA body_offset instead of taking a 3-cycle BT over the cold exit. */
 static inline u8 *sh4g_branch_exit_internal(u8 **tp, uint32_t new_pc)
 {
-  u8 *bt, *site;
+  u8 *bf, *site;
+  sh4g_litseg_reserve_bytes(tp, 1, 32u);
   { sh4_codegen cg = sh4g_open(tp);
     sh4_emit_cmppl(&cg, SH4_REG_CYCLES);        /* T = (cycles > 0) */
     sh4g_close(tp, &cg); }
-  bt = *tp;
-  sh4g_u16(tp, 0x8900);                         /* BT over (budget left) */
+  bf = *tp;
+  sh4g_u16(tp, 0x8B00);                         /* BF cold_exit (hot fallthrough: 1 cyc) */
+  site = sh4g_emit_patch_jump(tp);              /* patched to BRA body_offset */
+  { long d = ((long)(*tp) - ((long)bf + 4)) / 2; bf[1] = (uint8_t)(d & 0xFF); }
   sh4g_const(tp, new_pc, SH4_REG_ARG0);         /* cold: R4 = new_pc */
   sh4g_block_exit_jmp(tp);                      /* exhausted: events + redispatch */
-  { long d = ((long)(*tp) - ((long)bt + 4)) / 2; bt[1] = (uint8_t)(d & 0xFF); }
-  site = sh4g_emit_patch_jump(tp);              /* patched to BRA body_offset */
   return site;
 }
 

@@ -6257,3 +6257,2578 @@ _cgba_render_4bpp_strip_over_u16_sh4:
 	bra     .Lsou_vf_hf_next
 	nop
 	.size   _cgba_render_4bpp_strip_over_u16_sh4, .-_cgba_render_4bpp_strip_over_u16_sh4
+
+/* ============================================================================
+ * Fast same-layout 4bpp tilemap segment mergers for Mode 0 opaque compositing.
+ *
+ * int cgba_mode0_merge2_seg_sh4(
+ *   u16 *out, const u16 *s0, const u16 *s1, u32 n, const u8 *cls_tbl)
+ *   r4=out, r5=s0, r6=s1, r7=n, @(0, sp)=cls_tbl
+ *
+ * int cgba_mode0_merge3_seg_sh4(
+ *   u16 *out, const u16 *s0, const u16 *s1, const u16 *s2,
+ *   u32 n, const u8 *cls_tbl)
+ *   r4=out, r5=s0, r6=s1, r7=s2, @(0, sp)=n, @(4, sp)=cls_tbl
+ *
+ * Returns 1 when every slot in [0..n) resolved cleanly via OPAQUE(2)/EMPTY(1)
+ * classes in cls_tbl; returns 0 on UNKNOWN(0) or MIXED(3) so the C caller can
+ * lazily classify unknown tiles or check MIXED-over-EMPTY.
+ * ========================================================================== */
+	.balign 4
+	.global _cgba_mode0_merge2_seg_sh4
+	.type   _cgba_mode0_merge2_seg_sh4, @function
+_cgba_mode0_merge2_seg_sh4:
+	tst     r7, r7
+	bt      .Lm2_ok
+	mov.l   @r15, r3                    /* r3 = cls_tbl */
+	mov.w   .Lm2_3ff, r2                /* r2 = 0x03FF */
+
+	.balign 4
+.Lm2_loop:
+	mov.w   @r6+, r1                    /* r1 = s1[i] */
+	swap.b  r1, r0
+	and     r2, r0
+	mov.b   @(r0, r3), r0               /* r0 = c1 in {0,1,2,3} */
+	cmp/eq  #2, r0                      /* T = (c1 == OPAQUE) */
+	bt.s    .Lm2_opaque
+	cmp/eq  #1, r0                      /* delay: T = (c1 == EMPTY) */
+	bf      .Lm2_fail                   /* c1 == UNKNOWN or MIXED */
+	mov.w   @r5+, r1                    /* c1 == EMPTY: r1 = s0[i] */
+	mov.w   r1, @r4
+	dt      r7
+	bf.s    .Lm2_loop
+	add     #2, r4
+.Lm2_ok:
+	rts
+	mov     #1, r0
+
+	.balign 4
+.Lm2_opaque:
+	mov.w   r1, @r4
+	add     #2, r5
+	dt      r7
+	bf.s    .Lm2_loop
+	add     #2, r4
+	rts
+	mov     #1, r0
+
+.Lm2_fail:
+	rts
+	mov     #0, r0
+
+	.balign 2
+.Lm2_3ff:
+	.word   0x03FF
+	.size   _cgba_mode0_merge2_seg_sh4, .-_cgba_mode0_merge2_seg_sh4
+
+	.balign 4
+	.global _cgba_mode0_merge3_seg_sh4
+	.type   _cgba_mode0_merge3_seg_sh4, @function
+_cgba_mode0_merge3_seg_sh4:
+	mov.l   @r15, r0                    /* r0 = n */
+	tst     r0, r0
+	bt      .Lm3_ok_early
+	mov.l   @(4, r15), r3               /* r3 = cls_tbl */
+	mov.l   r8, @-r15
+	mov.l   r9, @-r15
+	mov     r0, r8                      /* r8 = n */
+	mov.w   .Lm3_3ff, r9                /* r9 = 0x03FF */
+
+	.balign 4
+.Lm3_loop:
+	mov.w   @r7+, r2                    /* r2 = s2[i] (top) */
+	swap.b  r2, r0
+	and     r9, r0
+	mov.b   @(r0, r3), r0               /* r0 = c2 */
+	cmp/eq  #2, r0                      /* T = (c2 == OPAQUE) */
+	bt.s    .Lm3_c2_op
+	cmp/eq  #1, r0                      /* delay: T = (c2 == EMPTY) */
+	bf      .Lm3_fail                   /* c2 == UNKNOWN or MIXED */
+
+	mov.w   @r6+, r1                    /* r1 = s1[i] (mid) */
+	swap.b  r1, r0
+	and     r9, r0
+	mov.b   @(r0, r3), r0               /* r0 = c1 */
+	cmp/eq  #2, r0                      /* T = (c1 == OPAQUE) */
+	bt.s    .Lm3_c1_op
+	cmp/eq  #1, r0                      /* delay: T = (c1 == EMPTY) */
+	bf      .Lm3_fail                   /* c1 == UNKNOWN or MIXED */
+
+	mov.w   @r5+, r1                    /* r1 = s0[i] (bot) */
+	mov.w   r1, @r4
+	dt      r8
+	bf.s    .Lm3_loop
+	add     #2, r4
+	bra     .Lm3_ok
+	nop
+
+	.balign 4
+.Lm3_c1_op:
+	mov.w   r1, @r4
+	add     #2, r5
+	dt      r8
+	bf.s    .Lm3_loop
+	add     #2, r4
+	bra     .Lm3_ok
+	nop
+
+	.balign 4
+.Lm3_c2_op:
+	mov.w   r2, @r4
+	add     #2, r6
+	add     #2, r5
+	dt      r8
+	bf.s    .Lm3_loop
+	add     #2, r4
+.Lm3_ok:
+	mov     #1, r0
+	mov.l   @r15+, r9
+	rts
+	mov.l   @r15+, r8
+
+.Lm3_fail:
+	mov     #0, r0
+	mov.l   @r15+, r9
+	rts
+	mov.l   @r15+, r8
+
+.Lm3_ok_early:
+	rts
+	mov     #1, r0
+
+	.balign 2
+.Lm3_3ff:
+	.word   0x03FF
+	.size   _cgba_mode0_merge3_seg_sh4, .-_cgba_mode0_merge3_seg_sh4
+
+/* ============================================================================
+ * _cgba_render_affine_bg_scale_sh4
+ *   Fast FULLCOLOR non-mosaic affine BG scanline (dy == 0).
+ *   r4 = const cgba_aff_bg_params *p:
+ *     +0  dst_ptr       (u16 *)
+ *     +4  map_base      (const u8 *)
+ *     +8  tile_base     (const u8 *)
+ *     +12 pal           (const u16 *, pal[0] = backdrop)
+ *     +16 source_x      (s32)
+ *     +20 source_y      (s32)
+ *     +24 dx            (s32)
+ *     +28 dy            (s32, == 0)
+ *     +32 cnt           (u32, >= 1)
+ *     +36 width_height  (u32, 128/256/512/1024)
+ *     +40 map_pitch     (u32, 4/5/6/7)
+ *     +44 flags         (u32: bit0 = isbase, bit1 = wrap)
+ * ========================================================================== */
+	.balign 4
+	.global _cgba_render_affine_bg_scale_sh4
+	.type   _cgba_render_affine_bg_scale_sh4, @function
+_cgba_render_affine_bg_scale_sh4:
+	mov.l   r8, @-r15
+	mov.l   r9, @-r15
+	mov.l   r10, @-r15
+	mov.l   r11, @-r15
+	mov.l   r12, @-r15
+	mov.l   r13, @-r15
+	mov.l   r14, @-r15
+
+	mov     r4, r0
+	mov.l   @(0, r0), r4                /* r4  = dst_ptr */
+	mov.l   @(4, r0), r8                /* r8  = map_base */
+	mov.l   @(8, r0), r9                /* r9  = tile_base */
+	mov.l   @(12, r0), r10              /* r10 = pal */
+	mov.l   @(16, r0), r5               /* r5  = source_x */
+	mov.l   @(20, r0), r1               /* r1  = source_y */
+	mov.l   @(24, r0), r6               /* r6  = dx */
+	mov.l   @(32, r0), r7               /* r7  = cnt */
+	mov.l   @(36, r0), r11              /* r11 = width_height */
+	mov.l   @(40, r0), r2               /* r2  = map_pitch */
+	mov.l   @(44, r0), r3               /* r3  = flags */
+
+	mov     #-8, r12                    /* r12 = -8 (shad >> 8) */
+	shad    r12, r1                     /* r1  = py = source_y >> 8 */
+
+	mov     r3, r0
+	tst     #2, r0                      /* T = !wrap */
+	bt      .Labgs_nowrap
+
+	/* ---- wrap == true ---- */
+	add     #-1, r11                    /* r11 = mask = width_height - 1 */
+	and     r11, r1                     /* py &= mask */
+	mov     r1, r0
+	shlr2   r0
+	shlr    r0
+	shld    r2, r0                      /* (py >> 3) << map_pitch */
+	add     r0, r8                      /* r8  = map_row */
+	mov     r1, r0
+	and     #7, r0
+	shll2   r0
+	add     r0, r0                      /* (py & 7) << 3 */
+	add     r0, r9                      /* r9  = tile_row_base */
+	mov     #-1, r13                    /* r13 = cur_tx sentinel */
+
+	mov     r3, r0
+	tst     #1, r0                      /* T = !isbase */
+	bt.s    .Labgs_wrap_over
+	mov     #7, r3                      /* r3  = 7 mask */
+
+	.balign 4
+.Labgs_wb_loop:
+	mov     r5, r0
+	shlr8   r0
+	and     r11, r0                     /* r0  = pix_x */
+	mov     r0, r2
+	and     r3, r2                      /* r2  = pix_x & 7 */
+	shlr2   r0
+	shlr    r0                          /* r0  = tx */
+	cmp/eq  r13, r0
+	bt.s    1f
+	add     r6, r5                      /* delay: source_x += dx */
+	mov     r0, r13
+	mov.b   @(r0, r8), r1               /* map_row[tx] */
+	extu.b  r1, r1
+	shll2   r1
+	shll2   r1
+	shll2   r1                          /* tile_idx << 6 */
+	mov     r9, r14
+	add     r1, r14                     /* r14 = tile_row_base + tile_idx*64 */
+1:	mov     r2, r0
+	mov.b   @(r0, r14), r0              /* pval */
+	extu.b  r0, r0
+	shll    r0
+	mov.w   @(r0, r10), r0              /* pal[pval] (pal[0] for transparent) */
+	mov.w   r0, @r4
+	dt      r7
+	bf.s    .Labgs_wb_loop
+	add     #2, r4
+	bra     .Labgs_done
+	nop
+
+	.balign 4
+.Labgs_wrap_over:
+.Labgs_wo_loop:
+	mov     r5, r0
+	shlr8   r0
+	and     r11, r0                     /* r0  = pix_x */
+	mov     r0, r2
+	and     r3, r2                      /* r2  = pix_x & 7 */
+	shlr2   r0
+	shlr    r0                          /* r0  = tx */
+	cmp/eq  r13, r0
+	bt.s    1f
+	add     r6, r5                      /* delay: source_x += dx */
+	mov     r0, r13
+	mov.b   @(r0, r8), r1
+	extu.b  r1, r1
+	shll2   r1
+	shll2   r1
+	shll2   r1
+	mov     r9, r14
+	add     r1, r14
+1:	mov     r2, r0
+	mov.b   @(r0, r14), r0
+	extu.b  r0, r0
+	tst     r0, r0
+	bt      2f
+	shll    r0
+	mov.w   @(r0, r10), r0
+	mov.w   r0, @r4
+2:	dt      r7
+	bf.s    .Labgs_wo_loop
+	add     #2, r4
+	bra     .Labgs_done
+	nop
+
+	/* ---- wrap == false ---- */
+	.balign 4
+.Labgs_nowrap:
+	cmp/hs  r11, r1                     /* T = ((u32)py >= width_height) */
+	bt      .Labgs_oob_y
+	mov     r1, r0
+	shlr2   r0
+	shlr    r0
+	shld    r2, r0                      /* (py >> 3) << map_pitch */
+	add     r0, r8                      /* r8  = map_row */
+	mov     r1, r0
+	and     #7, r0
+	shll2   r0
+	add     r0, r0                      /* (py & 7) << 3 */
+	add     r0, r9                      /* r9  = tile_row_base */
+	mov     #-1, r13                    /* cur_tx sentinel */
+
+	mov     r3, r0
+	tst     #1, r0                      /* T = !isbase */
+	bt.s    .Labgs_nwo_skip
+	mov     #7, r3                      /* r3  = 7 mask */
+
+	/* nowrap + isbase: leading OOB fills pal[0] */
+	mov.w   @r10, r14                   /* r14 = pal[0] (backdrop) */
+	.balign 4
+.Labgs_nwb_skip:
+	mov     r5, r0
+	shad    r12, r0
+	cmp/hs  r11, r0
+	bf      .Labgs_nwb_draw
+	mov.w   r14, @r4
+	add     #2, r4
+	dt      r7
+	bf.s    .Labgs_nwb_skip
+	add     r6, r5
+	bra     .Labgs_done
+	nop
+
+	.balign 4
+.Labgs_nwb_draw:
+	/* r0 = valid pix_x (< width_height) */
+	mov     r0, r2
+	and     r3, r2                      /* r2  = pix_x & 7 */
+	shlr2   r0
+	shlr    r0                          /* r0  = tx */
+	cmp/eq  r13, r0
+	bt.s    1f
+	add     r6, r5                      /* delay: source_x += dx */
+	mov     r0, r13
+	mov.b   @(r0, r8), r1
+	extu.b  r1, r1
+	shll2   r1
+	shll2   r1
+	shll2   r1
+	mov     r9, r14
+	add     r1, r14
+1:	mov     r2, r0
+	mov.b   @(r0, r14), r0
+	extu.b  r0, r0
+	shll    r0
+	mov.w   @(r0, r10), r0
+	mov.w   r0, @r4
+	add     #2, r4
+	dt      r7
+	bt      .Labgs_done
+	mov     r5, r0
+	shad    r12, r0
+	cmp/hs  r11, r0
+	bf      .Labgs_nwb_draw
+
+	/* Trailing OOB fill for isbase (r7 >= 1) */
+.Labgs_fill_bd:
+	mov.w   @r10, r0
+.Labgs_fill_bd_loop:
+	mov.w   r0, @r4
+	dt      r7
+	bf.s    .Labgs_fill_bd_loop
+	add     #2, r4
+	bra     .Labgs_done
+	nop
+
+.Labgs_oob_y:
+	mov     r3, r0
+	tst     #1, r0
+	bf      .Labgs_fill_bd
+	bra     .Labgs_done
+	nop
+
+	/* nowrap + !isbase: leading OOB skips */
+	.balign 4
+.Labgs_nwo_skip:
+	mov     r5, r0
+	shad    r12, r0
+	cmp/hs  r11, r0
+	bf      .Labgs_nwo_draw
+	add     #2, r4
+	dt      r7
+	bf.s    .Labgs_nwo_skip
+	add     r6, r5
+	bra     .Labgs_done
+	nop
+
+	.balign 4
+.Labgs_nwo_draw:
+	mov     r0, r2
+	and     r3, r2
+	shlr2   r0
+	shlr    r0
+	cmp/eq  r13, r0
+	bt.s    1f
+	add     r6, r5
+	mov     r0, r13
+	mov.b   @(r0, r8), r1
+	extu.b  r1, r1
+	shll2   r1
+	shll2   r1
+	shll2   r1
+	mov     r9, r14
+	add     r1, r14
+1:	mov     r2, r0
+	mov.b   @(r0, r14), r0
+	extu.b  r0, r0
+	tst     r0, r0
+	bt      2f
+	shll    r0
+	mov.w   @(r0, r10), r0
+	mov.w   r0, @r4
+2:	add     #2, r4
+	dt      r7
+	bt      .Labgs_done
+	mov     r5, r0
+	shad    r12, r0
+	cmp/hs  r11, r0
+	bf      .Labgs_nwo_draw
+
+.Labgs_done:
+	mov.l   @r15+, r14
+	mov.l   @r15+, r13
+	mov.l   @r15+, r12
+	mov.l   @r15+, r11
+	mov.l   @r15+, r10
+	mov.l   @r15+, r9
+	rts
+	mov.l   @r15+, r8
+	.size   _cgba_render_affine_bg_scale_sh4, .-_cgba_render_affine_bg_scale_sh4
+
+/* ============================================================================
+ * _cgba_render_affine_bg_rot_sh4
+ *   Fast FULLCOLOR non-mosaic affine BG scanline (dy != 0).
+ *   r4 = const cgba_aff_bg_params *p (same layout as scale above).
+ * ========================================================================== */
+	.balign 4
+	.global _cgba_render_affine_bg_rot_sh4
+	.type   _cgba_render_affine_bg_rot_sh4, @function
+_cgba_render_affine_bg_rot_sh4:
+	mov.l   r8, @-r15
+	mov.l   r9, @-r15
+	mov.l   r10, @-r15
+	mov.l   r11, @-r15
+	mov.l   r12, @-r15
+	mov.l   r13, @-r15
+	mov.l   r14, @-r15
+
+	mov     r4, r0
+	mov.l   @(0, r0), r4                /* r4  = dst_ptr */
+	mov.l   @(4, r0), r5                /* r5  = map_base */
+	mov.l   @(8, r0), r11               /* r11 = tile_base */
+	mov.l   @(12, r0), r12              /* r12 = pal */
+	mov.l   @(16, r0), r6               /* r6  = source_x */
+	mov.l   @(20, r0), r7               /* r7  = source_y */
+	mov.l   @(24, r0), r8               /* r8  = dx */
+	mov.l   @(28, r0), r9               /* r9  = dy */
+	mov.l   @(32, r0), r10              /* r10 = cnt */
+	mov.l   @(36, r0), r13              /* r13 = width_height */
+	mov.l   @(40, r0), r14              /* r14 = map_pitch */
+	mov.l   @(44, r0), r2               /* r2  = flags */
+
+	mov     r2, r0
+	tst     #2, r0                      /* T = !wrap */
+	bt      .Labgr_nowrap
+
+	/* ---- wrap == true ---- */
+	add     #-1, r13                    /* r13 = mask = width_height - 1 */
+	mov     r2, r0
+	tst     #1, r0                      /* T = !isbase */
+	bt      .Labgr_wo_loop
+
+	.balign 4
+.Labgr_wb_loop:
+	mov     r7, r0
+	shlr8   r0
+	and     r13, r0                     /* py */
+	mov     r0, r3                      /* r3  = py */
+	and     #7, r0
+	shll2   r0
+	add     r0, r0
+	mov     r0, r1                      /* r1  = (py & 7) << 3 */
+	mov     r6, r0
+	shlr8   r0
+	and     r13, r0                     /* px */
+	mov     r0, r2                      /* r2  = px */
+	and     #7, r0
+	add     r0, r1                      /* r1  = intra-tile offset */
+	shlr2   r3
+	shlr    r3
+	shld    r14, r3                     /* (py >> 3) << map_pitch */
+	mov     r2, r0
+	shlr2   r0
+	shlr    r0
+	add     r3, r0                      /* mapoff */
+	mov.b   @(r0, r5), r0               /* tile_idx */
+	extu.b  r0, r0
+	shll2   r0
+	shll2   r0
+	shll2   r0
+	add     r1, r0
+	mov.b   @(r0, r11), r0              /* pval */
+	extu.b  r0, r0
+	shll    r0
+	mov.w   @(r0, r12), r0
+	mov.w   r0, @r4
+	add     r8, r6
+	add     r9, r7
+	dt      r10
+	bf.s    .Labgr_wb_loop
+	add     #2, r4
+	bra     .Labgr_done
+	nop
+
+	.balign 4
+.Labgr_wo_loop:
+	mov     r7, r0
+	shlr8   r0
+	and     r13, r0                     /* py */
+	mov     r0, r3
+	and     #7, r0
+	shll2   r0
+	add     r0, r0
+	mov     r0, r1
+	mov     r6, r0
+	shlr8   r0
+	and     r13, r0                     /* px */
+	mov     r0, r2
+	and     #7, r0
+	add     r0, r1
+	shlr2   r3
+	shlr    r3
+	shld    r14, r3
+	mov     r2, r0
+	shlr2   r0
+	shlr    r0
+	add     r3, r0
+	mov.b   @(r0, r5), r0
+	extu.b  r0, r0
+	shll2   r0
+	shll2   r0
+	shll2   r0
+	add     r1, r0
+	mov.b   @(r0, r11), r0
+	extu.b  r0, r0
+	tst     r0, r0
+	bt      1f
+	shll    r0
+	mov.w   @(r0, r12), r0
+	mov.w   r0, @r4
+1:	add     r8, r6
+	add     r9, r7
+	dt      r10
+	bf.s    .Labgr_wo_loop
+	add     #2, r4
+	bra     .Labgr_done
+	nop
+
+	/* ---- wrap == false ---- */
+	.balign 4
+.Labgr_nowrap:
+	mov     r2, r0
+	tst     #1, r0                      /* T = !isbase */
+	bt      .Labgr_nwo_skip
+
+	/* nowrap + isbase: leading OOB fills pal[0] */
+	.balign 4
+.Labgr_nwb_skip:
+	mov     #-8, r3
+	mov     r6, r2
+	shad    r3, r2                      /* r2 = px */
+	cmp/hs  r13, r2
+	bt      1f
+	mov     r7, r0
+	shad    r3, r0                      /* r0 = py */
+	cmp/hs  r13, r0
+	bf      .Labgr_nwb_draw
+1:	mov.w   @r12, r0                    /* pal[0] */
+	mov.w   r0, @r4
+	add     #2, r4
+	dt      r10
+	bt      .Labgr_done
+	add     r8, r6
+	bra     .Labgr_nwb_skip
+	add     r9, r7
+
+	.balign 4
+.Labgr_nwb_draw:
+	/* r2 = valid px, r0 = valid py */
+	mov     r0, r3
+	and     #7, r0
+	shll2   r0
+	add     r0, r0
+	mov     r0, r1                      /* (py & 7) << 3 */
+	mov     r2, r0
+	and     #7, r0
+	add     r0, r1                      /* intra-tile offset */
+	shlr2   r3
+	shlr    r3
+	shld    r14, r3                     /* (py >> 3) << map_pitch */
+	mov     r2, r0
+	shlr2   r0
+	shlr    r0
+	add     r3, r0
+	mov.b   @(r0, r5), r0
+	extu.b  r0, r0
+	shll2   r0
+	shll2   r0
+	shll2   r0
+	add     r1, r0
+	mov.b   @(r0, r11), r0
+	extu.b  r0, r0
+	shll    r0
+	mov.w   @(r0, r12), r0
+	mov.w   r0, @r4
+	add     #2, r4
+	dt      r10
+	bt      .Labgr_done
+	add     r8, r6
+	add     r9, r7
+	mov     #-8, r3
+	mov     r6, r2
+	shad    r3, r2
+	cmp/hs  r13, r2
+	bt      .Labgr_fill_bd
+	mov     r7, r0
+	shad    r3, r0
+	cmp/hs  r13, r0
+	bf      .Labgr_nwb_draw
+
+.Labgr_fill_bd:
+	mov.w   @r12, r0
+.Labgr_fill_bd_loop:
+	mov.w   r0, @r4
+	dt      r10
+	bf.s    .Labgr_fill_bd_loop
+	add     #2, r4
+	bra     .Labgr_done
+	nop
+
+	/* nowrap + !isbase: leading OOB skips */
+	.balign 4
+.Labgr_nwo_skip:
+	mov     #-8, r3
+	mov     r6, r2
+	shad    r3, r2
+	cmp/hs  r13, r2
+	bt      1f
+	mov     r7, r0
+	shad    r3, r0
+	cmp/hs  r13, r0
+	bf      .Labgr_nwo_draw
+1:	add     #2, r4
+	dt      r10
+	bt      .Labgr_done
+	add     r8, r6
+	bra     .Labgr_nwo_skip
+	add     r9, r7
+
+	.balign 4
+.Labgr_nwo_draw:
+	mov     r0, r3
+	and     #7, r0
+	shll2   r0
+	add     r0, r0
+	mov     r0, r1
+	mov     r2, r0
+	and     #7, r0
+	add     r0, r1
+	shlr2   r3
+	shlr    r3
+	shld    r14, r3
+	mov     r2, r0
+	shlr2   r0
+	shlr    r0
+	add     r3, r0
+	mov.b   @(r0, r5), r0
+	extu.b  r0, r0
+	shll2   r0
+	shll2   r0
+	shll2   r0
+	add     r1, r0
+	mov.b   @(r0, r11), r0
+	extu.b  r0, r0
+	tst     r0, r0
+	bt      2f
+	shll    r0
+	mov.w   @(r0, r12), r0
+	mov.w   r0, @r4
+2:	add     #2, r4
+	dt      r10
+	bt      .Labgr_done
+	add     r8, r6
+	add     r9, r7
+	mov     #-8, r3
+	mov     r6, r2
+	shad    r3, r2
+	cmp/hs  r13, r2
+	bt      .Labgr_done
+	mov     r7, r0
+	shad    r3, r0
+	cmp/hs  r13, r0
+	bf      .Labgr_nwo_draw
+
+.Labgr_done:
+	mov.l   @r15+, r14
+	mov.l   @r15+, r13
+	mov.l   @r15+, r12
+	mov.l   @r15+, r11
+	mov.l   @r15+, r10
+	mov.l   @r15+, r9
+	rts
+	mov.l   @r15+, r8
+	.size   _cgba_render_affine_bg_rot_sh4, .-_cgba_render_affine_bg_rot_sh4
+
+/* ============================================================================
+ * _cgba_render_affine_bg_rot_u32_sh4
+ *   2D DDA affine BG renderer for u32 INDXCOLOR and base STCKCOLOR (dy != 0,
+ *   no mosaic). Accelerates Mode 1/2 affine layers under active BLDCNT.
+ *   p->dst_ptr      = u32 *dst
+ *   p->map_base     = const u8 *map_base
+ *   p->tile_base    = const u8 *tile_base
+ *   p->pal          = (const u16 *)(uintptr_t)px_comb_eff
+ *   p->source_x..dy = 24.8 fixed point
+ *   p->cnt          = pixel count (>= 1)
+ *   p->width_height = 128/256/512/1024
+ *   p->map_pitch    = map_size + 4 (4..7)
+ *   p->flags        = bit0=isbase, bit1=wrap, bits16..31=bg_comb
+ * ========================================================================== */
+	.balign 4
+	.global _cgba_render_affine_bg_rot_u32_sh4
+	.type   _cgba_render_affine_bg_rot_u32_sh4, @function
+_cgba_render_affine_bg_rot_u32_sh4:
+	mov.l   r8, @-r15
+	mov.l   r9, @-r15
+	mov.l   r10, @-r15
+	mov.l   r11, @-r15
+	mov.l   r12, @-r15
+	mov.l   r13, @-r15
+	mov.l   r14, @-r15
+
+	mov     r4, r0
+	mov.l   @(0, r0), r4                /* r4  = u32 *dst */
+	mov.l   @(4, r0), r5                /* r5  = map_base */
+	mov.l   @(8, r0), r11               /* r11 = tile_base */
+	mov.l   @(12, r0), r12              /* r12 = px_comb_eff */
+	mov.l   @(16, r0), r6               /* r6  = sx */
+	mov.l   @(20, r0), r7               /* r7  = sy */
+	mov.l   @(24, r0), r8               /* r8  = dx */
+	mov.l   @(28, r0), r9               /* r9  = dy */
+	mov.l   @(32, r0), r10              /* r10 = cnt */
+	mov.l   @(36, r0), r13              /* r13 = width_height */
+	mov.l   @(40, r0), r14              /* r14 = map_pitch (4..7) */
+	mov.l   @(44, r0), r2               /* r2  = flags | (bg_comb << 16) */
+
+	add     #-3, r14                    /* r14 = map_size + 1 (1..4) */
+	mov     r2, r0
+	shlr16  r0
+	mov.l   r0, @-r15                   /* @(0, sp) = bg_comb */
+
+	mov     r2, r0
+	tst     #2, r0                      /* T = !wrap */
+	bt      .Labgru_nowrap
+
+	/* ---- wrap == true ---- */
+	add     #-1, r13                    /* r13 = mask = width_height - 1 */
+	mov     r2, r0
+	tst     #1, r0                      /* T = !isbase */
+	bt      .Labgru_wo_loop
+
+	.balign 4
+.Labgru_wb_loop:
+	mov     r7, r0
+	shlr8   r0
+	and     r13, r0                     /* py */
+	mov     r0, r3
+	and     #7, r0
+	sub     r0, r3                      /* py & ~7 */
+	shll2   r0
+	add     r0, r0
+	mov     r0, r1                      /* (py & 7) << 3 */
+	mov     r6, r0
+	shlr8   r0
+	and     r13, r0                     /* px */
+	mov     r0, r2
+	and     #7, r0
+	add     r0, r1                      /* intra-tile offset */
+	shld    r14, r3                     /* (py >> 3) << map_pitch */
+	shlr2   r2
+	shlr    r2
+	mov     r2, r0
+	add     r3, r0
+	mov.b   @(r0, r5), r0
+	add     r8, r6
+	extu.b  r0, r0
+	shll8   r0
+	shlr2   r0
+	add     r1, r0
+	mov.b   @(r0, r11), r0
+	add     r9, r7
+	tst     r0, r0
+	bt.s    1f
+	dt      r10                         /* T = (--cnt == 0), preserved below */
+	extu.b  r0, r0
+	bra     2f
+	or      r12, r0
+1:	mov.l   @r15, r0                    /* bg_comb */
+2:	mov.l   r0, @r4
+	bf.s    .Labgru_wb_loop
+	add     #4, r4
+	bra     .Labgru_done
+	nop
+
+	.balign 4
+.Labgru_wo_loop:
+	mov     r7, r0
+	shlr8   r0
+	and     r13, r0                     /* py */
+	mov     r0, r3
+	and     #7, r0
+	sub     r0, r3
+	shll2   r0
+	add     r0, r0
+	mov     r0, r1
+	mov     r6, r0
+	shlr8   r0
+	and     r13, r0                     /* px */
+	mov     r0, r2
+	and     #7, r0
+	add     r0, r1
+	shld    r14, r3
+	shlr2   r2
+	shlr    r2
+	mov     r2, r0
+	add     r3, r0
+	mov.b   @(r0, r5), r0
+	add     r8, r6
+	extu.b  r0, r0
+	shll8   r0
+	shlr2   r0
+	add     r1, r0
+	mov.b   @(r0, r11), r0
+	add     r9, r7
+	tst     r0, r0
+	bt.s    1f
+	dt      r10
+	extu.b  r0, r0
+	or      r12, r0
+	mov.l   r0, @r4
+1:	bf.s    .Labgru_wo_loop
+	add     #4, r4
+	bra     .Labgru_done
+	nop
+
+	/* ---- wrap == false ---- */
+	.balign 4
+.Labgru_nowrap:
+	mov     r2, r0
+	tst     #1, r0                      /* T = !isbase */
+	bf      .Labgru_nwb_skip
+	bra     .Labgru_nwo_skip
+	nop
+
+	/* nowrap + isbase: leading OOB fills bg_comb */
+	.balign 4
+.Labgru_nwb_skip:
+	mov     r6, r2
+	shlr8   r2
+	mov     r7, r0
+	shlr8   r0
+	mov     r2, r1
+	or      r0, r1
+	cmp/hs  r13, r1
+	bf      .Labgru_nwb_check
+	mov.l   @r15, r0
+	mov.l   r0, @r4
+	add     #4, r4
+	dt      r10
+	bt      .Labgru_done_mid
+	add     r8, r6
+	bra     .Labgru_nwb_skip
+	add     r9, r7
+
+.Labgru_done_mid:
+	bra     .Labgru_done
+	nop
+
+.Labgru_nwb_check:
+	mov     r10, r1
+	add     #-1, r1
+	mul.l   r8, r1
+	sts     macl, r3
+	add     r6, r3
+	shlr8   r3
+	mul.l   r9, r1
+	sts     macl, r1
+	add     r7, r1
+	shlr8   r1
+	or      r3, r1
+	cmp/hs  r13, r1
+	bt      .Labgru_nwb_slow
+	mov     #-3, r13
+
+	.balign 4
+.Labgru_nwb_fast:
+	mov     r7, r0
+	shlr8   r0
+	mov     r0, r3
+	and     #7, r0
+	sub     r0, r3
+	shll2   r0
+	add     r0, r0
+	mov     r0, r1
+	mov     r6, r0
+	shlr8   r0
+	mov     r0, r2
+	and     #7, r0
+	add     r0, r1
+	shld    r14, r3
+	shld    r13, r2
+	mov     r2, r0
+	add     r3, r0
+	mov.b   @(r0, r5), r0
+	add     r8, r6
+	extu.b  r0, r0
+	shll8   r0
+	shlr2   r0
+	add     r1, r0
+	mov.b   @(r0, r11), r0
+	add     r9, r7
+	tst     r0, r0
+	bt.s    1f
+	dt      r10
+	extu.b  r0, r0
+	bra     2f
+	or      r12, r0
+1:	mov.l   @r15, r0
+2:	mov.l   r0, @r4
+	bf.s    .Labgru_nwb_fast
+	add     #4, r4
+	bra     .Labgru_done
+	nop
+
+	.balign 4
+.Labgru_nwb_slow:
+	mov     r0, r3
+	and     #7, r0
+	sub     r0, r3
+	shll2   r0
+	add     r0, r0
+	mov     r0, r1
+	mov     r2, r0
+	and     #7, r0
+	add     r0, r1
+	shld    r14, r3
+	shlr2   r2
+	shlr    r2
+	mov     r2, r0
+	add     r3, r0
+	mov.b   @(r0, r5), r0
+	add     r8, r6
+	extu.b  r0, r0
+	shll8   r0
+	shlr2   r0
+	add     r1, r0
+	mov.b   @(r0, r11), r0
+	add     r9, r7
+	tst     r0, r0
+	bt      1f
+	extu.b  r0, r0
+	bra     2f
+	or      r12, r0
+1:	mov.l   @r15, r0
+2:	mov.l   r0, @r4
+	add     #4, r4
+	dt      r10
+	bt      .Labgru_done_mid
+	mov     r6, r2
+	shlr8   r2
+	mov     r7, r0
+	shlr8   r0
+	mov     r2, r1
+	or      r0, r1
+	cmp/hs  r13, r1
+	bf      .Labgru_nwb_slow
+
+.Labgru_fill_bd:
+	mov.l   @r15, r0
+.Labgru_fill_bd_loop:
+	mov.l   r0, @r4
+	dt      r10
+	bf.s    .Labgru_fill_bd_loop
+	add     #4, r4
+	bra     .Labgru_done
+	nop
+
+	/* nowrap + !isbase: leading OOB skips */
+	.balign 4
+.Labgru_nwo_skip:
+	mov     r6, r2
+	shlr8   r2
+	mov     r7, r0
+	shlr8   r0
+	mov     r2, r1
+	or      r0, r1
+	cmp/hs  r13, r1
+	bf      .Labgru_nwo_check
+	add     #4, r4
+	dt      r10
+	bt      .Labgru_done
+	add     r8, r6
+	bra     .Labgru_nwo_skip
+	add     r9, r7
+
+.Labgru_nwo_check:
+	mov     r10, r1
+	add     #-1, r1
+	mul.l   r8, r1
+	sts     macl, r3
+	add     r6, r3
+	shlr8   r3
+	mul.l   r9, r1
+	sts     macl, r1
+	add     r7, r1
+	shlr8   r1
+	or      r3, r1
+	cmp/hs  r13, r1
+	bt      .Labgru_nwo_slow
+	mov     #-3, r13
+
+	.balign 4
+.Labgru_nwo_fast:
+	mov     r7, r0
+	shlr8   r0
+	mov     r0, r3
+	and     #7, r0
+	sub     r0, r3
+	shll2   r0
+	add     r0, r0
+	mov     r0, r1
+	mov     r6, r0
+	shlr8   r0
+	mov     r0, r2
+	and     #7, r0
+	add     r0, r1
+	shld    r14, r3
+	shld    r13, r2
+	mov     r2, r0
+	add     r3, r0
+	mov.b   @(r0, r5), r0
+	add     r8, r6
+	extu.b  r0, r0
+	shll8   r0
+	shlr2   r0
+	add     r1, r0
+	mov.b   @(r0, r11), r0
+	add     r9, r7
+	tst     r0, r0
+	bt.s    1f
+	dt      r10
+	extu.b  r0, r0
+	or      r12, r0
+	mov.l   r0, @r4
+1:	bf.s    .Labgru_nwo_fast
+	add     #4, r4
+	bra     .Labgru_done
+	nop
+
+	.balign 4
+.Labgru_nwo_slow:
+	mov     r0, r3
+	and     #7, r0
+	sub     r0, r3
+	shll2   r0
+	add     r0, r0
+	mov     r0, r1
+	mov     r2, r0
+	and     #7, r0
+	add     r0, r1
+	shld    r14, r3
+	shlr2   r2
+	shlr    r2
+	mov     r2, r0
+	add     r3, r0
+	mov.b   @(r0, r5), r0
+	add     r8, r6
+	extu.b  r0, r0
+	shll8   r0
+	shlr2   r0
+	add     r1, r0
+	mov.b   @(r0, r11), r0
+	add     r9, r7
+	tst     r0, r0
+	bt      2f
+	extu.b  r0, r0
+	or      r12, r0
+	mov.l   r0, @r4
+2:	add     #4, r4
+	dt      r10
+	bt      .Labgru_done
+	mov     r6, r2
+	shlr8   r2
+	mov     r7, r0
+	shlr8   r0
+	mov     r2, r1
+	or      r0, r1
+	cmp/hs  r13, r1
+	bf      .Labgru_nwo_slow
+
+.Labgru_done:
+	add     #4, r15
+	mov.l   @r15+, r14
+	mov.l   @r15+, r13
+	mov.l   @r15+, r12
+	mov.l   @r15+, r11
+	mov.l   @r15+, r10
+	mov.l   @r15+, r9
+	rts
+	mov.l   @r15+, r8
+	.size   _cgba_render_affine_bg_rot_u32_sh4, .-_cgba_render_affine_bg_rot_u32_sh4
+
+/* ============================================================================
+ * _cgba_render_obj_4bpp_tiles_blend_sh4
+ *   Direct RGB565 alpha-blending 4bpp OBJ tile row renderer (no VRAM wrap).
+ *   void cgba_render_obj_4bpp_tiles_blend_sh4(
+ *     const u8 *tile_ptr, u32 num_tiles, u16 *dst_ptr,
+ *     const u32 *sub_term_a, u32 evb_and_flags)
+ *     r4 = tile_ptr
+ *     r5 = num_tiles (>= 1)
+ *     r6 = dst_ptr
+ *     r7 = sub_term_a (16 u32 entries: expanded(pal[i]) * eva)
+ *     @(0, sp) = evb_and_flags: bits 0..4 = evb (0..16), bit 8 = hflip, bit 9 = sat
+ * ========================================================================== */
+	.balign 4
+	.global _cgba_render_obj_4bpp_tiles_blend_sh4
+	.type   _cgba_render_obj_4bpp_tiles_blend_sh4, @function
+_cgba_render_obj_4bpp_tiles_blend_sh4:
+	mov.l   @r15, r0                    /* evb_and_flags */
+	mov.l   r8, @-r15
+	mov.l   r9, @-r15
+	mov.l   r10, @-r15
+	mov.l   r11, @-r15
+	mov.l   r12, @-r15
+	mov.l   r13, @-r15
+	mov.l   r14, @-r15
+	sts.l   pr, @-r15
+
+	mov     r0, r1
+	and     #0x1F, r0
+	mov     r0, r11                     /* r11 = evb (0..16) */
+	mov.l   .Lobjb_blnd_msk, r12        /* r12 = 0x07E0F81F */
+	mov     #0, r13                     /* r13 = 0 (no saturate) */
+	shlr8   r1                          /* bit 0 = hflip, bit 1 = sat */
+	mov     r1, r0
+	tst     #2, r0
+	bt      1f
+	mov.l   .Lobjb_ovf_all, r13         /* r13 = 0x08010020 (saturate mask) */
+1:	mov     r1, r0
+	tst     #1, r0                      /* T = !hflip */
+	bt      .Lobjb_norm_loop
+
+	/* ---- hflip == true ---- */
+	.balign 4
+.Lobjb_hf_loop:
+	mov.l   @r4, r9                     /* [b0 | b1 | b2 | b3] */
+	tst     r9, r9
+	bt      .Lobjb_hf_next
+	mov     r9, r10
+	shlr2   r10                         /* odd nibbles << 2 */
+	add     r9, r9
+	add     r9, r9                      /* even nibbles << 2 */
+
+	mov     r9, r0
+	and     #0x3C, r0
+	tst     r0, r0
+	bt.s    1f
+	shlr8   r9
+	mov     r6, r1
+	bsr     .Lobjb_blend_pix
+	add     #2, r1                      /* dst[1] = p6 */
+1:	mov     r9, r0
+	and     #0x3C, r0
+	tst     r0, r0
+	bt.s    2f
+	shlr8   r9
+	mov     r6, r1
+	bsr     .Lobjb_blend_pix
+	add     #6, r1                      /* dst[3] = p4 */
+2:	mov     r9, r0
+	and     #0x3C, r0
+	tst     r0, r0
+	bt.s    3f
+	shlr8   r9
+	mov     r6, r1
+	bsr     .Lobjb_blend_pix
+	add     #10, r1                     /* dst[5] = p2 */
+3:	mov     r9, r0
+	and     #0x3C, r0
+	tst     r0, r0
+	bt      4f
+	mov     r6, r1
+	bsr     .Lobjb_blend_pix
+	add     #14, r1                     /* dst[7] = p0 */
+4:	mov     r10, r0
+	and     #0x3C, r0
+	tst     r0, r0
+	bt.s    5f
+	shlr8   r10
+	bsr     .Lobjb_blend_pix
+	mov     r6, r1                      /* dst[0] = p7 */
+5:	mov     r10, r0
+	and     #0x3C, r0
+	tst     r0, r0
+	bt.s    6f
+	shlr8   r10
+	mov     r6, r1
+	bsr     .Lobjb_blend_pix
+	add     #4, r1                      /* dst[2] = p5 */
+6:	mov     r10, r0
+	and     #0x3C, r0
+	tst     r0, r0
+	bt.s    7f
+	shlr8   r10
+	mov     r6, r1
+	bsr     .Lobjb_blend_pix
+	add     #8, r1                      /* dst[4] = p3 */
+7:	mov     r10, r0
+	and     #0x3C, r0
+	tst     r0, r0
+	bt      .Lobjb_hf_next
+	mov     r6, r1
+	bsr     .Lobjb_blend_pix
+	add     #12, r1                     /* dst[6] = p1 */
+.Lobjb_hf_next:
+	add     #-32, r4
+	dt      r5
+	bf.s    .Lobjb_hf_loop
+	add     #16, r6
+	bra     .Lobjb_done
+	nop
+
+	/* ---- hflip == false ---- */
+	.balign 4
+.Lobjb_norm_loop:
+	mov.l   @r4, r9                     /* [b0 | b1 | b2 | b3] */
+	tst     r9, r9
+	bt      .Lobjb_norm_next
+	mov     r9, r10
+	shlr2   r10                         /* odd nibbles << 2 */
+	add     r9, r9
+	add     r9, r9                      /* even nibbles << 2 */
+
+	mov     r9, r0
+	and     #0x3C, r0
+	tst     r0, r0
+	bt.s    1f
+	shlr8   r9
+	mov     r6, r1
+	bsr     .Lobjb_blend_pix
+	add     #12, r1                     /* dst[6] = p6 */
+1:	mov     r9, r0
+	and     #0x3C, r0
+	tst     r0, r0
+	bt.s    2f
+	shlr8   r9
+	mov     r6, r1
+	bsr     .Lobjb_blend_pix
+	add     #8, r1                      /* dst[4] = p4 */
+2:	mov     r9, r0
+	and     #0x3C, r0
+	tst     r0, r0
+	bt.s    3f
+	shlr8   r9
+	mov     r6, r1
+	bsr     .Lobjb_blend_pix
+	add     #4, r1                      /* dst[2] = p2 */
+3:	mov     r9, r0
+	and     #0x3C, r0
+	tst     r0, r0
+	bt      4f
+	bsr     .Lobjb_blend_pix
+	mov     r6, r1                      /* dst[0] = p0 */
+4:	mov     r10, r0
+	and     #0x3C, r0
+	tst     r0, r0
+	bt.s    5f
+	shlr8   r10
+	mov     r6, r1
+	bsr     .Lobjb_blend_pix
+	add     #14, r1                     /* dst[7] = p7 */
+5:	mov     r10, r0
+	and     #0x3C, r0
+	tst     r0, r0
+	bt.s    6f
+	shlr8   r10
+	mov     r6, r1
+	bsr     .Lobjb_blend_pix
+	add     #10, r1                     /* dst[5] = p5 */
+6:	mov     r10, r0
+	and     #0x3C, r0
+	tst     r0, r0
+	bt.s    7f
+	shlr8   r10
+	mov     r6, r1
+	bsr     .Lobjb_blend_pix
+	add     #6, r1                      /* dst[3] = p3 */
+7:	mov     r10, r0
+	and     #0x3C, r0
+	tst     r0, r0
+	bt      .Lobjb_norm_next
+	mov     r6, r1
+	bsr     .Lobjb_blend_pix
+	add     #2, r1                      /* dst[1] = p1 */
+.Lobjb_norm_next:
+	add     #32, r4
+	dt      r5
+	bf.s    .Lobjb_norm_loop
+	add     #16, r6
+
+.Lobjb_done:
+	lds.l   @r15+, pr
+	mov.l   @r15+, r14
+	mov.l   @r15+, r13
+	mov.l   @r15+, r12
+	mov.l   @r15+, r11
+	mov.l   @r15+, r10
+	mov.l   @r15+, r9
+	rts
+	mov.l   @r15+, r8
+
+	/* Internal helper: blend non-zero nibble (r0 = pix<<2) onto u16 *@r1 */
+	.balign 4
+.Lobjb_blend_pix:
+	mov.l   @(r0, r7), r3               /* term_a[pix] */
+	mov.w   @r1, r0
+	extu.w  r0, r0
+	swap.w  r0, r8
+	or      r8, r0
+	and     r12, r0                     /* p2e */
+	mul.l   r11, r0
+	sts     macl, r0
+	add     r3, r0
+	shlr2   r0
+	shlr2   r0                          /* pfe */
+	tst     r13, r0
+	bf      .Lobjb_sat
+.Lobjb_sat_ret:
+	and     r12, r0
+	swap.w  r0, r8
+	or      r8, r0
+	rts
+	mov.w   r0, @r1
+
+.Lobjb_sat:
+	mov.l   .Lobjb_ovfg, r8
+	tst     r8, r0
+	bt      1f
+	mov.l   .Lobjb_satg, r8
+	or      r8, r0
+1:	mov.l   .Lobjb_ovfr, r8
+	tst     r8, r0
+	bt      2f
+	mov.l   .Lobjb_satr, r8
+	or      r8, r0
+2:	tst     #0x20, r0
+	bt      .Lobjb_sat_ret
+	bra     .Lobjb_sat_ret
+	or      #0x1F, r0
+
+	.balign 4
+.Lobjb_blnd_msk: .long 0x07E0F81F
+.Lobjb_ovf_all:  .long 0x08010020
+.Lobjb_ovfg:     .long 0x08000000
+.Lobjb_satg:     .long 0x07E00000
+.Lobjb_ovfr:     .long 0x00010000
+.Lobjb_satr:     .long 0x0000F800
+	.size   _cgba_render_obj_4bpp_tiles_blend_sh4, .-_cgba_render_obj_4bpp_tiles_blend_sh4
+
+/* ============================================================================
+ * _cgba_merge_brightness_sh4
+ *   Fast SH-4 RGB565 merge_brightness for INDXCOLOR scanline spans.
+ *   void cgba_merge_brightness_sh4(
+ *     u16 *srcdst, u32 count, const u16 *pal_conv, u32 pa, u32 inv_evy)
+ *     r4 = srcdst, r5 = count, r6 = pal_conv, r7 = pa, @(0, sp) = inv_evy
+ * ========================================================================== */
+	.balign 4
+	.global _cgba_merge_brightness_sh4
+	.type   _cgba_merge_brightness_sh4, @function
+_cgba_merge_brightness_sh4:
+	tst     r5, r5
+	bt      .Lmbri_early
+	mov.l   @r15, r0                    /* r0  = inv_evy = 16 - brightness */
+	mov.l   r8, @-r15
+	mov.l   r9, @-r15
+	mov.l   r10, @-r15
+	mov.l   r11, @-r15
+	mov.l   r12, @-r15
+	mov.l   r13, @-r15
+
+	mov     r0, r8                      /* r8  = inv_evy */
+	mov     #-1, r9                     /* r9  = prev_spix sentinel */
+	mov     #0, r10                     /* r10 = prev_out */
+	mov.l   .Lmbri_blnd_msk, r11        /* r11 = 0x07E0F81F */
+	mov.w   .Lmbri_1ff, r12             /* r12 = 0x01FF */
+	mov.w   .Lmbri_200, r13             /* r13 = 0x0200 */
+
+	.balign 4
+.Lmbri_loop:
+	mov.w   @r4, r1
+	extu.w  r1, r1
+	cmp/eq  r9, r1
+	bt      .Lmbri_hit
+	mov     r1, r9
+	mov     r1, r0
+	and     r12, r0
+	shll    r0
+	mov.w   @(r0, r6), r0               /* pixcol */
+	tst     r13, r1                     /* T = !(spix & 0x200) */
+	bt.s    .Lmbri_store
+	extu.w  r0, r0
+	swap.w  r0, r2
+	or      r2, r0
+	and     r11, r0                     /* epixel */
+	mul.l   r8, r0                      /* epixel * inv_evy */
+	sts     macl, r0
+	shlr2   r0
+	shlr2   r0
+	and     r11, r0                     /* pb */
+	add     r7, r0                      /* pa + pb */
+	and     r11, r0
+	swap.w  r0, r2
+	or      r2, r0
+.Lmbri_store:
+	mov     r0, r10
+.Lmbri_hit:
+	mov.w   r10, @r4
+	dt      r5
+	bf.s    .Lmbri_loop
+	add     #2, r4
+
+	mov.l   @r15+, r13
+	mov.l   @r15+, r12
+	mov.l   @r15+, r11
+	mov.l   @r15+, r10
+	mov.l   @r15+, r9
+	rts
+	mov.l   @r15+, r8
+
+.Lmbri_early:
+	rts
+	nop
+
+	.balign 4
+.Lmbri_blnd_msk: .long 0x07E0F81F
+.Lmbri_1ff:      .word 0x01FF
+.Lmbri_200:      .word 0x0200
+	.size   _cgba_merge_brightness_sh4, .-_cgba_merge_brightness_sh4
+
+/* ============================================================================
+ * _cgba_merge_blend_sh4
+ *   Fast SH-4 RGB565 merge_blend for STCKCOLOR scanline spans.
+ *   void cgba_merge_blend_sh4(
+ *     u16 *dst, const u32 *src, u32 count, const u16 *pal_conv,
+ *     const cgba_merge_blend_params *p)
+ *     r4 = dst, r5 = src, r6 = count, r7 = pal_conv, @(0, sp) = p:
+ *       +0  blend_a        (0..16)
+ *       +4  blend_b        (0..16)
+ *       +8  top_blend_bits ((st_objs ? 0x800 : 0) | (BLEND_ONLY ? 0x200 : 0))
+ *       +12 sat_mask       ((a+b > 16) ? 0x08010020 : 0)
+ *       +16 bright_mask    ((DARK|BRIGHT) ? 0x200 : 0)
+ *       +20 bright_pa      (BRIGHT ? ((BLND_MSK*brightf)>>4)&BLND_MSK : 0)
+ *       +24 bright_inv     (16 - brightf)
+ * ========================================================================== */
+	.balign 4
+	.global _cgba_merge_blend_sh4
+	.type   _cgba_merge_blend_sh4, @function
+_cgba_merge_blend_sh4:
+	tst     r6, r6
+	bt      .Lmbl_early
+	mov.l   @r15, r0                    /* r0  = p */
+	mov.l   r8, @-r15
+	mov.l   r9, @-r15
+	mov.l   r10, @-r15
+	mov.l   r11, @-r15
+	mov.l   r12, @-r15
+	mov.l   r13, @-r15
+	mov.l   r14, @-r15
+
+	mov     r0, r8                      /* r8  = p */
+	mov     #-1, r9                     /* r9  = prev_pair sentinel */
+	mov     #0, r10                     /* r10 = prev_out */
+	mov.l   .Lmbl_blnd_msk, r11         /* r11 = 0x07E0F81F */
+	mov.w   .Lmbl_1ff, r12              /* r12 = 0x01FF */
+	mov.l   @(8, r8), r13               /* r13 = top_blend_bits */
+	mov.l   .Lmbl_tgt2_bit, r14         /* r14 = 0x04000000 */
+
+	.balign 4
+.Lmbl_loop:
+	mov.l   @r5+, r1                    /* r1  = pixpair */
+	cmp/eq  r9, r1
+	bt      .Lmbl_hit
+	mov     r1, r9
+	tst     r14, r1                     /* bottom is 2nd target? */
+	bt      .Lmbl_no_alpha
+	tst     r13, r1                     /* top is ST-obj or 1st target? */
+	bt      .Lmbl_no_alpha
+
+	/* ---- Alpha blend top (p1) + bottom (p2) ---- */
+	mov     r1, r0
+	and     r12, r0
+	shll    r0
+	mov.w   @(r0, r7), r0               /* p1 */
+	extu.w  r0, r0
+	swap.w  r0, r2
+	or      r2, r0
+	and     r11, r0                     /* p1e */
+	mov.l   @(0, r8), r2                /* blend_a */
+	mul.l   r2, r0
+	sts     macl, r3                    /* p1e * blend_a */
+
+	mov     r1, r0
+	shlr16  r0
+	and     r12, r0
+	shll    r0
+	mov.w   @(r0, r7), r0               /* p2 */
+	extu.w  r0, r0
+	swap.w  r0, r2
+	or      r2, r0
+	and     r11, r0                     /* p2e */
+	mov.l   @(4, r8), r2                /* blend_b */
+	mul.l   r2, r0
+	sts     macl, r0                    /* p2e * blend_b */
+	add     r3, r0
+	shlr2   r0
+	shlr2   r0                          /* pfe */
+
+	mov.l   @(12, r8), r2               /* sat_mask (0 when a+b <= 16) */
+	tst     r2, r0
+	bf      .Lmbl_sat
+.Lmbl_sat_ret:
+	and     r11, r0
+	swap.w  r0, r2
+	or      r2, r0
+	mov     r0, r10
+	bra     .Lmbl_hit
+	nop
+
+.Lmbl_sat:
+	mov.l   .Lmbl_ovfg, r2
+	tst     r2, r0
+	bt      1f
+	mov.l   .Lmbl_satg, r2
+	or      r2, r0
+1:	mov.l   .Lmbl_ovfr, r2
+	tst     r2, r0
+	bt      2f
+	mov.l   .Lmbl_satr, r2
+	or      r2, r0
+2:	tst     #0x20, r0
+	bt      .Lmbl_sat_ret
+	bra     .Lmbl_sat_ret
+	or      #0x1F, r0
+
+	.balign 4
+.Lmbl_no_alpha:
+	mov     r1, r0
+	and     r12, r0
+	shll    r0
+	mov.w   @(r0, r7), r0               /* pal[pixpair & 0x1FF] */
+	mov.l   @(16, r8), r2               /* bright_mask (0 or 0x200) */
+	tst     r2, r1
+	bt.s    .Lmbl_store
+	extu.w  r0, r0
+	swap.w  r0, r2
+	or      r2, r0
+	and     r11, r0                     /* epixel */
+	mov.l   @(24, r8), r2               /* bright_inv = 16 - brightf */
+	mul.l   r2, r0
+	sts     macl, r0
+	shlr2   r0
+	shlr2   r0
+	and     r11, r0                     /* pb */
+	mov.l   @(20, r8), r2               /* bright_pa */
+	add     r2, r0
+	and     r11, r0
+	swap.w  r0, r2
+	or      r2, r0
+.Lmbl_store:
+	mov     r0, r10
+.Lmbl_hit:
+	mov.w   r10, @r4
+	dt      r6
+	bf.s    .Lmbl_loop
+	add     #2, r4
+
+	mov.l   @r15+, r14
+	mov.l   @r15+, r13
+	mov.l   @r15+, r12
+	mov.l   @r15+, r11
+	mov.l   @r15+, r10
+	mov.l   @r15+, r9
+	rts
+	mov.l   @r15+, r8
+
+.Lmbl_early:
+	rts
+	nop
+
+	.balign 4
+.Lmbl_blnd_msk: .long 0x07E0F81F
+.Lmbl_tgt2_bit: .long 0x04000000
+.Lmbl_ovfg:     .long 0x08000000
+.Lmbl_satg:     .long 0x07E00000
+.Lmbl_ovfr:     .long 0x00010000
+.Lmbl_satr:     .long 0x0000F800
+.Lmbl_1ff:      .word 0x01FF
+	.size   _cgba_merge_blend_sh4, .-_cgba_merge_blend_sh4
+
+/* ============================================================================
+ * _cgba_render_8bpp_strip_base_sh4
+ *   Tile-major SH-4 big-endian 8-bpp FULLCOLOR base strip renderer (k = 1..8
+ *   rows per tile).  Accepts any 256-entry RGB565 LUT (either pal_conv for
+ *   normal 8-bpp base or cgba_bg_blend_bd_pal for backdrop-folded 8-bpp
+ *   alpha-blend base).  Uses 32-bit mov.l paired stores when dst_top is
+ *   4-byte aligned (even HOFS), and 16-bit mov.w stores otherwise.
+ *
+ *   void cgba_render_8bpp_strip_base_sh4(
+ *     const u16 *map1, u32 counts_packed, u16 *dst_top,
+ *     const u8 *tile_charbase, u32 start_r_and_k,
+ *     const u16 *pal256, const u16 *map2)
+ * ========================================================================== */
+	.balign 4
+	.global _cgba_render_8bpp_strip_base_sh4
+	.type   _cgba_render_8bpp_strip_base_sh4, @function
+_cgba_render_8bpp_strip_base_sh4:
+	tst     r5, r5
+	bf      1f
+	rts
+	nop
+1:	mov.l   @(0, r15), r0               /* r0 = (start_r << 8) | k */
+	mov.l   @(4, r15), r1               /* r1 = pal256 */
+	mov.l   @(8, r15), r2               /* r2 = map2 */
+	mov.l   r8, @-r15
+	mov.l   r9, @-r15
+	mov.l   r10, @-r15
+	mov.l   r11, @-r15
+	mov.l   r12, @-r15
+	mov.l   r13, @-r15
+	mov.l   r14, @-r15
+	add     #-12, r15                   /* +0=k, +4=todraw2, +8=map2 */
+
+	mov     r1, r10                     /* r10 = pal256 */
+	mov.l   r2, @(8, r15)               /* save map2 */
+	mov     r0, r3
+	extu.b  r3, r3                      /* r3 = k (1..8) */
+	mov.l   r3, @(0, r15)
+	shlr8   r0
+	extu.b  r0, r0                      /* r0 = start_r (0..7) */
+	mov     r0, r1
+	shll2   r1
+	shll    r1                          /* r1 = start_r << 3 */
+	add     r1, r7                      /* r7 = tb_norm = tile_charbase + start_r*8 */
+	shll    r1                          /* r1 = start_r << 4 */
+	mov     #56, r9
+	sub     r1, r9                      /* r9 = vflip_off = 56 - start_r*16 */
+	mov.w   .L8b_stride_a, r13          /* r13 = 480 */
+
+	mov     r5, r1
+	shlr16  r1                          /* r1 = todraw2 */
+	mov.l   r1, @(4, r15)
+	extu.w  r5, r5                      /* r5 = todraw1 */
+	tst     r5, r5
+	bf      1f
+	mov.l   @(4, r15), r5
+	mov     #0, r0
+	mov.l   r0, @(4, r15)
+	mov.l   @(8, r15), r4
+	tst     r5, r5
+	bf      1f
+	bra     .L8b_done
+	nop
+1:
+	mov     r6, r0
+	tst     #2, r0                      /* T = 4-byte aligned dst_top */
+	bt      .L8ba_tile_loop
+	bra     .L8bu_tile_loop
+	nop
+
+	/* ---- Aligned (4k) 8-bpp base tile loop: 2 pixels per mov.l ---- */
+	.balign 4
+.L8ba_tile_loop:
+	mov.w   @r4+, r0
+	swap.b  r0, r1
+	shll2   r1
+	shll2   r1
+	shll2   r1
+	mov.w   .L8b_tile_mask_a, r2
+	extu.w  r2, r2
+	and     r2, r1                      /* r1 = (tid & 0x3FF) << 6 */
+	tst     #0x08, r0                   /* T = !vflip */
+	mov     #8, r8
+	bt.s    1f
+	add     r7, r1
+	add     r9, r1
+	mov     #-8, r8
+1:	mov     r1, r11                     /* r11 = r_tile */
+	mov     r6, r12                     /* r12 = r_dst */
+	mov.l   @r15, r14                   /* r14 = k */
+	tst     #0x04, r0                   /* T = !hflip */
+	bt      .L8ba_row_nf
+	bra     .L8ba_row_hf
+	nop
+
+	.balign 4
+.L8ba_row_nf:
+	mov.l   @r11, r2                    /* [p0 p1 p2 p3] */
+	mov.l   @(4, r11), r3               /* [p4 p5 p6 p7] */
+	mov     r2, r0
+	or      r3, r0
+	tst     r0, r0
+	bt      .L8ba_zero_nf
+	extu.b  r2, r0                      /* p3 */
+	shll    r0
+	mov.w   @(r0, r10), r1
+	shlr8   r2
+	extu.b  r2, r0                      /* p2 */
+	shll    r0
+	mov.w   @(r0, r10), r0
+	shlr8   r2
+	swap.w  r1, r1
+	xtrct   r0, r1
+	mov.l   r1, @(4, r12)
+	extu.b  r2, r0                      /* p1 */
+	shll    r0
+	mov.w   @(r0, r10), r1
+	shlr8   r2
+	mov     r2, r0                      /* p0 */
+	shll    r0
+	mov.w   @(r0, r10), r0
+	swap.w  r1, r1
+	xtrct   r0, r1
+	mov.l   r1, @r12
+	extu.b  r3, r0                      /* p7 */
+	shll    r0
+	mov.w   @(r0, r10), r1
+	shlr8   r3
+	extu.b  r3, r0                      /* p6 */
+	shll    r0
+	mov.w   @(r0, r10), r0
+	shlr8   r3
+	swap.w  r1, r1
+	xtrct   r0, r1
+	mov.l   r1, @(12, r12)
+	extu.b  r3, r0                      /* p5 */
+	shll    r0
+	mov.w   @(r0, r10), r1
+	shlr8   r3
+	mov     r3, r0                      /* p4 */
+	shll    r0
+	mov.w   @(r0, r10), r0
+	swap.w  r1, r1
+	xtrct   r0, r1
+	mov.l   r1, @(8, r12)
+.L8ba_nf_next:
+	add     r8, r11
+	dt      r14
+	bf.s    .L8ba_row_nf
+	add     r13, r12
+	dt      r5
+	bf.s    .L8ba_tile_loop
+	add     #16, r6
+	bra     .L8ba_span2
+	nop
+
+.L8ba_zero_nf:
+	mov.w   @r10, r0
+	swap.w  r0, r1
+	xtrct   r0, r1
+	mov.l   r1, @r12
+	mov.l   r1, @(4, r12)
+	mov.l   r1, @(8, r12)
+	bra     .L8ba_nf_next
+	mov.l   r1, @(12, r12)
+
+	.balign 4
+.L8ba_row_hf:
+	mov.l   @r11, r2                    /* [p0 p1 p2 p3] */
+	mov.l   @(4, r11), r3               /* [p4 p5 p6 p7] */
+	mov     r2, r0
+	or      r3, r0
+	tst     r0, r0
+	bt      .L8ba_zero_hf
+	extu.b  r2, r0                      /* p3 -> dst[4] */
+	shll    r0
+	mov.w   @(r0, r10), r1
+	shlr8   r2
+	extu.b  r2, r0                      /* p2 -> dst[5] */
+	shll    r0
+	mov.w   @(r0, r10), r0
+	shlr8   r2
+	swap.w  r0, r0
+	xtrct   r1, r0
+	mov.l   r0, @(8, r12)
+	extu.b  r2, r0                      /* p1 -> dst[6] */
+	shll    r0
+	mov.w   @(r0, r10), r1
+	shlr8   r2
+	mov     r2, r0                      /* p0 -> dst[7] */
+	shll    r0
+	mov.w   @(r0, r10), r0
+	swap.w  r0, r0
+	xtrct   r1, r0
+	mov.l   r0, @(12, r12)
+	extu.b  r3, r0                      /* p7 -> dst[0] */
+	shll    r0
+	mov.w   @(r0, r10), r1
+	shlr8   r3
+	extu.b  r3, r0                      /* p6 -> dst[1] */
+	shll    r0
+	mov.w   @(r0, r10), r0
+	shlr8   r3
+	swap.w  r0, r0
+	xtrct   r1, r0
+	mov.l   r0, @r12
+	extu.b  r3, r0                      /* p5 -> dst[2] */
+	shll    r0
+	mov.w   @(r0, r10), r1
+	shlr8   r3
+	mov     r3, r0                      /* p4 -> dst[3] */
+	shll    r0
+	mov.w   @(r0, r10), r0
+	swap.w  r0, r0
+	xtrct   r1, r0
+	mov.l   r0, @(4, r12)
+.L8ba_hf_next:
+	add     r8, r11
+	dt      r14
+	bf.s    .L8ba_row_hf
+	add     r13, r12
+	dt      r5
+	bt.s    .L8ba_span2
+	add     #16, r6
+	bra     .L8ba_tile_loop
+	nop
+
+.L8ba_zero_hf:
+	mov.w   @r10, r0
+	swap.w  r0, r1
+	xtrct   r0, r1
+	mov.l   r1, @r12
+	mov.l   r1, @(4, r12)
+	mov.l   r1, @(8, r12)
+	bra     .L8ba_hf_next
+	mov.l   r1, @(12, r12)
+
+.L8ba_span2:
+	mov.l   @(4, r15), r5
+	tst     r5, r5
+	bt      .L8b_done_tramp
+	mov     #0, r0
+	mov.l   r0, @(4, r15)
+	mov.l   @(8, r15), r4
+	bra     .L8ba_tile_loop
+	nop
+.L8b_done_tramp:
+	bra     .L8b_done
+	nop
+
+	.balign 4
+.L8b_stride_a:    .word 480
+.L8b_tile_mask_a: .word 0xFFC0
+
+	/* ---- Unaligned (4k+2) 8-bpp base tile loop: 16-bit mov.w stores ---- */
+	.balign 4
+.L8bu_tile_loop:
+	mov.w   @r4+, r0
+	swap.b  r0, r1
+	shll2   r1
+	shll2   r1
+	shll2   r1
+	mov.w   .L8b_tile_mask, r2
+	extu.w  r2, r2
+	and     r2, r1
+	tst     #0x08, r0
+	mov     #8, r8
+	bt.s    1f
+	add     r7, r1
+	add     r9, r1
+	mov     #-8, r8
+1:	mov     r1, r11
+	mov     r6, r12
+	mov.l   @r15, r14
+	tst     #0x04, r0
+	bt      .L8bu_row_nf
+	bra     .L8bu_row_hf
+	nop
+
+	.balign 4
+.L8bu_row_nf:
+	mov.l   @r11, r2
+	mov.l   @(4, r11), r3
+	mov     r2, r0
+	or      r3, r0
+	tst     r0, r0
+	bt      .L8bu_zero_nf
+	extu.b  r2, r0
+	shll    r0
+	mov.w   @(r0, r10), r0
+	shlr8   r2
+	mov.w   r0, @(6, r12)
+	extu.b  r2, r0
+	shll    r0
+	mov.w   @(r0, r10), r0
+	shlr8   r2
+	mov.w   r0, @(4, r12)
+	extu.b  r2, r0
+	shll    r0
+	mov.w   @(r0, r10), r0
+	shlr8   r2
+	mov.w   r0, @(2, r12)
+	mov     r2, r0
+	shll    r0
+	mov.w   @(r0, r10), r0
+	mov.w   r0, @r12
+	extu.b  r3, r0
+	shll    r0
+	mov.w   @(r0, r10), r0
+	shlr8   r3
+	mov.w   r0, @(14, r12)
+	extu.b  r3, r0
+	shll    r0
+	mov.w   @(r0, r10), r0
+	shlr8   r3
+	mov.w   r0, @(12, r12)
+	extu.b  r3, r0
+	shll    r0
+	mov.w   @(r0, r10), r0
+	shlr8   r3
+	mov.w   r0, @(10, r12)
+	mov     r3, r0
+	shll    r0
+	mov.w   @(r0, r10), r0
+	mov.w   r0, @(8, r12)
+.L8bu_nf_next:
+	add     r8, r11
+	dt      r14
+	bf.s    .L8bu_row_nf
+	add     r13, r12
+	dt      r5
+	bf.s    .L8bu_tile_loop
+	add     #16, r6
+	bra     .L8bu_span2
+	nop
+
+.L8bu_zero_nf:
+	mov.w   @r10, r0
+	mov.w   r0, @r12
+	mov.w   r0, @(2, r12)
+	mov.w   r0, @(4, r12)
+	mov.w   r0, @(6, r12)
+	mov.w   r0, @(8, r12)
+	mov.w   r0, @(10, r12)
+	mov.w   r0, @(12, r12)
+	bra     .L8bu_nf_next
+	mov.w   r0, @(14, r12)
+
+	.balign 4
+.L8bu_row_hf:
+	mov.l   @r11, r2
+	mov.l   @(4, r11), r3
+	mov     r2, r0
+	or      r3, r0
+	tst     r0, r0
+	bt      .L8bu_zero_hf
+	extu.b  r2, r0
+	shll    r0
+	mov.w   @(r0, r10), r0
+	shlr8   r2
+	mov.w   r0, @(8, r12)
+	extu.b  r2, r0
+	shll    r0
+	mov.w   @(r0, r10), r0
+	shlr8   r2
+	mov.w   r0, @(10, r12)
+	extu.b  r2, r0
+	shll    r0
+	mov.w   @(r0, r10), r0
+	shlr8   r2
+	mov.w   r0, @(12, r12)
+	mov     r2, r0
+	shll    r0
+	mov.w   @(r0, r10), r0
+	mov.w   r0, @(14, r12)
+	extu.b  r3, r0
+	shll    r0
+	mov.w   @(r0, r10), r0
+	shlr8   r3
+	mov.w   r0, @r12
+	extu.b  r3, r0
+	shll    r0
+	mov.w   @(r0, r10), r0
+	shlr8   r3
+	mov.w   r0, @(2, r12)
+	extu.b  r3, r0
+	shll    r0
+	mov.w   @(r0, r10), r0
+	shlr8   r3
+	mov.w   r0, @(4, r12)
+	mov     r3, r0
+	shll    r0
+	mov.w   @(r0, r10), r0
+	mov.w   r0, @(6, r12)
+.L8bu_hf_next:
+	add     r8, r11
+	dt      r14
+	bf.s    .L8bu_row_hf
+	add     r13, r12
+	dt      r5
+	bt.s    .L8bu_span2
+	add     #16, r6
+	bra     .L8bu_tile_loop
+	nop
+
+.L8bu_zero_hf:
+	mov.w   @r10, r0
+	mov.w   r0, @r12
+	mov.w   r0, @(2, r12)
+	mov.w   r0, @(4, r12)
+	mov.w   r0, @(6, r12)
+	mov.w   r0, @(8, r12)
+	mov.w   r0, @(10, r12)
+	mov.w   r0, @(12, r12)
+	bra     .L8bu_hf_next
+	mov.w   r0, @(14, r12)
+
+.L8bu_span2:
+	mov.l   @(4, r15), r5
+	tst     r5, r5
+	bt      .L8b_done
+	mov     #0, r0
+	mov.l   r0, @(4, r15)
+	mov.l   @(8, r15), r4
+	bra     .L8bu_tile_loop
+	nop
+
+.L8b_done:
+	add     #12, r15
+	mov.l   @r15+, r14
+	mov.l   @r15+, r13
+	mov.l   @r15+, r12
+	mov.l   @r15+, r11
+	mov.l   @r15+, r10
+	mov.l   @r15+, r9
+	rts
+	mov.l   @r15+, r8
+
+.L8b_early:
+	rts
+	nop
+
+	.balign 4
+.L8b_stride:    .word 480
+.L8b_tile_mask: .word 0xFFC0
+	.size   _cgba_render_8bpp_strip_base_sh4, .-_cgba_render_8bpp_strip_base_sh4
+
+/* ============================================================================
+ * _cgba_render_8bpp_strip_blend_sh4
+ *   Tile-major SH-4 big-endian 8-bpp direct RGB565 alpha-blend strip renderer
+ *   with whole-row backdrop LUT fast path (bd_pal256) and per-pixel backdrop
+ *   shortcut (skips mul.l whenever dst == backdrop).
+ *
+ *   void cgba_render_8bpp_strip_blend_sh4(
+ *     const u16 *map1, u32 counts_packed, u16 *dst_top,
+ *     const u8 *tile_charbase, u32 rke_sat,
+ *     const u32 *term_a256, const u16 *map2, const u16 *bd_pal256)
+ *   rke_sat = k | (start_r << 8) | (evb << 16) | (sat << 24)
+ * ========================================================================== */
+	.balign 4
+	.global _cgba_render_8bpp_strip_blend_sh4
+	.type   _cgba_render_8bpp_strip_blend_sh4, @function
+_cgba_render_8bpp_strip_blend_sh4:
+	tst     r5, r5
+	bf      1f
+	rts
+	nop
+1:	mov.l   @(0, r15), r0               /* r0 = rke_sat */
+	mov.l   @(4, r15), r1               /* r1 = term_a256 */
+	mov.l   @(8, r15), r2               /* r2 = map2 */
+	mov.l   @(12, r15), r3              /* r3 = bd_pal256 */
+	mov.l   r8, @-r15
+	mov.l   r9, @-r15
+	mov.l   r10, @-r15
+	mov.l   r11, @-r15
+	mov.l   r12, @-r15
+	mov.l   r13, @-r15
+	mov.l   r14, @-r15
+	sts.l   pr, @-r15
+	add     #-32, r15                   /* +0=k,+4=vflip,+8=tstep,+12=td2,+16=map2,+20=tb_norm,+24=bd_pal,+28=bd_pair */
+
+	mov     r1, r10                     /* r10 = term_a256 */
+	mov.l   r2, @(16, r15)              /* save map2 */
+	mov.l   r3, @(24, r15)              /* save bd_pal256 */
+	mov.w   @r3, r3                     /* r3[15:0] = bd_pal256[0] = backdrop */
+	swap.w  r3, r14
+	xtrct   r3, r14                     /* r14 = (bd << 16) | bd */
+	mov.l   r14, @(28, r15)             /* save bd_pair */
+
+	mov     r0, r3
+	extu.b  r3, r3                      /* r3 = k */
+	mov.l   r3, @(0, r15)
+	shlr8   r0
+	mov     r0, r1
+	extu.b  r1, r1                      /* r1 = start_r */
+	shll2   r1
+	shll    r1                          /* r1 = start_r << 3 */
+	add     r1, r7                      /* r7 = tb_norm */
+	mov.l   r7, @(20, r15)
+	shll    r1                          /* r1 = start_r << 4 */
+	mov     #56, r2
+	sub     r1, r2                      /* r2 = vflip_off = 56 - start_r*16 */
+	mov.l   r2, @(4, r15)
+	shlr8   r0
+	mov     r0, r11
+	extu.b  r11, r11                    /* r11 = evb (0..16) */
+	shlr8   r0
+	tst     r0, r0                      /* sat != 0? */
+	mov     #0, r13
+	bt      1f
+	mov.l   .L8bl_ovf_all, r13          /* r13 = 0x08010020 */
+1:	mov.l   .L8bl_blnd_msk, r12         /* r12 = 0x07E0F81F */
+
+	mov     r5, r1
+	shlr16  r1                          /* r1 = todraw2 */
+	mov.l   r1, @(12, r15)
+	extu.w  r5, r5                      /* r5 = todraw1 */
+	tst     r5, r5
+	bf      .L8bl_tile_loop
+	mov.l   @(12, r15), r5
+	mov     #0, r0
+	mov.l   r0, @(12, r15)
+	mov.l   @(16, r15), r4
+	tst     r5, r5
+	bf      .L8bl_tile_loop
+	bra     .L8bl_done
+	nop
+
+	.balign 4
+.L8bl_tile_loop:
+	mov.w   @r4+, r0                    /* raw_map */
+	swap.b  r0, r1
+	shll2   r1
+	shll2   r1
+	shll2   r1
+	mov.w   .L8bl_tile_mask, r2
+	extu.w  r2, r2
+	and     r2, r1                      /* r1 = (tid & 0x3FF) << 6 */
+	mov.l   @(20, r15), r7              /* r7 = tb_norm */
+	add     r1, r7
+	tst     #0x08, r0                   /* T = !vflip */
+	mov     #8, r2
+	bt      1f
+	mov.l   @(4, r15), r3               /* vflip_off */
+	add     r3, r7
+	mov     #-8, r2
+1:	mov.l   r2, @(8, r15)               /* save tstep */
+	mov     r6, r8                      /* r8 = r_dst */
+	mov.l   @(0, r15), r9               /* r9 = k */
+	tst     #0x04, r0                   /* T = !hflip */
+	bt      .L8bl_row_nf
+	bra     .L8bl_row_hf
+	nop
+
+	.balign 4
+.L8bl_blnd_msk:  .long 0x07E0F81F
+.L8bl_ovf_all:   .long 0x08010020
+.L8bl_tile_mask: .word 0xFFC0
+
+	/* ---- !hflip 8-bpp blend row loop ---- */
+	.balign 4
+.L8bl_row_nf:
+	mov     r8, r0
+	tst     #2, r0
+	bf      .L8bl_nf_slow
+	mov.l   @(28, r15), r2              /* bd_pair */
+	mov.l   @r8, r0
+	cmp/eq  r2, r0
+	bf      .L8bl_nf_slow
+	mov.l   @(4, r8), r0
+	cmp/eq  r2, r0
+	bf      .L8bl_nf_slow
+	mov.l   @(8, r8), r0
+	cmp/eq  r2, r0
+	bf      .L8bl_nf_slow
+	mov.l   @(12, r8), r0
+	cmp/eq  r2, r0
+	bf      .L8bl_nf_slow
+	/* Whole 8-pixel dst row == backdrop: 2-pixel mov.l LUT via bd_pal256! */
+	mov.l   @r7, r2
+	mov.l   @(4, r7), r3
+	mov     r2, r0
+	or      r3, r0
+	tst     r0, r0
+	bt      .L8bl_nf_bd_skip
+	mov.l   @(24, r15), r14             /* r14 = bd_pal256 */
+	extu.b  r2, r0
+	shll    r0
+	mov.w   @(r0, r14), r1
+	shlr8   r2
+	extu.b  r2, r0
+	shll    r0
+	mov.w   @(r0, r14), r0
+	shlr8   r2
+	swap.w  r1, r1
+	xtrct   r0, r1
+	mov.l   r1, @(4, r8)
+	extu.b  r2, r0
+	shll    r0
+	mov.w   @(r0, r14), r1
+	shlr8   r2
+	mov     r2, r0
+	shll    r0
+	mov.w   @(r0, r14), r0
+	swap.w  r1, r1
+	xtrct   r0, r1
+	mov.l   r1, @r8
+	extu.b  r3, r0
+	shll    r0
+	mov.w   @(r0, r14), r1
+	shlr8   r3
+	extu.b  r3, r0
+	shll    r0
+	mov.w   @(r0, r14), r0
+	shlr8   r3
+	swap.w  r1, r1
+	xtrct   r0, r1
+	mov.l   r1, @(12, r8)
+	extu.b  r3, r0
+	shll    r0
+	mov.w   @(r0, r14), r1
+	shlr8   r3
+	mov     r3, r0
+	shll    r0
+	mov.w   @(r0, r14), r0
+	swap.w  r1, r1
+	xtrct   r0, r1
+	mov.l   r1, @(8, r8)
+.L8bl_nf_bd_skip:
+	bra     .L8bl_nf_next
+	nop
+
+	.balign 4
+.L8bl_nf_slow:
+	mov.l   @r7, r14                    /* [p0 p1 p2 p3] */
+	tst     r14, r14
+	bt      .L8bl_nf_hi
+	extu.b  r14, r0                     /* p3 */
+	tst     r0, r0
+	bt.s    1f
+	shlr8   r14
+	shll2   r0
+	mov     r8, r1
+	bsr     .L8bl_blend_pix
+	add     #6, r1
+1:	extu.b  r14, r0                     /* p2 */
+	tst     r0, r0
+	bt.s    2f
+	shlr8   r14
+	shll2   r0
+	mov     r8, r1
+	bsr     .L8bl_blend_pix
+	add     #4, r1
+2:	extu.b  r14, r0                     /* p1 */
+	tst     r0, r0
+	bt.s    3f
+	shlr8   r14
+	shll2   r0
+	mov     r8, r1
+	bsr     .L8bl_blend_pix
+	add     #2, r1
+3:	tst     r14, r14                    /* p0 */
+	bt      .L8bl_nf_hi
+	mov     r14, r0
+	shll2   r0
+	bsr     .L8bl_blend_pix
+	mov     r8, r1
+.L8bl_nf_hi:
+	mov.l   @(4, r7), r14               /* [p4 p5 p6 p7] */
+	tst     r14, r14
+	bt      .L8bl_nf_next
+	extu.b  r14, r0                     /* p7 */
+	tst     r0, r0
+	bt.s    4f
+	shlr8   r14
+	shll2   r0
+	mov     r8, r1
+	bsr     .L8bl_blend_pix
+	add     #14, r1
+4:	extu.b  r14, r0                     /* p6 */
+	tst     r0, r0
+	bt.s    5f
+	shlr8   r14
+	shll2   r0
+	mov     r8, r1
+	bsr     .L8bl_blend_pix
+	add     #12, r1
+5:	extu.b  r14, r0                     /* p5 */
+	tst     r0, r0
+	bt.s    6f
+	shlr8   r14
+	shll2   r0
+	mov     r8, r1
+	bsr     .L8bl_blend_pix
+	add     #10, r1
+6:	tst     r14, r14                    /* p4 */
+	bt      .L8bl_nf_next
+	mov     r14, r0
+	shll2   r0
+	mov     r8, r1
+	bsr     .L8bl_blend_pix
+	add     #8, r1
+.L8bl_nf_next:
+	mov.l   @(8, r15), r0               /* tstep */
+	add     r0, r7
+	mov.w   .L8bl_stride_nf, r0
+	dt      r9
+	bt.s    7f
+	add     r0, r8
+	bra     .L8bl_row_nf
+	nop
+7:	dt      r5
+	bt.s    8f
+	add     #16, r6
+	bra     .L8bl_tile_loop
+	nop
+8:	bra     .L8bl_span2
+	nop
+
+	.balign 2
+.L8bl_stride_nf: .word 480
+
+	/* ---- hflip 8-bpp blend row loop ---- */
+	.balign 4
+.L8bl_row_hf:
+	mov     r8, r0
+	tst     #2, r0
+	bf      .L8bl_hf_slow
+	mov.l   @(28, r15), r2              /* bd_pair */
+	mov.l   @r8, r0
+	cmp/eq  r2, r0
+	bf      .L8bl_hf_slow
+	mov.l   @(4, r8), r0
+	cmp/eq  r2, r0
+	bf      .L8bl_hf_slow
+	mov.l   @(8, r8), r0
+	cmp/eq  r2, r0
+	bf      .L8bl_hf_slow
+	mov.l   @(12, r8), r0
+	cmp/eq  r2, r0
+	bf      .L8bl_hf_slow
+	mov.l   @r7, r2
+	mov.l   @(4, r7), r3
+	mov     r2, r0
+	or      r3, r0
+	tst     r0, r0
+	bt      .L8bl_hf_bd_skip
+	mov.l   @(24, r15), r14             /* r14 = bd_pal256 */
+	extu.b  r2, r0                      /* p3 -> dst[4] */
+	shll    r0
+	mov.w   @(r0, r14), r1
+	shlr8   r2
+	extu.b  r2, r0                      /* p2 -> dst[5] */
+	shll    r0
+	mov.w   @(r0, r14), r0
+	shlr8   r2
+	swap.w  r0, r0
+	xtrct   r1, r0
+	mov.l   r0, @(8, r8)
+	extu.b  r2, r0                      /* p1 -> dst[6] */
+	shll    r0
+	mov.w   @(r0, r14), r1
+	shlr8   r2
+	mov     r2, r0                      /* p0 -> dst[7] */
+	shll    r0
+	mov.w   @(r0, r14), r0
+	swap.w  r0, r0
+	xtrct   r1, r0
+	mov.l   r0, @(12, r8)
+	extu.b  r3, r0                      /* p7 -> dst[0] */
+	shll    r0
+	mov.w   @(r0, r14), r1
+	shlr8   r3
+	extu.b  r3, r0                      /* p6 -> dst[1] */
+	shll    r0
+	mov.w   @(r0, r14), r0
+	shlr8   r3
+	swap.w  r0, r0
+	xtrct   r1, r0
+	mov.l   r0, @r8
+	extu.b  r3, r0                      /* p5 -> dst[2] */
+	shll    r0
+	mov.w   @(r0, r14), r1
+	shlr8   r3
+	mov     r3, r0                      /* p4 -> dst[3] */
+	shll    r0
+	mov.w   @(r0, r14), r0
+	swap.w  r0, r0
+	xtrct   r1, r0
+	mov.l   r0, @(4, r8)
+.L8bl_hf_bd_skip:
+	bra     .L8bl_hf_next
+	nop
+
+	.balign 4
+.L8bl_hf_slow:
+	mov.l   @r7, r14                    /* [p0 p1 p2 p3] -> dst[7..4] */
+	tst     r14, r14
+	bt      .L8bl_hf_hi
+	extu.b  r14, r0                     /* p3 -> dst[4] */
+	tst     r0, r0
+	bt.s    1f
+	shlr8   r14
+	shll2   r0
+	mov     r8, r1
+	bsr     .L8bl_blend_pix
+	add     #8, r1
+1:	extu.b  r14, r0                     /* p2 -> dst[5] */
+	tst     r0, r0
+	bt.s    2f
+	shlr8   r14
+	shll2   r0
+	mov     r8, r1
+	bsr     .L8bl_blend_pix
+	add     #10, r1
+2:	extu.b  r14, r0                     /* p1 -> dst[6] */
+	tst     r0, r0
+	bt.s    3f
+	shlr8   r14
+	shll2   r0
+	mov     r8, r1
+	bsr     .L8bl_blend_pix
+	add     #12, r1
+3:	tst     r14, r14                    /* p0 -> dst[7] */
+	bt      .L8bl_hf_hi
+	mov     r14, r0
+	shll2   r0
+	mov     r8, r1
+	bsr     .L8bl_blend_pix
+	add     #14, r1
+.L8bl_hf_hi:
+	mov.l   @(4, r7), r14               /* [p4 p5 p6 p7] -> dst[3..0] */
+	tst     r14, r14
+	bt      .L8bl_hf_next
+	extu.b  r14, r0                     /* p7 -> dst[0] */
+	tst     r0, r0
+	bt.s    4f
+	shlr8   r14
+	shll2   r0
+	bsr     .L8bl_blend_pix
+	mov     r8, r1
+4:	extu.b  r14, r0                     /* p6 -> dst[1] */
+	tst     r0, r0
+	bt.s    5f
+	shlr8   r14
+	shll2   r0
+	mov     r8, r1
+	bsr     .L8bl_blend_pix
+	add     #2, r1
+5:	extu.b  r14, r0                     /* p5 -> dst[2] */
+	tst     r0, r0
+	bt.s    6f
+	shlr8   r14
+	shll2   r0
+	mov     r8, r1
+	bsr     .L8bl_blend_pix
+	add     #4, r1
+6:	tst     r14, r14                    /* p4 -> dst[3] */
+	bt      .L8bl_hf_next
+	mov     r14, r0
+	shll2   r0
+	mov     r8, r1
+	bsr     .L8bl_blend_pix
+	add     #6, r1
+.L8bl_hf_next:
+	mov.l   @(8, r15), r0
+	add     r0, r7
+	mov.w   .L8bl_stride, r0
+	dt      r9
+	bt.s    7f
+	add     r0, r8
+	bra     .L8bl_row_hf
+	nop
+7:	dt      r5
+	bt.s    .L8bl_span2
+	add     #16, r6
+	bra     .L8bl_tile_loop
+	nop
+
+.L8bl_span2:
+	mov.l   @(12, r15), r5
+	tst     r5, r5
+	bt      .L8bl_done
+	mov     #0, r0
+	mov.l   r0, @(12, r15)
+	mov.l   @(16, r15), r4
+	bra     .L8bl_tile_loop
+	nop
+
+.L8bl_done:
+	add     #32, r15
+	lds.l   @r15+, pr
+	mov.l   @r15+, r14
+	mov.l   @r15+, r13
+	mov.l   @r15+, r12
+	mov.l   @r15+, r11
+	mov.l   @r15+, r10
+	mov.l   @r15+, r9
+	rts
+	mov.l   @r15+, r8
+
+	/* Internal helper: blend non-zero 8-bpp pixel (r0 = pix<<2) onto *@r1.
+	 * Fast-paths dst == backdrop via bd_pal256. Preserves r4..r14. */
+	.balign 4
+.L8bl_blend_pix:
+	mov     r0, r3                      /* r3 = pix << 2 */
+	mov.l   @(28, r15), r2              /* bd_pair */
+	mov.w   @r1, r0                     /* sign-ext dst */
+	exts.w  r2, r2                      /* sign-ext bd */
+	cmp/eq  r2, r0
+	bt      .L8bl_pix_bd
+	extu.w  r0, r0
+	swap.w  r0, r2
+	or      r2, r0
+	and     r12, r0                     /* p2e */
+	mul.l   r11, r0
+	mov     r3, r0
+	mov.l   @(r0, r10), r3              /* term_a[pix] */
+	sts     macl, r0
+	add     r3, r0
+	shlr2   r0
+	shlr2   r0                          /* pfe */
+	tst     r13, r0
+	bf      .L8bl_sat
+.L8bl_sat_ret:
+	and     r12, r0
+	swap.w  r0, r2
+	or      r2, r0
+	rts
+	mov.w   r0, @r1
+
+.L8bl_pix_bd:
+	mov.l   @(24, r15), r2              /* bd_pal256 */
+	mov     r3, r0
+	shlr    r0                          /* pix << 1 */
+	mov.w   @(r0, r2), r0               /* bd_pal256[pix] */
+	rts
+	mov.w   r0, @r1
+
+.L8bl_sat:
+	mov.l   .L8bl_ovfg, r2
+	tst     r2, r0
+	bt      1f
+	mov.l   .L8bl_satg, r2
+	or      r2, r0
+1:	mov.l   .L8bl_ovfr, r2
+	tst     r2, r0
+	bt      2f
+	mov.l   .L8bl_satr, r2
+	or      r2, r0
+2:	tst     #0x20, r0
+	bt      .L8bl_sat_ret
+	bra     .L8bl_sat_ret
+	or      #0x1F, r0
+
+	.balign 4
+.L8bl_ovfg:      .long 0x08000000
+.L8bl_satg:      .long 0x07E00000
+.L8bl_ovfr:      .long 0x00010000
+.L8bl_satr:      .long 0x0000F800
+.L8bl_stride:    .word 480
+	.size   _cgba_render_8bpp_strip_blend_sh4, .-_cgba_render_8bpp_strip_blend_sh4

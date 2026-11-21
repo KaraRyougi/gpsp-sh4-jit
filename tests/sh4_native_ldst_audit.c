@@ -93,6 +93,14 @@ void sh4_fastmem_pc_mem_tramp(void)
 void sh4_fastmem_compact8_tramp(void)
 {
 }
+int cgba_sh4_fm_ool_can_record(const u8 *tp){(void)tp;return 1;}
+void cgba_sh4_fm_ool_push(u32 r, u32 p, u32 o, u32 c){(void)r;(void)p;(void)o;(void)c;}
+void cgba_sh4_fm_ool_reset_rom(void){}
+void cgba_sh4_fm_ool_reset_ram(void){}
+u8 *cgba_sh4_fm_ool_rom_limit(u32 t){(void)t;return NULL;}
+struct cgba_sh4_fm_desc;
+const struct cgba_sh4_fm_desc *cgba_sh4_fm_ool_cache[256];
+const struct cgba_sh4_fm_desc *cgba_sh4_fastmem_ool_lookup(u32 r){(void)r;return 0;}
 u8 *cgba_sh4_fastmem_routine[CGBA_FM_TOTAL];
 u8 *cgba_sh4_fastmem_io16_store;
 

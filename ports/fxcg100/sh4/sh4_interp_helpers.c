@@ -27,6 +27,7 @@
 #endif
 #ifdef CGBA_SH4_ARM_MIXER_FASTPATH
 #include "ports/fxcg100/sh4/sh4_arm_mixer.h"
+#include "ports/fxcg100/sh4/sh4_arm_pcm_clamp.h"
 #endif
 
 u32 execute_arm_translate_internal(u32 cycles, void *reg_base);  /* sh4_stub.S */
@@ -1495,8 +1496,16 @@ static int cgba_sh4_arm_mixer_prepare(
         !cgba_sh4_arm_mixer_output_fast_ok(right))
       return 0;
     page = memory_map_read[source >> 15];
-    if (!page)
+    if (page) {
+      p->source_page[i] = page + (source & 0x7000u);
+    } else if ((source >> 24) >= 8u && (source >> 24) <= 12u) {
+      page = cgba_gamepak_resolve_4k(source);
+      if (!page)
+        return 0;
+      p->source_page[i] = page;
+    } else {
       return 0;
+    }
 
     left_off = left & 0x7FFFu;
     right_off = right & 0x7FFFu;
@@ -1504,8 +1513,7 @@ static int cgba_sh4_arm_mixer_prepare(
         iwram[right_off] || iwram[right_off + 1u])
       return 0;
 
-    p->source_page[i] = page;
-    p->source_offset[i] = (u16)(source & 0x7FFFu);
+    p->source_offset[i] = (u16)(source & 0x0FFFu);
     p->source_cost[i] = ws_cyc_nseq[(source >> 24) & 0x0Fu][0];
     phase += s->r5;
   }
@@ -1626,13 +1634,9 @@ static int __attribute__((noinline)) cgba_sh4_arm_mixer_run_whole(
   last_phase = s->r4 + (samples - 1u) * s->r5;
   last_source = s->r0 + (last_phase >> 8);
   if (last_source < s->r0 ||
-      (source >> 15) != (last_source >> 15) ||
+      (last_source >> 24) != source_region ||
       (source_region >= 8u &&
        (last_source & 0x01FFFFFFu) >= gamepak_size))
-    return 0;
-
-  source_page = memory_map_read[source >> 15];
-  if (!source_page)
     return 0;
 
   left_last = s->r1 + bytes - 2u;
@@ -1652,16 +1656,37 @@ static int __attribute__((noinline)) cgba_sh4_arm_mixer_run_whole(
   /* When the sound backend is a no-op (CGBA_SH4_M4A_MIX_SKIP) and the PCM
    * source is in ROM (cannot alias the IWRAM stereo output buffer), the
    * mixed PCM samples written to left_ptr/right_ptr are discarded by audio
-   * DMA. Advance registers and cycle accounting in O(1). */
+   * DMA. Advance registers and cycle accounting in O(1), resolving fragmented
+   * NOR flash via 4 KiB blocks when the 32 KiB page is not direct-mapped. */
   if (!CGBA_SH4_DIFF_ACTIVE() && source_region >= 8u) {
-    u32 last_addr = s->r0 + (last_phase >> 8);
+    u8 *last_page = memory_map_read[last_source >> 15];
+    u32 last_off;
+    if (last_page) {
+      last_off = last_source & 0x7FFFu;
+    } else {
+      last_page = cgba_gamepak_resolve_4k(last_source);
+      if (!last_page)
+        return 0;
+      last_off = last_source & 0x0FFFu;
+    }
     s16 last_right = (s16)eswap16(right_ptr[samples - 1u]);
-    sample32 = (u32)(s32)(s8)address8(source_page, last_addr & 0x7FFFu);
+    sample32 = (u32)(s32)(s8)address8(last_page, last_off);
     mixed = s->r7 * sample32 + (u32)(s32)last_right;
     phase = last_phase + s->r5;
   } else
 #endif
   {
+    u32 src_mask;
+    if ((source >> 15) == (last_source >> 15) &&
+        (source_page = memory_map_read[source >> 15]) != NULL) {
+      src_mask = 0x7FFFu;
+    } else if (source_region >= 8u &&
+               (source >> 12) == (last_source >> 12) &&
+               (source_page = cgba_gamepak_resolve_4k(source)) != NULL) {
+      src_mask = 0x0FFFu;
+    } else {
+      return 0;
+    }
     phase = s->r4;
     for (i = 0; i < samples; i++) {
       u32 sample_address = s->r0 + (phase >> 8);
@@ -1669,7 +1694,7 @@ static int __attribute__((noinline)) cgba_sh4_arm_mixer_run_whole(
       s16 right;
 
       sample32 = (u32)(s32)(s8)address8(source_page,
-                                        sample_address & 0x7FFFu);
+                                        sample_address & src_mask);
       left = (s16)eswap16(*left_ptr);
       mixed = s->r6 * sample32 + (u32)(s32)left;
       *left_ptr++ = eswap16((u16)mixed);
@@ -1788,6 +1813,116 @@ int cgba_sh4_arm_mixer_loop_try(u32 unused, u32 pc)
 #endif
   return 1;
 }
+
+static int cgba_sh4_arm_pcm_clamp_tags_zero(const u8 *tags, u32 len)
+{
+  u32 i = 0;
+  for (; i < len && (((uintptr_t)tags + i) & 3u); i++)
+    if (tags[i]) return 0;
+  for (; i + 4u <= len; i += 4u)
+    if (*(const u32 *)(const void *)(tags + i)) return 0;
+  for (; i < len; i++)
+    if (tags[i]) return 0;
+  return 1;
+}
+
+/* Exact fast path for the 8-sample 16-bit -> 8-bit signed PCM clamp loop
+ * (see sh4_arm_pcm_clamp.h).  Preserves every written output byte, register
+ * (r0, r1, r3, r12), aliasing order, SMC tag guard, and cycle debit, and
+ * returns to the untouched CMP/BNE loop tail. */
+int cgba_sh4_arm_pcm_clamp_loop_try(u32 unused, u32 pc)
+{
+  u32 r0 = reg[0], r1 = reg[1], r2 = reg[2], r4 = reg[4], r5 = reg[5];
+  u32 in_region = r0 >> 24;
+  u32 out_region = r1 >> 24;
+  u32 pc_region = (pc >> 24) & 0x0Fu;
+  u32 seq_word_cost = ws_cyc_seq[pc_region][1];
+  u32 body_cycles, tail_cycles, batches, samples, in_bytes, out_bytes;
+  uint32_t spent;
+  u32 in_off, out_off;
+  const u16 *src_ptr;
+  u8 *dst_ptr;
+  const u8 *out_tags;
+  u32 r3 = 0, r12 = 0, i;
+  (void)unused;
+
+  if (CGBA_SH4_DIFF_ACTIVE() || (reg[REG_CPSR] & 0x20u) ||
+      cgba_sh4_arm_mixer_budget <= 0)
+    return 0;
+  if ((r0 & 1u) != 0u ||
+      (in_region != 2u && in_region != 3u) ||
+      (out_region != 2u && out_region != 3u))
+    return 0;
+
+  body_cycles = cgba_sh4_arm_pcm_clamp_body_cycles(
+    seq_word_cost, ws_cyc_nseq[in_region][0], ws_cyc_nseq[out_region][0]);
+  tail_cycles = cgba_sh4_arm_pcm_clamp_taken_tail_cycles(
+    seq_word_cost, ws_cyc_nseq[pc_region][1]);
+  batches = cgba_sh4_arm_pcm_clamp_plan_constant(
+    r0, r2, cgba_sh4_arm_mixer_budget, body_cycles, tail_cycles, &spent);
+  samples = batches * CGBA_SH4_ARM_PCM_CLAMP_STEPS;
+  in_bytes = samples * 2u;
+  out_bytes = samples;
+
+  if (r0 + in_bytes - 2u < r0 || ((r0 + in_bytes - 2u) >> 24) != in_region ||
+      r1 + out_bytes - 1u < r1 || ((r1 + out_bytes - 1u) >> 24) != out_region)
+    return 0;
+
+  if (in_region == 3u) {
+    in_off = r0 & 0x7FFFu;
+    if (in_off + in_bytes > 0x8000u)
+      return 0;
+    src_ptr = (const u16 *)(const void *)(iwram + 0x8000u + in_off);
+  } else {
+    in_off = r0 & 0x3FFFFu;
+    if (in_off + in_bytes > 0x40000u)
+      return 0;
+    src_ptr = (const u16 *)(const void *)(ewram + in_off);
+  }
+
+  if (out_region == 3u) {
+    out_off = r1 & 0x7FFFu;
+    if (out_off + out_bytes > 0x8000u)
+      return 0;
+    dst_ptr = iwram + 0x8000u + out_off;
+    out_tags = iwram + out_off;
+  } else {
+    out_off = r1 & 0x3FFFFu;
+    if (out_off + out_bytes > 0x40000u)
+      return 0;
+    dst_ptr = ewram + out_off;
+    out_tags = ewram + 0x40000u + out_off;
+  }
+
+  if (!cgba_sh4_arm_pcm_clamp_tags_zero(out_tags, out_bytes))
+    return 0;
+
+  for (i = 0; i < samples; i++) {
+    u16 raw = src_ptr[i];
+    if (raw == 0u) {
+      r3 = 0u;
+      r12 = 0u;
+      dst_ptr[i] = 0u;
+      continue;
+    }
+    int16_t sample = (int16_t)eswap16(raw);
+    r3 = (uint32_t)(int32_t)sample;
+    if (sample < 0)
+      r3 += 0x7Fu;
+    r3 = (r3 >> 7) | ((uint32_t)-(int32_t)(r3 >> 31) << 25);
+    r12 = r3 & r5;
+    if (r12 != 0u && r12 != r5)
+      r3 = r4 + (r3 >> 31);
+    dst_ptr[i] = (u8)r3;
+  }
+
+  reg[0] = r0 + in_bytes;
+  reg[1] = r1 + out_bytes;
+  reg[3] = r3;
+  reg[12] = r12;
+  cgba_sh4_extra_cycles = (int)spent;
+  return 1;
+}
 #endif
 
 #ifdef CGBA_SH4_M4A_LOOP_FOLD
@@ -1803,9 +1938,11 @@ u32 cgba_sh4_m4a_loop_try_count;
 u32 cgba_sh4_m4a_loop_cycles;
 #endif
 
-int cgba_sh4_m4a_loop_try(u32 kind, u32 pc)
+int cgba_sh4_m4a_loop_try(u32 packed, u32 pc)
 {
   cgba_sh4_m4a_loop_costs costs;
+  u32 kind = packed & 0xFFu;
+  u32 stride = (packed >> 8) & 0xFFFu;
   u32 region = (pc >> 24) & 0x0Fu;
   s32 budget = cgba_sh4_m4a_loop_budget;
   u32 spent = 0;
@@ -1817,22 +1954,38 @@ int cgba_sh4_m4a_loop_try(u32 kind, u32 pc)
   costs.branch = ws_cyc_nseq[region][1];
   costs.mem = (const uint8_t (*)[2])ws_cyc_nseq;
 
-  if (kind == CGBA_SH4_M4A_LOOP_REVERB) {
+  if (kind == CGBA_SH4_M4A_KIND_REVERB) {
     uint32_t r4 = reg[4], r5 = reg[5], r7 = reg[7], cpsr = reg[REG_CPSR];
     spent = cgba_sh4_m4a_fold_reverb(&r4, &r5, reg[6], &r7, &cpsr, budget,
                                      &costs);
     if (spent) {
       reg[4] = r4; reg[5] = r5; reg[7] = r7; reg[REG_CPSR] = cpsr;
     }
-  } else if (kind == CGBA_SH4_M4A_LOOP_INTERP) {
+  } else if (kind == CGBA_SH4_M4A_KIND_FIXED) {
+    uint32_t r3 = reg[3], r5 = reg[5], r8 = reg[8], cpsr = reg[REG_CPSR];
+    spent = cgba_sh4_m4a_fold_fixed(&r3, &r5, &r8, &cpsr, stride, budget,
+                                    &costs);
+    if (spent) {
+      reg[3] = r3; reg[5] = r5; reg[8] = r8; reg[REG_CPSR] = cpsr;
+    }
+  } else if (kind == CGBA_SH4_M4A_KIND_INTERP_A ||
+             kind == CGBA_SH4_M4A_KIND_INTERP_B) {
     cgba_sh4_m4a_interp_state s;
+    int swap_r9_lr = (kind == CGBA_SH4_M4A_KIND_INTERP_B);
     s.r2 = reg[2]; s.r3 = reg[3]; s.r4 = reg[4]; s.r5 = reg[5];
-    s.r8 = reg[8]; s.r9 = reg[9]; s.lr = reg[REG_LR];
+    s.r8 = reg[8];
+    s.r9 = swap_r9_lr ? reg[REG_LR] : reg[9];
+    s.lr = swap_r9_lr ? reg[9] : reg[REG_LR];
     s.cpsr = reg[REG_CPSR];
-    spent = cgba_sh4_m4a_fold_interp(&s, budget, &costs);
+    spent = cgba_sh4_m4a_fold_interp_stride(&s, stride, budget, &costs);
     if (spent) {
       reg[2] = s.r2; reg[3] = s.r3; reg[5] = s.r5; reg[8] = s.r8;
-      reg[9] = s.r9; reg[REG_LR] = s.lr; reg[REG_CPSR] = s.cpsr;
+      if (swap_r9_lr) {
+        reg[REG_LR] = s.r9; reg[9] = s.lr;
+      } else {
+        reg[9] = s.r9; reg[REG_LR] = s.lr;
+      }
+      reg[REG_CPSR] = s.cpsr;
     }
   }
 #if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
@@ -2150,11 +2303,28 @@ static u8 *cgba_bulk_ram_host(u32 addr, u32 len, u8 **tags)
 
 static const u8 *cgba_bulk_src_host(u32 addr, u32 len)
 {
-  if ((addr >> 24) >= 8 && (addr >> 24) <= 0xD) {   /* gamepak: one page */
-    u8 *page = memory_map_read[(addr & 0x0FFFFFFF) >> 15];
-    u32 off = addr & 0x7FFF;
-    if (!page || off + len > 0x8000) return NULL;
-    return page + off;
+  u32 region = addr >> 24;
+  if (region >= 8u && region <= 0xDu) {   /* gamepak: one 32K page or 4K block */
+    u8 *page = memory_map_read[(addr & 0x0FFFFFFFu) >> 15];
+    if (page) {
+      u32 off = addr & 0x7FFFu;
+      if (off + len <= 0x8000u)
+        return page + off;
+    }
+    /* Fragmented NOR flash: resolve single-4K-block ROM reads directly so
+     * CpuSet/CpuFastSet/ObjAffineSet don't fall back to the ARM interpreter.
+     * Region 0x0D is excluded here so EEPROM reads never bypass read_eeprom. */
+    if (region <= 0xCu && len > 0u) {
+      u32 rom_off = addr & 0x01FFFFFFu;
+      u32 off4 = addr & 0x0FFFu;
+      if (rom_off < gamepak_size && len <= gamepak_size - rom_off &&
+          off4 + len <= 0x1000u) {
+        u8 *blk = cgba_gamepak_resolve_4k(addr);
+        if (blk)
+          return blk + off4;
+      }
+    }
+    return NULL;
   }
   return cgba_bulk_ram_host(addr, len, NULL);
 }

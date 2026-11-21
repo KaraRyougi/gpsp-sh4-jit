@@ -85,48 +85,35 @@ static inline int sh4g_arm_multiply_native(u8 **tp, u32 opcode, u32 flag_status)
       sh4_emit_store_greg(&cg, SH4_REG_T0, rd);
     } else {
       unsigned r_rm = SH4_REG_T0, r_rs = SH4_REG_T1;
+      int pin_rm, pin_rs, pin_rd;
       if (cg.ptr == sh4_forward_at && rs == sh4_forward_guest && rm != rs) {
         u32 tmp = rm; rm = rs; rs = tmp;            /* hit R1 forward window */
       }
-#if CGBA_SH4_PIN_GUEST_R0
-      if (rm == 0) r_rm = SH4_REG_GUEST_R0;
-      else         sh4_emit_load_greg(&cg, rm, SH4_REG_T0);
-      if (rs == 0) r_rs = SH4_REG_GUEST_R0;
-      else         sh4_emit_load_greg(&cg, rs, SH4_REG_T1);
-#else
-      sh4_emit_load_greg(&cg, rm, SH4_REG_T0);
-      sh4_emit_load_greg(&cg, rs, SH4_REG_T1);
-#endif
+      pin_rm = sh4_pinned_reg(rm);
+      pin_rs = sh4_pinned_reg(rs);
+      pin_rd = sh4_pinned_reg(rd);
+      if (pin_rm >= 0) r_rm = (unsigned)pin_rm;
+      else             sh4_emit_load_greg(&cg, rm, SH4_REG_T0);
+      if (pin_rs >= 0) r_rs = (unsigned)pin_rs;
+      else             sh4_emit_load_greg(&cg, rs, SH4_REG_T1);
       sh4_emit_mul_l(&cg, r_rm, r_rs);              /* MACL = rm * rs (low 32) */
       if (accumulate) {
-#if CGBA_SH4_PIN_GUEST_R0
-        if (rd == 0 && rn == 0 && !set_flags) {
+        if (pin_rd >= 0 && rd == rn && !set_flags) {
           sh4_emit_sts_macl(&cg, SH4_REG_T0);
-          sh4_emit_add_reg(&cg, SH4_REG_T0, SH4_REG_GUEST_R0);
+          sh4_emit_add_reg(&cg, SH4_REG_T0, (unsigned)pin_rd);
         } else {
           sh4_emit_load_greg(&cg, rn, SH4_REG_T1);  /* hide MUL.L latency */
           sh4_emit_sts_macl(&cg, SH4_REG_T0);       /* R1 = product */
           sh4_emit_add_reg(&cg, SH4_REG_T1, SH4_REG_T0);
           sh4_emit_store_greg(&cg, SH4_REG_T0, rd);
         }
-#else
-        sh4_emit_load_greg(&cg, rn, SH4_REG_T1);    /* hide MUL.L latency */
-        sh4_emit_sts_macl(&cg, SH4_REG_T0);         /* R1 = product */
-        sh4_emit_add_reg(&cg, SH4_REG_T1, SH4_REG_T0);
-        sh4_emit_store_greg(&cg, SH4_REG_T0, rd);
-#endif
       } else {
-#if CGBA_SH4_PIN_GUEST_R0
-        if (rd == 0 && !set_flags) {
-          sh4_emit_sts_macl(&cg, SH4_REG_GUEST_R0);
+        if (pin_rd >= 0 && !set_flags) {
+          sh4_emit_sts_macl(&cg, (unsigned)pin_rd);
         } else {
           sh4_emit_sts_macl(&cg, SH4_REG_T0);
           sh4_emit_store_greg(&cg, SH4_REG_T0, rd);
         }
-#else
-        sh4_emit_sts_macl(&cg, SH4_REG_T0);
-        sh4_emit_store_greg(&cg, SH4_REG_T0, rd);
-#endif
       }
     }
 #else

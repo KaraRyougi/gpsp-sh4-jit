@@ -104,11 +104,14 @@
 #if defined(CGBA_FXCG100) || defined(CGBA_FXCG50)
   #if defined(CGBA_HOST_TEST)
     #define CGBA_HIGH_BSS __attribute__((aligned(32)))
+    #define CGBA_HOT_TEXT
   #else
     #define CGBA_HIGH_BSS __attribute__((section(".cgba.highbss"), aligned(32)))
+    #define CGBA_HOT_TEXT __attribute__((section(".text.cgba.hot")))
   #endif
 #else
   #define CGBA_HIGH_BSS
+  #define CGBA_HOT_TEXT
 #endif
 
 #if defined(USE_XBGR1555_FORMAT)

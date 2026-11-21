@@ -534,6 +534,370 @@ static bool run_tests(void)
   write_ioreg(REG_BLDCNT, 0u);
   write_ioreg(REG_BLDY, 0u);
 
+  /* --- Tile4 opacity classifier, uniform non-zero empty row skip, and
+   * 2-/3-layer aligned opaque merge verification --- */
+  {
+    /* Set up dedicated tiles in charblock 0:
+     *   tile 0x07F: all zero (EMPTY, non-zero tile ID like Zelda HUD)
+     *   tile 0x1EC: all zero (EMPTY, dungeon blank tile)
+     *   tile 0x080: all non-zero nibbles (OPAQUE)
+     *   tile 0x081: opaque except 1 zero pixel (MIXED) — test every row/nibble */
+    cgba_tile4_invalidate_all();
+    memset(vram + 0x07Fu * 32u, 0, 32u);
+    memset(vram + 0x1ECu * 32u, 0, 32u);
+    memset(vram + 0x080u * 32u, 0x37u, 32u);
+    CHECK(cgba_tile4_classify(0u, 0x07Fu) == CGBA_TILE4_EMPTY);
+    CHECK(cgba_tile4_classify(0u, 0x1ECu) == CGBA_TILE4_EMPTY);
+    CHECK(cgba_tile4_classify(0u, 0x080u) == CGBA_TILE4_OPAQUE);
+    CHECK(cgba_tile4_classify(1536u, 600u) == CGBA_TILE4_MIXED); /* >= 2048 sentinel */
+
+    /* Every single pixel position (64 pixels) becoming 0 must flip OPAQUE -> MIXED. */
+    for (u32 px = 0; px < 64u; px++) {
+      memset(vram + 0x081u * 32u, 0x5Au, 32u);
+      u32 byte_idx = px >> 1;
+      u8 mask = (px & 1u) ? 0x0Fu : 0xF0u;
+      vram[0x081u * 32u + byte_idx] &= mask;
+      cgba_tile4_invalidate_sbd(1u << (0x081u >> 6));
+      CHECK(cgba_tile4_classify(0u, 0x081u) == CGBA_TILE4_MIXED);
+    }
+
+    /* Non-zero uniform blank row detection + VRAM charblock edit invalidation. */
+    u32 sb = 16u; /* VRAM 0x8000 */
+    u16 *map = (u16 *)(void *)(vram + sb * 2048u);
+    for (u32 i = 0; i < 1024u; i++)
+      map[i] = eswap16((u16)((i & 3u) << 12 | 0x07Fu)); /* varied pal, same empty tid */
+    /* Put one opaque tile in row 5. */
+    map[5u * 32u + 7u] = eswap16(0x0080u);
+    cgba_vram_dirty = CGBA_VRAM_DIRTY_BG;
+    cgba_vram_sb_dirty = (1u << sb);
+    cgba_bg_vram_invalidate();
+    u32 cbb_mask = 0u;
+    u32 em = cgba_sb_compute_empty_rows(sb, 0u, &cbb_mask);
+    CHECK(em == (0xFFFFFFFFu & ~(1u << 5)));
+    CHECK((cbb_mask & (1u << (0x07Fu >> 6))) != 0u);
+
+    /* Now draw a non-zero pixel into tile 0x07F and invalidate its 2 KiB block:
+     * row_all_empty must drop to 0! */
+    vram[0x07Fu * 32u + 12u] = 0x04u;
+    cgba_vram_dirty = CGBA_VRAM_DIRTY_BG;
+    cgba_vram_sb_dirty = (1u << (0x07Fu >> 6));
+    cgba_bg_vram_invalidate();
+    cbb_mask = 0u;
+    em = cgba_sb_compute_empty_rows(sb, 0u, &cbb_mask);
+    CHECK(em == 0u);
+    memset(vram + 0x07Fu * 32u, 0, 32u);
+    cgba_tile4_invalidate_all();
+
+    /* Exhaustive 27-case (cls0, cls1, cls2) truth-table test for try_merge_2/3,
+     * covering both same_h and mismatched seg1, thoff=0 (30) and thoff!=0 (31),
+     * with HFLIP/VFLIP/palette bits preserved. */
+    u16 tids[3] = { 0x1ECu, 0x080u, 0x081u }; /* EMPTY, OPAQUE, MIXED */
+    u16 m0[32], m1[32], m2[32], out[32];
+    for (u32 c0 = 0; c0 < 3u; c0++) {
+      for (u32 c1 = 0; c1 < 3u; c1++) {
+        u16 r0 = eswap16((u16)(0x1400u | tids[c0]));
+        u16 r1 = eswap16((u16)(0x2800u | tids[c1]));
+        for (u32 s = 0; s < 31u; s++) { m0[s] = r0; m1[s] = r1; }
+        const u16 *am1_2[2] = { m0, m1 };
+        const u16 *am2_2[2] = { m0 + 17, m1 + 17 };
+        u32 seg_same[2] = { 17u, 17u };
+        u32 seg_diff[2] = { 17u, 11u };
+        const u16 *am2_2d[2] = { m0 + 17, m1 + 11 };
+        bool exp2 = !(c1 == 2u && c0 != 0u);
+        u16 exp_tile2 = (c1 == 1u || (c1 == 2u && c0 == 0u)) ? r1 : r0;
+        CHECK(cgba_mode0_try_merge_2(out, 30u, 0u, am1_2, am2_2, seg_same) == exp2);
+        if (exp2) {
+          for (u32 s = 0; s < 30u; s++) CHECK(out[s] == exp_tile2);
+        }
+        CHECK(cgba_mode0_try_merge_2(out, 31u, 0u, am1_2, am2_2d, seg_diff) == exp2);
+        if (exp2) {
+          for (u32 s = 0; s < 31u; s++) CHECK(out[s] == exp_tile2);
+        }
+
+        for (u32 c2 = 0; c2 < 3u; c2++) {
+          u16 r2 = eswap16((u16)(0x3C00u | tids[c2]));
+          for (u32 s = 0; s < 31u; s++) m2[s] = r2;
+          const u16 *am1_3[3] = { m0, m1, m2 };
+          const u16 *am2_3[3] = { m0 + 19, m1 + 19, m2 + 19 };
+          u32 seg3_same[3] = { 19u, 19u, 19u };
+          const u16 *am2_3d[3] = { m0 + 19, m1 + 11, m2 + 23 };
+          u32 seg3_diff[3] = { 19u, 11u, 23u };
+          bool exp3;
+          u16 exp_tile3 = r0;
+          if (c2 == 1u) {
+            exp3 = true; exp_tile3 = r2;
+          } else if (c2 == 0u) {
+            exp3 = exp2; exp_tile3 = exp_tile2;
+          } else {
+            exp3 = (c1 == 0u && c0 == 0u); exp_tile3 = r2;
+          }
+          CHECK(cgba_mode0_try_merge_3(out, 30u, 0u, am1_3, am2_3, seg3_same) == exp3);
+          if (exp3) {
+            for (u32 s = 0; s < 30u; s++) CHECK(out[s] == exp_tile3);
+          }
+          CHECK(cgba_mode0_try_merge_3(out, 31u, 0u, am1_3, am2_3d, seg3_diff) == exp3);
+          if (exp3) {
+            for (u32 s = 0; s < 31u; s++) CHECK(out[s] == exp_tile3);
+          }
+        }
+      }
+    }
+  }
+
+  /* ======================================================================
+   * Phase 3A/3B/3C/3D differential tests: Mode 1/2 affine plans & dirty skip,
+   * direct RGB565 OBJ_MOD_SEMITRAN blend (normal/clipped/sat/overlap/tgt2),
+   * and WIN0/WIN1 differing-layer-mask multi-span windowing.
+   * ====================================================================== */
+  {
+    /* Helper to reset IO and fill randomized BG/OBJ VRAM & palettes. */
+    auto init_scene = [&]() {
+      memset(io_registers, 0, sizeof(io_registers));
+      memset(oam_ram, 0, sizeof(oam_ram));
+      for (u32 i = 0; i < 128; i++)
+        oam_ram[i * 4] = eswap16(0x0200u); /* disable all sprites */
+      for (u32 i = 0; i < 512; i++)
+        palette_ram_converted[i] = (u16)(rand_u32() & 0xFFFFu);
+      for (u32 i = 0; i < sizeof(vram); i++) {
+        u32 r = rand_u32();
+        vram[i] = (r & 3u) ? (u8)(r >> 8) : 0u; /* ~25% zero bytes for transparency */
+      }
+      /* Zero tile 0 in charblock 0 to exercise empty-tile skips too. */
+      memset(vram, 0, 64u);
+      palette_ram_dirty = CGBA_PALETTE_DIRTY_ACTIVE;
+      cgba_vram_dirty = CGBA_VRAM_DIRTY_ALL;
+      cgba_vram_sb_dirty = 0;
+      cgba_video_io_dirty = 1;
+      reg[OAM_UPDATED] = 1;
+      video_invalidate_scanline_cache(0, 160);
+    };
+
+    /* 1. Mode 1 (BG0/BG1 4bpp text + BG2 affine) & Mode 2 (BG2/BG3 affine):
+     *    scale (dy==0) & rotate (dy!=0), wrap & nowrap, negative dx/dy,
+     *    and steady-frame dirty-row skip preserving affine_reference_x/y. */
+    init_scene();
+    for (u32 trial = 0; trial < 24u; trial++) {
+      u32 mode = (trial < 14u) ? 1u : 2u;
+      bool wrap = (trial & 1u) != 0u;
+      bool rot = (trial & 2u) != 0u;
+      bool mos = (trial % 7u) == 0u;
+      u32 map_sz = trial & 3u;
+      u16 dispcnt = (u16)(mode | ((mode == 1u) ? 0x1700u : 0x1C00u) | 0x0040u);
+      write_ioreg(REG_DISPCNT, dispcnt);
+      write_ioreg(REG_BG0CNT, (u16)(0x0800u | (trial & 3u)));
+      write_ioreg(REG_BG1CNT, (u16)(0x0900u | ((trial + 1u) & 3u)));
+      write_ioreg(REG_BG2CNT, (u16)((map_sz << 14) | (wrap ? 0x2000u : 0u) |
+                                    0x0A00u | (mos ? 0x0040u : 0u) | ((trial + 2u) & 3u)));
+      write_ioreg(REG_BG3CNT, (u16)((((map_sz + 1u) & 3u) << 14) | (!wrap ? 0x2000u : 0u) |
+                                    0x0C00u | ((trial + 3u) & 3u)));
+      write_ioreg(REG_BG0HOFS, (u16)(trial * 13u));
+      write_ioreg(REG_BG0VOFS, (u16)(trial * 7u));
+      write_ioreg(REG_BG1HOFS, (u16)(trial * 5u));
+      write_ioreg(REG_BG1VOFS, (u16)(trial * 11u));
+      write_ioreg(REG_MOSAIC, mos ? 0x0023u : 0x0000u);
+      s16 pa = (trial & 4u) ? (s16)-320 : (s16)(192 + (trial * 29u & 0xFFu));
+      s16 pb = rot ? (s16)(64 - (int)(trial * 17u & 0x7Fu)) : (s16)0;
+      s16 pc = rot ? (s16)(-48 + (int)(trial * 19u & 0x7Fu)) : (s16)0;
+      s16 pd = (s16)(256 + (int)(trial * 13u & 0x7Fu));
+      write_ioreg(REG_BG2PA, (u16)pa); write_ioreg(REG_BG2PB, (u16)pb);
+      write_ioreg(REG_BG2PC, (u16)pc); write_ioreg(REG_BG2PD, (u16)pd);
+      write_ioreg(REG_BG3PA, (u16)(pa >> 1)); write_ioreg(REG_BG3PB, (u16)-pb);
+      write_ioreg(REG_BG3PC, (u16)-pc); write_ioreg(REG_BG3PD, (u16)pd);
+      s32 rx0 = ((s32)(trial & 1u ? -20 : 12)) << 8;
+      s32 ry0 = ((s32)(trial & 2u ? -10 : 8)) << 8;
+      write_ioreg(REG_BG2X_L, (u16)(rx0 & 0xFFFF)); write_ioreg(REG_BG2X_H, (u16)(rx0 >> 16));
+      write_ioreg(REG_BG2Y_L, (u16)(ry0 & 0xFFFF)); write_ioreg(REG_BG2Y_H, (u16)(ry0 >> 16));
+      write_ioreg(REG_BG3X_L, (u16)(rx0 & 0xFFFF)); write_ioreg(REG_BG3X_H, (u16)(rx0 >> 16));
+      write_ioreg(REG_BG3Y_L, (u16)(ry0 & 0xFFFF)); write_ioreg(REG_BG3Y_H, (u16)(ry0 >> 16));
+      cgba_video_io_dirty = 1;
+      CHECK(verify_frame("phase3_mode12_affine"));
+      /* Verify dirty-row mask recorded all 160 rows on dirty frame. */
+      CHECK(cgba_video_frame_dirty_rows == 160u);
+      CHECK(cgba_video_frame_dirty_row_mask[0] == 0xFFFFFFFFu &&
+            cgba_video_frame_dirty_row_mask[4] == 0xFFFFFFFFu);
+      /* Second identical frame must skip all 160 rows cleanly! */
+      CHECK(verify_frame("phase3_mode12_affine_steady"));
+      CHECK(cgba_video_frame_dirty_rows == 0u);
+      CHECK((cgba_video_frame_dirty_row_mask[0] | cgba_video_frame_dirty_row_mask[1] |
+             cgba_video_frame_dirty_row_mask[2] | cgba_video_frame_dirty_row_mask[3] |
+             cgba_video_frame_dirty_row_mask[4]) == 0u);
+    }
+
+    /* 2. Phase 3C: Direct RGB565 OBJ_MOD_SEMITRAN blend vs STCKCOLOR reference. */
+    init_scene();
+    write_ioreg(REG_DISPCNT, 0x1340u); /* Mode 0, BG0 + BG1 + OBJ, 1D OBJ */
+    write_ioreg(REG_BG0CNT, 0x0801u);  /* prio 1 */
+    write_ioreg(REG_BG1CNT, 0x0902u);  /* prio 2 */
+    /* BLDCNT: no BG effect (mode 0), 2nd targets = BG0 + BG1 + Backdrop (0x2300) */
+    write_ioreg(REG_BLDCNT, 0x2300u);
+
+    for (u32 c = 0; c < 12u; c++) {
+      for (u32 i = 0; i < 128; i++)
+        oam_ram[i * 4] = eswap16(0x0200u);
+      u32 eva = (c & 1u) ? 12u : 7u;
+      u32 evb = (c & 2u) ? 10u : 9u; /* c&3==3 tests saturating eva+evb=22 > 16 */
+      write_ioreg(REG_BLDALPHA, (u16)(eva | (evb << 8)));
+      /* Place non-overlapping 4bpp SEMITRAN OBJs (normal, hflip, vflip, clipped). */
+      s32 xs[3] = { (c == 4u) ? -4 : 16, 100, (c == 5u) ? 232 : 180 };
+      for (u32 k = 0; k < 3u; k++) {
+        u16 a0 = (u16)(((20u + k * 24u) & 0xFFu) | 0x0400u); /* OBJ_MOD_SEMITRAN, 4bpp, square */
+        u16 a1 = (u16)((xs[k] & 0x1FFu) | 0x4000u |           /* 16x16 */
+                       ((k == 1u) ? 0x1000u : 0u) |            /* hflip */
+                       ((k == 2u) ? 0x2000u : 0u));            /* vflip */
+        u16 a2 = (u16)((k * 16u) | (1u << 10) | ((k + 1u) << 12)); /* prio 1 */
+        oam_ram[k * 4 + 0] = eswap16(a0);
+        oam_ram[k * 4 + 1] = eswap16(a1);
+        oam_ram[k * 4 + 2] = eswap16(a2);
+      }
+      if (c == 6u) {
+        /* Add an overlapping normal OBJ underneath sprite 0 -> must trigger fallback. */
+        oam_ram[10 * 4 + 0] = eswap16(20u);
+        oam_ram[10 * 4 + 1] = eswap16(20u | 0x4000u);
+        oam_ram[10 * 4 + 2] = eswap16(0x0040u | (1u << 10));
+      } else if (c == 7u) {
+        /* Add an overlapping normal OBJ ABOVE (lower OAM idx) sprite 0 -> still direct-safe! */
+        oam_ram[0 * 4 + 0] = eswap16(20u);
+        oam_ram[0 * 4 + 1] = eswap16(20u | 0x4000u);
+        oam_ram[0 * 4 + 2] = eswap16(0x0040u | (0u << 10));
+        oam_ram[1 * 4 + 0] = eswap16(20u | 0x0400u);
+        oam_ram[1 * 4 + 1] = eswap16(16u | 0x4000u);
+        oam_ram[1 * 4 + 2] = eswap16(0x0010u | (1u << 10));
+      } else if (c == 8u) {
+        /* Remove BG1 from 2nd targets -> priority 1 must NOT use direct alpha. */
+        write_ioreg(REG_BLDCNT, 0x2100u);
+      } else {
+        write_ioreg(REG_BLDCNT, 0x2300u);
+      }
+      reg[OAM_UPDATED] = 1;
+      cgba_video_io_dirty = 1;
+      CHECK(verify_frame("phase3_semitran_obj"));
+      if (c < 6u) {
+        CHECK(cgba_m0.obj_alpha_direct_pmask != 0u);
+        CHECK(obj_alpha_complex[24] == 0u);
+      } else if (c == 6u) {
+        CHECK(obj_alpha_complex[24] != 0u);
+      } else if (c == 8u) {
+        CHECK((cgba_m0.obj_alpha_direct_pmask & (1u << 1)) == 0u);
+      }
+    }
+
+    /* 3. Phase 3D: WIN0/WIN1 differing layer masks (normal, inverted, overlapping,
+     *    and mixed effect/non-effect spans) in Mode 0 and Mode 1. */
+    init_scene();
+    for (u32 w = 0; w < 12u; w++) {
+      u32 mode = (w >= 8u) ? 1u : 0u;
+      u32 wctrl = 1u + (w % 3u); /* 1=WIN0, 2=WIN1, 3=WIN0+WIN1 */
+      write_ioreg(REG_DISPCNT, (u16)(mode | (wctrl << 13) | 0x1740u));
+      write_ioreg(REG_BG0CNT, 0x0800u);
+      write_ioreg(REG_BG1CNT, 0x0901u);
+      write_ioreg(REG_BG2CNT, (mode == 1u) ? 0x6A02u : 0x0A02u);
+      write_ioreg(REG_BG0HOFS, (u16)(w * 9u));
+      write_ioreg(REG_BG1HOFS, (u16)(w * 7u));
+      write_ioreg(REG_BG2PA, 0x0120u); write_ioreg(REG_BG2PB, 0x0010u);
+      write_ioreg(REG_BG2PC, 0xFFE8u); write_ioreg(REG_BG2PD, 0x0110u);
+      if (w & 1u) {
+        /* Normal windows */
+        write_ioreg(REG_WIN0H, (u16)((20u << 8) | 200u));
+        write_ioreg(REG_WIN0V, (u16)((16u << 8) | 120u));
+        write_ioreg(REG_WIN1H, (u16)((80u << 8) | 232u));
+        write_ioreg(REG_WIN1V, (u16)((40u << 8) | 150u));
+      } else {
+        /* Inverted (l > r and/or top > bot) windows */
+        write_ioreg(REG_WIN0H, (u16)((180u << 8) | 40u));
+        write_ioreg(REG_WIN0V, (u16)((120u << 8) | 30u));
+        write_ioreg(REG_WIN1H, (u16)((210u << 8) | 70u));
+        write_ioreg(REG_WIN1V, (u16)((20u << 8) | 140u));
+      }
+      /* Differing layer masks in WIN0, WIN1, WINOUT + mixed color effects. */
+      write_ioreg(REG_WININ, (u16)(0x15u | (0x33u << 8)));
+      write_ioreg(REG_WINOUT, 0x26u);
+      write_ioreg(REG_BLDCNT, (w & 2u) ? 0x00EFu : 0x0000u);
+      write_ioreg(REG_BLDY, 0x0008u);
+      cgba_video_io_dirty = 1;
+      CHECK(verify_frame("phase3_win_multispan"));
+      CHECK(cgba_m0.win_multi_active != 0u);
+    }
+
+    /* 4. 8-bpp blend_bg direct RGB565 fast path (both !base_done backdrop-folded
+     *    LUT via empty lower BG skip AND base_done direct blend over opaque BG0),
+     *    aligned & unaligned HOFS (0..7 + 512-wide seam), hflip/vflip, sat/nonsat,
+     *    and palette-write cache invalidation. */
+    init_scene();
+    /* Populate 8-bpp tiles in charblock 1 (vram[0x4000..0x8000]) with transparent
+     * (0) and non-zero indices 1..255, plus 4-bpp tiles in charblock 0. */
+    for (u32 t = 0; t < 32u; t++) {
+      u8 *tp = &vram[0x4000u + t * 64u];
+      for (u32 i = 0; i < 64u; i++) {
+        if (t == 0u)
+          tp[i] = 0u; /* all-zero transparent tile */
+        else if (((t + i) & 7u) == 0u)
+          tp[i] = 0u; /* mixed transparent pixels */
+        else
+          tp[i] = (u8)(1u + ((t * 17u + i * 5u) % 255u));
+      }
+    }
+    /* BG0 (sb=28): 100% empty except tile rows 4 and 15 (exercises BOTH !base_done
+     * and base_done strips inside the same frame!). */
+    memset(&vram[28u * 2048u], 0, 2048u);
+    for (u32 tx = 0; tx < 32u; tx++) {
+      ((u16 *)&vram[28u * 2048u])[4u * 32u + tx] = eswap16((u16)(1u + (tx & 7u)));
+      ((u16 *)&vram[28u * 2048u])[15u * 32u + tx] = eswap16((u16)(2u + (tx & 5u)));
+    }
+    /* BG1 (sb=29): 100% empty 4-bpp layer. */
+    memset(&vram[29u * 2048u], 0, 2048u);
+    /* BG2 (sb=30..31, 512x256 wide 8-bpp layer) with normal, hflip, vflip, hvflip. */
+    for (u32 sb = 30u; sb <= 31u; sb++) {
+      u16 *mp = (u16 *)&vram[sb * 2048u];
+      for (u32 i = 0; i < 1024u; i++) {
+        u16 tid = (u16)((i + sb * 7u) & 31u);
+        u16 fl = (u16)(((i & 3u) == 1u ? 0x0400u : 0u) |
+                       ((i & 3u) == 2u ? 0x0800u : 0u) |
+                       ((i & 3u) == 3u ? 0x0C00u : 0u));
+        mp[i] = eswap16((u16)(tid | fl));
+      }
+    }
+    /* BG3 (sb=27): 100% empty 4-bpp layer above BG2. */
+    memset(&vram[27u * 2048u], 0, 2048u);
+    /* Ensure tile 0 in charblock 0 is all zeros so BG0/BG1/BG3 empty rows match. */
+    memset(&vram[0], 0, 32u);
+    cgba_vram_sb_dirty = 0xFFFFFFFFu;
+
+    write_ioreg(REG_DISPCNT, 0x1F40u); /* Mode 0, BG0+BG1+BG2+BG3+OBJ, 1D OBJ */
+    write_ioreg(REG_BG0CNT, 0x1C03u);  /* prio 3, 4bpp, cbb=0, sb=28 */
+    write_ioreg(REG_BG1CNT, 0x1D02u);  /* prio 2, 4bpp, cbb=0, sb=29 */
+    write_ioreg(REG_BG2CNT, 0x5E85u);  /* prio 1, 8bpp, cbb=1, sb=30, 512x256 */
+    write_ioreg(REG_BG3CNT, 0x1B00u);  /* prio 0, 4bpp, cbb=0, sb=27 */
+    write_ioreg(REG_BLDCNT, 0x3F44u);  /* BLEND: 1st=BG2, 2nd=ALL */
+
+    static const u16 test_hofs[10] = { 0u, 192u, 1u, 2u, 3u, 5u, 7u, 249u, 255u, 487u };
+    for (u32 t = 0; t < 10u; t++) {
+      write_ioreg(REG_BG0HOFS, (u16)(t * 3u));
+      write_ioreg(REG_BG0VOFS, (u16)(157u + t));
+      write_ioreg(REG_BG2HOFS, test_hofs[t]);
+      write_ioreg(REG_BG2VOFS, (u16)(157u + t * 5u));
+      u32 eva = (t == 8u) ? 0u : ((t & 1u) ? 12u : 15u);
+      u32 evb = (t == 8u) ? 16u : ((t & 1u) ? 10u : 1u);
+      write_ioreg(REG_BLDALPHA, (u16)(eva | (evb << 8)));
+      if (t == 5u) {
+        /* Mutate palette mid-sequence (both backdrop and entry 42) to verify
+         * cgba_bg_blend_bd_pal invalidation. */
+        palette_ram_converted[0] = 0x7C1Fu;
+        palette_ram_converted[42] = 0x03E0u;
+        cgba_blend_caches_invalidate();
+      }
+      cgba_video_io_dirty = 1;
+      CHECK(verify_frame("blend8bpp_pop_fastpath"));
+      CHECK(cgba_m0.blend_bg_layer == 2u);
+      CHECK((cgba_bg_plans[2].flags & 8u) != 0u);
+    }
+    /* Also verify non-blend 8-bpp base fast path (BLDCNT=0). */
+    write_ioreg(REG_BLDCNT, 0x0000u);
+    write_ioreg(REG_DISPCNT, 0x0440u); /* BG2 (8-bpp) only */
+    write_ioreg(REG_BG2HOFS, 195u);
+    cgba_video_io_dirty = 1;
+    CHECK(verify_frame("nonblend_8bpp_base"));
+  }
+
   return true;
 }
 

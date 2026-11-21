@@ -21,6 +21,12 @@
 #ifndef CGBA_SH4_PIN_GUEST_R0
 #define CGBA_SH4_PIN_GUEST_R0 1
 #endif
+#ifndef CGBA_SH4_PIN_GUEST_R1
+#define CGBA_SH4_PIN_GUEST_R1 1
+#endif
+#ifndef CGBA_SH4_FASTMEM_OOL_DESC
+#define CGBA_SH4_FASTMEM_OOL_DESC 1
+#endif
 #ifndef CGBA_SH4_LAZY_CHAIN
 #define CGBA_SH4_LAZY_CHAIN 1
 #endif
@@ -108,12 +114,18 @@
 #if CGBA_SH4_PIN_GUEST_R0
   mov.l   r11, @r14
 #endif
+#if CGBA_SH4_PIN_GUEST_R1
+  mov.l   r12, @(4,r14)
+#endif
   mov     #REG_CPSR, r0
   mov.l   r8, @(r0,r14)
 .endm
 .macro CPSR_RELOAD
 #if CGBA_SH4_PIN_GUEST_R0
   mov.l   @r14, r11
+#endif
+#if CGBA_SH4_PIN_GUEST_R1
+  mov.l   @(4,r14), r12
 #endif
   mov     #REG_CPSR, r0
   mov.l   @(r0,r14), r8
@@ -122,6 +134,9 @@
 #if CGBA_SH4_PIN_GUEST_R0
   mov.l   @r14, r11
 #endif
+#if CGBA_SH4_PIN_GUEST_R1
+  mov.l   @(4,r14), r12
+#endif
   mov     r14, r1
   add     #REG_CPSR, r1
   mov.l   @r1, r8
@@ -129,6 +144,9 @@
 .macro CPSR_FLUSH_R1
 #if CGBA_SH4_PIN_GUEST_R0
   mov.l   r11, @r14
+#endif
+#if CGBA_SH4_PIN_GUEST_R1
+  mov.l   r12, @(4,r14)
 #endif
   mov     r14, r1
   add     #REG_CPSR, r1
@@ -202,11 +220,10 @@ defsymbl(sh4_indirect_branch_arm)
   mov.l   ibh_bios_limit, r1
   cmp/hs  r1, r4                  /* T = target >= 0x4000 */
   bt      iba_hash
+  mov.l   ibh_bios_fb, r1
   mov     #REG_PC, r0
-  mov.l   r4, @(r0,r14)           /* match resolver before BIOS fallback */
-  mov.l   ibh_bios_fb, r0
-  jmp     @r0
-  nop
+  jmp     @r1
+  mov.l   r4, @(r0,r14)           /* delay slot: match resolver before BIOS fallback */
 iba_hash:
   mov     r4, r2
   shlr2   r2
@@ -244,9 +261,8 @@ iba_walk:
   mov.l   @r7, r0                 /* hashhdr_type.pc_value */
   cmp/eq  r2, r0
   bt      iba_hit
-  mov.l   @(4,r7), r5             /* hashhdr_type.next_entry */
   bra     iba_walk
-  nop
+  mov.l   @(4,r7), r5             /* delay slot: hashhdr_type.next_entry */
 iba_hit:
   INC_COUNTER cgba_dynarec_ibh_arm_hit_count
   add     #8, r7                  /* sizeof(hashhdr_type) + prologue size */
@@ -277,11 +293,10 @@ defsymbl(sh4_indirect_branch_thumb)
   mov.l   ibh_bios_limit, r1
   cmp/hs  r1, r4                  /* T = target >= 0x4000 */
   bt      ibt_hash
+  mov.l   ibh_bios_fb, r1
   mov     #REG_PC, r0
-  mov.l   r4, @(r0,r14)
-  mov.l   ibh_bios_fb, r0
-  jmp     @r0
-  nop
+  jmp     @r1
+  mov.l   r4, @(r0,r14)           /* delay slot */
 ibt_hash:
   mov     r4, r0
   or      #1, r0
@@ -318,9 +333,8 @@ ibt_walk:
   mov.l   @r7, r0
   cmp/eq  r2, r0
   bt      ibt_hit
-  mov.l   @(4,r7), r5
   bra     ibt_walk
-  nop
+  mov.l   @(4,r7), r5             /* delay slot */
 ibt_hit:
   INC_COUNTER cgba_dynarec_ibh_thumb_hit_count
   add     #8, r7
@@ -388,9 +402,8 @@ defsymbl(sh4_indirect_branch_dual_thumb_current)
   mov.l   @r7, r0
   cmp/eq  r2, r0
   bt      .Libdc_hit
-  mov.l   @(4,r7), r5
   bra     .Libdc_walk
-  nop
+  mov.l   @(4,r7), r5             /* delay slot */
 .Libdc_hit:
   INC_COUNTER cgba_dynarec_ibh_dual_thumb_hit_count
   add     #8, r7
@@ -417,17 +430,15 @@ defsymbl(sh4_update_gba)
   mov.l   r4, @(r0,r14)           /* reg[REG_PC] = current PC */
   CPSR_FLUSH
   sts.l   pr, @-r15               /* save return into the block */
-  mov     r13, r4                 /* arg0 = remaining cycles */
   mov.l   ibh_update_gba_c, r0
   jsr     @r0
-  nop
+  mov     r13, r4                 /* delay slot: arg0 = remaining cycles */
   CPSR_RELOAD_R1                  /* update_gba may take an IRQ (CPSR write) */
   cmp/pz  r0
   bt      1f                      /* bit31 clear -> keep running */
-  lds.l   @r15+, pr
   mov.l   ibh_ret_main, r1
   jmp     @r1
-  nop
+  lds.l   @r15+, pr               /* delay slot */
 1:
   mov     r0, r13
   mov     #-1, r1
@@ -481,10 +492,9 @@ defsymbl(sh4_block_exit)
   mov     r13, r0                 /* single-block diff: return remaining cycles */
 1:
 #endif
-  mov     r13, r4                 /* arg0 = remaining cycles */
   mov.l   ibh_update_gba_c, r0
   jsr     @r0
-  nop
+  mov     r13, r4                 /* delay slot: arg0 = remaining cycles */
   CPSR_RELOAD_R1                  /* update_gba may take an IRQ (CPSR write) */
   cmp/pz  r0
   bt      .Lblock_continue
@@ -496,9 +506,8 @@ defsymbl(sh4_block_exit)
   mov     #-1, r1
   shlr16  r1
   shlr    r1
-  and     r1, r13                 /* cycles = ret & 0x7FFF */
   bra     .Lilram_lookup_pc       /* always re-dispatch on reg[REG_PC] */
-  nop
+  and     r1, r13                 /* delay slot: cycles = ret & 0x7FFF */
 
   .align 2
 #ifdef CGBA_SH4_DIFF_HARNESS
@@ -1079,9 +1088,10 @@ defsymbl(sh4_op2_pc_tramp)          /* + redispatch when the helper moved PC */
   add     #8, r1                    /* skip the TRAMP literal -> fn */
   mov.l   @r1+, r0
   mov.l   @r1+, r4
-  mov     r1, r12                   /* literal cursor survives the C call */
+  mov.l   @r1+, r5                  /* pc; r1 -> cycle_count literal */
   jsr     @r0
-  mov.l   @r12+, r5                 /* pc; r12 -> cycle_count literal */
+  mov.l   r1, @-r15                 /* delay slot: save cursor across C call */
+  mov.l   @r15+, r3                 /* r3 -> cycle_count literal */
   CPSR_RELOAD_R1
   bra     op2_pc_common
   mov     #0, r7                    /* full-width cycle descriptor */
@@ -1093,9 +1103,10 @@ defsymbl(sh4_op2_pc_mem_tramp)      /* + memory debit + PC redispatch */
   add     #8, r1                    /* skip the TRAMP literal -> fn */
   mov.l   @r1+, r0
   mov.l   @r1+, r4
-  mov     r1, r12
+  mov.l   @r1+, r5
   jsr     @r0
-  mov.l   @r12+, r5
+  mov.l   r1, @-r15                 /* delay slot: save cursor across C call */
+  mov.l   @r15+, r3
   CPSR_RELOAD_R1
   mov.l   tram_extra, r1
   mov.l   @r1, r1
@@ -1114,9 +1125,10 @@ defsymbl(sh4_fastmem_pc_mem_tramp)
   add     #8, r1
   mov.l   @r1+, r0
   mov.l   @r1+, r4
-  mov     r1, r12
+  mov.l   @r1+, r5
   jsr     @r0
-  mov.l   @r12+, r5
+  mov.l   r1, @-r15
+  mov.l   @r15+, r3
   CPSR_RELOAD_R1
   mov.l   tram_extra, r1
   mov.l   @r1, r1
@@ -1124,6 +1136,80 @@ defsymbl(sh4_fastmem_pc_mem_tramp)
   bra     op2_pc_common
   mov     #1, r7                    /* low-16 cycle descriptor */
 
+#if CGBA_SH4_FASTMEM_OOL_DESC
+/* Out-of-line slow-path trampoline for non-WB single fastmem sites:
+ * PR is the exact resume address (no inline descriptor after JSR).
+ * First probes the 256-entry direct-mapped cache in ASM (~13 insns on hit);
+ * on miss, calls _cgba_sh4_fastmem_ool_lookup(PR) to binary-search & fill. */
+defsymbl(sh4_fastmem_compact8_tramp)
+  sts     pr, r4                    /* r4 = ret_pc */
+  sts.l   pr, @-r15
+  CPSR_FLUSH
+  mov     r4, r0
+  shlr    r0                        /* r0 = ret_pc >> 1 */
+  mov     r0, r1
+  shlr8   r1                        /* r1 = ret_pc >> 9 */
+  xor     r1, r0
+  extu.b  r0, r0                    /* 0..255 */
+  shll2   r0                        /* byte offset */
+  mov.l   tram_ool_cache, r1
+  mov.l   @(r0,r1), r1              /* r1 = cached cgba_sh4_fm_desc * */
+  tst     r1, r1
+  bt      .Lfm8_ool_miss
+  mov.l   @r1, r0                   /* r0 = desc->ret_pc */
+  cmp/eq  r4, r0
+  bf      .Lfm8_ool_miss
+.Lfm8_ool_hit:
+  mov.l   @(4,r1), r5               /* r5 = pc_flags (bit31 = is_arm) */
+  mov.l   @(8,r1), r4               /* r4 = opcode */
+  mov.l   @(12,r1), r1              /* r1 = cycle_count */
+  cmp/pz  r5                        /* T = 1 -> Thumb, T = 0 -> ARM */
+  bf      .Lfm8_ool_arm
+  mov.l   tram_ool_thumb_ldst, r0
+  jsr     @r0
+  mov.l   r1, @-r15                 /* delay slot: save cycle_count */
+  bra     .Lfm8_ool_post
+  nop
+.Lfm8_ool_arm:
+  shll    r5
+  shlr    r5                        /* clear bit 31 -> guest pc */
+  mov.l   tram_ool_arm_ldst, r0
+  jsr     @r0
+  mov.l   r1, @-r15                 /* delay slot: save cycle_count */
+.Lfm8_ool_post:
+  mov.l   @r15+, r3                 /* r3 = cycle_count */
+  CPSR_RELOAD_R1
+  mov.l   tram_extra, r1
+  mov.l   @r1, r1
+  sub     r1, r13
+  tst     r0, r0
+  bt      .Lfm8_cont
+  sub     r3, r13                   /* block cycle debit on non-zero exit */
+  mov     r0, r1
+  mov     #REG_PC, r0
+  mov.l   @(r0,r14), r4
+  bra     sh4_helper_exit
+  lds.l   @r15+, pr                 /* delay slot */
+.Lfm8_cont:
+  lds.l   @r15+, pr
+  rts
+  nop
+.Lfm8_ool_miss:
+  mov.l   tram_ool_lookup, r0
+  jsr     @r0
+  nop
+  bra     .Lfm8_ool_hit
+  mov     r0, r1                    /* delay slot: r1 = found desc */
+.align 2
+tram_ool_cache:
+  .long   _cgba_sh4_fm_ool_cache
+tram_ool_lookup:
+  .long   _cgba_sh4_fastmem_ool_lookup
+tram_ool_thumb_ldst:
+  .long   _cgba_sh4_thumb_ldst
+tram_ool_arm_ldst:
+  .long   _cgba_sh4_arm_ldst
+#else
 /* Ultra-compact non-writeback single fastmem slow-path trampoline.
  * PR points directly to the 4-byte-aligned inline descriptor:
  *   Thumb (bit31 of @PR == 0):
@@ -1144,7 +1230,7 @@ defsymbl(sh4_fastmem_compact8_tramp)
   cmp/pz  r5                        /* T = 1 -> Thumb, T = 0 -> ARM */
   bf      .Lfm8_arm
   mov.l   @r1, r4                   /* r4 = (thumb_op << 16) | cycles16 */
-  mov     r1, r12                   /* r12 -> cycles16; r12+4 = PR+8 resume */
+  mov.l   r1, @-r15                 /* save cursor -> cycles16; +4 = PR+8 resume */
   mov.l   tram_thumb_ldst, r0
   jsr     @r0
   shlr16  r4                        /* delay slot: r4 = thumb_opcode */
@@ -1155,19 +1241,19 @@ defsymbl(sh4_fastmem_compact8_tramp)
   shlr    r5                        /* strip bit31 -> real ARM pc */
   mov.l   @r1+, r4                  /* r4 = arm_opcode */
   add     #4, r1                    /* skip BRA +2 ; NOP at PR+8 */
-  mov     r1, r12                   /* r12 -> cycle_count; r12+4 = PR+16 resume */
   mov.l   tram_arm_ldst, r0
   jsr     @r0
-  nop
+  mov.l   r1, @-r15                 /* delay slot: save cursor -> cycle_count */
   mov     #0, r7                    /* full-32 cycle descriptor */
 .Lfm8_post:
+  mov.l   @r15+, r3                 /* r3 = literal cursor */
   CPSR_RELOAD_R1
   mov.l   tram_extra, r1
   mov.l   @r1, r1
   sub     r1, r13
   tst     r0, r0
   bt      .Lfm8_cont
-  mov.l   @r12, r1
+  mov.l   @r3, r1
   tst     r7, r7
   bt      1f
   extu.w  r1, r1
@@ -1176,13 +1262,12 @@ defsymbl(sh4_fastmem_compact8_tramp)
   mov     r0, r1
   mov     #REG_PC, r0
   mov.l   @(r0,r14), r4
-  lds.l   @r15+, pr
   bra     sh4_helper_exit
-  nop
+  lds.l   @r15+, pr                 /* delay slot */
 .Lfm8_cont:
   lds.l   @r15+, pr
-  add     #4, r12
-  jmp     @r12
+  add     #4, r3
+  jmp     @r3
   nop
 .align 2
 tram_thumb_ldst:
@@ -1190,11 +1275,12 @@ tram_thumb_ldst:
 tram_arm_ldst:
   .long   _cgba_sh4_arm_ldst
 #endif
+#endif
 
 op2_pc_common:
   tst     r0, r0
   bt      1f                        /* R0 == 0: continue the block */
-  mov.l   @r12, r1
+  mov.l   @r3, r1
   tst     r7, r7
   bt      2f
   extu.w  r1, r1
@@ -1203,9 +1289,8 @@ op2_pc_common:
   mov     r0, r1                    /* helper code for sh4_helper_exit */
   mov     #REG_PC, r0
   mov.l   @(r0,r14), r4             /* R4 = committed reg[REG_PC] */
-  lds.l   @r15+, pr                 /* balance the stack (value unused) */
   bra     sh4_helper_exit
-  nop
+  lds.l   @r15+, pr                 /* delay slot: balance stack */
 1:
   lds.l   @r15+, pr
   rts

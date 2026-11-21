@@ -81,6 +81,20 @@ static void test_row_avg(void)
 			"row_avg[%u]=%04X want %04X", i, dst[i],
 			ref_avg(a[i], b[i]));
 	CHECK(dst[384] == CANARY && dst[385] == CANARY, "row_avg canary");
+	{
+		_Alignas(4) uint16_t d0[386], d1[386];
+		d0[384] = d0[385] = d1[384] = d1[385] = CANARY;
+		cgba_scale_row_avg_dup2(a, b, d0, d1, 384);
+		for (i = 0; i < 384; i++) {
+			uint16_t exp = ref_avg(a[i], b[i]);
+			CHECK(d0[i] == exp && d1[i] == exp,
+				"row_avg_dup2[%u]=(%04X,%04X) want %04X",
+				i, d0[i], d1[i], exp);
+		}
+		CHECK(d0[384] == CANARY && d0[385] == CANARY &&
+		      d1[384] == CANARY && d1[385] == CANARY,
+		      "row_avg_dup2 canary");
+	}
 	cgba_scale_row_avg(a, b, dst, 320);
 	for (i = 320; i < 384; i++)
 		dst[i] = 0;

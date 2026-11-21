@@ -9,7 +9,131 @@
 
 #include <string.h>
 #include "vendor/gpsp/common.h"   /* gpSP fixed-size types (u8/u32/...) */
+#include "vendor/gpsp/gpsp_config.h"
 #include "ports/fxcg100/sh4/sh4_fastmem.h"
+
+#if CGBA_SH4_COMPACT_FASTMEM_TUPLE && CGBA_SH4_FASTMEM_OOL_DESC
+extern u8 rom_translation_cache[ROM_TRANSLATION_CACHE_SIZE];
+extern u8 ram_translation_cache[RAM_TRANSLATION_CACHE_SIZE];
+extern int cgba_sh4_extra_cycles;
+
+/* Out-of-line slow-path descriptors for non-WB single fastmem sites:
+ *   - ROM cache: grows downward from the top of rom_translation_cache (sorted
+ *     in strictly descending ret_pc order; shares the existing ROM arena with
+ *     zero extra .cgba.highbss cost).
+ *   - RAM cache: fixed 1024-entry table (16 KiB in .cgba.highbss, sorted in
+ *     strictly ascending ret_pc order; any overflow falls back to op2 tramp). */
+enum { CGBA_SH4_RAM_FM_DESC_MAX = 1024 };
+static cgba_sh4_fm_desc cgba_sh4_ram_fm_desc[CGBA_SH4_RAM_FM_DESC_MAX] CGBA_HIGH_BSS;
+static u32 cgba_sh4_ram_fm_desc_count CGBA_HIGH_BSS;
+static cgba_sh4_fm_desc *cgba_sh4_rom_fm_desc_cur CGBA_HIGH_BSS;
+const cgba_sh4_fm_desc *cgba_sh4_fm_ool_cache[256] CGBA_HIGH_BSS;
+
+static inline cgba_sh4_fm_desc *cgba_sh4_rom_fm_desc_top(void)
+{
+  return (cgba_sh4_fm_desc *)(void *)(rom_translation_cache + ROM_TRANSLATION_CACHE_SIZE);
+}
+
+void cgba_sh4_fm_ool_reset_rom(void)
+{
+  cgba_sh4_rom_fm_desc_cur = cgba_sh4_rom_fm_desc_top();
+  memset(cgba_sh4_fm_ool_cache, 0, sizeof(cgba_sh4_fm_ool_cache));
+}
+
+void cgba_sh4_fm_ool_reset_ram(void)
+{
+  cgba_sh4_ram_fm_desc_count = 0u;
+  memset(cgba_sh4_fm_ool_cache, 0, sizeof(cgba_sh4_fm_ool_cache));
+}
+
+u8 *cgba_sh4_fm_ool_rom_limit(u32 threshold)
+{
+  cgba_sh4_fm_desc *cur = cgba_sh4_rom_fm_desc_cur;
+  if (!cur) {
+    cur = cgba_sh4_rom_fm_desc_top();
+    cgba_sh4_rom_fm_desc_cur = cur;
+  }
+  u8 *top_bytes = (u8 *)(void *)cur;
+  if (top_bytes <= rom_translation_cache + threshold)
+    return rom_translation_cache;
+  return top_bytes - threshold;
+}
+
+int cgba_sh4_fm_ool_can_record(const u8 *tp)
+{
+  if (tp >= rom_translation_cache &&
+      tp < rom_translation_cache + ROM_TRANSLATION_CACHE_SIZE) {
+    cgba_sh4_fm_desc *cur = cgba_sh4_rom_fm_desc_cur;
+    if (!cur) {
+      cur = cgba_sh4_rom_fm_desc_top();
+      cgba_sh4_rom_fm_desc_cur = cur;
+    }
+    return (const u8 *)(void *)(cur - 1) >
+           tp + TRANSLATION_CACHE_LIMIT_THRESHOLD + 256u;
+  }
+  if (tp >= ram_translation_cache &&
+      tp < ram_translation_cache + RAM_TRANSLATION_CACHE_SIZE) {
+    return cgba_sh4_ram_fm_desc_count < CGBA_SH4_RAM_FM_DESC_MAX;
+  }
+  return 0;
+}
+
+void cgba_sh4_fm_ool_push(u32 ret_pc, u32 pc_flags, u32 opcode, u32 cycle_count)
+{
+  const u8 *p = (const u8 *)(uintptr_t)ret_pc;
+  if (p >= rom_translation_cache &&
+      p < rom_translation_cache + ROM_TRANSLATION_CACHE_SIZE) {
+    cgba_sh4_fm_desc *d = --cgba_sh4_rom_fm_desc_cur;
+    d->ret_pc = ret_pc;
+    d->pc_flags = pc_flags;
+    d->opcode = opcode;
+    d->cycle_count = cycle_count;
+  } else {
+    cgba_sh4_fm_desc *d = &cgba_sh4_ram_fm_desc[cgba_sh4_ram_fm_desc_count++];
+    d->ret_pc = ret_pc;
+    d->pc_flags = pc_flags;
+    d->opcode = opcode;
+    d->cycle_count = cycle_count;
+  }
+}
+
+CGBA_HOT_TEXT const cgba_sh4_fm_desc *cgba_sh4_fastmem_ool_lookup(u32 ret_pc)
+{
+  const u8 *p = (const u8 *)(uintptr_t)ret_pc;
+  const cgba_sh4_fm_desc *found = NULL;
+  if (p >= rom_translation_cache &&
+      p < rom_translation_cache + ROM_TRANSLATION_CACHE_SIZE) {
+    const cgba_sh4_fm_desc *arr = cgba_sh4_rom_fm_desc_cur;
+    u32 n = (u32)(cgba_sh4_rom_fm_desc_top() - arr);
+    u32 lo = 0u, hi = n;
+    while (lo < hi) {
+      u32 mid = lo + ((hi - lo) >> 1);
+      u32 k = arr[mid].ret_pc;
+      if (k == ret_pc) { found = &arr[mid]; break; }
+      if (k > ret_pc) lo = mid + 1u; else hi = mid;
+    }
+  } else {
+    const cgba_sh4_fm_desc *arr = cgba_sh4_ram_fm_desc;
+    u32 lo = 0u, hi = cgba_sh4_ram_fm_desc_count;
+    while (lo < hi) {
+      u32 mid = lo + ((hi - lo) >> 1);
+      u32 k = arr[mid].ret_pc;
+      if (k == ret_pc) { found = &arr[mid]; break; }
+      if (k < ret_pc) lo = mid + 1u; else hi = mid;
+    }
+  }
+  if (!found) {
+#if defined(CGBA_FXCG100) || defined(CGBA_FXCG50)
+    extern void gint_panic(uint32_t code);
+    gint_panic(0x0CBFu);              /* missing OOL fastmem descriptor */
+#endif
+    for (;;)
+      ;
+  }
+  cgba_sh4_fm_ool_cache[((ret_pc >> 1) ^ (ret_pc >> 9)) & 255u] = found;
+  return found;
+}
+#endif
 
 #ifndef CGBA_SH4_FASTMEM_ILRAM
 #define CGBA_SH4_FASTMEM_ILRAM 1
@@ -27,15 +151,20 @@ extern u8 cgba_ilram_fastmem_end[];
 #endif
 #endif
 
-u8 *cgba_sh4_fastmem_routine[CGBA_FM_TOTAL];
-u8 *cgba_sh4_fastmem_io16_store;
-u8 *cgba_sh4_psr_rebank_routine;
+u8 *cgba_sh4_fastmem_routine[CGBA_FM_TOTAL] CGBA_HIGH_BSS;
+u8 *cgba_sh4_fastmem_io16_store CGBA_HIGH_BSS;
+u8 *cgba_sh4_psr_rebank_routine CGBA_HIGH_BSS;
 
 #if CGBA_SH4_FASTMEM_XYRAM
 static u8 cgba_fastmem_buf[8192]
   __attribute__((section(".xyram.fastmem"), aligned(32)));
 #else
-static u8 cgba_fastmem_buf[8192] __attribute__((aligned(32)));
+/* Place overflow/cold resident fastmem routines (io16_store, psr_rebank, WB
+ * handlers that spill past 4 KiB ILRAM) in untranslated P1 .cgba.highbss so
+ * calling them never consumes a P0 ITLB/UTLB entry. Co-locating the routine
+ * table in .cgba.highbss also guarantees clear_gpsp_highbss() invalidates the
+ * cached pointers whenever cgba_fastmem_buf is wiped on ROM switch. */
+static u8 cgba_fastmem_buf[8192] CGBA_HIGH_BSS;
 #endif
 
 #if (defined(CGBA_FXCG100) || defined(CGBA_FXCG50)) && !defined(CGBA_CLASSPAD) && \

@@ -3853,9 +3853,13 @@ bool translate_block_arm(u32 pc, bool ram_region)
        - (0x10000 - ram_block_tag) / 2 * sizeof(ramtag_type)];
   } else {
     translation_ptr = rom_translation_ptr;
+#if defined(SH4_ARCH) && CGBA_SH4_COMPACT_FASTMEM_TUPLE && CGBA_SH4_FASTMEM_OOL_DESC
+    translation_cache_limit = cgba_sh4_fm_ool_rom_limit(TRANSLATION_CACHE_LIMIT_THRESHOLD);
+#else
     translation_cache_limit =
      rom_translation_cache + ROM_TRANSLATION_CACHE_SIZE -
      TRANSLATION_CACHE_LIMIT_THRESHOLD;
+#endif
   }
   attempt_base = translation_ptr;
 
@@ -3971,7 +3975,7 @@ bool translate_block_arm(u32 pc, bool ram_region)
           (pc + 4) != cheat_master_hook &&
           ((pc + 4) >> 12) == pc_region
 #ifdef CGBA_SH4_M4A_MIX_SKIP
-          && !sh4_m4a_skip_image
+          && !sh4_m4a_skip_active()
 #endif
           ) {
         u32 cur_op = readaddress32(pc_address_block, pc & 0x0FFF);
@@ -4538,6 +4542,10 @@ bool translate_block_arm(u32 pc, bool ram_region)
        a simple recursive call here won't work, it has to pedal out to
        the beginning. */
 
+#if defined(SH4_ARCH) && CGBA_SH4_COMPACT_FASTMEM_TUPLE && CGBA_SH4_FASTMEM_OOL_DESC
+    if (!ram_region)
+      translation_cache_limit = cgba_sh4_fm_ool_rom_limit(TRANSLATION_CACHE_LIMIT_THRESHOLD);
+#endif
     if(translation_ptr > translation_cache_limit) {
       CGBA_DIAG_LOG("@@CGBA_XFLUSH arm ram=%d start=%08lx pc=%08lx end=%08lx pos=%ld cap=%lu",
         (int)ram_region, (unsigned long)block_start_pc, (unsigned long)pc,
@@ -4801,15 +4809,13 @@ cgba_thumb_try_peephole(
       int is_signed = (next_op == want_asr);
       unsigned dst_reg = SH4_REG_T0;
       { sh4_codegen cg = sh4g_open(&translation_ptr);
-#if CGBA_SH4_PIN_GUEST_R0
-        if (e_rd == 0u && e_rm == 0u) {
-          dst_reg = SH4_REG_GUEST_R0;
-        } else if (e_rd == 0u) {
-          sh4_emit_load_greg(&cg, e_rm, SH4_REG_GUEST_R0);
-          dst_reg = SH4_REG_GUEST_R0;
-        } else
-#endif
-        {
+        int pin_rd = sh4_pinned_reg(e_rd);
+        if (pin_rd >= 0 && e_rd == e_rm) {
+          dst_reg = (unsigned)pin_rd;
+        } else if (pin_rd >= 0) {
+          sh4_emit_load_greg(&cg, e_rm, (unsigned)pin_rd);
+          dst_reg = (unsigned)pin_rd;
+        } else {
           sh4_emit_load_greg(&cg, e_rm, SH4_REG_T0);
         }
         if (e_is_byte) {
@@ -5244,8 +5250,12 @@ bool translate_block_thumb(u32 pc, bool ram_region)
        - (0x10000 - ram_block_tag) / 2 * sizeof(ramtag_type)];
   } else {
     translation_ptr = rom_translation_ptr;
+#if defined(SH4_ARCH) && CGBA_SH4_COMPACT_FASTMEM_TUPLE && CGBA_SH4_FASTMEM_OOL_DESC
+    translation_cache_limit = cgba_sh4_fm_ool_rom_limit(TRANSLATION_CACHE_LIMIT_THRESHOLD);
+#else
     translation_cache_limit = &rom_translation_cache[
        ROM_TRANSLATION_CACHE_SIZE - TRANSLATION_CACHE_LIMIT_THRESHOLD];
+#endif
   }
   attempt_base = translation_ptr;
 
@@ -5376,6 +5386,54 @@ bool translate_block_thumb(u32 pc, bool ram_region)
             block_start_pc, block_end_pc,
             num_insns, cheat_hook, ram_region);
         }
+        /* 4-slot R4..R7 BBRA for straight-line dead-flag Thumb ALU runs. */
+        if (!thumb_fused && !(block_data[block_data_position].flag_data & 0xFu)) {
+          u32 rm0, wm0;
+          if (sh4g_thumb_bbra_classify(cur_op, &rm0, &wm0)) {
+            u16 run_ops[16];
+            int rlen = 1;
+            run_ops[0] = (u16)cur_op;
+            while (rlen < 16 &&
+                   block_data_position + rlen < num_insns &&
+                   !block_data[block_data_position + rlen].update_cycles &&
+                   !(block_data[block_data_position + rlen].flag_data & 0xFu) &&
+                   (pc + (u32)(rlen * 2)) != cheat_hook &&
+                   ((pc + (u32)(rlen * 2)) & 0x0FFFu) != 0u) {
+              u16 rop = readaddress16(pc_address_block,
+                                      (pc + (u32)(rlen * 2)) & 0x0FFF);
+              u32 rmk, wmk;
+              if (!sh4g_thumb_bbra_classify(rop, &rmk, &wmk))
+                break;
+              run_ops[rlen++] = rop;
+            }
+            /* Preserve trailing const-RAM ADD+LDR peephole if present. */
+            if (rlen >= 2 && sh4_thumb_const_mask != 0u &&
+                block_data_position + rlen < num_insns &&
+                ((run_ops[rlen - 1] & 0xFE00u) == 0x1800u ||
+                 (run_ops[rlen - 1] & 0xFF00u) == 0x4400u) &&
+                ((pc + (u32)(rlen * 2)) & 0x0FFFu) != 0u) {
+              u16 after_op = readaddress16(pc_address_block,
+                                           (pc + (u32)(rlen * 2)) & 0x0FFF);
+              if ((after_op & 0xF800u) == 0x7800u ||
+                  (after_op & 0xF800u) == 0x8800u ||
+                  (after_op & 0xF800u) == 0x6800u)
+                rlen--;
+            }
+            if (rlen >= 2) {
+              u32 wmask = 0u;
+              if (sh4g_thumb_alu_run_native(&translation_ptr, run_ops, rlen, &wmask)) {
+                sh4_thumb_const_mask &= ~wmask;
+                pc += (u32)(rlen * 2);
+                cycle_count += pc_seq_cycles * (u32)(rlen - 1);
+                block_data_position += rlen - 1;
+                last_opcode = run_ops[rlen - 2];
+                opcode = run_ops[rlen - 1];
+                sh4g_litseg_maybe_flush(&translation_ptr);
+                thumb_fused = 1;
+              }
+            }
+          }
+        }
       }
 #endif
       if (!thumb_fused) {
@@ -5418,6 +5476,10 @@ bool translate_block_thumb(u32 pc, bool ram_region)
        a simple recursive call here won't work, it has to pedal out to
        the beginning. */
 
+#if defined(SH4_ARCH) && CGBA_SH4_COMPACT_FASTMEM_TUPLE && CGBA_SH4_FASTMEM_OOL_DESC
+    if (!ram_region)
+      translation_cache_limit = cgba_sh4_fm_ool_rom_limit(TRANSLATION_CACHE_LIMIT_THRESHOLD);
+#endif
     if(translation_ptr > translation_cache_limit)
     {
       CGBA_DIAG_LOG("@@CGBA_XFLUSH thumb ram=%d start=%08lx pc=%08lx end=%08lx pos=%ld cap=%lu",
@@ -5605,6 +5667,9 @@ void flush_translation_cache_ram(void)
     CGBA_SH4_RAM_CACHE_START(ram_translation_cache);
   ram_translation_ptr =
     CGBA_SH4_RAM_CACHE_START(ram_translation_cache);
+#if CGBA_SH4_COMPACT_FASTMEM_TUPLE && CGBA_SH4_FASTMEM_OOL_DESC
+  cgba_sh4_fm_ool_reset_ram();
+#endif
 #else
   last_ram_translation_ptr = ram_translation_cache;
   ram_translation_ptr = ram_translation_cache;
@@ -5719,6 +5784,9 @@ void flush_translation_cache_rom(void)
 
   last_rom_translation_ptr = &rom_translation_cache[rom_cache_watermark];
   rom_translation_ptr      = &rom_translation_cache[rom_cache_watermark];
+#if defined(SH4_ARCH) && CGBA_SH4_COMPACT_FASTMEM_TUPLE && CGBA_SH4_FASTMEM_OOL_DESC
+  cgba_sh4_fm_ool_reset_rom();
+#endif
   memset(rom_branch_hash, 0, sizeof(rom_branch_hash));
   memset(cgba_dynarec_arm_hot, 0, sizeof(cgba_dynarec_arm_hot));
   memset(cgba_dynarec_thumb_hot, 0, sizeof(cgba_dynarec_thumb_hot));
@@ -5729,6 +5797,10 @@ void init_dynarec_caches(void)
 {
 #ifdef SH4_ARCH
   cgba_sh4_fastmem_init();     /* resident ldst fast paths (sh4_fastmem.c) */
+#if CGBA_SH4_COMPACT_FASTMEM_TUPLE && CGBA_SH4_FASTMEM_OOL_DESC
+  cgba_sh4_fm_ool_reset_rom();
+  cgba_sh4_fm_ool_reset_ram();
+#endif
   memset(cgba_hot_count, 0, sizeof(cgba_hot_count));
   cgba_cold_pending = 0;
 #endif
