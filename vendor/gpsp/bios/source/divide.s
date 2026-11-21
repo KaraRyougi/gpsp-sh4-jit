@@ -34,6 +34,11 @@ swi_DivARM:
 swi_Div:
 @ See http://www.tofla.iconbar.com/tofla/arm/arm02/index.htm for more information
 @---------------------------------------------------------------------------------	
+	@ Match GBA BIOS behavior on division by zero (avoid infinite loop):
+	@ r0 = (numerator < 0) ? -1 : 1, r1 = numerator, r3 = 1
+	cmp denominator, #0
+	beq .Ldiv_by_zero
+
 	@ Set if numerator is signed, and abs numerator
 	ands numerator_signed, numerator, #0x80000000
 	rsbmi numerator, numerator, #0
@@ -42,17 +47,16 @@ swi_Div:
 	ands denominator_signed, denominator, #0x80000000
 	rsbmi denominator, denominator, #0
 
-	// Gets set if sign(numerator) != sign(denominator)
-	eor sign_flip, numerator_signed, denominator_signed
+	// Pack signs into r12: bit 31 = sign(numerator), bit 30 = sign(denominator)
+	orr sign_flip, numerator_signed, denominator_signed, lsr #1
 
 	mov accumulator, #0
 	mov current_bit, #1
 
-	// This moves out the current bit to the MSB of the denominator,
-	// and aligns the denominator up to the same bit-length as the
-	// numerator
+	// Align denominator up to numerator without shifting bit 31 out
+	// (prevents infinite loop when numerator == 0x80000000, i.e. INT_MIN)
  0:
-	cmp denominator, numerator
+	cmp denominator, numerator, lsr #1
 	movls denominator, denominator, lsl #1
 	movls current_bit, current_bit, lsl #1
 	bls 0b
@@ -70,7 +74,21 @@ swi_Div:
 	mov result_abs, accumulator
 	mov result, accumulator
 
+	// Remainder carries sign of numerator
+	tst sign_flip, #0x80000000
+	rsbmi remainder, remainder, #0
+
+	// Quotient is negative if sign(numerator) != sign(denominator)
+	eor sign_flip, sign_flip, sign_flip, lsl #1
 	tst sign_flip, #0x80000000
 	rsbmi result, result, #0
 	
+	bx lr
+
+.Ldiv_by_zero:
+	mov remainder, numerator
+	mov result_abs, #1
+	cmp numerator, #0
+	mvnlt result, #0
+	movge result, #1
 	bx lr

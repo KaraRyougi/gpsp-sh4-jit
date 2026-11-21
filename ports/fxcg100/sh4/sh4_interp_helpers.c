@@ -453,6 +453,12 @@ void function_cc execute_store_u8(u32 address, u32 source)
 
 void function_cc execute_store_u16(u32 address, u32 source)
 {
+  u32 region = address >> 24;
+  if (region == 0x0Eu || region == 0x0Fu) {
+    cgba_sh4_charge_mem(address, 0);
+    cgba_store_alert |= write_memory16(address, (u16)source);
+    return;
+  }
   u32 aligned = cgba_sh4_align_store_address(address, 2);
   cgba_sh4_charge_mem(aligned, 0);
   cgba_sh4_note_dma_ctl16(aligned, source);
@@ -462,6 +468,12 @@ void function_cc execute_store_u16(u32 address, u32 source)
 
 void function_cc execute_store_u32(u32 address, u32 source)
 {
+  u32 region = address >> 24;
+  if (region == 0x0Eu || region == 0x0Fu) {
+    cgba_sh4_charge_mem(address, 1);
+    cgba_store_alert |= write_memory32(address, source);
+    return;
+  }
   u32 aligned = cgba_sh4_align_store_address(address, 4);
   cgba_sh4_charge_mem(aligned, 1);
   cgba_store_alert |= write_memory32(aligned, source);
@@ -558,9 +570,10 @@ static void cgba_sh4_thumb_ldst_do(u32 opcode, u32 pc)
   u32 rb = (opcode >> 3) & 7;
 
   if (hi >= 0x48 && hi <= 0x4F) {                  /* LDR Rd,[PC,#imm8*4] */
+    u32 rdpc = (opcode >> 8) & 7;
     u32 addr = ((pc & ~2u) + 4) + ((opcode & 0xFF) * 4);
     cgba_sh4_helper_thumb_ldst_detail(1, addr, 4, CGBA_SH4_TLD_SRC_PC);
-    reg[rd] = execute_load_u32(addr);
+    reg[rdpc] = execute_load_u32(addr);
     return;
   }
   if (hi >= 0x50 && hi <= 0x5F) {                  /* reg-offset forms */
@@ -1040,6 +1053,7 @@ static u32 sh4_rebank_and_irq(u32 next_pc)
   set_cpu_mode(cpu_modes[reg[REG_CPSR] & 0xF]);
   if ((read_ioreg(REG_IE) & read_ioreg(REG_IF)) && read_ioreg(REG_IME) &&
       ((reg[REG_CPSR] & 0x80) == 0)) {
+    reg[REG_BUS_VALUE] = 0xe25ef004u;
     REG_MODE(MODE_IRQ)[6] = next_pc + 4;
     REG_SPSR(MODE_IRQ) = reg[REG_CPSR];
     reg[REG_CPSR] = 0xD2;
@@ -1056,6 +1070,8 @@ static u32 sh4_rebank_and_irq(u32 next_pc)
 u32 execute_spsr_restore(u32 address)
 {
   if (reg[CPU_MODE] != MODE_USER && reg[CPU_MODE] != MODE_SYSTEM) {
+    if (reg[CPU_MODE] == MODE_IRQ)
+      reg[REG_BUS_VALUE] = 0xe55ec002u;
     reg[REG_CPSR] = REG_SPSR(reg[CPU_MODE]);
     if (sh4_rebank_and_irq(address))
       address = 0x00000018;
@@ -1988,7 +2004,11 @@ void cgba_sh4_hle_div(u32 divarm, u32 pc)
 #if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
     cgba_sh4_hle_div_zero_count++;
 #endif
-    cgba_sh4_extra_cycles = 64; /* legacy undefined-input charge */
+    /* Match patched open BIOS (divide.s): q = (num < 0) ? -1 : 1, r = num, |q| = 1. */
+    reg[0] = (num < 0) ? (u32)-1 : 1u;
+    reg[1] = (u32)num;
+    reg[3] = 1u;
+    cgba_sh4_extra_cycles = 64;
     return;
   }
 
@@ -2202,6 +2222,7 @@ u32 cgba_hle_bios_irq_exit(void)
 
   ret_pc = reg[REG_LR] - 4;
   spsr_v = REG_SPSR(MODE_IRQ);
+  reg[REG_BUS_VALUE] = 0xe55ec002u;
   reg[REG_CPSR] = spsr_v;
   set_cpu_mode(cpu_modes[spsr_v & 0xF]);
   reg[REG_PC] = ret_pc;
@@ -2210,6 +2231,7 @@ u32 cgba_hle_bios_irq_exit(void)
    * after an SPSR restore: re-enter the IRQ vector immediately. */
   if ((read_ioreg(REG_IE) & read_ioreg(REG_IF)) && read_ioreg(REG_IME) &&
       (reg[REG_CPSR] & 0x80) == 0) {
+    reg[REG_BUS_VALUE] = 0xe25ef004u;
     REG_MODE(MODE_IRQ)[6] = ret_pc + 4;
     REG_SPSR(MODE_IRQ) = reg[REG_CPSR];
     reg[REG_CPSR] = 0xD2;
@@ -4426,14 +4448,14 @@ static int cgba_hle_bios_swi_num(u32 num, u32 budget)
        * every pause point so IRQs vector exactly as the interpreter would.
        * Fills stay interpreted (rare). */
       u32 cnt = reg[2] & 0x1FFFFFu, fill = (reg[2] >> 24) & 1;
-      if (num == 0x0C && budget > 0 && cnt != 0) {
-        cgba_swi_fastset_materialize(fill);
-        return 3;                        /* caller runs the FastSet engine */
-      }
-      if (num == 0x0B && budget > 0 && cnt != 0) {
+      if ((num == 0x0C || num == 0x0B) && budget > 0 && cnt != 0) {
         u32 src0 = reg[0];
         u32 end0 = src0 + (((reg[2] << 11) >> 9) & ~0xE00000u);
         if ((src0 & 0x0E000000u) && (end0 & 0x0E000000u)) {
+          if (num == 0x0C) {
+            cgba_swi_fastset_materialize(fill);
+            return 3;                    /* caller runs the FastSet engine */
+          }
           cgba_swi_cpuset_materialize(((reg[2] >> 26) & 1) ? 0 : 1, (int)fill);
           return 4;                      /* caller runs the CpuSet engine */
         }

@@ -1931,19 +1931,19 @@ static inline u8 *sh4g_fastmem_emit_pop1_bx(u8 **tp, size_t *bx_tail_off)
  * blocks matters more than its instruction count — inlining it grew the hot
  * IRQ-dispatcher block and cost +59% I-cache misses on AW. In: R1 = merged
  * CPSR (preserved; the site stores it into the cached CPSR R8 after
- * return). Mirrors gpSP's set_cpu_mode exactly: retire r13/r14 into
- * reg_mode[old & 0xF][5..6] (r8..r14 into [0..6] when entering FIQ), load
- * them back from the new row (7 registers when leaving FIQ), update
- * reg[CPU_MODE]. Same-row transitions (USER<->SYSTEM, INVALID<->INVALID)
- * retire-then-reload the same slots, exactly like the C code. Leaf; only
- * uses caller-scratch (R0, R2, R3, R5, R6, R7). */
+ * return). Mirrors gpSP's set_cpu_mode exactly: early-out on old==new;
+ * retire r13/r14 into reg_mode[old & 0xF][5..6], bank r8..r12 via
+ * reg_mode[MODE_USER][0..4] and r8..r14 via reg_mode[MODE_FIQ][0..6] when
+ * entering or leaving FIQ, load r13/r14 from reg_mode[new & 0xF][5..6],
+ * and update reg[CPU_MODE]. Leaf; only uses caller-scratch
+ * (R0, R2, R3, R5, R6, R7). */
 extern u32 reg_mode[7][7];
 extern const u32 cpu_modes[16];
 
 static inline u8 *sh4g_psr_emit_rebank_routine(u8 **tp)
 {
   u8 *entry = *tp;
-  u8 *to_save7, *save_done, *to_load7, *load_done;
+  u8 *same_mode, *from_fiq, *to_fiq;
   int i;
 
   sh4g_litseg_begin();
@@ -1958,8 +1958,12 @@ static inline u8 *sh4g_psr_emit_rebank_routine(u8 **tp)
   { sh4_codegen cg = sh4g_open(tp);
     sh4_emit_mov_l_load_r0(&cg, SH4_REG_T1, SH4_REG_ARG3);
     sh4g_close(tp, &cg); }
-  /* R5 = old gpSP mode */
+  /* R5 = old gpSP mode; early-out when unchanged (avoids FIQ->FIQ re-bank). */
   sh4g_load_greg(tp, SH4_GREG_CPU_MODE, SH4_REG_ARG1);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_cmpeq(&cg, SH4_REG_ARG1, SH4_REG_ARG3);
+    sh4g_close(tp, &cg); }
+  same_mode = sh4g_emit_bt_placeholder(tp);
 
   /* R6 = &reg_mode[old & 0xF], R3 = &reg_mode[new & 0xF] (28-byte rows) */
   sh4g_const(tp, (u32)(uintptr_t)reg_mode, SH4_REG_T2);
@@ -1983,52 +1987,78 @@ static inline u8 *sh4g_psr_emit_rebank_routine(u8 **tp)
     sh4_emit_add_reg(&cg, SH4_REG_T1, SH4_REG_RET);
     sh4_emit_add_reg(&cg, SH4_REG_T1, SH4_REG_RET);  /* 28*new */
     sh4_emit_add_reg(&cg, SH4_REG_RET, SH4_REG_T2);  /* R3 = new row */
+    sh4_emit_mov_reg(&cg, SH4_REG_ARG1, SH4_REG_RET);
+    sh4_emit_cmpeq_imm(&cg, 0x12);                   /* leaving FIQ? */
+    sh4g_close(tp, &cg); }
+  from_fiq = sh4g_emit_bt_placeholder(tp);
+
+  { sh4_codegen cg = sh4g_open(tp);
     sh4_emit_mov_reg(&cg, SH4_REG_ARG3, SH4_REG_RET);
     sh4_emit_cmpeq_imm(&cg, 0x12);                   /* entering FIQ? */
     sh4g_close(tp, &cg); }
-  to_save7 = sh4g_emit_bt_placeholder(tp);
+  to_fiq = sh4g_emit_bt_placeholder(tp);
 
-  { sh4_codegen cg = sh4g_open(tp);                  /* retire r13/r14 */
+  /* Common non-FIQ <-> non-FIQ hot path: retire/load r13/r14 only. */
+  { sh4_codegen cg = sh4g_open(tp);
     sh4_emit_load_greg(&cg, SH4_GREG_SP, SH4_REG_T1);
     sh4_emit_mov_l_store_disp(&cg, SH4_REG_T1, SH4_REG_ARG2, 5);
     sh4_emit_load_greg(&cg, SH4_GREG_LR, SH4_REG_T1);
     sh4_emit_mov_l_store_disp(&cg, SH4_REG_T1, SH4_REG_ARG2, 6);
+    sh4_emit_mov_l_load_disp(&cg, SH4_REG_T2, SH4_REG_T1, 5);
+    sh4_emit_store_greg(&cg, SH4_REG_T1, SH4_GREG_SP);
+    sh4_emit_mov_l_load_disp(&cg, SH4_REG_T2, SH4_REG_T1, 6);
+    sh4_emit_store_greg(&cg, SH4_REG_T1, SH4_GREG_LR);
+    sh4_emit_store_greg(&cg, SH4_REG_ARG3, SH4_GREG_CPU_MODE);
     sh4g_close(tp, &cg); }
-  save_done = sh4g_emit_bra_placeholder(tp);
+  sh4g_patch_cond(same_mode, *tp);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_rts(&cg);
+    sh4_emit_nop(&cg);
+    sh4g_close(tp, &cg); }
 
-  sh4g_patch_cond(to_save7, *tp);
-  { sh4_codegen cg = sh4g_open(tp);                  /* retire r8..r14 */
+  /* Leaving FIQ: save r8..r14 to FIQ bank, restore r8..r12 from USER bank,
+   * load r13..r14 from new mode bank. */
+  sh4g_patch_cond(from_fiq, *tp);
+  { sh4_codegen cg = sh4g_open(tp);
     for (i = 0; i < 7; i++) {
       sh4_emit_load_greg(&cg, 8 + (unsigned)i, SH4_REG_T1);
       sh4_emit_mov_l_store_disp(&cg, SH4_REG_T1, SH4_REG_ARG2, (unsigned)i);
     }
     sh4g_close(tp, &cg); }
-
-  sh4g_patch_bra(save_done, *tp);
+  sh4g_const(tp, (u32)(uintptr_t)reg_mode, SH4_REG_ARG2);
   { sh4_codegen cg = sh4g_open(tp);
-    sh4_emit_mov_reg(&cg, SH4_REG_ARG1, SH4_REG_RET);
-    sh4_emit_cmpeq_imm(&cg, 0x12);                   /* leaving FIQ? */
-    sh4g_close(tp, &cg); }
-  to_load7 = sh4g_emit_bt_placeholder(tp);
-
-  { sh4_codegen cg = sh4g_open(tp);                  /* load r13/r14 */
+    for (i = 0; i < 5; i++) {
+      sh4_emit_mov_l_load_disp(&cg, SH4_REG_ARG2, SH4_REG_T1, (unsigned)i);
+      sh4_emit_store_greg(&cg, SH4_REG_T1, 8 + (unsigned)i);
+    }
     sh4_emit_mov_l_load_disp(&cg, SH4_REG_T2, SH4_REG_T1, 5);
     sh4_emit_store_greg(&cg, SH4_REG_T1, SH4_GREG_SP);
     sh4_emit_mov_l_load_disp(&cg, SH4_REG_T2, SH4_REG_T1, 6);
     sh4_emit_store_greg(&cg, SH4_REG_T1, SH4_GREG_LR);
+    sh4_emit_store_greg(&cg, SH4_REG_ARG3, SH4_GREG_CPU_MODE);
+    sh4_emit_rts(&cg);
+    sh4_emit_nop(&cg);
     sh4g_close(tp, &cg); }
-  load_done = sh4g_emit_bra_placeholder(tp);
 
-  sh4g_patch_cond(to_load7, *tp);
-  { sh4_codegen cg = sh4g_open(tp);                  /* load r8..r14 */
+  /* Entering FIQ: save r13..r14 to old mode bank, save r8..r12 to USER bank,
+   * load r8..r14 from FIQ bank. */
+  sh4g_patch_cond(to_fiq, *tp);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_load_greg(&cg, SH4_GREG_SP, SH4_REG_T1);
+    sh4_emit_mov_l_store_disp(&cg, SH4_REG_T1, SH4_REG_ARG2, 5);
+    sh4_emit_load_greg(&cg, SH4_GREG_LR, SH4_REG_T1);
+    sh4_emit_mov_l_store_disp(&cg, SH4_REG_T1, SH4_REG_ARG2, 6);
+    sh4g_close(tp, &cg); }
+  sh4g_const(tp, (u32)(uintptr_t)reg_mode, SH4_REG_ARG2);
+  { sh4_codegen cg = sh4g_open(tp);
+    for (i = 0; i < 5; i++) {
+      sh4_emit_load_greg(&cg, 8 + (unsigned)i, SH4_REG_T1);
+      sh4_emit_mov_l_store_disp(&cg, SH4_REG_T1, SH4_REG_ARG2, (unsigned)i);
+    }
     for (i = 0; i < 7; i++) {
       sh4_emit_mov_l_load_disp(&cg, SH4_REG_T2, SH4_REG_T1, (unsigned)i);
       sh4_emit_store_greg(&cg, SH4_REG_T1, 8 + (unsigned)i);
     }
-    sh4g_close(tp, &cg); }
-
-  sh4g_patch_bra(load_done, *tp);
-  { sh4_codegen cg = sh4g_open(tp);
     sh4_emit_store_greg(&cg, SH4_REG_ARG3, SH4_GREG_CPU_MODE);
     sh4_emit_rts(&cg);
     sh4_emit_nop(&cg);

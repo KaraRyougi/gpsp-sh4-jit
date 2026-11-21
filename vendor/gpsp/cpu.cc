@@ -270,9 +270,7 @@ static const u8 gba_header_logo[156] = {
 #define get_shift_register(dest)                                              \
   u32 shift = reg[(opcode >> 8) & 0x0F] & 0xFF;                               \
   using_register(arm, ((opcode >> 8) & 0x0F), op_shift);                      \
-  dest = reg[rm];                                                             \
-  if(rm == 15)                                                                \
-    dest += 4                                                                 \
+  dest = reg[rm]                                                              \
 
 
 #define calculate_z_flag(dest)                                                \
@@ -641,6 +639,7 @@ static const u8 gba_header_logo[156] = {
   if((read_ioreg(REG_IE) & read_ioreg(REG_IF)) &&                             \
    read_ioreg(REG_IME) && ((reg[REG_CPSR] & 0x80) == 0))                      \
   {                                                                           \
+    reg[REG_BUS_VALUE] = 0xe25ef004;                                          \
     REG_MODE(MODE_IRQ)[6] = reg[REG_PC] + 4;                                  \
     REG_SPSR(MODE_IRQ) = reg[REG_CPSR];                                       \
     reg[REG_CPSR] = 0xD2;                                                     \
@@ -653,6 +652,8 @@ static const u8 gba_header_logo[156] = {
   {                                                                           \
     if(reg[CPU_MODE] != MODE_USER && reg[CPU_MODE] != MODE_SYSTEM)            \
     {                                                                         \
+      if(reg[CPU_MODE] == MODE_IRQ)                                           \
+        reg[REG_BUS_VALUE] = 0xe55ec002;                                      \
       reg[REG_CPSR] = REG_SPSR(reg[CPU_MODE]);                                \
       extract_flags();                                                        \
       set_cpu_mode(cpu_modes[reg[REG_CPSR] & 0xF]);                           \
@@ -691,13 +692,18 @@ static const u8 gba_header_logo[156] = {
 #define arm_data_proc_imm()                                                   \
   arm_decode_data_proc_imm(opcode)                                            \
 
+/* With a register-controlled shift (bit 4 set in register-operand form),
+ * ARM7TDMI reads R15 as PC+12 for both Rn and Rm instead of PC+8. */
+#define arm_pc_reg_extra_reg  ((opcode & 0x10) ? 4 : 0)
+#define arm_pc_reg_extra_imm  0
+
 #define arm_data_proc(expr, type)                                             \
 {                                                                             \
   u32 dest;                                                                   \
-  arm_pc_offset(8);                                                           \
+  arm_pc_offset(8 + arm_pc_reg_extra_##type);                                 \
   arm_data_proc_##type();                                                     \
   dest = expr;                                                                \
-  arm_pc_offset(-4);                                                          \
+  arm_pc_offset(-4 - arm_pc_reg_extra_##type);                                \
   reg[rd] = dest;                                                             \
 }                                                                             \
 
@@ -708,11 +714,11 @@ static const u8 gba_header_logo[156] = {
 
 #define arm_data_proc_logic_flags(expr, type)                                 \
 {                                                                             \
-  arm_pc_offset(8);                                                           \
+  arm_pc_offset(8 + arm_pc_reg_extra_##type);                                 \
   arm_data_proc_flags_##type();                                               \
   u32 dest = expr;                                                            \
   calculate_flags_logic(dest);                                                \
-  arm_pc_offset(-4);                                                          \
+  arm_pc_offset(-4 - arm_pc_reg_extra_##type);                                \
   reg[rd] = dest;                                                             \
   arm_spsr_restore_check();                                                   \
 }                                                                             \
@@ -720,7 +726,7 @@ static const u8 gba_header_logo[156] = {
 #define arm_data_proc_add_flags(src_a, src_b, src_c, type)                    \
 {                                                                             \
   u32 _sc = src_c;                                                            \
-  arm_pc_offset(8);                                                           \
+  arm_pc_offset(8 + arm_pc_reg_extra_##type);                                 \
   arm_data_proc_##type();                                                     \
   flags_vars(src_a, src_b);                                                   \
   dest = _sa + _sb;                                                           \
@@ -728,7 +734,7 @@ static const u8 gba_header_logo[156] = {
   dest += _sc;                                                                \
   c_flag |= (dest < _sc);                                                     \
   calculate_flags_add(dest, _sa, _sb);                                        \
-  arm_pc_offset(-4);                                                          \
+  arm_pc_offset(-4 - arm_pc_reg_extra_##type);                                \
   reg[rd] = dest;                                                             \
   arm_spsr_restore_check();                                                   \
 }
@@ -736,44 +742,44 @@ static const u8 gba_header_logo[156] = {
 #define arm_data_proc_sub_flags(src_a, src_b, src_c, type)                    \
 {                                                                             \
   u32 _sc = src_c;                                                            \
-  arm_pc_offset(8);                                                           \
+  arm_pc_offset(8 + arm_pc_reg_extra_##type);                                 \
   arm_data_proc_##type();                                                     \
   flags_vars(src_a, src_b);                                                   \
   dest = _sa + (~(_sb)) + _sc;                                                \
   calculate_flags_sub(dest, _sa, _sb, _sc);                                   \
-  arm_pc_offset(-4);                                                          \
+  arm_pc_offset(-4 - arm_pc_reg_extra_##type);                                \
   reg[rd] = dest;                                                             \
   arm_spsr_restore_check();                                                   \
 }                                                                             \
 
 #define arm_data_proc_test_logic(expr, type)                                  \
 {                                                                             \
-  arm_pc_offset(8);                                                           \
+  arm_pc_offset(8 + arm_pc_reg_extra_##type);                                 \
   arm_data_proc_flags_##type();                                               \
   u32 dest = expr;                                                            \
   calculate_flags_logic(dest);                                                \
-  arm_pc_offset(-4);                                                          \
+  arm_pc_offset(-4 - arm_pc_reg_extra_##type);                                \
 }                                                                             \
 
 #define arm_data_proc_test_add(src_a, src_b, type)                            \
 {                                                                             \
-  arm_pc_offset(8);                                                           \
+  arm_pc_offset(8 + arm_pc_reg_extra_##type);                                 \
   arm_data_proc_##type();                                                     \
   flags_vars(src_a, src_b);                                                   \
   dest = _sa + _sb;                                                           \
   c_flag = (dest < _sb);                                                      \
   calculate_flags_add(dest, _sa, _sb);                                        \
-  arm_pc_offset(-4);                                                          \
+  arm_pc_offset(-4 - arm_pc_reg_extra_##type);                                \
 }                                                                             \
 
 #define arm_data_proc_test_sub(src_a, src_b, type)                            \
 {                                                                             \
-  arm_pc_offset(8);                                                           \
+  arm_pc_offset(8 + arm_pc_reg_extra_##type);                                 \
   arm_data_proc_##type();                                                     \
   flags_vars(src_a, src_b);                                                   \
   dest = _sa - _sb;                                                           \
   calculate_flags_sub(dest, _sa, _sb, 1);                                     \
-  arm_pc_offset(-4);                                                          \
+  arm_pc_offset(-4 - arm_pc_reg_extra_##type);                                \
 }                                                                             \
 
 #define arm_multiply_flags_yes(_dest)                                         \
@@ -902,7 +908,9 @@ const u32 spsr_masks[4] = { 0x00000000, 0x000000EF, 0xF0000000, 0xF00000EF };
      !(map = memory_map_read[_address >> 15])        /* Unmapped memory */    \
   )                                                                           \
   {                                                                           \
-    dest = (type)(readfn)(_address);                                          \
+    /* Do not truncate read_memory16()'s rotated 32-bit result for unaligned  \
+       halfword loads; signed variants use read_memory8s/read_memory16s. */   \
+    dest = (readfn)(_address);                                                \
   }                                                                           \
   else                                                                        \
   {                                                                           \
@@ -1020,7 +1028,10 @@ static inline void cgba_interp_smc_check(u32 address, unsigned bytes,
 
 #define fast_write_memory(size, type, address, value)                         \
 {                                                                             \
-  u32 _address = (address) & ~(aligned_address_mask##size & 0x03);            \
+  u32 _raw_addr = (address);                                                  \
+  u32 _address = ((_raw_addr >> 24) == 0x0E || (_raw_addr >> 24) == 0x0F)     \
+    ? _raw_addr                                                               \
+    : (_raw_addr & ~(aligned_address_mask##size & 0x03));                     \
   if(_address < 0x10000000)                                                   \
   {                                                                           \
     u8 region = _address >> 24;                                               \
@@ -1082,10 +1093,10 @@ static inline void cgba_interp_smc_check(u32 address, unsigned bytes,
   fast_read_memory(32, u32, address, dest, read_memory32)                     \
 
 #define load_memory_s8(address, dest)                                         \
-  fast_read_memory(8, s8, address, dest, read_memory8)                        \
+  fast_read_memory(8, s8, address, dest, read_memory8s)                       \
 
 #define load_memory_s16(address, dest)                                        \
-  fast_read_memory(16, s16, address, dest, read_memory16_signed)              \
+  fast_read_memory(16, s16, address, dest, read_memory16s)                    \
 
 #define store_memory_u8(address, value)                                       \
   fast_write_memory(8, u8, address, value)                                    \
@@ -1531,24 +1542,28 @@ void set_cpu_mode(cpu_mode_type new_mode)
   if(cpu_mode == new_mode)
      return;
 
-  if(new_mode == MODE_FIQ)
+  if(cpu_mode == MODE_FIQ)
   {
      for (u32 i = 8; i < 15; i++)
-        REG_MODE(cpu_mode)[i - 8] = reg[i];
+        REG_MODE(MODE_FIQ)[i - 8] = reg[i];
+     for (u32 i = 8; i < 13; i++)
+        reg[i] = REG_MODE(MODE_USER)[i - 8];
+     reg[REG_SP] = REG_MODE(new_mode)[5];
+     reg[REG_LR] = REG_MODE(new_mode)[6];
+  }
+  else if(new_mode == MODE_FIQ)
+  {
+     for (u32 i = 8; i < 13; i++)
+        REG_MODE(MODE_USER)[i - 8] = reg[i];
+     REG_MODE(cpu_mode)[5] = reg[REG_SP];
+     REG_MODE(cpu_mode)[6] = reg[REG_LR];
+     for (u32 i = 8; i < 15; i++)
+        reg[i] = REG_MODE(MODE_FIQ)[i - 8];
   }
   else
   {
      REG_MODE(cpu_mode)[5] = reg[REG_SP];
      REG_MODE(cpu_mode)[6] = reg[REG_LR];
-  }
-
-  if(cpu_mode == MODE_FIQ)
-  {
-     for (u32 i = 8; i < 15; i++)
-        reg[i] = REG_MODE(new_mode)[i - 8];
-  }
-  else
-  {
      reg[REG_SP] = REG_MODE(new_mode)[5];
      reg[REG_LR] = REG_MODE(new_mode)[6];
   }
@@ -1572,8 +1587,8 @@ u32 check_and_raise_interrupts()
   // Check any IRQ flag pending, IME and CPSR-IRQ enabled
   if (cpu_has_interrupt())
   {
-    // Value after the FIQ returns, should be improved
-    reg[REG_BUS_VALUE] = 0xe55ec002;
+    // BIOS read-protect value during IRQ handler (0x134+8 = subs pc, lr, #4)
+    reg[REG_BUS_VALUE] = 0xe25ef004;
 
     // Interrupt handler in BIOS
     REG_MODE(MODE_IRQ)[6] = reg[REG_PC] + 4;
@@ -3943,6 +3958,7 @@ void init_cpu(void)
   // Initialize CPU registers
   cgba_pf_valid = 0;
   memset(reg, 0, REG_USERDEF * sizeof(u32));
+  reg[REG_BUS_VALUE] = 0xe129f000;
   memset(reg_mode, 0, sizeof(reg_mode));
   for (u32 i = 0; i < sizeof(spsr)/sizeof(spsr[0]); i++)
     spsr[i] = 0x00000010;

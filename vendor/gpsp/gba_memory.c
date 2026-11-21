@@ -1383,9 +1383,12 @@ void function_cc write_backup(u32 address, u32 value)
 #define write_backup8()                                                       \
   write_backup(address & 0xFFFF, value)                                       \
 
+/* 8-bit GamePak SRAM/Flash bus selects the byte lane matching address[1:0] */
 #define write_backup16()                                                      \
+  write_backup(address & 0xFFFF, (u8)(value >> ((address & 1) << 3)))         \
 
 #define write_backup32()                                                      \
+  write_backup(address & 0xFFFF, (u8)(value >> ((address & 3) << 3)))         \
 
 #ifdef CGBA_VRAM_DIRTY_ACTIVE
 volatile u32 cgba_vram_dirty = CGBA_VRAM_DIRTY_ALL;
@@ -1789,6 +1792,7 @@ void function_cc write_gpio(u32 address, u32 value) {
       break;                                                                  \
                                                                               \
     case 0x0E:                                                                \
+    case 0x0F:                                                                \
       write_backup##type();                                                   \
       break;                                                                  \
   }                                                                           \

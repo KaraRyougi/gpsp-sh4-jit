@@ -1187,11 +1187,12 @@ int main(void)
                 fails++; continue;
               }
               if (old_mode != new_mode) {
-                /* Model set_cpu_mode over logical values: retire into the
-                 * old row (7 registers when ENTERING FIQ, else r13/r14),
-                 * then load from the new row (7 when LEAVING FIQ). Shared
-                 * rows (USER<->SYSTEM, INVALID<->INVALID) retire-then-load
-                 * the just-written slots, exactly like the C code. */
+                /* Model fixed set_cpu_mode() over logical values:
+                 * - Leaving FIQ: save r8..r14 to MODE_FIQ (row 2), restore
+                 *   r8..r12 from MODE_USER (row 0), load r13..r14 from new row.
+                 * - Entering FIQ: save r13..r14 to old row, save r8..r12 to
+                 *   MODE_USER (row 0), load r8..r14 from MODE_FIQ (row 2).
+                 * - Non-FIQ <-> Non-FIQ: retire/load r13..r14 only. */
                 u32 or_ = old_mode & 0xF, nr = new_mode & 0xF;
                 u32 rm_m[7][7], regs_m[16];
                 int bad = 0;
@@ -1200,22 +1201,27 @@ int main(void)
                     rm_m[r][c] = 0xB0000000u + (u32)r * 0x100u + (u32)c;
                 for (int r = 0; r < 16; r++) regs_m[r] = 0xFACE0000u + (u32)r;
                 regs_m[2] = rvals[ri];
-                if (new_mode == 0x12)
-                  for (int r = 0; r < 7; r++) rm_m[or_][r] = regs_m[8 + r];
-                else {
+                if (old_mode == 0x12) {
+                  for (int r = 0; r < 7; r++) rm_m[2][r] = regs_m[8 + r];
+                  for (int r = 0; r < 5; r++) regs_m[8 + r] = rm_m[0][r];
+                  regs_m[13] = rm_m[nr][5];
+                  regs_m[14] = rm_m[nr][6];
+                } else if (new_mode == 0x12) {
+                  for (int r = 0; r < 5; r++) rm_m[0][r] = regs_m[8 + r];
                   rm_m[or_][5] = regs_m[13];
                   rm_m[or_][6] = regs_m[14];
-                }
-                if (old_mode == 0x12)
-                  for (int r = 0; r < 7; r++) regs_m[8 + r] = rm_m[nr][r];
-                else {
+                  for (int r = 0; r < 7; r++) regs_m[8 + r] = rm_m[2][r];
+                } else {
+                  rm_m[or_][5] = regs_m[13];
+                  rm_m[or_][6] = regs_m[14];
                   regs_m[13] = rm_m[nr][5];
                   regs_m[14] = rm_m[nr][6];
                 }
                 for (int r = 8; r < 15 && !bad; r++)
                   if (g_reg[r] != regs_m[r]) bad = 1;
-                for (int c = 0; c < 7 && !bad; c++)
-                  if (ORC_BSWAP32(reg_mode[or_][c]) != rm_m[or_][c]) bad = 1;
+                for (int row = 0; row < 7 && !bad; row++)
+                  for (int c = 0; c < 7 && !bad; c++)
+                    if (ORC_BSWAP32(reg_mode[row][c]) != rm_m[row][c]) bad = 1;
                 if (bad) {
                   printf("FAIL msr rebank op=%08X old=%08X val=%08X "
                          "modes %02X->%02X: r13=%08X r14=%08X r8=%08X\n",
@@ -1223,10 +1229,15 @@ int main(void)
                          g_reg[13], g_reg[14], g_reg[8]);
                   fails++;
                 }
-              } else if (g_reg[13] != 0xFACE000Du || g_reg[14] != 0xFACE000Eu) {
-                printf("FAIL msr op=%08X: r13/r14 moved without mode change\n",
-                       opcode);
-                fails++;
+              } else {
+                for (int r = 8; r < 15; r++) {
+                  if (g_reg[r] != 0xFACE0000u + (u32)r) {
+                    printf("FAIL msr op=%08X: r%d moved without mode change\n",
+                           opcode, r);
+                    fails++;
+                    break;
+                  }
+                }
               }
             }
   }
