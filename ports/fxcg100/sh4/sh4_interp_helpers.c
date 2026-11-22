@@ -1657,6 +1657,7 @@ int cgba_sh4_arm_pcm_clamp_loop_try(u32 unused, u32 pc)
 
 #if defined(CGBA_SH4_M4A_MIX_SKIP) && CGBA_SH4_M4A_MIX_SKIP
 #include "ports/fxcg100/sh4/sh4_ea_mixer.h"
+#include "ports/fxcg100/sh4/sh4_gax_mixer.h"
 
 static inline int cgba_sh4_return_via_lr(u32 lr, u32 est_cycles, s32 budget)
 {
@@ -1794,6 +1795,200 @@ int cgba_sh4_ea_mixer_try(u32 opcode, u32 pc)
   reg[0] = r1 + count;
   est_cycles = cgba_sh4_ea_mixer_estimate_cycles(count, r1, active_ch, skipped_ch);
   return cgba_sh4_return_via_lr(lr, est_cycles, budget);
+}
+
+static inline int cgba_sh4_mixer_ram_struct(u32 addr, u32 size,
+                                            u8 **data_out, const u8 **tags_out,
+                                            u32 *off_out)
+{
+  u32 r = addr >> 24;
+  u32 off, mask;
+  if ((addr & 3u) != 0u)
+    return 0;
+  if (r == 0x03u) {
+    mask = 0x7FFFu;
+    *data_out = iwram + 0x8000u;
+    *tags_out = iwram;
+  } else if (r == 0x02u) {
+    mask = 0x3FFFFu;
+    *data_out = ewram;
+    *tags_out = ewram + 0x40000u;
+  } else {
+    return 0;
+  }
+  off = addr & mask;
+  if (off + size > mask + 1u)
+    return 0;
+  *off_out = off;
+  return 1;
+}
+
+static inline int cgba_sh4_mixer_src_region_ok(u32 addr)
+{
+  u32 r = addr >> 24;
+  return r == 0x02u || r == 0x03u || (r >= 0x08u && r <= 0x0Du);
+}
+
+/* Soundless fast skips for Shin'en GAX, Vicarious Visions / Krawall, and
+ * Eurocom / Factor 5 IWRAM stereo PCM mixers (see sh4_gax_mixer.h). */
+int cgba_sh4_audio_mixer_try(u32 kind, u32 pc)
+{
+  u32 r0 = reg[0];
+  u32 lr = reg[REG_LR];
+  s32 budget = cgba_sh4_fastpath_budget;
+  u8 *sdata = NULL;
+  const u8 *stags = NULL;
+  u32 soff = 0u;
+
+  cgba_sh4_extra_cycles = 0;
+  if (CGBA_SH4_DIFF_ACTIVE() || (reg[REG_CPSR] & 0x20u))
+    return 0;
+
+  if (kind == CGBA_SH4_AUDIO_MIXER_GAX_STD ||
+      kind == CGBA_SH4_AUDIO_MIXER_GAX_PINGPONG) {
+    uint32_t r1, r2, r3, r4, r5, r7, n_iters, est_c;
+    if (!cgba_sh4_mixer_ram_struct(r0, 28u, &sdata, &stags, &soff))
+      return 0;
+    r1 = readaddress32(sdata, soff + 0u);
+    r2 = readaddress32(sdata, soff + 4u);
+    r3 = readaddress32(sdata, soff + 8u);
+    r4 = readaddress32(sdata, soff + 12u);
+    r5 = readaddress32(sdata, soff + 16u);
+    r7 = readaddress32(sdata, soff + 24u);
+    if ((s32)r3 <= 0 || r3 > CGBA_SH4_AUDIO_MIXER_MAX_SAMPLES)
+      return 0;
+    if (!cgba_sh4_mixer_src_region_ok(r1) ||
+        ((r2 >> 24) != 0x03u && (r2 >> 24) != 0x02u))
+      return 0;
+    if (cgba_smc_tags_nonzero(stags + soff, 28u))
+      return 0;
+    if (kind == CGBA_SH4_AUDIO_MIXER_GAX_STD) {
+      n_iters = cgba_sh4_gax_std_advance(&r4, r5, r7, r3);
+      address32(sdata, soff + 12u) = eswap32((u32)r4);
+      est_c = 20u + n_iters * (26u + 4u * (u32)ws_cyc_nseq[r1 >> 24][0] +
+                               4u * (u32)ws_cyc_seq[r2 >> 24][1]);
+    } else {
+      uint32_t bounces = 0u;
+      n_iters = cgba_sh4_gax_pingpong_advance(&r1, &r4, r5, &r7, r3, &bounces);
+      address32(sdata, soff + 0u)  = eswap32((u32)r1);
+      address32(sdata, soff + 12u) = eswap32((u32)r4);
+      address32(sdata, soff + 24u) = eswap32((u32)r7);
+      est_c = 36u + bounces * 16u +
+              n_iters * (27u + 4u * (u32)ws_cyc_nseq[r1 >> 24][0] +
+                         4u * (u32)ws_cyc_seq[r2 >> 24][1]);
+    }
+    reg[1] = (u32)r1;
+    reg[2] = (u32)(r2 + (n_iters << 3));
+    reg[3] = (u32)(r3 - (n_iters << 2));
+    return cgba_sh4_return_via_lr(lr, (u32)est_c, budget);
+  }
+
+  if (kind == CGBA_SH4_AUDIO_MIXER_VV_A ||
+      kind == CGBA_SH4_AUDIO_MIXER_VV_B) {
+    uint32_t src, dst, pos, end_pos, count, written, step, mode, loop_len;
+    uint32_t iters = 0u, est_c;
+    u32 op_step, op_br, iw_off = pc & 0x7FFFu;
+    int rev = 0;
+
+    if (!cgba_sh4_mixer_ram_struct(r0, 40u, &sdata, &stags, &soff))
+      return 0;
+    src      = readaddress32(sdata, soff + 0x00u);
+    dst      = readaddress32(sdata, soff + 0x04u);
+    pos      = readaddress32(sdata, soff + 0x08u);
+    end_pos  = readaddress32(sdata, soff + 0x0Cu);
+    count    = readaddress32(sdata, soff + 0x10u);
+    written  = readaddress32(sdata, soff + 0x14u);
+    step     = readaddress32(sdata, soff + 0x1Cu);
+    mode     = readaddress32(sdata, soff + 0x20u);
+    loop_len = readaddress32(sdata, soff + 0x24u);
+
+    if (mode > (kind == CGBA_SH4_AUDIO_MIXER_VV_A ? 2u : 1u))
+      return 0;
+    if (count > CGBA_SH4_AUDIO_MIXER_MAX_SAMPLES || written > count)
+      return 0;
+    if (!cgba_sh4_mixer_src_region_ok(src) ||
+        ((dst >> 24) != 0x03u && (dst >> 24) != 0x02u))
+      return 0;
+    if (cgba_smc_tags_nonzero(stags + soff, 40u))
+      return 0;
+    if (mode <= 1u) {
+      if (kind == CGBA_SH4_AUDIO_MIXER_VV_A) {
+        op_step = readaddress32(iwram + 0x8000u, iw_off + (mode ? 41u : 24u) * 4u);
+        op_br   = readaddress32(iwram + 0x8000u, iw_off + (mode ? 45u : 28u) * 4u);
+      } else {
+        op_step = readaddress32(iwram + 0x8000u, iw_off + (mode ? 39u : 23u) * 4u);
+        op_br   = readaddress32(iwram + 0x8000u, iw_off + (mode ? 43u : 27u) * 4u);
+      }
+      if (op_step == 0xE0822008u && (op_br >> 24) == 0xBAu)
+        rev = 0;
+      else if (op_step == 0xE0422008u && (op_br >> 24) == 0xCAu)
+        rev = 1;
+      else
+        return 0;
+    }
+    if (!cgba_sh4_vv_advance(mode, rev, &pos, end_pos, count, &written,
+                             step, loop_len, &iters))
+      return 0;
+    address32(sdata, soff + 0x08u) = eswap32((u32)pos);
+    address32(sdata, soff + 0x14u) = eswap32((u32)written);
+    reg[0] = lr;
+    reg[2] = (u32)pos;
+    reg[3] = (u32)written;
+    est_c = 28u + iters * ((mode == 0u ? 13u : (mode == 1u ? 16u : 22u)) +
+                           (u32)ws_cyc_nseq[src >> 24][0] +
+                           (mode == 0u ? 1u : 2u) * (u32)ws_cyc_nseq[dst >> 24][0]);
+    return cgba_sh4_return_via_lr(lr, (u32)est_c, budget);
+  }
+
+  if (kind == CGBA_SH4_AUDIO_MIXER_EUROCOM_INTERP ||
+      kind == CGBA_SH4_AUDIO_MIXER_EUROCOM_RAW) {
+    u32 r1 = reg[1];
+    uint32_t cur, end_p, loop_start, loop_len, samples_done = 0u, est_c;
+    uint16_t frac, step;
+    int ended;
+
+    if (!cgba_sh4_mixer_ram_struct(r0, 28u, &sdata, &stags, &soff))
+      return 0;
+    if ((r1 & 1u) != 0u || ((r1 >> 24) != 0x03u && (r1 >> 24) != 0x02u))
+      return 0;
+    if ((r0 >> 24) == (r1 >> 24)) {
+      u32 r1_off = r1 & ((r1 >> 24) == 0x03u ? 0x7FFFu : 0x3FFFFu);
+      if (!(r1_off + 512u <= soff || soff + 28u <= r1_off))
+        return 0;
+    }
+    if (cgba_smc_tags_nonzero(stags + soff, 28u))
+      return 0;
+    cur = readaddress32(sdata, soff + 4u);
+    end_p = readaddress32(sdata, soff + 8u);
+    if ((s32)(end_p - cur) < 0)
+      return 0; /* reverse playback: fall back to native ARM code */
+    if (!cgba_sh4_mixer_src_region_ok(cur))
+      return 0;
+    loop_start = readaddress32(sdata, soff + 12u);
+    loop_len   = readaddress32(sdata, soff + 16u);
+    step       = readaddress16(sdata, soff + 20u);
+    frac       = readaddress16(sdata, soff + 22u);
+
+    ended = cgba_sh4_eurocom_advance_fwd(&cur, &end_p, &frac, step,
+                                         loop_start, loop_len, &samples_done);
+    address32(sdata, soff + 8u) = eswap32((u32)end_p);
+    if (!ended) {
+      address32(sdata, soff + 4u) = eswap32((u32)cur);
+      address16(sdata, soff + 22u) = eswap16((u16)frac);
+    }
+    reg[0] = (u32)ended;
+    {
+      u32 per_s = (kind == CGBA_SH4_AUDIO_MIXER_EUROCOM_INTERP)
+                    ? (28u + 2u * (u32)ws_cyc_nseq[cur >> 24][0] +
+                       4u * (u32)ws_cyc_nseq[r1 >> 24][0])
+                    : (19u + (u32)ws_cyc_nseq[cur >> 24][0] +
+                       4u * (u32)ws_cyc_nseq[r1 >> 24][0]);
+      est_c = 28u + samples_done * per_s;
+    }
+    return cgba_sh4_return_via_lr(lr, (u32)est_c, budget);
+  }
+
+  return 0;
 }
 #endif
 

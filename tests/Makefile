@@ -19,11 +19,11 @@ DEAD_STRIP := $(if $(filter Darwin,$(shell uname -s)),\
 
 .PHONY: all smoke audit core litpool thumb cond native-ldst input config-version storage lcd-cleanup backlight-overlay state-codec scale classpad fxcg-ui fxcg-sync txt-reader rtc backup-dirty nor-world-switch rom-library save-path overclock cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc \
 	swi-overlap swi-oam bios-swi-hle udiv udiv-emitter idle-signature \
-	video-backdrop-shadow video-sprite-decode video-text-fastpaths video-dirty-scanline arm-mixer arm-pcm-clamp m4a-skip ea-mixer clean
+	video-backdrop-shadow video-sprite-decode video-text-fastpaths video-dirty-scanline arm-mixer arm-pcm-clamp m4a-skip ea-mixer gax-mixer clean
 
 all: smoke core litpool thumb cond native-ldst rtc pacing backup-dirty nor-world-switch rom-library save-path overclock input config-version storage lcd-cleanup backlight-overlay state-codec scale classpad fxcg-ui fxcg-sync txt-reader cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc swi-overlap swi-oam bios-swi-hle udiv \
 	udiv-emitter idle-signature \
-	video-backdrop-shadow video-sprite-decode video-text-fastpaths video-dirty-scanline arm-mixer arm-pcm-clamp m4a-skip ea-mixer audit
+	video-backdrop-shadow video-sprite-decode video-text-fastpaths video-dirty-scanline arm-mixer arm-pcm-clamp m4a-skip ea-mixer gax-mixer audit
 
 # Execution oracle: run emitted native code in a mini SH4 interpreter against
 # the C-helper semantics (closes the pixel-soak blind spot on the audio path).
@@ -449,6 +449,12 @@ ea-mixer: $(ROOT)/tests/sh4_ea_mixer_test.c \
 	$(CC) $(CFLAGS) -O2 -I$(ROOT) $(ROOT)/tests/sh4_ea_mixer_test.c \
 	  -o $(BIN)-ea-mixer
 	$(BIN)-ea-mixer
+
+gax-mixer: $(ROOT)/tests/sh4_gax_mixer_test.c \
+	$(ROOT)/ports/fxcg100/sh4/sh4_gax_mixer.h
+	$(CC) $(CFLAGS) -O2 -I$(ROOT) $(ROOT)/tests/sh4_gax_mixer_test.c \
+	  -o $(BIN)-gax-mixer
+	$(BIN)-gax-mixer
 
 # Requires sh-elf-as + sh-elf-objcopy on PATH.
 audit: $(ROOT)/tests/sh4_codegen_audit.c $(ROOT)/ports/fxcg100/sh4/sh4_codegen.h

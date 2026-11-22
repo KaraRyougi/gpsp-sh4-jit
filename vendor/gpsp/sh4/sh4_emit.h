@@ -36,6 +36,7 @@
 #ifdef CGBA_SH4_M4A_MIX_SKIP
 #include "ports/fxcg100/sh4/sh4_m4a_skip.h"
 #include "ports/fxcg100/sh4/sh4_ea_mixer.h"
+#include "ports/fxcg100/sh4/sh4_gax_mixer.h"
 #endif
 
 /* ------------------------------------------------------------------ */
@@ -109,6 +110,7 @@ int cgba_sh4_arm_pcm_clamp_loop_try(u32 unused, u32 pc);
 #endif
 #if defined(CGBA_SH4_M4A_MIX_SKIP) && CGBA_SH4_M4A_MIX_SKIP
 int cgba_sh4_ea_mixer_try(u32 opcode, u32 pc);
+int cgba_sh4_audio_mixer_try(u32 kind, u32 pc);
 #endif
 
 #if defined(CGBA_FXCG100) || defined(CGBA_FXCG50)
@@ -621,6 +623,44 @@ static inline void sh4g_ea_mixer_entry(u8 **tp, u32 pc)
                       (const void *)cgba_sh4_ea_mixer_try,
                       CGBA_SH4_EA_MIXER_W0, pc, 1, 0);
 }
+
+static inline void sh4g_audio_mixer_entry(u8 **tp, u32 pc)
+{
+  u32 off, avail, i;
+  uint32_t nwords = 0u;
+  uint32_t wbuf[CGBA_SH4_AUDIO_MIXER_MAX_WORDS];
+  u32 w0;
+  int kind;
+
+  if ((pc >> 24) != 0x03u || (pc & 3u) != 0u)
+    return;
+  off = pc & 0x7FFFu;
+  if (off + 29u * 4u > 0x8000u)
+    return;
+  w0 = readaddress32(iwram + 0x8000u, off);
+  if (w0 != 0xE92D0FF0u && w0 != 0xE92D4FF0u &&
+      w0 != 0xE92D0FF1u && w0 != 0xE92D5FFEu)
+    return;
+  avail = (0x8000u - off) >> 2;
+  if (avail > CGBA_SH4_AUDIO_MIXER_MAX_WORDS)
+    avail = CGBA_SH4_AUDIO_MIXER_MAX_WORDS;
+  for (i = 0u; i < avail; i++)
+    wbuf[i] = readaddress32(iwram + 0x8000u, off + i * 4u);
+  kind = cgba_sh4_audio_mixer_match_words(wbuf, avail, &nwords);
+  if (kind == CGBA_SH4_AUDIO_MIXER_NONE)
+    return;
+  if (sh4g_range_has_observer(pc, pc + nwords * 4u))
+    return;
+  sh4g_const(tp, (u32)(uintptr_t)&cgba_sh4_fastpath_budget, SH4_REG_T0);
+  {
+    sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_l_store(&cg, SH4_REG_CYCLES, SH4_REG_T0);
+    sh4g_close(tp, &cg);
+  }
+  sh4g_op2_tramp_call(tp, (const void *)sh4_op2_pc_mem_tramp,
+                      (const void *)cgba_sh4_audio_mixer_try,
+                      (u32)kind, pc, 1, 0);
+}
 #endif
 
 static inline void sh4g_block_entry_fastpaths(u8 **tp, const u8 *map,
@@ -637,8 +677,10 @@ static inline void sh4g_block_entry_fastpaths(u8 **tp, const u8 *map,
   }
 #endif
 #if defined(CGBA_SH4_M4A_MIX_SKIP) && CGBA_SH4_M4A_MIX_SKIP
-  if (!thumb)
+  if (!thumb) {
     sh4g_ea_mixer_entry(tp, pc);
+    sh4g_audio_mixer_entry(tp, pc);
+  }
 #endif
 #if !defined(CGBA_SH4_THUMB_UDIV_FASTPATH) && \
     !defined(CGBA_SH4_ARM_MIXER_FASTPATH) && \
