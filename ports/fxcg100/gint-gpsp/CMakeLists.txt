@@ -94,10 +94,6 @@ option(CGBA_SH4_KNOWN_TARGET_CACHE
   "Cache known ARM and Thumb indirect targets before the ROM hash walk" ON)
 option(CGBA_SH4_SEGMENTED_LITERAL_POOL
   "Deduplicate large SH-4 constants in bounded per-block literal segments" ON)
-option(CGBA_SH4_COMPACT_FASTMEM_TUPLE
-  "Pack single-fastmem params with a 16-bit cycle field to shrink JIT sites" ON)
-option(CGBA_SH4_FASTMEM_OOL_DESC
-  "Place non-WB fastmem slow descriptors out-of-line so fast hits return via RTS" ON)
 option(CGBA_SH4_INTERP_STATS
   "Count interpreted guest instructions by region (diag; ~4.5% overhead)" OFF)
 option(CGBA_SH4_DIAG_COUNTERS
@@ -297,8 +293,6 @@ if(CGBA_DYNAREC)
     CGBA_SH4_LAZY_CHAIN=$<BOOL:${CGBA_SH4_LAZY_CHAIN}>
     CGBA_SH4_KNOWN_TARGET_CACHE=$<BOOL:${CGBA_SH4_KNOWN_TARGET_CACHE}>
     CGBA_SH4_SEGMENTED_LITERAL_POOL=$<BOOL:${CGBA_SH4_SEGMENTED_LITERAL_POOL}>
-    CGBA_SH4_COMPACT_FASTMEM_TUPLE=$<BOOL:${CGBA_SH4_COMPACT_FASTMEM_TUPLE}>
-    CGBA_SH4_FASTMEM_OOL_DESC=$<BOOL:${CGBA_SH4_FASTMEM_OOL_DESC}>
     SMALL_TRANSLATION_CACHE=1
     ROM_TRANSLATION_CACHE_SIZE=${CGBA_GPSP_ROM_TRANSLATION_CACHE_SIZE}
     RAM_TRANSLATION_CACHE_SIZE=${CGBA_GPSP_RAM_TRANSLATION_CACHE_SIZE}

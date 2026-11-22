@@ -34,6 +34,34 @@ static inline void video_invalidate_scanline_cache(u32 start_y, u32 end_y)
 extern s32 affine_reference_x[2];
 extern s32 affine_reference_y[2];
 
+/* Commit a 4-word (16-byte) BG2PA..BG2Y affine register block (0x04000020)
+ * from a 4-byte-aligned guest buffer, refreshing dma_bus_val, dirty flag,
+ * and BG2 internal reference point latches. Shared by bulk DMA and HBlank
+ * BG2 affine fast paths. */
+static inline void cgba_commit_bg2_affine_dma_4words(const u8 *s)
+{
+  const u32 *src32 = (const u32 *)s;
+  u32 *d32 = (u32 *)((u8 *)io_registers + 0x20u);
+  u32 w0 = src32[0];
+  u32 w1 = src32[1];
+  u32 w2 = src32[2];
+  u32 w3 = src32[3];
+  d32[0] = w0;
+  d32[1] = w1;
+  d32[2] = w2;
+  d32[3] = w3;
+  {
+    u32 rx = eswap32(w2);
+    u32 ry = eswap32(w3);
+    dma_bus_val = ry;
+#ifdef CGBA_VRAM_DIRTY_ACTIVE
+    cgba_video_io_dirty = 1;
+#endif
+    affine_reference_x[0] = ((s32)(rx << 4)) >> 4;
+    affine_reference_y[0] = ((s32)(ry << 4)) >> 4;
+  }
+}
+
 extern u16* gba_screen_pixels;
 
 #endif

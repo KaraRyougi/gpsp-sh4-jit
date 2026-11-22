@@ -488,7 +488,7 @@ static void check_budget_path(u32 initial_budget, int expect_hit)
   ws_cyc_nseq[(pc >> 24) & 0xFu][0] = 5;
   cgba_dynarec_single_block = 0;
   cgba_sh4_extra_cycles = 0x13579BDF;
-  cgba_sh4_thumb_udiv_budget = -123;
+  cgba_sh4_fastpath_budget = -123;
 
   model = cgba_sh4_thumb_udiv_loop_run(
     initial_regs[0], initial_regs[1], initial_regs[2], initial_regs[3],
@@ -505,7 +505,7 @@ static void check_budget_path(u32 initial_budget, int expect_hit)
   oracle_reset_windows();
   oracle_add_window(code, (u32)code_size, ORACLE_BYTES_BE);
   oracle_add_window(vector_table, sizeof(vector_table), ORACLE_BYTES_BE);
-  oracle_add_window((void *)&cgba_sh4_thumb_udiv_budget, 4,
+  oracle_add_window((void *)&cgba_sh4_fastpath_budget, 4,
                     ORACLE_NATIVE_S32);
   oracle_add_window((void *)&cgba_sh4_extra_cycles, 4, ORACLE_NATIVE_S32);
   got = oracle_run(code, code_size, vector_table, initial_budget);
@@ -519,7 +519,7 @@ static void check_budget_path(u32 initial_budget, int expect_hit)
       got.helper_opcode != cgba_sh4_thumb_udiv_loop_pattern[0] ||
       got.helper_pc != pc)
     failf("trampoline tuple/call count mismatch");
-  if ((u32)cgba_sh4_thumb_udiv_budget != initial_budget)
+  if ((u32)cgba_sh4_fastpath_budget != initial_budget)
     failf("entry prefix did not snapshot R13 budget");
 
   if (!expect_hit) {

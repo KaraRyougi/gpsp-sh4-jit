@@ -29,14 +29,8 @@
 #define CGBA_SH4_DIFF_ACTIVE() 0
 #endif
 #ifdef SH4_ARCH
-#if defined(CGBA_SH4_COMPACT_FASTMEM_TUPLE) && CGBA_SH4_COMPACT_FASTMEM_TUPLE && \
-    (!defined(CGBA_SH4_FASTMEM_OOL_DESC) || CGBA_SH4_FASTMEM_OOL_DESC)
 #define CGBA_SH4_RAM_CODE_START(cache) ((cache) + CGBA_SH4_RAM_FM_DESC_BYTES)
 #define CGBA_SH4_RAM_CODE_WATERMARK CGBA_SH4_RAM_FM_DESC_BYTES
-#else
-#define CGBA_SH4_RAM_CODE_START(cache) CGBA_SH4_RAM_CACHE_START(cache)
-#define CGBA_SH4_RAM_CODE_WATERMARK CGBA_SH4_RAM_CACHE_WATERMARK
-#endif
 #if RAM_TRANSLATION_CACHE_SIZE <= \
     CGBA_SH4_RAM_CODE_WATERMARK + TRANSLATION_CACHE_LIMIT_THRESHOLD + \
     CGBA_SH4_RAM_TAG_BYTES
@@ -619,7 +613,7 @@ void translate_icache_sync() {
 /* End of Cache invalidation */
 
 
-#if defined(SH4_ARCH) && CGBA_SH4_COMPACT_FASTMEM_TUPLE && CGBA_SH4_FASTMEM_OOL_DESC
+#ifdef SH4_ARCH
 #define CGBA_SH4_FM_OOL_REWIND(ptr, ram) cgba_sh4_fm_ool_rewind((ptr), (ram))
 #else
 #define CGBA_SH4_FM_OOL_REWIND(ptr, ram) ((void)0)
@@ -4138,7 +4132,7 @@ bool translate_block_arm(u32 pc, bool ram_region)
        - (0x10000 - ram_block_tag) / 2 * sizeof(ramtag_type)];
   } else {
     translation_ptr = rom_translation_ptr;
-#if defined(SH4_ARCH) && CGBA_SH4_COMPACT_FASTMEM_TUPLE && CGBA_SH4_FASTMEM_OOL_DESC
+#ifdef SH4_ARCH
     translation_cache_limit = cgba_sh4_fm_ool_rom_limit(TRANSLATION_CACHE_LIMIT_THRESHOLD);
 #else
     translation_cache_limit =
@@ -4694,7 +4688,7 @@ bool translate_block_arm(u32 pc, bool ram_region)
               ((opcode >> 12) & 15) != 15 &&
               (((opcode >> 21) & 15) < 8 || ((opcode >> 21) & 15) >= 12)) ||
              ((opcode & 0xFFD000F0) == 0xE0000090 && ((opcode >> 16) & 15) != 15) ||
-             ((pc >> 24) != 0x03 && CGBA_SH4_COMPACT_FASTMEM_TUPLE &&
+             ((pc >> 24) != 0x03 &&
               cycle_count <= 0xFFFFu && ((opcode >> 12) & 15u) != 15u &&
               (((opcode & 0x0D300000u) == 0x05100000u) ||
                (((opcode & 0x0F300090u) == 0x01100090u) && (opcode & 0x60u) != 0u)))));
@@ -4717,7 +4711,7 @@ bool translate_block_arm(u32 pc, bool ram_region)
        a simple recursive call here won't work, it has to pedal out to
        the beginning. */
 
-#if defined(SH4_ARCH) && CGBA_SH4_COMPACT_FASTMEM_TUPLE && CGBA_SH4_FASTMEM_OOL_DESC
+#ifdef SH4_ARCH
     if (!ram_region)
       translation_cache_limit = cgba_sh4_fm_ool_rom_limit(TRANSLATION_CACHE_LIMIT_THRESHOLD);
 #endif
@@ -5600,7 +5594,7 @@ bool translate_block_thumb(u32 pc, bool ram_region)
        - (0x10000 - ram_block_tag) / 2 * sizeof(ramtag_type)];
   } else {
     translation_ptr = rom_translation_ptr;
-#if defined(SH4_ARCH) && CGBA_SH4_COMPACT_FASTMEM_TUPLE && CGBA_SH4_FASTMEM_OOL_DESC
+#ifdef SH4_ARCH
     translation_cache_limit = cgba_sh4_fm_ool_rom_limit(TRANSLATION_CACHE_LIMIT_THRESHOLD);
 #else
     translation_cache_limit = &rom_translation_cache[
@@ -6120,8 +6114,7 @@ bool translate_block_thumb(u32 pc, bool ram_region)
             (((opcode & 0xFF00) == 0x4400 || (opcode & 0xFF00) == 0x4600) &&
              (((opcode & 7) | ((opcode >> 4) & 8)) != 15)) ||
             (opcode & 0xF000) == 0xA000 ||
-            (CGBA_SH4_COMPACT_FASTMEM_TUPLE &&
-             cycle_count <= 0xFFFFu &&
+            (cycle_count <= 0xFFFFu &&
              sh4g_thumb_ldst_is_load(opcode) &&
              ((opcode & 0xF800u) == 0x4800u ||
               (opcode & 0xF000u) == 0x5000u ||
@@ -6148,7 +6141,7 @@ bool translate_block_thumb(u32 pc, bool ram_region)
        a simple recursive call here won't work, it has to pedal out to
        the beginning. */
 
-#if defined(SH4_ARCH) && CGBA_SH4_COMPACT_FASTMEM_TUPLE && CGBA_SH4_FASTMEM_OOL_DESC
+#ifdef SH4_ARCH
     if (!ram_region)
       translation_cache_limit = cgba_sh4_fm_ool_rom_limit(TRANSLATION_CACHE_LIMIT_THRESHOLD);
 #endif
@@ -6391,9 +6384,7 @@ void flush_translation_cache_ram(void)
     CGBA_SH4_RAM_CODE_START(ram_translation_cache);
   ram_translation_ptr =
     CGBA_SH4_RAM_CODE_START(ram_translation_cache);
-#if CGBA_SH4_COMPACT_FASTMEM_TUPLE && CGBA_SH4_FASTMEM_OOL_DESC
   cgba_sh4_fm_ool_reset_ram();
-#endif
 #else
   last_ram_translation_ptr = ram_translation_cache;
   ram_translation_ptr = ram_translation_cache;
@@ -6507,7 +6498,7 @@ void flush_translation_cache_rom(void)
 
   last_rom_translation_ptr = &rom_translation_cache[rom_cache_watermark];
   rom_translation_ptr      = &rom_translation_cache[rom_cache_watermark];
-#if defined(SH4_ARCH) && CGBA_SH4_COMPACT_FASTMEM_TUPLE && CGBA_SH4_FASTMEM_OOL_DESC
+#ifdef SH4_ARCH
   cgba_sh4_fm_ool_reset_rom();
 #endif
   memset(rom_branch_hash, 0, sizeof(rom_branch_hash));
@@ -6520,9 +6511,7 @@ void init_dynarec_caches(void)
 {
 #ifdef SH4_ARCH
   cgba_sh4_fastmem_init();     /* resident ldst fast paths (sh4_fastmem.c) */
-#if CGBA_SH4_COMPACT_FASTMEM_TUPLE && CGBA_SH4_FASTMEM_OOL_DESC
   cgba_sh4_fm_ool_reset_all();
-#endif
   memset(cgba_hot_count, 0, sizeof(cgba_hot_count));
   cgba_cold_pending = 0;
 #endif

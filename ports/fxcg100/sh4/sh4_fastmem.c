@@ -1,10 +1,10 @@
 /*
- * Resident fastmem routines (see sh4_fastmem.h): the 16 shared load/store
- * fast paths, generated once at dynarec init. The buffer has a dedicated
- * NOLOAD XYRAM allocation — not the high arena (whose end is pinned at the
- * hardware-proven 0x8c655300) — and survives translation-cache flushes.
- * Cache sync remains harmless for the P4 XYRAM window and keeps host/emulator
- * configurations using ordinary executable RAM coherent.
+ * Resident fastmem routines (see sh4_fastmem.h): the 20 shared scalar and
+ * block load/store fast paths, plus POP+BX and PSR-rebank routines, generated
+ * once at dynarec init. The hottest routines are packed into zero-wait-state
+ * ILRAM (backed up across OS world switches); overflow/cold routines live in
+ * untranslated P1 .cgba.highbss alongside the pointer table and survive
+ * translation-cache flushes.
  */
 
 #include <string.h>
@@ -13,7 +13,6 @@
 #include "vendor/gpsp/sh4/sh4_jit_safety.h"
 #include "ports/fxcg100/sh4/sh4_fastmem_emit.h"
 
-#if CGBA_SH4_COMPACT_FASTMEM_TUPLE && CGBA_SH4_FASTMEM_OOL_DESC
 extern u8 rom_translation_cache[ROM_TRANSLATION_CACHE_SIZE];
 extern u8 ram_translation_cache[RAM_TRANSLATION_CACHE_SIZE];
 extern int cgba_sh4_extra_cycles;
@@ -190,7 +189,6 @@ CGBA_HOT_TEXT const cgba_sh4_fm_desc *cgba_sh4_fastmem_ool_lookup(u32 ret_pc)
   cgba_sh4_fm_ool_cache[cgba_sh4_fm_ool_hash(ret_pc)] = found;
   return found;
 }
-#endif
 
 #ifndef CGBA_SH4_FASTMEM_ILRAM
 #define CGBA_SH4_FASTMEM_ILRAM 1

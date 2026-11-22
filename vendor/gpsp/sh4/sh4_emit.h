@@ -104,21 +104,16 @@ void cgba_sh4_arm_multiply_long(u32 opcode, u32 pc);
 int  cgba_sh4_arm_psr(u32 opcode, u32 pc);   /* returns 1 if an IRQ changed PC */
 int cgba_sh4_arm_swap(u32 opcode, u32 pc);
 void cgba_sh4_hle_div(u32 cpu_mode, u32 pc);
-int  cgba_sh4_thumb_dp(u32 opcode, u32 pc);
-void cgba_sh4_thumb_shift_reg(u32 opcode, u32 pc);
-void cgba_sh4_thumb_shift_imm(u32 opcode, u32 pc);
 
+extern volatile s32 cgba_sh4_fastpath_budget;
 #ifdef CGBA_SH4_THUMB_UDIV_FASTPATH
-extern volatile s32 cgba_sh4_thumb_udiv_budget;
 int cgba_sh4_thumb_udiv_loop_try(u32 unused, u32 pc);
 #endif
 #ifdef CGBA_SH4_ARM_MIXER_FASTPATH
-extern volatile s32 cgba_sh4_arm_mixer_budget;
 int cgba_sh4_arm_mixer_loop_try(u32 unused, u32 pc);
 int cgba_sh4_arm_pcm_clamp_loop_try(u32 unused, u32 pc);
 #endif
 #if defined(CGBA_SH4_M4A_MIX_SKIP) && CGBA_SH4_M4A_MIX_SKIP
-extern volatile s32 cgba_sh4_ea_mixer_budget;
 int cgba_sh4_ea_mixer_try(u32 opcode, u32 pc);
 #endif
 
@@ -224,7 +219,7 @@ static inline void sh4g_thumb_udiv_loop_entry(u8 **tp, const u8 *map, u32 pc)
   if (!sh4g_thumb_udiv_loop_match_map(map, pc) ||
       sh4g_range_has_observer(pc, pc + CGBA_SH4_THUMB_UDIV_LOOP_BYTES))
     return;
-  sh4g_emit_speculative_loop_entry(tp, &cgba_sh4_thumb_udiv_budget,
+  sh4g_emit_speculative_loop_entry(tp, &cgba_sh4_fastpath_budget,
                                    (const void *)cgba_sh4_thumb_udiv_loop_try,
                                    (u32)cgba_sh4_thumb_udiv_loop_pattern[0],
                                    pc, pc + CGBA_SH4_THUMB_UDIV_LOOP_BYTES);
@@ -241,9 +236,10 @@ static inline int sh4g_arm_mixer_match_map(const u8 *map, u32 pc)
   u32 i;
   if (!map || off + CGBA_SH4_ARM_MIXER_BYTES > 0x1000u)
     return 0;
-  for (i = 0; i < CGBA_SH4_ARM_MIXER_WORDS; i++) {
-    if (readaddress32(map, off + i * 4u) !=
-        cgba_sh4_arm_mixer_pattern[i])
+  if (readaddress32(map, off) != cgba_sh4_arm_mixer_step_pattern[0])
+    return 0;
+  for (i = 1; i < CGBA_SH4_ARM_MIXER_WORDS; i++) {
+    if (readaddress32(map, off + i * 4u) != cgba_sh4_arm_mixer_word(i))
       return 0;
   }
   return 1;
@@ -254,9 +250,9 @@ static inline void sh4g_arm_mixer_entry(u8 **tp, const u8 *map, u32 pc)
   if (!sh4g_arm_mixer_match_map(map, pc) ||
       sh4g_range_has_observer(pc, pc + CGBA_SH4_ARM_MIXER_BYTES))
     return;
-  sh4g_emit_speculative_loop_entry(tp, &cgba_sh4_arm_mixer_budget,
+  sh4g_emit_speculative_loop_entry(tp, &cgba_sh4_fastpath_budget,
                                    (const void *)cgba_sh4_arm_mixer_loop_try,
-                                   cgba_sh4_arm_mixer_pattern[0],
+                                   cgba_sh4_arm_mixer_step_pattern[0],
                                    pc, pc + CGBA_SH4_ARM_MIXER_BODY_BYTES);
 }
 
@@ -280,7 +276,7 @@ static inline void sh4g_arm_pcm_clamp_entry(u8 **tp, const u8 *map, u32 pc)
   if (!sh4g_arm_pcm_clamp_match_map(map, pc) ||
       sh4g_range_has_observer(pc, pc + CGBA_SH4_ARM_PCM_CLAMP_BYTES))
     return;
-  sh4g_emit_speculative_loop_entry(tp, &cgba_sh4_arm_mixer_budget,
+  sh4g_emit_speculative_loop_entry(tp, &cgba_sh4_fastpath_budget,
                                    (const void *)cgba_sh4_arm_pcm_clamp_loop_try,
                                    cgba_sh4_arm_pcm_clamp_step_pattern[0],
                                    pc, pc + CGBA_SH4_ARM_PCM_CLAMP_BODY_BYTES);
@@ -517,7 +513,6 @@ static inline int sh4g_m4a_skip_emit(u8 **tp, const cgba_sh4_m4a_match *match,
 }
 
 #ifdef CGBA_SH4_M4A_LOOP_FOLD
-extern volatile s32 cgba_sh4_m4a_loop_budget;
 int cgba_sh4_m4a_loop_try(u32 packed, u32 pc);
 
 /* Prefix at a verified loop head.  `at_seam` is the translator's guarantee
@@ -543,7 +538,7 @@ static inline void sh4g_m4a_loop_entry(u8 **tp, const cgba_sh4_m4a_match *m,
   if (sh4g_range_has_observer(m->head_pc, m->head_pc + m->body_bytes))
     return;
   packed = (u32)m->kind | ((u32)m->stride << 8);
-  sh4g_const(tp, (u32)(uintptr_t)&cgba_sh4_m4a_loop_budget, SH4_REG_T0);
+  sh4g_const(tp, (u32)(uintptr_t)&cgba_sh4_fastpath_budget, SH4_REG_T0);
   { sh4_codegen cg = sh4g_open(tp);
     sh4_emit_mov_l_store(&cg, SH4_REG_CYCLES, SH4_REG_T0);
     sh4g_close(tp, &cg); }
@@ -632,7 +627,7 @@ static inline void sh4g_ea_mixer_entry(u8 **tp, u32 pc)
 {
   if (!sh4g_ea_mixer_match_iwram(pc))
     return;
-  sh4g_const(tp, (u32)(uintptr_t)&cgba_sh4_ea_mixer_budget, SH4_REG_T0);
+  sh4g_const(tp, (u32)(uintptr_t)&cgba_sh4_fastpath_budget, SH4_REG_T0);
   {
     sh4_codegen cg = sh4g_open(tp);
     sh4_emit_mov_l_store(&cg, SH4_REG_CYCLES, SH4_REG_T0);
@@ -1112,42 +1107,28 @@ SH4G_NOINLINE u8 *sh4g_generate_branch_taken(
   } while (0)
 
 /* ================================================================== */
-/* Thumb data-processing.                                              */
+/* Thumb data-processing (100% native SH-4A emission).                 */
 /* ================================================================== */
-/*
- * Routed to the C core (cgba_sh4_thumb_dp) for full, correct N/Z/C/V and
- * carry-in. The earlier inline emitters set only N/Z and mapped ADC/SBC to
- * plain add/sub (dropping carry-in -> wrong result), so CS/CC/VS/VC and the
- * compound conditions were wrong and ADC/SBC were doubly wrong. The inline path
- * (sh4g_dp_*) remains in the glue for the eventual lazy/dead-flag synthesis the
- * optimization plan describes; for bring-up, correctness wins. The opcode fully
- * determines the operation, so the helper re-decodes and the macro tokens are
- * unused. rd is r0..r7 here (never PC); only the hi-reg forms can write PC.
- */
-/* Each form first tries native SH4 emission (sh4g_thumb_dp_native, op-by-op
- * allow-list); on a 0 it falls back to the C helper, untouched. */
 #define thumb_data_proc(type, name, rn_type, _rd, _rs, _rn)                   \
-  do { if(!sh4g_thumb_dp_native(&translation_ptr, (u32)opcode, (u32)pc, (u32)flag_status, (int)cycle_count))      \
-         SH4_CALL_OP2(cgba_sh4_thumb_dp);                                     \
+  do { sh4g_thumb_dp_native(&translation_ptr, (u32)opcode, (u32)pc,           \
+                            (u32)flag_status, (int)cycle_count);              \
        sh4g_thumb_const_update_dp((u32)opcode, &sh4_thumb_const_mask,         \
                                   sh4_thumb_const_val); } while(0)
 #define thumb_data_proc_test(type, name, rn_type, _rs, _rn)                   \
-  do { if(!sh4g_thumb_dp_native(&translation_ptr, (u32)opcode, (u32)pc, (u32)flag_status, (int)cycle_count))      \
-         SH4_CALL_OP2(cgba_sh4_thumb_dp); } while(0)
+  do { sh4g_thumb_dp_native(&translation_ptr, (u32)opcode, (u32)pc,           \
+                            (u32)flag_status, (int)cycle_count); } while(0)
 #define thumb_data_proc_unary(type, name, rn_type, _rd, _rn)                  \
-  do { if(!sh4g_thumb_dp_native(&translation_ptr, (u32)opcode, (u32)pc, (u32)flag_status, (int)cycle_count))      \
-         SH4_CALL_OP2(cgba_sh4_thumb_dp);                                     \
+  do { sh4g_thumb_dp_native(&translation_ptr, (u32)opcode, (u32)pc,           \
+                            (u32)flag_status, (int)cycle_count);              \
        if(((u32)opcode & 0xF800u) == 0x2000u)                                 \
          sh4_thumb_const_set(sh4g_thumb_dp_write_reg_index((u32)opcode),      \
                              ((u32)opcode & 0xFFu));                          \
        else                                                                   \
          sh4_thumb_const_kill(sh4g_thumb_dp_write_reg_index((u32)opcode)); } while(0)
 
-/* Hi-register ADD/MOV can target r15 -> re-dispatch when the helper returns 1.
- * The native path returns 0 for the rd==15 cases so they stay on the C path. */
 #define thumb_data_proc_hi(name)                                              \
-  do { if(!sh4g_thumb_dp_native(&translation_ptr, (u32)opcode, (u32)pc, (u32)flag_status, (int)cycle_count))      \
-         SH4_CALL_OP2_PC(cgba_sh4_thumb_dp);                                  \
+  do { sh4g_thumb_dp_native(&translation_ptr, (u32)opcode, (u32)pc,           \
+                            (u32)flag_status, (int)cycle_count);              \
        { unsigned _ct_rs = ((u32)opcode >> 3) & 0x0Fu;                        \
          unsigned _ct_rd = (((u32)opcode >> 4) & 8u) | ((u32)opcode & 7u);    \
          if(_ct_rd == REG_PC) sh4_thumb_const_clear_all();                    \
@@ -1158,39 +1139,34 @@ SH4G_NOINLINE u8 *sh4g_generate_branch_taken(
                                        sh4_thumb_const_val[_ct_rs]);          \
          else sh4_thumb_const_kill(_ct_rd); } } while(0)
 #define thumb_data_proc_test_hi(name)                                         \
-  do { if(!sh4g_thumb_dp_native(&translation_ptr, (u32)opcode, (u32)pc, (u32)flag_status, (int)cycle_count))      \
-         SH4_CALL_OP2(cgba_sh4_thumb_dp); } while(0)
+  do { sh4g_thumb_dp_native(&translation_ptr, (u32)opcode, (u32)pc,           \
+                            (u32)flag_status, (int)cycle_count); } while(0)
 #define thumb_data_proc_mov_hi()                                              \
-  do { if(!sh4g_thumb_dp_native(&translation_ptr, (u32)opcode, (u32)pc, (u32)flag_status, (int)cycle_count))      \
-         SH4_CALL_OP2_PC(cgba_sh4_thumb_dp);                                  \
+  do { sh4g_thumb_dp_native(&translation_ptr, (u32)opcode, (u32)pc,           \
+                            (u32)flag_status, (int)cycle_count);              \
        { unsigned _ct_rs = ((u32)opcode >> 3) & 0x0Fu;                        \
-         unsigned _ct_rd = (((u32)opcode >> 4) & 8u) | ((u32)opcode & 7u);     \
+         unsigned _ct_rd = (((u32)opcode >> 4) & 8u) | ((u32)opcode & 7u);    \
          if(_ct_rd == REG_PC) sh4_thumb_const_clear_all();                    \
          else sh4_thumb_const_copy(_ct_rd, _ct_rs); } } while(0)
 
 /* ================================================================== */
-/* Thumb shifts. Immediate shifts are exact native N/Z/C; register shifts keep */
-/* the C helper because full ARM amount>=32/ROR carry semantics are branchy.   */
+/* Thumb shifts (immediate and register-specified, 100% native).       */
 /* ================================================================== */
 
 #define SH4_THUMB_SHIFT_imm(decode_type, op_type)                             \
   do { u32 _sh_op = ((u32)opcode >> 11) & 3;                                  \
-       if (_sh_op <= 2)                                                        \
-         sh4g_shift_imm(&translation_ptr, (int)_sh_op,                         \
-                        (unsigned)((u32)opcode & 7),                           \
-                        (unsigned)(((u32)opcode >> 3) & 7),                    \
-                        (unsigned)(((u32)opcode >> 6) & 0x1F),                 \
-                        (u32)flag_status & 0xFu);                              \
-       else                                                                    \
-         SH4_CALL_OP2(cgba_sh4_thumb_shift_imm);                               \
+       sh4g_shift_imm(&translation_ptr, (int)_sh_op,                          \
+                      (unsigned)((u32)opcode & 7),                            \
+                      (unsigned)(((u32)opcode >> 3) & 7),                     \
+                      (unsigned)(((u32)opcode >> 6) & 0x1F),                  \
+                      (u32)flag_status & 0xFu);                               \
        sh4g_thumb_const_update_shift_imm((u32)opcode, &sh4_thumb_const_mask,  \
                                          sh4_thumb_const_val);                \
   } while(0)
 
 #define SH4_THUMB_SHIFT_reg(decode_type, op_type)                             \
-  do { if (!sh4g_thumb_shift_reg_native(&translation_ptr, (u32)opcode,        \
-                                        (u32)pc, (u32)flag_status))           \
-         SH4_CALL_OP2(cgba_sh4_thumb_shift_reg);                              \
+  do { sh4g_thumb_shift_reg_native(&translation_ptr, (u32)opcode,             \
+                                   (u32)pc, (u32)flag_status);                \
        sh4_thumb_const_kill((u32)opcode & 7u); } while(0)
 
 #define thumb_shift(decode_type, op_type, value_type)                         \

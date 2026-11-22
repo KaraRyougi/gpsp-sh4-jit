@@ -64,18 +64,28 @@ static inline void cgba_sh4_ea_mixer_advance_channel(
   *frac = (uint32_t)phase;
 }
 
-static inline uint32_t cgba_sh4_ea_mixer_estimate_cycles(
-  uint32_t count, uint32_t r1, uint32_t active_ch, uint32_t skipped_ch)
+static inline void cgba_sh4_ea_mixer_split_counts(
+  uint32_t count, uint32_t r1, uint32_t *lead_out, uint32_t *body_out,
+  uint32_t *tail_out)
 {
-  uint32_t lead, rem, tail, body, chunks, per_byte, per_chunk;
-  if (count == 0u)
-    return 18u;
-  lead = (r1 & 3u) ? (4u - (r1 & 3u)) : 0u;
+  uint32_t lead = (r1 & 3u) ? (4u - (r1 & 3u)) : 0u;
+  uint32_t rem, tail;
   if (lead > count)
     lead = count;
   rem = count - lead;
   tail = rem & 3u;
-  body = rem - tail;
+  *lead_out = lead;
+  *body_out = rem - tail;
+  *tail_out = tail;
+}
+
+static inline uint32_t cgba_sh4_ea_mixer_estimate_cycles(
+  uint32_t count, uint32_t r1, uint32_t active_ch, uint32_t skipped_ch)
+{
+  uint32_t lead, body, tail, chunks, per_byte, per_chunk;
+  if (count == 0u)
+    return 18u;
+  cgba_sh4_ea_mixer_split_counts(count, r1, &lead, &body, &tail);
   chunks = (body + 15u) >> 4;
   per_byte = 16u + skipped_ch * 10u + active_ch * 22u;
   per_chunk = 40u + skipped_ch * 10u + active_ch * 176u;

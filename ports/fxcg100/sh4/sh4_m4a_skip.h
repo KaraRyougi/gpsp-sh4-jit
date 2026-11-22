@@ -461,12 +461,14 @@ static inline uint32_t cgba_sh4_m4a_subs_flags(uint32_t a, uint32_t b)
          ((((a ^ b) & (a ^ r)) >> 31) << 28);
 }
 
-/* Reverb loop, one sample per iteration (15 instructions, 6 byte transfers):
- *   r4 = samples left, r5/r7 = buffer cursors, r6 = constant channel offset.
+/* Reverb loop, one sample per iteration:
+ *   stereo != 0 (15 instructions, 6 byte transfers): r4 = samples left,
+ *     r5/r7 = buffer cursors, r6 = constant channel offset.
+ *   stereo == 0 (10 instructions, 3 byte transfers): r6 unused.
  * Returns the cycles spent; 0 means nothing was folded and nothing changed. */
-static inline uint32_t cgba_sh4_m4a_fold_reverb(
+static inline uint32_t cgba_sh4_m4a_fold_reverb_impl(
   uint32_t *r4, uint32_t *r5, uint32_t r6, uint32_t *r7, uint32_t *cpsr,
-  int32_t budget, const cgba_sh4_m4a_loop_costs *c)
+  int stereo, int32_t budget, const cgba_sh4_m4a_loop_costs *c)
 {
   uint32_t n4 = *r4, n5 = *r5, n7 = *r7, spent = 0, last = 0;
   uint32_t rem, base_cost;
@@ -475,31 +477,34 @@ static inline uint32_t cgba_sh4_m4a_fold_reverb(
   if (budget <= 1 || (int32_t)n4 <= 1)
     return 0;
   rem = (uint32_t)(budget - 1);       /* strictly positive remaining budget */
-  base_cost = 15u * c->seq + c->branch;
+  base_cost = (stereo ? 15u : 10u) * c->seq + c->branch;
 
   while ((int32_t)n4 > 1) {           /* keep the final (exiting) iteration */
-    uint32_t a0 = n5 + r6, a2 = n7 + r6, cost;
-    uint32_t max_k, by_budget, room, r1, r2, r3, step_cost;
-    if ((a0 >> 28) | (n5 >> 28) | (a2 >> 28) | (n7 >> 28))
+    uint32_t a0 = stereo ? (n5 + r6) : 0u;
+    uint32_t a2 = stereo ? (n7 + r6) : 0u;
+    uint32_t cost, max_k, by_budget, room, r1, step_cost;
+    if ((n5 >> 28) | (n7 >> 28) | (a0 >> 28) | (a2 >> 28))
       break;                          /* outside the charge table */
-    cost = base_cost +
-           2u * mem[a0 >> 24][0] + 2u * mem[n5 >> 24][0] +
-           mem[a2 >> 24][0] + mem[n7 >> 24][0];
+    cost = base_cost + 2u * mem[n5 >> 24][0] + mem[n7 >> 24][0];
+    if (stereo)
+      cost += 2u * mem[a0 >> 24][0] + mem[a2 >> 24][0];
     if (cost > rem)
       break;
-    /* All four cursors increment by 1/iter, so cost stays constant until one
+    /* All cursors increment by 1/iter, so cost stays constant until one
      * crosses a 16 MiB region boundary. Fold the whole uniform run in O(1). */
     max_k = n4 - 1u;
     by_budget = rem / cost;
     if (by_budget < max_k)
       max_k = by_budget;
-    room = 0x01000000u - (a0 & 0x00FFFFFFu);
-    r1 = 0x01000000u - (n5 & 0x00FFFFFFu);
-    r2 = 0x01000000u - (a2 & 0x00FFFFFFu);
-    r3 = 0x01000000u - (n7 & 0x00FFFFFFu);
+    room = 0x01000000u - (n5 & 0x00FFFFFFu);
+    r1 = 0x01000000u - (n7 & 0x00FFFFFFu);
     if (r1 < room) room = r1;
-    if (r2 < room) room = r2;
-    if (r3 < room) room = r3;
+    if (stereo) {
+      uint32_t r2 = 0x01000000u - (a0 & 0x00FFFFFFu);
+      uint32_t r3 = 0x01000000u - (a2 & 0x00FFFFFFu);
+      if (r2 < room) room = r2;
+      if (r3 < room) room = r3;
+    }
     if (room < max_k)
       max_k = room;
     step_cost = max_k * cost;
@@ -517,50 +522,18 @@ static inline uint32_t cgba_sh4_m4a_fold_reverb(
   return spent;
 }
 
-/* Mono reverb loop, one sample per iteration (10 instructions, 3 byte
- * transfers: ldrsb [r5], ldrsb [r7],#1, strb [r5],#1). */
+static inline uint32_t cgba_sh4_m4a_fold_reverb(
+  uint32_t *r4, uint32_t *r5, uint32_t r6, uint32_t *r7, uint32_t *cpsr,
+  int32_t budget, const cgba_sh4_m4a_loop_costs *c)
+{
+  return cgba_sh4_m4a_fold_reverb_impl(r4, r5, r6, r7, cpsr, 1, budget, c);
+}
+
 static inline uint32_t cgba_sh4_m4a_fold_reverb_mono(
   uint32_t *r4, uint32_t *r5, uint32_t *r7, uint32_t *cpsr,
   int32_t budget, const cgba_sh4_m4a_loop_costs *c)
 {
-  uint32_t n4 = *r4, n5 = *r5, n7 = *r7, spent = 0, last = 0;
-  uint32_t rem, base_cost;
-  const uint8_t (*mem)[2] = c->mem;
-
-  if (budget <= 1 || (int32_t)n4 <= 1)
-    return 0;
-  rem = (uint32_t)(budget - 1);
-  base_cost = 10u * c->seq + c->branch;
-
-  while ((int32_t)n4 > 1) {
-    uint32_t cost, max_k, by_budget, room, r1, step_cost;
-    if ((n5 >> 28) | (n7 >> 28))
-      break;
-    cost = base_cost + 2u * mem[n5 >> 24][0] + mem[n7 >> 24][0];
-    if (cost > rem)
-      break;
-    max_k = n4 - 1u;
-    by_budget = rem / cost;
-    if (by_budget < max_k)
-      max_k = by_budget;
-    room = 0x01000000u - (n5 & 0x00FFFFFFu);
-    r1 = 0x01000000u - (n7 & 0x00FFFFFFu);
-    if (r1 < room) room = r1;
-    if (room < max_k)
-      max_k = room;
-    step_cost = max_k * cost;
-    spent += step_cost;
-    rem -= step_cost;
-    last = n4 - max_k + 1u;
-    n4 -= max_k;
-    n5 += max_k;
-    n7 += max_k;
-  }
-  if (!spent)
-    return 0;
-  *r4 = n4; *r5 = n5; *r7 = n7;
-  *cpsr = (*cpsr & 0x0FFFFFFFu) | cgba_sh4_m4a_subs_flags(last, 1u);
-  return spent;
+  return cgba_sh4_m4a_fold_reverb_impl(r4, r5, 0u, r7, cpsr, 0, budget, c);
 }
 
 /* Fixed-rate mix, four samples per group:

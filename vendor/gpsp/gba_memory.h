@@ -292,7 +292,7 @@ extern u32 gbc_sound_wave_update;
 extern dma_transfer_type dma[DMA_CHAN_CNT];
 extern u32 dma_bus_val;
 extern u8 cgba_hblank_dma_mask;
-extern u8 cgba_dma0_bg2_fast;
+extern u8 cgba_dma_bg2_fast_mask;
 
 extern u8 open_gba_bios_rom[1024*16];
 extern u16 palette_ram[512];
@@ -416,8 +416,8 @@ extern volatile u32 cgba_pending_sl_count;
 extern u32 cgba_pending_sl_start;
 void cgba_flush_pending_scanlines(void);
 void cgba_snapshot_bg2_affine_pending(void);
-int cgba_try_hblank_bg2_dma0_fast(void);
-int cgba_try_batch_hblank_bg2_dma0_fast(u32 start_y, u32 lines);
+int cgba_try_hblank_bg2_dma_fast(u32 ch);
+int cgba_try_batch_hblank_bg2_dma_fast(u32 ch, u32 start_y, u32 lines);
 void cgba_discard_pending_scanlines(void);
 void cgba_queue_scanlines(u32 start_y, u32 count);
 static inline void cgba_video_flush_before_write(void) {

@@ -403,20 +403,23 @@ u8 gamepak_backup[1024 * 128] CGBA_HIGH_BSS;
 u32 dma_bus_val;
 dma_transfer_type dma[4];
 u8 cgba_hblank_dma_mask;
-u8 cgba_dma0_bg2_fast;
+u8 cgba_dma_bg2_fast_mask;
 
-static inline void cgba_update_dma0_bg2_fast(void)
+static inline void cgba_update_dma_bg2_fast(u32 dma_number)
 {
-  const dma_transfer_type *d = &dma[0];
-  cgba_dma0_bg2_fast = (u8)(
-    d->start_type == DMA_START_HBLANK &&
-    d->repeat_type != DMA_NO_REPEAT &&
-    d->source_direction == 0 &&
-    d->dest_direction == 3 &&
-    d->length_type != DMA_16BIT &&
-    d->length == 4u &&
-    d->irq == 0 &&
-    (d->dest_address & 0x0FFFFFFCu) == 0x04000020u);
+  const dma_transfer_type *d = &dma[dma_number];
+  u8 bit = (u8)(1u << dma_number);
+  if (d->start_type == DMA_START_HBLANK &&
+      d->repeat_type != DMA_NO_REPEAT &&
+      d->source_direction == 0 &&
+      d->dest_direction == 3 &&
+      d->length_type != DMA_16BIT &&
+      d->length == 4u &&
+      d->irq == 0 &&
+      (d->dest_address & 0x0FFFFFFCu) == 0x04000020u)
+    cgba_dma_bg2_fast_mask |= bit;
+  else
+    cgba_dma_bg2_fast_mask &= (u8)~bit;
 }
 
 static inline void cgba_update_hblank_dma_mask(u32 dma_number, u32 start_type)
@@ -425,8 +428,7 @@ static inline void cgba_update_hblank_dma_mask(u32 dma_number, u32 start_type)
     cgba_hblank_dma_mask |= (u8)(1u << dma_number);
   } else {
     cgba_hblank_dma_mask &= (u8)~(1u << dma_number);
-    if (dma_number == 0u)
-      cgba_dma0_bg2_fast = 0u;
+    cgba_dma_bg2_fast_mask &= (u8)~(1u << dma_number);
   }
 }
 
@@ -931,8 +933,7 @@ static cpu_alert_type trigger_dma(u32 dma_number, u32 value)
         dma[dma_number].length_type = ((value >> 10) & 0x01);
         dma[dma_number].dest_direction = ((value >> 5) & 3);
       }
-      if (dma_number == 0u)
-        cgba_update_dma0_bg2_fast();
+      cgba_update_dma_bg2_fast(dma_number);
 
       write_dmareg(REG_DMA0CNT_H, dma_number, value);
       if(start_type == DMA_START_IMMEDIATELY) {
@@ -2412,19 +2413,7 @@ static bool dma_bulk_copy(dma_transfer_type *dmach, u32 src, u32 dst,
         u8 *iod = (u8 *)io_registers + ioff;
         if (width == 4 && length == 4u && ioff == 0x020u) {
           /* Hot 4-word BG2PA..BG2Y affine block (e.g., Mode-7 per-scanline HDMA). */
-          const u32 *s32 = (const u32 *)s;
-          u32 *d32 = (u32 *)iod;
-          u32 w0 = s32[0], w1 = s32[1], w2 = s32[2], w3 = s32[3];
-          d32[0] = w0;
-          d32[1] = w1;
-          d32[2] = w2;
-          d32[3] = w3;
-          dma_bus_val = eswap32(w3);
-#ifdef CGBA_VRAM_DIRTY_ACTIVE
-          cgba_video_io_dirty = 1;
-#endif
-          affine_reference_x[0] = signext28(eswap32(w2));
-          affine_reference_y[0] = signext28(eswap32(w3));
+          cgba_commit_bg2_affine_dma_4words(s);
         } else {
           if (width == 4) {
             const u32 *s32 = (const u32 *)s;
@@ -3055,7 +3044,7 @@ void init_memory(void)
     dma[i].direct_sound_channel = DMA_NO_DIRECT_SOUND;
   }
   cgba_hblank_dma_mask = 0;
-  cgba_dma0_bg2_fast = 0;
+  cgba_dma_bg2_fast_mask = 0;
 
   // Fill memory map regions, areas marked as NULL must be checked directly
   map_region(read, 0x0000000, 0x1000000, 1, bios_rom);
@@ -3252,8 +3241,8 @@ bool memory_read_savestate(const u8 *src)
       bson_read_int32(dmastr, "irq", &dma[i].irq)))
       return false;
     cgba_update_hblank_dma_mask((u32)i, dma[i].start_type);
+    cgba_update_dma_bg2_fast((u32)i);
   }
-  cgba_update_dma0_bg2_fast();
 
   rtc_data = rtc_data_array[0] | (((u64)rtc_data_array[1]) << 32);
   update_gpio_romregs();

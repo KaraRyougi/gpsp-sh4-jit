@@ -54,13 +54,6 @@ int cgba_sh4_thumb_ldst(u32 opcode, u32 pc)
   return 0;
 }
 
-int cgba_sh4_thumb_ldst_run(u32 count, u32 pc)
-{
-  (void)count;
-  (void)pc;
-  return 0;
-}
-
 int cgba_sh4_thumb_block(u32 opcode, u32 pc)
 {
   (void)opcode;
@@ -91,10 +84,6 @@ void sh4_indirect_branch_thumb(u32 address)
 }
 
 void sh4_op2_pc_mem_tramp(void)
-{
-}
-
-void sh4_fastmem_pc_mem_tramp(void)
 {
 }
 

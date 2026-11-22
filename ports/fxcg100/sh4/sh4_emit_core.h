@@ -90,6 +90,7 @@ static inline int sh4_pinned_reg(unsigned idx)
 #define SH4_GREG_Z_FLAG    21
 #define SH4_GREG_C_FLAG    22
 #define SH4_GREG_V_FLAG    23
+#define SH4_GREG_OAM_UPDATED 25
 #define SH4_GREG_SAVE      26
 
 /* ---- literal pool ---- */

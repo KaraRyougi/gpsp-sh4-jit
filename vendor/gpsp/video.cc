@@ -8343,30 +8343,39 @@ void cgba_snapshot_bg2_affine_pending(void)
 }
 
 #if defined(CGBA_BULK_DMA) && CGBA_BULK_DMA
-int cgba_try_hblank_bg2_dma0_fast(void)
+static inline const u8 *cgba_bg2_dma_resolve_src(
+  const dma_transfer_type *dmach, u32 bytes, u32 *src_ptr_out, int *cyc_out)
+{
+  u32 src_ptr = dmach->source_address & 0x0FFFFFFCu;
+  u32 sreg = src_ptr >> 24;
+  *src_ptr_out = src_ptr;
+  if (__builtin_expect(sreg == 3u, 1)) {
+    u32 soff = src_ptr & 0x7FFFu;
+    if (__builtin_expect(soff + bytes > 0x8000u, 0))
+      return NULL;
+    if (cyc_out) *cyc_out = 8;
+    return iwram + 0x8000u + soff;
+  }
+  if (sreg == 2u) {
+    u32 soff = src_ptr & 0x3FFFFu;
+    if (__builtin_expect(soff + bytes > 0x40000u, 0))
+      return NULL;
+    if (cyc_out) *cyc_out = 28;
+    return ewram + soff;
+  }
+  return NULL;
+}
+
+int cgba_try_hblank_bg2_dma_fast(u32 ch)
 {
   if (__builtin_expect(skip_next_frame != 0, 0))
     return 0;
-  dma_transfer_type *dmach = &dma[0];
-  u32 src_ptr = dmach->source_address & 0x0FFFFFFCu;
-  u32 sreg = src_ptr >> 24;
-  const u8 *s;
+  dma_transfer_type *dmach = &dma[ch];
+  u32 src_ptr;
   int cyc;
-  if (__builtin_expect(sreg == 3u, 1)) {
-    u32 soff = src_ptr & 0x7FFFu;
-    if (__builtin_expect(soff + 16u > 0x8000u, 0))
-      return 0;
-    s = iwram + 0x8000u + soff;
-    cyc = 8;
-  } else if (sreg == 2u) {
-    u32 soff = src_ptr & 0x3FFFFu;
-    if (__builtin_expect(soff + 16u > 0x40000u, 0))
-      return 0;
-    s = ewram + soff;
-    cyc = 28;
-  } else {
+  const u8 *s = cgba_bg2_dma_resolve_src(dmach, 16u, &src_ptr, &cyc);
+  if (__builtin_expect(!s, 0))
     return 0;
-  }
   u32 count = cgba_pending_sl_count;
   if (__builtin_expect(count != 0u, 1)) {
     u32 y0 = cgba_pending_sl_start;
@@ -8388,27 +8397,12 @@ int cgba_try_hblank_bg2_dma0_fast(void)
     }
     cgba_bg2_snap_count = count;
   }
-  const u32 *src32 = (const u32 *)s;
-  u32 *d32 = (u32 *)((u8 *)io_registers + 0x20u);
-  u32 w0 = src32[0];
-  u32 w1 = src32[1];
-  u32 w2 = src32[2];
-  u32 w3 = src32[3];
-  d32[0] = w0;
-  d32[1] = w1;
-  d32[2] = w2;
-  d32[3] = w3;
-  u32 rx = eswap32(w2);
-  u32 ry = eswap32(w3);
-  dma_bus_val = ry;
-  cgba_video_io_dirty = 1;
-  affine_reference_x[0] = ((s32)(rx << 4)) >> 4;
-  affine_reference_y[0] = ((s32)(ry << 4)) >> 4;
+  cgba_commit_bg2_affine_dma_4words(s);
   dmach->source_address = src_ptr + 16u;
   return cyc;
 }
 
-int cgba_try_batch_hblank_bg2_dma0_fast(u32 start_y, u32 lines)
+int cgba_try_batch_hblank_bg2_dma_fast(u32 ch, u32 start_y, u32 lines)
 {
   if (__builtin_expect(skip_next_frame != 0 || lines == 0u ||
                        start_y + lines > 160u, 0))
@@ -8423,24 +8417,12 @@ int cgba_try_batch_hblank_bg2_dma0_fast(u32 start_y, u32 lines)
       __builtin_expect(start_y != cgba_pending_sl_start + cur ||
                        cgba_bg2_snap_count != cur, 0))
     return 0;
-  dma_transfer_type *dmach = &dma[0];
-  u32 src_ptr = dmach->source_address & 0x0FFFFFFCu;
-  u32 sreg = src_ptr >> 24;
+  dma_transfer_type *dmach = &dma[ch];
+  u32 src_ptr;
   u32 total_bytes = lines * 16u;
-  const u8 *s;
-  if (__builtin_expect(sreg == 3u, 1)) {
-    u32 soff = src_ptr & 0x7FFFu;
-    if (__builtin_expect(soff + total_bytes > 0x8000u, 0))
-      return 0;
-    s = iwram + 0x8000u + soff;
-  } else if (sreg == 2u) {
-    u32 soff = src_ptr & 0x3FFFFu;
-    if (__builtin_expect(soff + total_bytes > 0x40000u, 0))
-      return 0;
-    s = ewram + soff;
-  } else {
+  const u8 *s = cgba_bg2_dma_resolve_src(dmach, total_bytes, &src_ptr, NULL);
+  if (__builtin_expect(!s, 0))
     return 0;
-  }
 
   cgba_bg2_aff_snap *sn = &cgba_bg2_snaps[start_y];
   sn->ref_x = affine_reference_x[0];
@@ -8461,22 +8443,7 @@ int cgba_try_batch_hblank_bg2_dma0_fast(u32 start_y, u32 lines)
     p += 16u;
   }
 
-  const u32 *last32 = (const u32 *)p;
-  u32 *d32 = (u32 *)((u8 *)io_registers + 0x20u);
-  u32 w0 = last32[0];
-  u32 w1 = last32[1];
-  u32 w2 = last32[2];
-  u32 w3 = last32[3];
-  d32[0] = w0;
-  d32[1] = w1;
-  d32[2] = w2;
-  d32[3] = w3;
-  u32 rx = eswap32(w2);
-  u32 ry = eswap32(w3);
-  dma_bus_val = ry;
-  cgba_video_io_dirty = 1;
-  affine_reference_x[0] = ((s32)(rx << 4)) >> 4;
-  affine_reference_y[0] = ((s32)(ry << 4)) >> 4;
+  cgba_commit_bg2_affine_dma_4words(p);
   if (__builtin_expect((io_registers[REG_BG3PB] | io_registers[REG_BG3PD]) != 0u, 0)) {
     affine_reference_x[1] += (s32)(s16)read_ioreg(REG_BG3PB) * (s32)lines;
     affine_reference_y[1] += (s32)(s16)read_ioreg(REG_BG3PD) * (s32)lines;

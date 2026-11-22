@@ -222,7 +222,6 @@ SH4G_NOINLINE int sh4g_thumb_ldst_native(u8 **tp, u32 opcode, u32 pc,
     return 0;
   }
 
-#if CGBA_SH4_COMPACT_FASTMEM_TUPLE
   if (is_load && !pc_relative) {
     uint16_t load_delay_op = 0x0009u;
     if (reg_offset) {
@@ -282,7 +281,6 @@ SH4G_NOINLINE int sh4g_thumb_ldst_native(u8 **tp, u32 opcode, u32 pc,
                               (u32)pc, cycle_count, rd, load_delay_op);
     return 1;
   }
-#endif
 
   if (pc_relative) {
     sh4g_const(tp, ((pc & ~2u) + 4u + offset), SH4_REG_T0);
@@ -587,7 +585,9 @@ static inline int sh4g_thumb_strh_stride_run_native(u8 **tp, const u32 *ops,
  * cgba_iwram_code_end bypass), eliminates dead IWRAM loads overwritten later in
  * the same run, runs all accesses inline (2..6 insns each), and debits cnt
  * IWRAM cycles once. For cnt<=3 fallback emits fastmem sites (keeping ROM/EWRAM
- * fast); for cnt>=4 fallback emits one compact 28-byte cgba_sh4_thumb_ldst_run. */
+ * Fast path guards canonical IWRAM + alignment + SMC once, then executes direct
+ * host transfers (zero JSR overhead). On miss, emits compact8+OOL fastmem sites
+ * so EWRAM/VRAM/IO stay on native fastmem instead of C interp. */
 static inline int sh4g_thumb_base_run_native(u8 **tp, const u32 *ops,
   const int *ccs, int cnt, u32 pc)
 {
@@ -812,27 +812,14 @@ static inline int sh4g_thumb_base_run_native(u8 **tp, const u32 *ops,
     sh4g_close(tp, &cg); }
   bra_done = sh4g_emit_bra_debit(tp, cnt);
 
-  /* Cold fallback: emit resident fastmem sites directly under compact8+OOL
-   * (8-10B each, keeping EWRAM/VRAM/IO on native fastmem instead of C interp). */
+  /* Cold fallback: emit resident fastmem sites directly (8-10B each under
+   * compact8+OOL, keeping EWRAM/VRAM/IO on native fastmem instead of C interp). */
   while (nmiss)
     sh4g_patch_cond(miss[--nmiss], *tp);
-#if CGBA_SH4_COMPACT_FASTMEM_TUPLE && CGBA_SH4_FASTMEM_OOL_DESC
   for (k = 0; k < cnt; k++) {
     sh4_greg_forward_reset();
     sh4g_thumb_ldst_native(tp, ops[k], pc + (u32)(k * 2), ccs[k]);
   }
-#else
-  if (cnt <= 3) {
-    for (k = 0; k < cnt; k++) {
-      sh4_greg_forward_reset();
-      sh4g_thumb_ldst_native(tp, ops[k], pc + (u32)(k * 2), ccs[k]);
-    }
-  } else {
-    sh4g_op2_tramp_call(tp, (const void *)sh4_op2_pc_mem_tramp,
-                        (const void *)cgba_sh4_thumb_ldst_run,
-                        (u32)cnt, (u32)pc, 1, ccs[cnt - 1]);
-  }
-#endif
   sh4g_patch_bra(bra_done, *tp);
   return 1;
 }

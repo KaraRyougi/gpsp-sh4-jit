@@ -23,7 +23,7 @@ u8 ewram[1024 * 256 * 2] = {0};
 u8 iwram[1024 * 32 * 2] = {0};
 dma_transfer_type dma[DMA_CHAN_CNT];
 u8 cgba_hblank_dma_mask;
-u8 cgba_dma0_bg2_fast;
+u8 cgba_dma_bg2_fast_mask;
 
 const u32 cpu_modes[16] = {0};
 const u32 cpsr_masks[4][2] = {{0}};
@@ -243,7 +243,7 @@ static void test_io16_routes_through_canonical_write(void)
     memset(dma, 0, sizeof(dma));
     dma[0].start_type = DMA_START_HBLANK;
     cgba_hblank_dma_mask = 0x01u;
-    cgba_dma0_bg2_fast = 1u;
+    cgba_dma_bg2_fast_mask = 0x01u;
     address16(io_registers, 0x000u) = eswap16(0x0403u);
     reg[1] = 0u;
     reg[2] = addrs[i];
@@ -258,7 +258,7 @@ static void test_io16_routes_through_canonical_write(void)
     CHECK(name, address16(io_registers, 0x000u) == eswap16(0x0403u),
           "DISPCNT mutated by shadow path on %08X", addrs[i]);
     CHECK(name, dma[0].start_type == DMA_START_HBLANK &&
-          cgba_hblank_dma_mask == 0x01u && cgba_dma0_bg2_fast == 1u,
+          cgba_hblank_dma_mask == 0x01u && cgba_dma_bg2_fast_mask == 0x01u,
           "DMA0 state mutated by shadow path on %08X", addrs[i]);
   }
 }

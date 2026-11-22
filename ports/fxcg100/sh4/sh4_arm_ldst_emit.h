@@ -131,7 +131,6 @@ SH4G_NOINLINE int sh4g_arm_ldst_native(u8 **tp, u32 opcode, u32 pc,
     goto have_address;
   }
 
-#if CGBA_SH4_COMPACT_FASTMEM_TUPLE
   /* Compact non-IWRAM ARM load (pre-indexed, no writeback): pack the final
    * address instruction into the JSR @R0 delay slot (mirrors Thumb loads). */
   if (is_load && !effective_wb && (pc >> 24) != 0x03 &&
@@ -209,7 +208,6 @@ SH4G_NOINLINE int sh4g_arm_ldst_native(u8 **tp, u32 opcode, u32 pc,
                               (u32)pc, cycle_count, rd, load_delay_op);
     return 1;
   }
-#endif
 
   /* addr = transfer address in R1; for post-indexed forms keep the old base in
    * R1 and precompute writeback into R6 before the fast path clobbers R2. */

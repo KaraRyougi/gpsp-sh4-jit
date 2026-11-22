@@ -21,7 +21,10 @@
 
 #include <stdint.h>
 
-#define CGBA_SH4_ARM_MIXER_BODY_WORDS 36u
+#define CGBA_SH4_ARM_MIXER_STEP_WORDS 9u
+#define CGBA_SH4_ARM_MIXER_STEPS      4u
+#define CGBA_SH4_ARM_MIXER_BODY_WORDS \
+  (CGBA_SH4_ARM_MIXER_STEP_WORDS * CGBA_SH4_ARM_MIXER_STEPS)
 #define CGBA_SH4_ARM_MIXER_TAIL_WORDS 2u
 #define CGBA_SH4_ARM_MIXER_WORDS \
   (CGBA_SH4_ARM_MIXER_BODY_WORDS + CGBA_SH4_ARM_MIXER_TAIL_WORDS)
@@ -35,31 +38,28 @@
  * for a larger slice. */
 #define CGBA_SH4_ARM_MIXER_WHOLE_MAX_BATCHES 8u
 
-static const uint32_t cgba_sh4_arm_mixer_pattern[CGBA_SH4_ARM_MIXER_WORDS] = {
+static const uint32_t cgba_sh4_arm_mixer_step_pattern[CGBA_SH4_ARM_MIXER_STEP_WORDS] = {
   0xE080C424u, 0xE1DC80D0u, 0xE1D1C0F0u,
   0xE02CC896u, 0xE0C1C0B2u, 0xE1D2C0F0u,
-  0xE02CC897u, 0xE0C2C0B2u, 0xE0844005u,
+  0xE02CC897u, 0xE0C2C0B2u, 0xE0844005u
+};
 
-  0xE080C424u, 0xE1DC80D0u, 0xE1D1C0F0u,
-  0xE02CC896u, 0xE0C1C0B2u, 0xE1D2C0F0u,
-  0xE02CC897u, 0xE0C2C0B2u, 0xE0844005u,
-
-  0xE080C424u, 0xE1DC80D0u, 0xE1D1C0F0u,
-  0xE02CC896u, 0xE0C1C0B2u, 0xE1D2C0F0u,
-  0xE02CC897u, 0xE0C2C0B2u, 0xE0844005u,
-
-  0xE080C424u, 0xE1DC80D0u, 0xE1D1C0F0u,
-  0xE02CC896u, 0xE0C1C0B2u, 0xE1D2C0F0u,
-  0xE02CC897u, 0xE0C2C0B2u, 0xE0844005u,
-
+static const uint32_t cgba_sh4_arm_mixer_tail_pattern[CGBA_SH4_ARM_MIXER_TAIL_WORDS] = {
   0xE1510003u, 0x3AFFFFD9u
 };
+
+static inline uint32_t cgba_sh4_arm_mixer_word(uint32_t idx)
+{
+  if (idx < CGBA_SH4_ARM_MIXER_BODY_WORDS)
+    return cgba_sh4_arm_mixer_step_pattern[idx % CGBA_SH4_ARM_MIXER_STEP_WORDS];
+  return cgba_sh4_arm_mixer_tail_pattern[idx - CGBA_SH4_ARM_MIXER_BODY_WORDS];
+}
 
 static inline int cgba_sh4_arm_mixer_match(const uint32_t *ops)
 {
   uint32_t i;
   for (i = 0; i < CGBA_SH4_ARM_MIXER_WORDS; i++) {
-    if (ops[i] != cgba_sh4_arm_mixer_pattern[i])
+    if (ops[i] != cgba_sh4_arm_mixer_word(i))
       return 0;
   }
   return 1;

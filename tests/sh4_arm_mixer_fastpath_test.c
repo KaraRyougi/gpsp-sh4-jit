@@ -39,7 +39,7 @@ static void run_reference(model *m, uint32_t seq_cost,
   uint32_t sample_index = 0;
 
   for (i = 0; i < CGBA_SH4_ARM_MIXER_BODY_WORDS; i++) {
-    uint32_t op = cgba_sh4_arm_mixer_pattern[i];
+    uint32_t op = cgba_sh4_arm_mixer_word(i);
     m->cycles += seq_cost;
     switch (i % 9u) {
     case 0:
@@ -92,7 +92,7 @@ static void run_reference(model *m, uint32_t seq_cost,
 
 bad_opcode:
   fprintf(stderr, "oracle saw unexpected opcode %08x at %u\n",
-          cgba_sh4_arm_mixer_pattern[i], i);
+          cgba_sh4_arm_mixer_word(i), i);
   m->cycles = UINT32_MAX;
 }
 
@@ -310,7 +310,8 @@ int main(void)
   uint32_t pattern[CGBA_SH4_ARM_MIXER_WORDS];
   uint32_t i;
 
-  memcpy(pattern, cgba_sh4_arm_mixer_pattern, sizeof(pattern));
+  for (i = 0; i < CGBA_SH4_ARM_MIXER_WORDS; i++)
+    pattern[i] = cgba_sh4_arm_mixer_word(i);
   if (!cgba_sh4_arm_mixer_match(pattern)) {
     fprintf(stderr, "canonical mixer signature rejected\n");
     return 1;

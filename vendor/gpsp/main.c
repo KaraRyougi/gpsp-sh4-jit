@@ -467,9 +467,12 @@ static __attribute__((noinline)) unsigned cgba_ugba_idle_fastforward(
             ok = 1;
           }
 #if defined(CGBA_BULK_DMA) && CGBA_BULK_DMA && defined(CGBA_VIDEO_DEFERRED_ACTIVE)
-          else if (is_halt && cgba_hblank_dma_mask == 1u &&
-                   cgba_dma0_bg2_fast != 0u &&
-                   cgba_try_batch_hblank_bg2_dma0_fast(vcount + 1u, lines)) {
+          else if (is_halt &&
+                   (cgba_hblank_dma_mask & (cgba_hblank_dma_mask - 1u)) == 0u &&
+                   (cgba_dma_bg2_fast_mask & cgba_hblank_dma_mask) != 0u &&
+                   cgba_try_batch_hblank_bg2_dma_fast(
+                     (u32)__builtin_ctz(cgba_hblank_dma_mask),
+                     vcount + 1u, lines)) {
             write_ioreg(REG_VCOUNT, stop_y);
             ok = 1;
           }
@@ -569,6 +572,32 @@ static inline u32 cgba_finish_slice_cycles(u32 ec, int dma_cycles, u32 flags)
   }
   return ec | flags;
 }
+
+static inline void cgba_step_cpu_dma_sleep(unsigned completed_cycles)
+{
+  if (__builtin_expect(reg[CPU_HALT_STATE] == CPU_DMA, 0)) {
+    u32 dma_cyc = reg[REG_SLEEP_CYCLES];
+    if (dma_cyc & 0x80000000)
+      dma_cyc &= 0x7FFFFFFF;
+    else
+      dma_cyc -= MIN(dma_cyc, completed_cycles);
+    reg[REG_SLEEP_CYCLES] = dma_cyc;
+    if (!dma_cyc)
+      reg[CPU_HALT_STATE] = CPU_ACTIVE;
+    else
+      execute_cycles = MIN(execute_cycles, dma_cyc);
+  }
+}
+
+#if defined(CGBA_BULK_DMA) && CGBA_BULK_DMA && defined(CGBA_VIDEO_DEFERRED_ACTIVE)
+static inline int cgba_try_hblank_bg2_dma_fast_inline(void)
+{
+  u32 m = cgba_hblank_dma_mask;
+  if ((m & (m - 1u)) == 0u && (cgba_dma_bg2_fast_mask & m) != 0u)
+    return cgba_try_hblank_bg2_dma_fast((u32)__builtin_ctz(m));
+  return 0;
+}
+#endif
 
 static __attribute__((noinline)) u32 cgba_update_gba_slow(int remaining_cycles)
 {
@@ -680,9 +709,7 @@ static __attribute__((noinline)) u32 cgba_update_gba_slow(int remaining_cycles)
           // Trigger the HBlank DMAs if enabled
           if (__builtin_expect(cgba_hblank_dma_mask != 0, 0)) {
 #if defined(CGBA_BULK_DMA) && CGBA_BULK_DMA && defined(CGBA_VIDEO_DEFERRED_ACTIVE)
-            int fcyc = (cgba_hblank_dma_mask == 1u && cgba_dma0_bg2_fast != 0u)
-                         ? cgba_try_hblank_bg2_dma0_fast()
-                         : 0;
+            int fcyc = cgba_try_hblank_bg2_dma_fast_inline();
             if (__builtin_expect(fcyc != 0, 1)) {
               dma_cycles += fcyc;
             } else
@@ -749,18 +776,7 @@ static __attribute__((noinline)) u32 cgba_update_gba_slow(int remaining_cycles)
     }
 
     // If we are paused due to a DMA, cap the number of cyles to that amount.
-    if (__builtin_expect(reg[CPU_HALT_STATE] == CPU_DMA, 0)) {
-      u32 dma_cyc = reg[REG_SLEEP_CYCLES];
-      if (dma_cyc & 0x80000000)
-        dma_cyc &= 0x7FFFFFFF;
-      else
-        dma_cyc -= MIN(dma_cyc, completed_cycles);
-      reg[REG_SLEEP_CYCLES] = dma_cyc;
-      if (!dma_cyc)
-        reg[CPU_HALT_STATE] = CPU_ACTIVE;
-      else
-        execute_cycles = MIN(execute_cycles, dma_cyc);
-    }
+    cgba_step_cpu_dma_sleep(completed_cycles);
 
     /* Only IRQ or cascade-feeding timers must break the slice at their
        overflow; sound-clock timers batch (update_timers loops). */
@@ -802,18 +818,7 @@ static __attribute__((noinline)) u32 cgba_ugba_finish_cold_dma(
     cgba_fwd_idle_armed = 0u;
 
   execute_cycles = MAX(video_count, 0);
-  if (reg[CPU_HALT_STATE] == CPU_DMA) {
-    u32 dma_cyc = reg[REG_SLEEP_CYCLES];
-    if (dma_cyc & 0x80000000)
-      dma_cyc &= 0x7FFFFFFF;
-    else
-      dma_cyc -= MIN(dma_cyc, completed_cycles);
-    reg[REG_SLEEP_CYCLES] = dma_cyc;
-    if (!dma_cyc)
-      reg[CPU_HALT_STATE] = CPU_ACTIVE;
-    else
-      execute_cycles = MIN(execute_cycles, dma_cyc);
-  }
+  cgba_step_cpu_dma_sleep(completed_cycles);
   if (cgba_timer_cap_mask != 0)
     cgba_ugba_timer_cap();
   if (reg[CPU_HALT_STATE] != CPU_ACTIVE && !frame_complete) {
@@ -884,9 +889,7 @@ CGBA_HOT_TEXT u32 function_cc update_gba(int remaining_cycles)
 
           if (__builtin_expect(cgba_hblank_dma_mask != 0, 0)) {
 #if defined(CGBA_BULK_DMA) && CGBA_BULK_DMA && defined(CGBA_VIDEO_DEFERRED_ACTIVE)
-            int fcyc = (cgba_hblank_dma_mask == 1u && cgba_dma0_bg2_fast != 0u)
-                         ? cgba_try_hblank_bg2_dma0_fast()
-                         : 0;
+            int fcyc = cgba_try_hblank_bg2_dma_fast_inline();
             if (__builtin_expect(fcyc != 0, 1)) {
               dma_cycles = fcyc;
             } else

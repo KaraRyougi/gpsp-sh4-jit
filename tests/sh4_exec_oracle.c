@@ -67,14 +67,12 @@ u8 ws_cyc_seq[16][2], ws_cyc_nseq[16][2];
 u32 cgba_sh4_native_thumb_const_io_count;
 int cgba_sh4_extra_cycles;
 int cgba_sh4_thumb_ldst(u32 o, u32 p){(void)o;(void)p;return 0;}
-int cgba_sh4_thumb_ldst_run(u32 c, u32 p){(void)c;(void)p;return 0;}
 int cgba_sh4_arm_ldst(u32 o, u32 p){(void)o;(void)p;return 0;}
 int cgba_sh4_arm_psr(u32 o, u32 p){(void)o;(void)p;return 0;}
 void sh4_block_exit(u32 pc){(void)pc;}
 void sh4_helper_exit(u32 pc){(void)pc;}
 void sh4_cycle_gate_exit(void){}
 void sh4_op2_pc_mem_tramp(void){}
-void sh4_fastmem_pc_mem_tramp(void){}
 void sh4_fastmem_compact8_tramp(void){}
 void sh4_fastmem_compact8_load_tramp(void){}
 static struct { u32 ret_pc, pc_flags, opcode, cycle_count; } orc_fm_ool[64];
@@ -130,7 +128,9 @@ volatile u32 palette_ram_dirty;
 #define CGBA_VRAM_DIRTY_OBJ 2u
 #define CGBA_VRAM_DIRTY_ALL 3u
 #define CGBA_VRAM_DIRTY_ACTIVE 3u
+#define CGBA_VRAM_SB_DIRTY_ACTIVE 1
 volatile u32 cgba_vram_dirty;
+volatile u32 cgba_vram_sb_dirty;
 volatile u32 cgba_video_io_dirty;
 #define CGBA_SH4_REG_FORWARD 1
 #include "ports/fxcg100/sh4/sh4_thumb_dp_emit.h"
@@ -284,7 +284,6 @@ static void orc_write(u32 addr, u32 v, int size_log2, int *ok)
 
 static u32 orc_slow_target;        /* trunc(&sh4_op2_pc_mem_tramp) */
 static u32 orc_slow_target2;       /* trunc(&sh4_op2_pc_tramp) */
-static u32 orc_slow_target3;       /* trunc(&sh4_fastmem_pc_mem_tramp) */
 static u32 orc_slow_target4;       /* trunc(&sh4_fastmem_compact8_tramp) */
 static u32 orc_slow_target5;       /* trunc(&sh4_fastmem_compact8_load_tramp) */
 static int orc_took_slow;
@@ -293,7 +292,7 @@ static u32 orc_final_cycles;
 static int orc_is_slow_target(u32 a)
 {
   return a == orc_slow_target || a == orc_slow_target2 ||
-         a == orc_slow_target3 || a == orc_slow_target4 ||
+         a == orc_slow_target4 ||
          a == orc_slow_target5;
 }
 
@@ -651,7 +650,6 @@ static int run_sh4x(const u8 *code, size_t n)
   orc_add_window(cpu_modes, sizeof cpu_modes, 0);
   orc_add_window(psr_rebank_buf, sizeof psr_rebank_buf, 0);
   orc_slow_target = (u32)(uintptr_t)sh4_op2_pc_mem_tramp;
-  orc_slow_target3 = (u32)(uintptr_t)sh4_fastmem_pc_mem_tramp;
   orc_slow_target4 = (u32)(uintptr_t)sh4_fastmem_compact8_tramp;
   orc_slow_target5 = (u32)(uintptr_t)sh4_fastmem_compact8_load_tramp;
   orc_slow_target2 = (u32)(uintptr_t)sh4_op2_pc_tramp;
@@ -1631,13 +1629,18 @@ int main(void)
       }
 
     /* Native STR/STRH/STM to VRAM notify cgba_vram_dirty with exact BG/OBJ
-     * bit (including the 0x06018000 OBJ mirror). */
+     * bit (including the 0x06018000 OBJ mirror) and cgba_vram_sb_dirty with
+     * exact 2 KiB screenblock bitmask (including cross-SB block STM). */
     {
-      static const struct { u32 addr; u32 want; const char *nm; } vcases[] = {
-        { 0x06000020u, CGBA_VRAM_DIRTY_BG,  "bg0" },
-        { 0x06008020u, CGBA_VRAM_DIRTY_BG,  "bg1" },
-        { 0x06010020u, CGBA_VRAM_DIRTY_OBJ, "obj" },
-        { 0x06018020u, CGBA_VRAM_DIRTY_OBJ, "obj_mirror" }
+      static const struct {
+        u32 addr; u32 want; u32 want_sb_single; u32 want_sb_stm; const char *nm;
+      } vcases[] = {
+        { 0x06000020u, CGBA_VRAM_DIRTY_BG,  (1u << 0),  (1u << 0),              "bg0" },
+        { 0x06008020u, CGBA_VRAM_DIRTY_BG,  (1u << 16), (1u << 16),             "bg1" },
+        { 0x060007F8u, CGBA_VRAM_DIRTY_BG,  (1u << 0),  (1u << 0) | (1u << 1),  "bg_sb0_sb1" },
+        { 0x0600F7FCu, CGBA_VRAM_DIRTY_BG,  (1u << 30), (1u << 30) | (1u << 31),"bg_sb30_sb31" },
+        { 0x06010020u, CGBA_VRAM_DIRTY_OBJ, 0u,         0u,                     "obj" },
+        { 0x06018020u, CGBA_VRAM_DIRTY_OBJ, 0u,         0u,                     "obj_mirror" }
       };
       memory_map_read[0x06000000u >> 15] = vram;
       memory_map_read[0x06008000u >> 15] = vram + 0x8000;
@@ -1655,6 +1658,7 @@ int main(void)
           g_reg[4] = 0x55667788u;
           g_reg[5] = 0x99aabbccu;
           cgba_vram_dirty = 0;
+          cgba_vram_sb_dirty = 0;
           int emitted = (mode < 2) ? sh4g_arm_ldst_native(&sp, op, pc, 0)
                                    : sh4g_arm_block_native(&sp, op, pc, 0);
           orc_reset_windows();
@@ -1663,17 +1667,22 @@ int main(void)
           orc_add_window(memory_map_read, 8192 * 4, ORC_WIN_READ_MAP);
           orc_add_window(vram, sizeof(vram), ORC_WIN_BYTES);
           orc_add_window((const void *)&cgba_vram_dirty, sizeof(cgba_vram_dirty), ORC_WIN_BYTES);
+          orc_add_window((const void *)&cgba_vram_sb_dirty, sizeof(cgba_vram_sb_dirty), ORC_WIN_BYTES);
           orc_add_window(orc_vec_table, sizeof(orc_vec_table), ORC_WIN_BYTES);
           orc_add_window(ws_cyc_seq, sizeof(ws_cyc_seq), ORC_WIN_BYTES);
           orc_add_window(ws_cyc_nseq, sizeof(ws_cyc_nseq), ORC_WIN_BYTES);
-          int ok = 1;
+          int ok = 1, ok_sb = 1;
+          u32 want_sb = (mode < 2) ? vcases[ci].want_sb_single : vcases[ci].want_sb_stm;
           cases++;
           if (!emitted || !run_at((u32)(uintptr_t)sbuf, (u32)(uintptr_t)sp) ||
-              orc_read((u32)(uintptr_t)&cgba_vram_dirty, 2, &ok) != vcases[ci].want || !ok) {
-            printf("FAIL native VRAM dirty %s mode=%u got=%u want=%u (%s)\n",
+              orc_read((u32)(uintptr_t)&cgba_vram_dirty, 2, &ok) != vcases[ci].want || !ok ||
+              orc_read((u32)(uintptr_t)&cgba_vram_sb_dirty, 2, &ok_sb) != want_sb || !ok_sb) {
+            printf("FAIL native VRAM dirty %s mode=%u got=%u want=%u sb=%08X want_sb=%08X (%s)\n",
                    vcases[ci].nm, mode,
                    orc_read((u32)(uintptr_t)&cgba_vram_dirty, 2, &ok),
-                   vcases[ci].want, unmodeled);
+                   vcases[ci].want,
+                   orc_read((u32)(uintptr_t)&cgba_vram_sb_dirty, 2, &ok_sb),
+                   want_sb, unmodeled);
             fails++;
           }
         }
@@ -1789,7 +1798,7 @@ int main(void)
           orc_add_window(ewram, sizeof ewram, 0);
           orc_add_window(vram, sizeof vram, 0);
           orc_add_window((const void *)&cgba_vram_dirty, sizeof(cgba_vram_dirty), 0);
-        orc_add_window((const void *)&cgba_video_io_dirty, sizeof(cgba_video_io_dirty), 0);
+          orc_add_window((const void *)&cgba_vram_sb_dirty, sizeof(cgba_vram_sb_dirty), 0);
           orc_add_window((const void *)&cgba_video_io_dirty, sizeof(cgba_video_io_dirty), 0);
           orc_add_window(rom, sizeof rom, 0);
           orc_add_window(ws_cyc_seq, sizeof ws_cyc_seq, 0);
@@ -1972,7 +1981,6 @@ int main(void)
         orc_add_window(orc_vec_table, sizeof orc_vec_table, ORC_WIN_BYTES);
         orc_slow_target = (u32)(uintptr_t)sh4_op2_pc_mem_tramp;
         orc_slow_target2 = (u32)(uintptr_t)sh4_op2_pc_tramp;
-        orc_slow_target3 = (u32)(uintptr_t)sh4_fastmem_pc_mem_tramp;
         orc_slow_target4 = (u32)(uintptr_t)sh4_fastmem_compact8_tramp;
         orc_slow_target5 = (u32)(uintptr_t)sh4_fastmem_compact8_load_tramp;
 
@@ -2132,7 +2140,6 @@ int main(void)
             orc_add_window(orc_vec_table, sizeof orc_vec_table, ORC_WIN_BYTES);
             orc_slow_target = (u32)(uintptr_t)sh4_op2_pc_mem_tramp;
             orc_slow_target2 = (u32)(uintptr_t)sh4_op2_pc_tramp;
-            orc_slow_target3 = (u32)(uintptr_t)sh4_fastmem_pc_mem_tramp;
             orc_slow_target4 = (u32)(uintptr_t)sh4_fastmem_compact8_tramp;
             orc_slow_target5 = (u32)(uintptr_t)sh4_fastmem_compact8_load_tramp;
             cases++;
@@ -2210,7 +2217,6 @@ int main(void)
             orc_add_window(orc_vec_table, sizeof orc_vec_table, ORC_WIN_BYTES);
             orc_slow_target = (u32)(uintptr_t)sh4_op2_pc_mem_tramp;
             orc_slow_target2 = (u32)(uintptr_t)sh4_op2_pc_tramp;
-            orc_slow_target3 = (u32)(uintptr_t)sh4_fastmem_pc_mem_tramp;
             orc_slow_target4 = (u32)(uintptr_t)sh4_fastmem_compact8_tramp;
             orc_slow_target5 = (u32)(uintptr_t)sh4_fastmem_compact8_load_tramp;
             cases++;
@@ -2332,7 +2338,6 @@ int main(void)
             orc_add_window(orc_vec_table, sizeof orc_vec_table, ORC_WIN_BYTES);
             orc_slow_target = (u32)(uintptr_t)sh4_op2_pc_mem_tramp;
             orc_slow_target2 = (u32)(uintptr_t)sh4_op2_pc_tramp;
-            orc_slow_target3 = (u32)(uintptr_t)sh4_fastmem_pc_mem_tramp;
             orc_slow_target4 = (u32)(uintptr_t)sh4_fastmem_compact8_tramp;
             orc_slow_target5 = (u32)(uintptr_t)sh4_fastmem_compact8_load_tramp;
             cases++;
@@ -2446,7 +2451,6 @@ int main(void)
             orc_add_window(orc_vec_table, sizeof orc_vec_table, ORC_WIN_BYTES);
             orc_slow_target = (u32)(uintptr_t)sh4_op2_pc_mem_tramp;
             orc_slow_target2 = (u32)(uintptr_t)sh4_op2_pc_tramp;
-            orc_slow_target3 = (u32)(uintptr_t)sh4_fastmem_pc_mem_tramp;
             orc_slow_target4 = (u32)(uintptr_t)sh4_fastmem_compact8_tramp;
             orc_slow_target5 = (u32)(uintptr_t)sh4_fastmem_compact8_load_tramp;
             cases++;
@@ -2543,6 +2547,7 @@ int main(void)
         orc_add_window(ewram, sizeof ewram, 0);
         orc_add_window(vram, sizeof vram, 0);
         orc_add_window((const void *)&cgba_vram_dirty, sizeof(cgba_vram_dirty), 0);
+        orc_add_window((const void *)&cgba_vram_sb_dirty, sizeof(cgba_vram_sb_dirty), 0);
         orc_add_window((const void *)&cgba_video_io_dirty, sizeof(cgba_video_io_dirty), 0);
         orc_add_window(rom, sizeof rom, 0);
         orc_add_window(ws_cyc_seq, sizeof ws_cyc_seq, 0);
@@ -2550,7 +2555,6 @@ int main(void)
         orc_add_window(orc_vec_table, sizeof orc_vec_table, 0);
         orc_slow_target = (u32)(uintptr_t)sh4_op2_pc_mem_tramp;
         orc_slow_target2 = (u32)(uintptr_t)sh4_op2_pc_tramp;
-        orc_slow_target3 = (u32)(uintptr_t)sh4_fastmem_pc_mem_tramp;
         orc_slow_target4 = (u32)(uintptr_t)sh4_fastmem_compact8_tramp;
         orc_slow_target5 = (u32)(uintptr_t)sh4_fastmem_compact8_load_tramp;
 
@@ -2795,6 +2799,7 @@ int main(void)
         orc_add_window(ewram, sizeof ewram, 0);
         orc_add_window(vram, sizeof vram, 0);
         orc_add_window((const void *)&cgba_vram_dirty, sizeof(cgba_vram_dirty), 0);
+        orc_add_window((const void *)&cgba_vram_sb_dirty, sizeof(cgba_vram_sb_dirty), 0);
         orc_add_window((const void *)&cgba_video_io_dirty, sizeof(cgba_video_io_dirty), 0);
         orc_add_window(rom, sizeof rom, 0);
         orc_add_window(ws_cyc_seq, sizeof ws_cyc_seq, 0);
@@ -2802,7 +2807,6 @@ int main(void)
         orc_add_window(orc_vec_table, sizeof orc_vec_table, 0);
         orc_slow_target = (u32)(uintptr_t)sh4_op2_pc_mem_tramp;
         orc_slow_target2 = (u32)(uintptr_t)sh4_op2_pc_tramp;
-        orc_slow_target3 = (u32)(uintptr_t)sh4_fastmem_pc_mem_tramp;
         orc_slow_target4 = (u32)(uintptr_t)sh4_fastmem_compact8_tramp;
         orc_slow_target5 = (u32)(uintptr_t)sh4_fastmem_compact8_load_tramp;
 
@@ -2966,6 +2970,7 @@ int main(void)
         orc_add_window(ewram, sizeof ewram, 0);
         orc_add_window(vram, sizeof vram, 0);
         orc_add_window((const void *)&cgba_vram_dirty, sizeof(cgba_vram_dirty), 0);
+        orc_add_window((const void *)&cgba_vram_sb_dirty, sizeof(cgba_vram_sb_dirty), 0);
         orc_add_window((const void *)&cgba_video_io_dirty, sizeof(cgba_video_io_dirty), 0);
         orc_add_window(rom, sizeof rom, 0);
         orc_add_window(ws_cyc_seq, sizeof ws_cyc_seq, 0);
@@ -2973,7 +2978,6 @@ int main(void)
         orc_add_window(orc_vec_table, sizeof orc_vec_table, 0);
         orc_slow_target = (u32)(uintptr_t)sh4_op2_pc_mem_tramp;
         orc_slow_target2 = (u32)(uintptr_t)sh4_op2_pc_tramp;
-        orc_slow_target3 = (u32)(uintptr_t)sh4_fastmem_pc_mem_tramp;
         orc_slow_target4 = (u32)(uintptr_t)sh4_fastmem_compact8_tramp;
         orc_slow_target5 = (u32)(uintptr_t)sh4_fastmem_compact8_load_tramp;
 
@@ -3095,7 +3099,6 @@ int main(void)
       orc_add_window(orc_vec_table, sizeof orc_vec_table, 0);
       orc_slow_target = (u32)(uintptr_t)sh4_op2_pc_mem_tramp;
       orc_slow_target2 = (u32)(uintptr_t)sh4_op2_pc_tramp;
-      orc_slow_target3 = (u32)(uintptr_t)sh4_fastmem_pc_mem_tramp;
       orc_slow_target4 = (u32)(uintptr_t)sh4_fastmem_compact8_tramp;
       orc_slow_target5 = (u32)(uintptr_t)sh4_fastmem_compact8_load_tramp;
       int ran = emitted && run_at((u32)(uintptr_t)sbuf, (u32)(uintptr_t)sp);
