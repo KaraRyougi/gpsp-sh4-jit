@@ -10,6 +10,7 @@
 #include <string.h>
 #include "vendor/gpsp/common.h"   /* gpSP fixed-size types (u8/u32/...) */
 #include "vendor/gpsp/gpsp_config.h"
+#include "vendor/gpsp/sh4/sh4_jit_safety.h"
 #include "ports/fxcg100/sh4/sh4_fastmem_emit.h"
 
 #if CGBA_SH4_COMPACT_FASTMEM_TUPLE && CGBA_SH4_FASTMEM_OOL_DESC
@@ -21,15 +22,16 @@ extern int cgba_sh4_extra_cycles;
  *   - ROM cache: grows downward from the top of rom_translation_cache (sorted
  *     in strictly descending ret_pc order; shares the existing ROM arena with
  *     zero extra .cgba.highbss cost).
- *   - RAM cache: fixed 4096-entry table (64 KiB in .cgba.highbss, sorted in
- *     strictly ascending ret_pc order; any overflow falls back to C helper).
+ *   - RAM cache: 4096-entry table residing in the reserved base [0, 64 KiB) of
+ *     ram_translation_cache (sorted in strictly ascending ret_pc order; zero
+ *     separate .cgba.highbss allocation; any overflow falls back to C helper).
  *   - 512-entry direct-mapped cache in .cgba.highbss probed directly in SH-4
  *     ASM inside sh4_fastmem_compact8_tramp. */
 enum {
-  CGBA_SH4_RAM_FM_DESC_MAX = 4096,
   CGBA_SH4_OOL_CACHE_SIZE = 512
 };
-static cgba_sh4_fm_desc cgba_sh4_ram_fm_desc[CGBA_SH4_RAM_FM_DESC_MAX] CGBA_HIGH_BSS;
+_Static_assert(sizeof(cgba_sh4_fm_desc) == 16u, "cgba_sh4_fm_desc must be 16 bytes");
+#define cgba_sh4_ram_fm_desc ((cgba_sh4_fm_desc *)(void *)ram_translation_cache)
 static u32 cgba_sh4_ram_fm_desc_count CGBA_HIGH_BSS;
 static cgba_sh4_fm_desc *cgba_sh4_rom_fm_desc_cur CGBA_HIGH_BSS;
 const cgba_sh4_fm_desc *cgba_sh4_fm_ool_cache[CGBA_SH4_OOL_CACHE_SIZE] CGBA_HIGH_BSS;
@@ -106,7 +108,7 @@ int cgba_sh4_fm_ool_can_record(const u8 *tp)
     return (const u8 *)(void *)(cur - 1) >
            tp + TRANSLATION_CACHE_LIMIT_THRESHOLD + 256u;
   }
-  if (tp >= ram_translation_cache &&
+  if (tp >= ram_translation_cache + CGBA_SH4_RAM_FM_DESC_BYTES &&
       tp < ram_translation_cache + RAM_TRANSLATION_CACHE_SIZE) {
     return cgba_sh4_ram_fm_desc_count < CGBA_SH4_RAM_FM_DESC_MAX;
   }

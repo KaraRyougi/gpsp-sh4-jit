@@ -2442,18 +2442,20 @@ static u8 *cgba_bulk_ram_host(u32 addr, u32 len, u8 **tags)
   u32 off;
   switch (addr >> 24) {
   case 2:
-    off = addr & 0x3FFFF;
-    if (off + len > 0x40000) return NULL;
-    if (tags) *tags = ewram + 0x40000 + off;
+    off = addr & 0x3FFFFu;
+    if (off + len > 0x40000u) return NULL;
+    if (tags) *tags = ewram + 0x40000u + off;
     return ewram + off;
   case 3:
-    off = addr & 0x7FFF;
-    if (off + len > 0x8000) return NULL;
+    off = addr & 0x7FFFu;
+    if (off + len > 0x8000u) return NULL;
     if (tags) *tags = iwram + off;
-    return iwram + 0x8000 + off;
+    return iwram + 0x8000u + off;
   case 6:
-    off = addr & 0x1FFFF;
-    if (off + len > 0x18000) return NULL;
+    off = addr & 0x1FFFFu;
+    if (off >= 0x18000u)
+      off -= 0x8000u;
+    if (off + len > 0x18000u) return NULL;
     if (tags) {
       cgba_video_flush_before_write();
       *tags = NULL;                 /* VRAM: no tag mirror */
@@ -2465,32 +2467,61 @@ static u8 *cgba_bulk_ram_host(u32 addr, u32 len, u8 **tags)
   }
 }
 
-static const u8 *cgba_bulk_src_host(u32 addr, u32 len)
+/* Unified contiguous guest read-span resolver across mapped 32 KiB ROM pages,
+ * 4 KiB fragmented NOR blocks (excluding region 0x0D EEPROM), EWRAM, IWRAM,
+ * and VRAM (including its 0x18000..0x1FFFF 32 KiB mirror). */
+static inline const u8 *cgba_resolve_guest_read_span(u32 addr, u32 *avail_out)
 {
   u32 region = addr >> 24;
-  if (region >= 8u && region <= 0xDu) {   /* gamepak: one 32K page or 4K block */
+  if (region >= 8u && region <= 0xDu) {
     u8 *page = memory_map_read[(addr & 0x0FFFFFFFu) >> 15];
     if (page) {
       u32 off = addr & 0x7FFFu;
-      if (off + len <= 0x8000u)
-        return page + off;
+      *avail_out = 0x8000u - off;
+      return page + off;
     }
-    /* Fragmented NOR flash: resolve single-4K-block ROM reads directly so
-     * CpuSet/CpuFastSet/ObjAffineSet don't fall back to the ARM interpreter.
-     * Region 0x0D is excluded here so EEPROM reads never bypass read_eeprom. */
-    if (region <= 0xCu && len > 0u) {
+    if (region <= 0xCu) {
       u32 rom_off = addr & 0x01FFFFFFu;
-      u32 off4 = addr & 0x0FFFu;
-      if (rom_off < gamepak_size && len <= gamepak_size - rom_off &&
-          off4 + len <= 0x1000u) {
+      if (rom_off < gamepak_size) {
         u8 *blk = cgba_gamepak_resolve_4k(addr);
-        if (blk)
+        if (blk) {
+          u32 off4 = addr & 0x0FFFu;
+          u32 rem_blk = 0x1000u - off4;
+          u32 rem_rom = gamepak_size - rom_off;
+          *avail_out = rem_blk < rem_rom ? rem_blk : rem_rom;
           return blk + off4;
+        }
       }
     }
     return NULL;
   }
-  return cgba_bulk_ram_host(addr, len, NULL);
+  if (region == 2u) {
+    u32 off = addr & 0x3FFFFu;
+    *avail_out = 0x40000u - off;
+    return ewram + off;
+  }
+  if (region == 3u) {
+    u32 off = addr & 0x7FFFu;
+    *avail_out = 0x8000u - off;
+    return iwram + 0x8000u + off;
+  }
+  if (region == 6u) {
+    u32 off = addr & 0x1FFFFu;
+    if (off >= 0x18000u)
+      off -= 0x8000u;
+    *avail_out = 0x18000u - off;
+    return vram + off;
+  }
+  return NULL;
+}
+
+static const u8 *cgba_bulk_src_host(u32 addr, u32 len)
+{
+  u32 avail = 0u;
+  const u8 *p = cgba_resolve_guest_read_span(addr, &avail);
+  if (p && len <= avail)
+    return p;
+  return NULL;
 }
 
 static int cgba_bulk_ranges_overlap(const u8 *a, const u8 *b, u32 len)
@@ -3669,31 +3700,7 @@ static u32 cgba_lz_entry_cost;
 
 static inline const u8 *cgba_lz_src_page(u32 addr, u32 *avail_out)
 {
-  u32 region = addr >> 24;
-  if (region >= 8u && region <= 0xDu) {
-    u8 *page = memory_map_read[(addr & 0x0FFFFFFFu) >> 15];
-    u32 off = addr & 0x7FFFu;
-    if (!page) return NULL;
-    *avail_out = 0x8000u - off;
-    return page + off;
-  }
-  if (region == 2u) {
-    u32 off = addr & 0x3FFFFu;
-    *avail_out = 0x40000u - off;
-    return ewram + off;
-  }
-  if (region == 3u) {
-    u32 off = addr & 0x7FFFu;
-    *avail_out = 0x8000u - off;
-    return iwram + 0x8000u + off;
-  }
-  if (region == 6u) {
-    u32 off = addr & 0x1FFFFu;
-    if (off >= 0x18000u) return NULL;
-    *avail_out = 0x18000u - off;
-    return vram + off;
-  }
-  return NULL;
+  return cgba_resolve_guest_read_span(addr, avail_out);
 }
 
 static inline u8 cgba_lz_read_u8(u32 addr)

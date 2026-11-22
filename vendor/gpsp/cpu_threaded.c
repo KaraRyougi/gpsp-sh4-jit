@@ -29,10 +29,18 @@
 #define CGBA_SH4_DIFF_ACTIVE() 0
 #endif
 #ifdef SH4_ARCH
+#if defined(CGBA_SH4_COMPACT_FASTMEM_TUPLE) && CGBA_SH4_COMPACT_FASTMEM_TUPLE && \
+    (!defined(CGBA_SH4_FASTMEM_OOL_DESC) || CGBA_SH4_FASTMEM_OOL_DESC)
+#define CGBA_SH4_RAM_CODE_START(cache) ((cache) + CGBA_SH4_RAM_FM_DESC_BYTES)
+#define CGBA_SH4_RAM_CODE_WATERMARK CGBA_SH4_RAM_FM_DESC_BYTES
+#else
+#define CGBA_SH4_RAM_CODE_START(cache) CGBA_SH4_RAM_CACHE_START(cache)
+#define CGBA_SH4_RAM_CODE_WATERMARK CGBA_SH4_RAM_CACHE_WATERMARK
+#endif
 #if RAM_TRANSLATION_CACHE_SIZE <= \
-    CGBA_SH4_RAM_CACHE_WATERMARK + TRANSLATION_CACHE_LIMIT_THRESHOLD + \
+    CGBA_SH4_RAM_CODE_WATERMARK + TRANSLATION_CACHE_LIMIT_THRESHOLD + \
     CGBA_SH4_RAM_TAG_BYTES
-#error "SH4 RAM translation cache is too small for its sentinel and safety reserve"
+#error "SH4 RAM translation cache is too small for its descriptor/sentinel reserve"
 #endif
 #endif
 #if defined(VITA)
@@ -64,7 +72,7 @@ u8 *ram_translation_ptr = ram_translation_cache;
 #else
 u8 *rom_translation_ptr = rom_translation_cache;
 #ifdef SH4_ARCH
-u8 *ram_translation_ptr = CGBA_SH4_RAM_CACHE_START(ram_translation_cache);
+u8 *ram_translation_ptr = CGBA_SH4_RAM_CODE_START(ram_translation_cache);
 #else
 u8 *ram_translation_ptr = ram_translation_cache;
 #endif
@@ -582,15 +590,6 @@ SH4G_NOINLINE void sh4g_arm_access_memory_emit(
   void platform_cache_sync(void *baseaddr, void *endptr) {
     cgba_sh4_cache_sync(baseaddr, endptr);
   }
-#if defined(CGBA_SH4_PATCH_RESYNC)
-  void cgba_sh4_patch_cache_sync(void *baseaddr, void *endptr) {
-    cgba_sh4_cache_sync(baseaddr, endptr);
-#if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
-    cgba_dynarec_patch_sync_count++;
-    cgba_dynarec_patch_sync_bytes += (u32)((u8 *)endptr - (u8 *)baseaddr);
-#endif
-  }
-#endif
 #else
   /* x86 CPUs have icache consistency checks */
   void platform_cache_sync(void *baseaddr, void *endptr) {}
@@ -6389,9 +6388,9 @@ void flush_translation_cache_ram(void)
 
 #ifdef SH4_ARCH
   last_ram_translation_ptr =
-    CGBA_SH4_RAM_CACHE_START(ram_translation_cache);
+    CGBA_SH4_RAM_CODE_START(ram_translation_cache);
   ram_translation_ptr =
-    CGBA_SH4_RAM_CACHE_START(ram_translation_cache);
+    CGBA_SH4_RAM_CODE_START(ram_translation_cache);
 #if CGBA_SH4_COMPACT_FASTMEM_TUPLE && CGBA_SH4_FASTMEM_OOL_DESC
   cgba_sh4_fm_ool_reset_ram();
 #endif
@@ -6543,7 +6542,7 @@ void init_dynarec_caches(void)
 
 #ifdef SH4_ARCH
   ram_translation_ptr = last_ram_translation_ptr =
-    CGBA_SH4_RAM_CACHE_START(ram_translation_cache);
+    CGBA_SH4_RAM_CODE_START(ram_translation_cache);
 #else
   ram_translation_ptr = last_ram_translation_ptr = &ram_translation_cache[0];
 #endif

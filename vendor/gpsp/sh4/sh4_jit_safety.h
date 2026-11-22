@@ -12,6 +12,14 @@
 #define CGBA_SH4_RAM_CACHE_START(cache) \
   ((cache) + CGBA_SH4_RAM_CACHE_WATERMARK)
 
+/* When out-of-line fastmem descriptors are enabled, reserve the first 64 KiB
+ * of ram_translation_cache (4096 x 16-byte descriptors) so RAM fastmem sites
+ * keep full 4096-entry capacity with zero separate .cgba.highbss allocation.
+ * Translated RAM blocks start at offset >= CGBA_SH4_RAM_FM_DESC_BYTES (> 0),
+ * preserving the offset-zero untranslated sentinel automatically. */
+#define CGBA_SH4_RAM_FM_DESC_MAX   4096u
+#define CGBA_SH4_RAM_FM_DESC_BYTES (CGBA_SH4_RAM_FM_DESC_MAX * 16u)
+
 /* Overflow retries progressively shorten a pathological block.  Keep the
  * documented floor even for an odd/non-power-of-two configured cap. */
 static inline unsigned cgba_sh4_scan_cap_after_overflow(unsigned cap)

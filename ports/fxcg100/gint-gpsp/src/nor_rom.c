@@ -105,8 +105,6 @@ static int cgba_cg100_bfile_get_block_address(int fd, int offset, void **addr)
 #define CGBA_HIGH_BSS
 #endif
 
-static uint8_t cgba_nor_single_page[CGBA_NOR_ROM_PAGE_SIZE] CGBA_HIGH_BSS;
-
 /* Per-4KB-block direct NOR address table for the loaded ROM. Captures any
  * fragmentation (each block independent). Contiguous 32KB pages are direct
  * mapped (zero-copy); fragmented pages are page-faulted and gathered from this
@@ -116,7 +114,8 @@ static uint8_t cgba_nor_single_page[CGBA_NOR_ROM_PAGE_SIZE] CGBA_HIGH_BSS;
 static const uint8_t *cgba_block_addr[CGBA_NOR_ROM_MAX_BLOCKS] CGBA_HIGH_BSS;
 static uint32_t cgba_block_total;
 /* Page 0 is read directly by the loader (header/backup scan); if it is
- * fragmented we gather it here so it is always a valid contiguous pointer. */
+ * fragmented — or for <=32 KiB single-page ROM fallback — we hold page 0 here
+ * so it is always a valid contiguous pointer. */
 static uint8_t cgba_page0_buf[CGBA_NOR_ROM_PAGE_SIZE] CGBA_HIGH_BSS;
 
 static const uint16_t cgba_storage_root_prefix[] = {
@@ -733,8 +732,8 @@ static int load_single_page_fallback(cgba_nor_rom *rom)
 			rom->size > CGBA_NOR_ROM_PAGE_SIZE)
 		return -1;
 
-	memset(cgba_nor_single_page, 0xff, sizeof(cgba_nor_single_page));
-	int got = os_bfile_read(rom->fd, cgba_nor_single_page,
+	memset(cgba_page0_buf, 0xff, sizeof(cgba_page0_buf));
+	int got = os_bfile_read(rom->fd, cgba_page0_buf,
 		(int)rom->size, 0);
 	if(!bfile_read_exact_ok(got, (int)rom->size)) {
 		rom->last_error = -6;
@@ -744,7 +743,7 @@ static int load_single_page_fallback(cgba_nor_rom *rom)
 
 	rom->padded_size = CGBA_NOR_ROM_PAGE_SIZE;
 	rom->page_count = 1;
-	rom->pages[0] = cgba_nor_single_page;
+	rom->pages[0] = cgba_page0_buf;
 	rom->direct_page_count = 0;
 	rom->fallback_used = 1;
 	return 0;

@@ -634,7 +634,6 @@ lookup_pc_c:
   REDISPATCH_IF_NULL
   jmp     @r0
   nop
-#endif
 1:
   mov     #REG_PC, r0
   mov.l   @(r0,r14), r4
@@ -644,6 +643,7 @@ lookup_pc_c:
   REDISPATCH_IF_NULL
   jmp     @r0
   nop
+#endif
 
 /* ---- CPU halted: spin on update_gba until an event wakes it ---- */
 cpu_sleep_loop:

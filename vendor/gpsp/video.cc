@@ -3615,7 +3615,7 @@ static void order_obj(u32 video_mode)
             if (*rc_p < max_rend_cycles) {
               *mask_p |= pbit;
               *rc_p += cyccnt;
-              *alpha_p = 1;
+              (*alpha_p)++;
             } else {
               obj_cyccap_hit = true;
             }

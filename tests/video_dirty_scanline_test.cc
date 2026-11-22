@@ -1407,28 +1407,34 @@ static bool run_tests(void)
       for (u32 b = 0; b < 32u; b++) {
         u8 lo = (u8)((t + b) & 0x0Fu);
         u8 hi = (u8)((t * 3u + b + 1u) & 0x0Fu);
-        vram[0x10000u + t * 32u + b] = (u8)((hi << 4) | lo);
+        /* Bitmap modes (3-5) only allow OBJ tile IDs >= 512 (0x14000..0x17FFF). */
+        vram[0x14000u + t * 32u + b] = (u8)((hi << 4) | lo);
       }
     }
     memset(oam_ram, 0, sizeof(oam_ram));
     for (u32 i = 0; i < 128u; i++)
       oam_ram[i * 4u] = eswap16(0x0200u);
 
-    oam_ram[0 * 4u + 0] = eswap16(10u | 0x0000u);
+    /* OAM 0: opaque 4bpp 16x16 at (30, 14) -> drawn AFTER ST OBJs (y=14..29) */
+    oam_ram[0 * 4u + 0] = eswap16(14u | 0x0000u);
     oam_ram[0 * 4u + 1] = eswap16(30u | 0x4000u);
-    oam_ram[0 * 4u + 2] = eswap16(1u | (1u << 12));
+    oam_ram[0 * 4u + 2] = eswap16(0x201u | (1u << 12));
 
+    /* OAM 1: ST 4bpp 32x32 at (20, 8) -> overlaps OAM 2 on y=10..25 with NO prior
+     * opaque OBJ on y=10..13 (directly exercises st_rem > 1 bg_save snapshot). */
     oam_ram[1 * 4u + 0] = eswap16(8u | 0x0400u);
     oam_ram[1 * 4u + 1] = eswap16(20u | 0x8000u);
-    oam_ram[1 * 4u + 2] = eswap16(2u | (2u << 12));
+    oam_ram[1 * 4u + 2] = eswap16(0x202u | (2u << 12));
 
-    oam_ram[2 * 4u + 0] = eswap16(12u | 0x2400u);
+    /* OAM 2: ST 8bpp 16x16 at (28, 10) -> overlapping 2nd ST OBJ */
+    oam_ram[2 * 4u + 0] = eswap16(10u | 0x2400u);
     oam_ram[2 * 4u + 1] = eswap16(28u | 0x4000u);
-    oam_ram[2 * 4u + 2] = eswap16(4u);
+    oam_ram[2 * 4u + 2] = eswap16(0x204u);
 
-    oam_ram[3 * 4u + 0] = eswap16(14u | 0x0000u);
+    /* OAM 3: opaque 4bpp 16x16 at (24, 16) -> drawn BEFORE ST OBJs (y=16..31) */
+    oam_ram[3 * 4u + 0] = eswap16(16u | 0x0000u);
     oam_ram[3 * 4u + 1] = eswap16(24u | 0x4000u);
-    oam_ram[3 * 4u + 2] = eswap16(3u | (3u << 12));
+    oam_ram[3 * 4u + 2] = eswap16(0x203u | (3u << 12));
 
     reg[OAM_UPDATED] = 1u;
     write_ioreg(REG_BG2CNT, 0x0000u);
@@ -1447,10 +1453,13 @@ static bool run_tests(void)
       write_ioreg(REG_DISPCNT, dispcnts[ai]);
       reg[OAM_UPDATED] = 1u;
       order_obj(4u);
+      CHECK(obj_alpha_count[12] >= 2u);
+      CHECK((obj_row_prio_mask[12] & 0x0Fu) != 0u);
       for (u32 si = 0; si < 2u; si++) {
         u32 s = spans[si][0], e = spans[si][1];
         for (u32 y = 6u; y < 44u; y++) {
           write_ioreg(REG_VCOUNT, (u16)y);
+          order_layers((dispcnts[ai] >> 8) & 0x1Fu, y);
           affine_reference_x[0] = 0;
           affine_reference_y[0] = (s32)(y << 8);
 
@@ -1464,7 +1473,7 @@ static bool run_tests(void)
             s, e, got, 0x1Fu, dispcnts[ai], 0x3F3Fu);
           CHECK(ok);
 
-          bitmap_render_layers<STCKCOLOR, INDXCOLOR, u32>(
+          bitmap_render_layers<INDXCOLOR, STCKCOLOR, u32>(
             s, e, tmp, 0x1Fu);
           merge_blend<OBJ_BLEND, true>(s, e, ref, tmp);
 

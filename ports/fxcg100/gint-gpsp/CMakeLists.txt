@@ -67,11 +67,10 @@ set(GPSP_C_SOURCES
   # ~64 KB of .rodata. --gc-sections already strips it; not compiling it too.
 )
 
-# SH4 dynarec bring-up (opt-in). Adds the threaded recompiler, its SH4 host
-# emitter, the entry/exit trampoline, the executable code-cache placement and
-# the C instruction helpers. Default OFF so the interpreter build stays the
-# conservative shipping target; turn CGBA_DYNAREC on for hardware JIT artifacts.
-option(CGBA_DYNAREC "Build the SH4 dynamic recompiler (bring-up)" OFF)
+# SH4 dynarec. Adds the threaded recompiler, its SH4 host emitter, the
+# entry/exit trampoline, the executable code-cache placement and the C
+# instruction helpers. Hardware builds (including ClassPad II) enable this.
+option(CGBA_DYNAREC "Build the SH4 dynamic recompiler" OFF)
 option(CGBA_SH4_ARM_LDST_NATIVE
   "Enable SH4 native ARM single load fast path" ON)
 option(CGBA_SH4_THUMB_LDST_NATIVE
@@ -109,6 +108,8 @@ option(CGBA_KEY_TEST
   "Show the raw keyboard matrix (KEYSC) and menu key bits in the menu footer" OFF)
 option(CGBA_DEBUG_MENU
   "Show the in-menu DEBUG INFO submenu + F:/H frame/hash overlay (dev; hidden in release)" OFF)
+option(CGBA_SH4_SWI_CPUSET_FAITHFUL
+  "Faithful HLE for CpuSet/CpuFastSet/ObjAffineSet/LZ77 SWIs" ON)
 option(CGBA_SH4_SWI_HLE_VERIFY
   "Diag: predict faithful SWI HLE results, run the interpreted BIOS, compare" OFF)
 option(CGBA_SH4_SWI_FORWARD_OVERLAP
@@ -116,11 +117,11 @@ option(CGBA_SH4_SWI_FORWARD_OVERLAP
 option(CGBA_SH4_SWI_OAM_BULK
   "Faithful bulk path for CpuSet halfword copies into OAM" ON)
 option(CGBA_SH4_THUMB_UDIV_FASTPATH
-  "Exact fast path for the Zelda/libgcc Thumb unsigned divide suffix" ON)
+  "Exact fast path for the GCC/libgcc Thumb unsigned divide suffix" ON)
 option(CGBA_SH4_ARM_MIXER_FASTPATH
-  "Exact fast path for the Zelda/m4a ARM four-sample mixer loop" ON)
+  "Exact fast path for the Flagship/Sappy ARM four-sample mixer & PCM clamp loops" ON)
 option(CGBA_SH4_M4A_MIX_SKIP
-  "Skip discarded PCM arithmetic and buffer access in the signature-matched m4a mixer (only valid with the no-op sound backend)" ON)
+  "Skip discarded PCM arithmetic across all soundless audio skippers (MP2K, Flagship, IWRAM RMW-MLA, EA mixer; only valid with the no-op sound backend)" ON)
 option(CGBA_SH4_M4A_LOOP_FOLD
   "Fold whole iterations of the elided m4a reverb/mix loops in C (needs CGBA_SH4_M4A_MIX_SKIP)" ON)
 set(CGBA_SH4_HEAT_QUIET_FRAMES "180" CACHE STRING
@@ -145,8 +146,6 @@ option(CGBA_SH4_DIFF_HARNESS
   "Emulator-only interp/JIT differential harness (uses 492 KiB beyond the fx-CG100 hardware-safe arena)" OFF)
 option(CGBA_SH4_DIFF_DUMP_OPS
   "Headless/debug: dump block-diff op/cycle diagnostics" OFF)
-option(CGBA_SH4_PATCH_RESYNC
-  "Re-sync each unpublished instruction patch before final block publication" OFF)
 option(CGBA_SH4_PROFILE_COUNTERS
   "Hardware/debug: count SH4 JIT translations, cache flushes, and helper calls for the ON-menu debug page" OFF)
 option(CGBA_FXCG100_STORAGE
@@ -174,11 +173,9 @@ set(CGBA_GPSP_RAM_TRANSLATION_CACHE_SIZE "524288" CACHE STRING
 set(CGBA_GPSP_ROM_BRANCH_HASH_BITS "${_CGBA_DEFAULT_ROM_HASH_BITS}" CACHE STRING
   "SH4 dynarec ROM branch-hash = 2^N u32 entries (12 = 16 KiB, 13 = 32 KiB)")
 if(CGBA_CLASSPAD)
-  # The ClassPad II arena is in the OS heap and not under the fx-CG ceiling
-  # above, so the ROM cache is 1920 KiB (1.875 MiB) there: Pokemon Emerald was
-  # seen to fill the 1 MiB one 11 times in a session, while leaving ~78 KiB
-  # headroom in the 5.5 MiB arena for .cgba.core (incl. main.c + Mode 1/Phase 3
-  # ASM) and .cgba.highbss. The hash table is doubled to keep chains short.
+  # The ClassPad II arena is in the OS heap (5.5 MiB), not under the fx-CG
+  # ceiling above, so the ROM cache is 1920 KiB (1.875 MiB) with a 13-bit
+  # branch hash while leaving ~150 KiB headroom for .cgba.core and .cgba.highbss.
   set(CGBA_GPSP_ROM_TRANSLATION_CACHE_SIZE 1966080)
   set(CGBA_GPSP_ROM_BRANCH_HASH_BITS 13)
 endif()
@@ -327,9 +324,12 @@ if(CGBA_DYNAREC)
   if(CGBA_SH4_DIAG_COUNTERS)
     target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_SH4_DIAG_COUNTERS=1)
   endif()
-  if(DEFINED CGBA_SH4_SWI_CPUSET_FAITHFUL)
+  if(CGBA_SH4_SWI_CPUSET_FAITHFUL)
     target_compile_definitions(cgba-gint-gpsp PRIVATE
-      CGBA_SH4_SWI_CPUSET_FAITHFUL=${CGBA_SH4_SWI_CPUSET_FAITHFUL})
+      CGBA_SH4_SWI_CPUSET_FAITHFUL=1)
+  else()
+    target_compile_definitions(cgba-gint-gpsp PRIVATE
+      CGBA_SH4_SWI_CPUSET_FAITHFUL=0)
   endif()
   if(CGBA_SH4_SWI_HLE_VERIFY)
     target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_SH4_SWI_HLE_VERIFY=1)
@@ -376,12 +376,6 @@ if(CGBA_DYNAREC)
   target_compile_definitions(cgba-gint-gpsp PRIVATE
     CGBA_SH4_RAM_SCAN_CAP_INITIAL=${CGBA_SH4_RAM_SCAN_CAP_INITIAL}
     CGBA_SH4_ROM_SCAN_CAP_INITIAL=${CGBA_SH4_ROM_SCAN_CAP_INITIAL})
-  # Instruction patches are made before final block publication, so the full
-  # range sync is sufficient for production. Keep the per-patch path as an
-  # explicit hardware/overclock qualification switch.
-  if(CGBA_SH4_PATCH_RESYNC)
-    target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_SH4_PATCH_RESYNC=1)
-  endif()
   if(CGBA_SH4_EXACT_CYCLE_BOUNDARIES)
     target_compile_definitions(cgba-gint-gpsp PRIVATE CGBA_SH4_EXACT_CYCLE_BOUNDARIES=1)
   endif()
@@ -501,6 +495,8 @@ set(CGBA_GPSP_HEADLESS_SAVE_SLOT_FRAME "-1" CACHE STRING
   "Headless: run the real slot-save path (per-ROM name + compression) at this frame")
 set(CGBA_GPSP_HEADLESS_ALT_PERIOD "0" CACHE STRING
   "Headless: alternate A/START taps, one per N-frame window (0 = off)")
+set(CGBA_GPSP_HEADLESS_FUZZ_SEED "0" CACHE STRING
+  "Headless: deterministic input-fuzz PRNG seed (0 = off)")
 set(CGBA_GPSP_HEADLESS_ALT_PRESS "2" CACHE STRING
   "Headless: frames the alternating tap stays down")
 set(CGBA_GPSP_HEADLESS_ALT_FRAME "60" CACHE STRING
@@ -630,29 +626,6 @@ target_compile_options(cgba-gint-gpsp PRIVATE
   $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions -fno-rtti>
   $<$<COMPILE_LANGUAGE:ASM>:-Wa,-I${GPSP}>
 )
-
-# Performance A/B (P0): compile the two hottest gpSP translation units -- the CPU
-# interpreter and the scanline renderer -- at -O3 instead of the global -O2.
-# MEASURED on fx-CG100 hardware: -O3 on both files slightly REGRESSED worst-case
-# fps and added ~40 KB -- the predicted I-cache bloat on the giant dispatch switch.
-# So the default stays -O2 (option OFF); leave it OFF. (-g is intentionally
-# retained: no runtime/g3a-size effect, preserves addr2line for crash triage.)
-option(CGBA_TUNE_HOTFILES_O3 "Compile selected gpSP/fxCG100 hot files at -O3 (benchmark before enabling by default)" OFF)
-if(CGBA_TUNE_HOTFILES_O3)
-  set_source_files_properties(${GPSP}/cpu.cc ${GPSP}/video.cc
-    ${GPSP}/main.c ${FXCG100}/sh4/sh4_interp_helpers.c
-    PROPERTIES COMPILE_OPTIONS "-O3")
-endif()
-
-# A narrower compiler A/B.  On the Zelda checkpoint this added 41,248 bytes of
-# text and very slightly regressed the cache-sim model (36.081 -> 36.079 fps),
-# so it remains a diagnostic knob rather than a release setting.
-option(CGBA_TUNE_VIDEO_O3
-  "Compile only the scanline renderer at -O3 (benchmark before enabling)" OFF)
-if(CGBA_TUNE_VIDEO_O3 AND NOT CGBA_TUNE_HOTFILES_O3)
-  set_source_files_properties(${GPSP}/video.cc
-    PROPERTIES COMPILE_OPTIONS "-O3")
-endif()
 
 target_link_libraries(cgba-gint-gpsp Gint::Gint)
 

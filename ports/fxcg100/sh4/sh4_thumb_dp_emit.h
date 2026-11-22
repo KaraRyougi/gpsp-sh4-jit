@@ -581,8 +581,7 @@ static inline int sh4g_arm_psr_native(u8 **tp, u32 opcode, u32 pc, int cycles)
       { sh4_codegen cg = sh4g_open(tp);
         sh4_emit_add_imm(&cg, 6, SH4_REG_T2);
         sh4_emit_mov_w_load(&cg, SH4_REG_T2, SH4_REG_RET);
-        sh4_emit_swap_b(&cg, SH4_REG_RET, SH4_REG_RET);  /* IME, true order */
-        sh4_emit_tst_imm(&cg, 1);                        /* T=1: IME off */
+        sh4_emit_tst(&cg, SH4_REG_RET, SH4_REG_RET);     /* T=1: IME == 0 */
         sh4g_close(tp, &cg); }
       to_store[nst++] = sh4g_emit_bt_placeholder(tp);
 
