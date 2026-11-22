@@ -215,8 +215,10 @@ static inline void sh4g_thumb_bbra_const_step(u32 op, u32 *cmask, u32 cval[16])
     } else {
       *cmask = m & ~(1u << rd);
     }
-  } else if (hi >= 0xA8u && hi <= 0xAFu) {    /* ADD Rd, SP, #imm8*4 */
+  } else if (hi >= 0xA0u && hi <= 0xAFu) {    /* ADD Rd, PC/SP, #imm8*4 */
     *cmask = m & ~(1u << ((op >> 8) & 7u));
+  } else if (hi == 0xB0u) {                   /* ADD/SUB SP, #imm7*4 */
+    *cmask = m & ~(1u << 13u);
   }
 }
 

@@ -3899,13 +3899,13 @@ static inline u8 *cgba_sh4_find_existing_block(u32 block_end_pc,
 #define cgba_scan_existing_arm()                                              \
   do { u8 *_existing = cgba_sh4_find_existing_block(                          \
          block_end_pc, cgba_blk_start, ram_region, attempt_base, 0);          \
-       if (_existing != NULL) { chain_existing_target = _existing; break; } } while(0)
+       if (_existing != NULL) { chain_existing_target = _existing; goto block_end; } } while(0)
 
 #define cgba_scan_existing_thumb()                                            \
   do { if ((opcode & 0xF800u) != 0xF000u) {                                   \
          u8 *_existing = cgba_sh4_find_existing_block(                        \
            block_end_pc, cgba_blk_start, ram_region, attempt_base, 1);        \
-         if (_existing != NULL) { chain_existing_target = _existing; break; } \
+         if (_existing != NULL) { chain_existing_target = _existing; goto block_end; } \
        } } while(0)
 #else
 #define cgba_scan_existing_arm()

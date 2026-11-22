@@ -760,7 +760,7 @@ static inline void sh4g_emit_shift_imm(sh4_codegen *cg, unsigned type,
     int sh;
     if (amount == 1u) { sh4_emit_shar(cg, dst); return; }
     if (amount == 2u) { sh4_emit_shar(cg, dst); sh4_emit_shar(cg, dst); return; }
-    sh = (amount == 0u) ? -31 : -(int)amount;
+    sh = (amount == 0u) ? -32 : -(int)amount;
     if (!cached_sh || *cached_sh != sh) {
       sh4_emit_mov_imm(cg, sh, SH4_REG_RET);
       if (cached_sh) *cached_sh = sh;
