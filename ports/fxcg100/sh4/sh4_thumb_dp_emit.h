@@ -483,7 +483,7 @@ static inline void sh4g_shift_reg(u8 **tp, unsigned type, unsigned val,
           sh4_emit_shll(&cg, rc);
           sh4_emit_movt(&cg, rc);
         }
-        sh4_emit_mov_imm(&cg, -31, s2);
+        sh4_emit_mov_imm(&cg, -32, s2);
         sh4_emit_shad(&cg, s2, val);
       } else {                                   /* LSL/LSR: 0; C only at ==32 */
         if (want_c) {
