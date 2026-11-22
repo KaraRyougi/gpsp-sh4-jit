@@ -65,6 +65,13 @@ static u32 get_serial_mode(u16 siocnt, u16 rcnt) {
 }
 
 uint16_t serial_mul_siocnt() {
+  // When serial link is disabled (or auto with no connected netplay peers),
+  // report SD=0 (no link cable / peers ready) so games polling SIO_MULTI at
+  // boot (e.g. Konami's 0xEDED link check) do not deadlock waiting for peers.
+  if (serial_mode == SERIAL_MODE_DISABLED ||
+      (serial_mode == SERIAL_MODE_AUTO && netplay_num_clients == 0))
+    return 0;
+
   // Calculate parent/child, ID and some other fields.
   uint16_t ret = 0x8 |                          // All GBAs ready.
                  (netplay_client_id << 4) |     // Device ID
@@ -75,8 +82,9 @@ uint16_t serial_mul_siocnt() {
 
 cpu_alert_type write_rcnt(u16 value) {
   u16 oldval = read_ioreg(REG_RCNT);
-  u32 pvmode = get_serial_mode(oldval, read_ioreg(REG_RCNT));
-  u32 nwmode = get_serial_mode(value, read_ioreg(REG_RCNT));
+  u16 siocnt = read_ioreg(REG_SIOCNT);
+  u32 pvmode = get_serial_mode(siocnt, oldval);
+  u32 nwmode = get_serial_mode(siocnt, value);
 
   write_ioreg(REG_RCNT, value);
 
@@ -178,6 +186,14 @@ cpu_alert_type write_siocnt(u16 value) {
         serialpoke_master_send();
       else if (serial_mode == SERIAL_MODE_SERIAL_AW1 || serial_mode == SERIAL_MODE_SERIAL_AW2)
         serialaw_master_send();
+      else {
+        // Standalone GBA in multiplayer mode: parent receives its own
+        // SIOMLT_SEND word in SIOMULTI0 and 0xFFFF for disconnected slaves.
+        write_ioreg(REG_SIOMULTI0, read_ioreg(REG_SIOMLT_SEND));
+        write_ioreg(REG_SIOMULTI1, 0xFFFF);
+        write_ioreg(REG_SIOMULTI2, 0xFFFF);
+        write_ioreg(REG_SIOMULTI3, 0xFFFF);
+      }
     }
 
     break;
