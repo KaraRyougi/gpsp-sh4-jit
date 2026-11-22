@@ -206,7 +206,7 @@ void swi_Stop() {
 /*-----------------------------------------------------------------
   Used by the IntrWait functions
 -----------------------------------------------------------------*/
-bool CheckInterrupts(u32 waitFlags)
+u16 CheckInterrupts(u32 waitFlags)
 {
 	REG_IME = 0; //Disable interrupts
 	u16 intFlags = *(vu16*)(0x04000000-8); //Get current flags
