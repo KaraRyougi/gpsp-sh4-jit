@@ -23,6 +23,234 @@
 	.balign 4
 
 /* ============================================================================
+ * Shared GAS helper macros (zero runtime overhead; single source of truth).
+ * ============================================================================ */
+
+/* Branchless SWAR RGB565 per-channel saturation on expanded pfe (0x07E0F81F
+ * layout, overflow bits in \ovf = 0x08010020 at bits 27/16/5).
+ * Clamps any overflowing channel to all-1s (G=0x07E00000, R=0x0000F800, B=0x1F)
+ * in \pfe; caller then masks with 0x07E0F81F.
+ * Clobbers \t1 and \t2 (\t1 may alias \ovf if caller no longer needs \ovf). */
+.macro CGBA_SWAR_SAT_PFE pfe, ovf, t1, t2
+	.ifnc \ovf,\t1
+	mov     \ovf, \t1
+	.endif
+	and     \pfe, \t1                   /* ovf = pfe & 0x08010020 */
+	mov     \t1, \t2
+	shlr2   \t2
+	shlr2   \t2
+	shlr    \t2                         /* ovf >> 5 */
+	sub     \t2, \t1                    /* R/B full 5-bit fill; G top 5 bits */
+	shlr    \t2                         /* ovf >> 6 (G bit 21) */
+	or      \t2, \t1
+	or      \t1, \pfe
+.endm
+
+/* Unpack 4 packed 4bpp bytes in \wreg ([b0|b1|b2|b3], big-endian) into 8
+ * pre-shifted nibble bytes (pix << 1) at @(\dst) via the 512B _cgba_nib2_lut
+ * in \lut. Clobbers \wreg and r0. */
+.macro CGBA_UNPACK_4BPP_TILE_LUT wreg, dst, lut
+	extu.b  \wreg, r0
+	add     r0, r0
+	mov.w   @(r0, \lut), r0
+	shlr8   \wreg
+	mov.w   r0, @(6, \dst)
+
+	extu.b  \wreg, r0
+	add     r0, r0
+	mov.w   @(r0, \lut), r0
+	shlr8   \wreg
+	mov.w   r0, @(4, \dst)
+
+	extu.b  \wreg, r0
+	add     r0, r0
+	mov.w   @(r0, \lut), r0
+	shlr8   \wreg
+	mov.w   r0, @(2, \dst)
+
+	extu.b  \wreg, r0
+	add     r0, r0
+	mov.w   @(r0, \lut), r0
+	mov.w   r0, @\dst
+.endm
+
+/* 8-pixel paired 32-bit mov.l LUT blit for an 8bpp tile row (4-byte aligned \dst).
+ * \w0 = [p0 p1 p2 p3], \w1 = [p4 p5 p6 p7] (clobbered), \pal = 256-entry u16 LUT.
+ * Clobbers r0, r1, \w0, \w1. */
+.macro CGBA_8BPP_BLIT8_XTRCT w0, w1, dst, pal, hflip
+.if \hflip
+	extu.b  \w0, r0                     /* p3 -> dst[4] */
+	shll    r0
+	mov.w   @(r0, \pal), r1
+	shlr8   \w0
+	extu.b  \w0, r0                     /* p2 -> dst[5] */
+	shll    r0
+	mov.w   @(r0, \pal), r0
+	shlr8   \w0
+	swap.w  r0, r0
+	xtrct   r1, r0
+	mov.l   r0, @(8, \dst)
+	extu.b  \w0, r0                     /* p1 -> dst[6] */
+	shll    r0
+	mov.w   @(r0, \pal), r1
+	shlr8   \w0
+	mov     \w0, r0                     /* p0 -> dst[7] */
+	shll    r0
+	mov.w   @(r0, \pal), r0
+	swap.w  r0, r0
+	xtrct   r1, r0
+	mov.l   r0, @(12, \dst)
+	extu.b  \w1, r0                     /* p7 -> dst[0] */
+	shll    r0
+	mov.w   @(r0, \pal), r1
+	shlr8   \w1
+	extu.b  \w1, r0                     /* p6 -> dst[1] */
+	shll    r0
+	mov.w   @(r0, \pal), r0
+	shlr8   \w1
+	swap.w  r0, r0
+	xtrct   r1, r0
+	mov.l   r0, @\dst
+	extu.b  \w1, r0                     /* p5 -> dst[2] */
+	shll    r0
+	mov.w   @(r0, \pal), r1
+	shlr8   \w1
+	mov     \w1, r0                     /* p4 -> dst[3] */
+	shll    r0
+	mov.w   @(r0, \pal), r0
+	swap.w  r0, r0
+	xtrct   r1, r0
+	mov.l   r0, @(4, \dst)
+.else
+	extu.b  \w0, r0                     /* p3 */
+	shll    r0
+	mov.w   @(r0, \pal), r1
+	shlr8   \w0
+	extu.b  \w0, r0                     /* p2 */
+	shll    r0
+	mov.w   @(r0, \pal), r0
+	shlr8   \w0
+	swap.w  r1, r1
+	xtrct   r0, r1
+	mov.l   r1, @(4, \dst)
+	extu.b  \w0, r0                     /* p1 */
+	shll    r0
+	mov.w   @(r0, \pal), r1
+	shlr8   \w0
+	mov     \w0, r0                     /* p0 */
+	shll    r0
+	mov.w   @(r0, \pal), r0
+	swap.w  r1, r1
+	xtrct   r0, r1
+	mov.l   r1, @\dst
+	extu.b  \w1, r0                     /* p7 */
+	shll    r0
+	mov.w   @(r0, \pal), r1
+	shlr8   \w1
+	extu.b  \w1, r0                     /* p6 */
+	shll    r0
+	mov.w   @(r0, \pal), r0
+	shlr8   \w1
+	swap.w  r1, r1
+	xtrct   r0, r1
+	mov.l   r1, @(12, \dst)
+	extu.b  \w1, r0                     /* p5 */
+	shll    r0
+	mov.w   @(r0, \pal), r1
+	shlr8   \w1
+	mov     \w1, r0                     /* p4 */
+	shll    r0
+	mov.w   @(r0, \pal), r0
+	swap.w  r1, r1
+	xtrct   r0, r1
+	mov.l   r1, @(8, \dst)
+.endif
+.endm
+
+/* 8-pixel 16-bit mov.w LUT blit for an unaligned (4k+2) 8bpp tile row. */
+.macro CGBA_8BPP_BLIT8_W16 w0, w1, dst, pal, hflip
+.if \hflip
+	extu.b  \w0, r0
+	shll    r0
+	mov.w   @(r0, \pal), r0
+	shlr8   \w0
+	mov.w   r0, @(8, \dst)
+	extu.b  \w0, r0
+	shll    r0
+	mov.w   @(r0, \pal), r0
+	shlr8   \w0
+	mov.w   r0, @(10, \dst)
+	extu.b  \w0, r0
+	shll    r0
+	mov.w   @(r0, \pal), r0
+	shlr8   \w0
+	mov.w   r0, @(12, \dst)
+	mov     \w0, r0
+	shll    r0
+	mov.w   @(r0, \pal), r0
+	mov.w   r0, @(14, \dst)
+	extu.b  \w1, r0
+	shll    r0
+	mov.w   @(r0, \pal), r0
+	shlr8   \w1
+	mov.w   r0, @\dst
+	extu.b  \w1, r0
+	shll    r0
+	mov.w   @(r0, \pal), r0
+	shlr8   \w1
+	mov.w   r0, @(2, \dst)
+	extu.b  \w1, r0
+	shll    r0
+	mov.w   @(r0, \pal), r0
+	shlr8   \w1
+	mov.w   r0, @(4, \dst)
+	mov     \w1, r0
+	shll    r0
+	mov.w   @(r0, \pal), r0
+	mov.w   r0, @(6, \dst)
+.else
+	extu.b  \w0, r0
+	shll    r0
+	mov.w   @(r0, \pal), r0
+	shlr8   \w0
+	mov.w   r0, @(6, \dst)
+	extu.b  \w0, r0
+	shll    r0
+	mov.w   @(r0, \pal), r0
+	shlr8   \w0
+	mov.w   r0, @(4, \dst)
+	extu.b  \w0, r0
+	shll    r0
+	mov.w   @(r0, \pal), r0
+	shlr8   \w0
+	mov.w   r0, @(2, \dst)
+	mov     \w0, r0
+	shll    r0
+	mov.w   @(r0, \pal), r0
+	mov.w   r0, @\dst
+	extu.b  \w1, r0
+	shll    r0
+	mov.w   @(r0, \pal), r0
+	shlr8   \w1
+	mov.w   r0, @(14, \dst)
+	extu.b  \w1, r0
+	shll    r0
+	mov.w   @(r0, \pal), r0
+	shlr8   \w1
+	mov.w   r0, @(12, \dst)
+	extu.b  \w1, r0
+	shll    r0
+	mov.w   @(r0, \pal), r0
+	shlr8   \w1
+	mov.w   r0, @(10, \dst)
+	mov     \w1, r0
+	shll    r0
+	mov.w   @(r0, \pal), r0
+	mov.w   r0, @(8, \dst)
+.endif
+.endm
+
+/* ============================================================================
  * void cgba_render_4bpp_span_over_sh4(
  *   const u16 *map_ptr,   // r4
  *   u32 todraw,           // r5
@@ -2059,11 +2287,12 @@ _cgba_render_obj_4bpp_tiles_hf_sh4:
  *     const u16 *subpal,     // r7: palptr + pal_off
  *     s32 row_step)          // @(0, sp_in): +4 (!vflip) or -4 (vflip)
  * ============================================================================ */
-	.section .text._cgba_render_obj_4bpp_tiles_strip_sh4,"ax",@progbits
+.macro CGBA_OBJ_4BPP_TILES_STRIP_KERNEL sym, pfx, hflip
+	.section .text.\sym,"ax",@progbits
 	.balign 4
-	.global _cgba_render_obj_4bpp_tiles_strip_sh4
-	.type   _cgba_render_obj_4bpp_tiles_strip_sh4, @function
-_cgba_render_obj_4bpp_tiles_strip_sh4:
+	.global \sym
+	.type   \sym, @function
+\sym:
 	mov.l   r8, @-r15
 	mov.l   r9, @-r15
 	mov.l   r10, @-r15
@@ -2075,78 +2304,31 @@ _cgba_render_obj_4bpp_tiles_strip_sh4:
 	shlr16  r5
 	mov     r5, r9                      /* r9  = k rows */
 	mov     r4, r8                      /* r8  = cur_row_tile_ptr */
-	mov.w   .Lobjs_480, r10
+	mov.w   \pfx\()_480, r10
 	mov     r12, r0
 	shll2   r0
 	shll2   r0                          /* ntiles * 16 */
 	sub     r0, r10                     /* r10 = 480 - ntiles * 16 */
 
 	.balign 4
-.Lobjs_row:
+\pfx\()_row:
 	mov     r8, r4
 	mov     r12, r5
-.Lobjs_loop:
-	CGBA_OBJ_4BPP_ROW 0, .Lobjs_next
-.Lobjs_next:
-	add     #32, r4
-	dt      r5
-	bf.s    .Lobjs_loop
-	add     #16, r6
-
-	add     r11, r8
-	dt      r9
-	bf.s    .Lobjs_row
-	add     r10, r6
-
-	mov.l   @r15+, r12
-	mov.l   @r15+, r11
-	mov.l   @r15+, r10
-	mov.l   @r15+, r9
-	rts
-	mov.l   @r15+, r8
-
-	.balign 2
-.Lobjs_480:
-	.word   480
-	.size   _cgba_render_obj_4bpp_tiles_strip_sh4, .-_cgba_render_obj_4bpp_tiles_strip_sh4
-
-	.section .text._cgba_render_obj_4bpp_tiles_strip_hf_sh4,"ax",@progbits
-	.balign 4
-	.global _cgba_render_obj_4bpp_tiles_strip_hf_sh4
-	.type   _cgba_render_obj_4bpp_tiles_strip_hf_sh4, @function
-_cgba_render_obj_4bpp_tiles_strip_hf_sh4:
-	mov.l   r8, @-r15
-	mov.l   r9, @-r15
-	mov.l   r10, @-r15
-	mov.l   r11, @-r15
-	mov.l   r12, @-r15
-
-	mov.l   @(20, r15), r11             /* r11 = row_step (+4 or -4) */
-	extu.w  r5, r12                     /* r12 = ntiles */
-	shlr16  r5
-	mov     r5, r9                      /* r9  = k rows */
-	mov     r4, r8                      /* r8  = cur_row_tile_ptr */
-	mov.w   .Lobjsh_480, r10
-	mov     r12, r0
-	shll2   r0
-	shll2   r0
-	sub     r0, r10
-
-	.balign 4
-.Lobjsh_row:
-	mov     r8, r4
-	mov     r12, r5
-.Lobjsh_loop:
-	CGBA_OBJ_4BPP_ROW 1, .Lobjsh_next
-.Lobjsh_next:
+\pfx\()_loop:
+	CGBA_OBJ_4BPP_ROW \hflip, \pfx\()_next
+\pfx\()_next:
+.if \hflip
 	add     #-32, r4
+.else
+	add     #32, r4
+.endif
 	dt      r5
-	bf.s    .Lobjsh_loop
+	bf.s    \pfx\()_loop
 	add     #16, r6
 
 	add     r11, r8
 	dt      r9
-	bf.s    .Lobjsh_row
+	bf.s    \pfx\()_row
 	add     r10, r6
 
 	mov.l   @r15+, r12
@@ -2157,9 +2339,14 @@ _cgba_render_obj_4bpp_tiles_strip_hf_sh4:
 	mov.l   @r15+, r8
 
 	.balign 2
-.Lobjsh_480:
+\pfx\()_480:
 	.word   480
-	.size   _cgba_render_obj_4bpp_tiles_strip_hf_sh4, .-_cgba_render_obj_4bpp_tiles_strip_hf_sh4
+	.size   \sym, .-\sym
+.endm
+
+	CGBA_OBJ_4BPP_TILES_STRIP_KERNEL _cgba_render_obj_4bpp_tiles_strip_sh4,    .Lobjs,  0
+	CGBA_OBJ_4BPP_TILES_STRIP_KERNEL _cgba_render_obj_4bpp_tiles_strip_hf_sh4, .Lobjsh, 1
+	.purgem CGBA_OBJ_4BPP_TILES_STRIP_KERNEL
 
 /* ============================================================================
  * Fast 32-byte-multiple strip copy for 4-byte-aligned non-overlapping buffers.
@@ -3009,20 +3196,9 @@ _cgba_render_4bpp_strip_over_sh4:
 	mov.l   @(48, r15), r12
 	tst     r12, r0
 	bt      9f
-	mov.l   \pfx\()_ovfg, r12
-	tst     r12, r0
-	bt      6f
-	mov.l   \pfx\()_satg, r12
-	or      r12, r0
-6:	mov.l   \pfx\()_ovfr, r12
-	tst     r12, r0
-	bt      7f
-	mov.w   \pfx\()_satr, r12
-	extu.w  r12, r12
-	or      r12, r0
-7:	tst     #0x20, r0
-	bt      9f
-	or      #0x1F, r0
+	mov.l   r1, @-r15
+	CGBA_SWAR_SAT_PFE r0, r12, r12, r1
+	mov.l   @r15+, r1
 9:
 .endm
 
@@ -3457,18 +3633,6 @@ _cgba_render_4bpp_strip_over_sh4:
 	rts
 	or      r12, r0
 
-	.if \sat
-	.balign 4
-\pfx\()_ovfg:
-	.long   0x08000000
-\pfx\()_satg:
-	.long   0x07E00000
-\pfx\()_ovfr:
-	.long   0x00010000
-\pfx\()_satr:
-	.word   0xF800
-	.endif
-
 	.balign 4
 \pfx\()_nhf_have_r2:
 	CGBA_BLEND_BYTE_CALL \pfx, 12, 14, 1
@@ -3670,6 +3834,7 @@ _cgba_render_obj_4bpp_affine_scale_sh4:
 	mov     r8, r2
 	shlr2   r2
 	shlr    r2                          /* r2 = num_tiles (1,2,4,8) */
+	mov.l   .Lafs_nib2_ptr, r12         /* r12 = 512B _cgba_nib2_lut (reloaded to -8 below) */
 	mov     #0, r5                      /* r5 = any non-zero tile flag */
 
 	.balign 4
@@ -3679,49 +3844,7 @@ _cgba_render_obj_4bpp_affine_scale_sh4:
 	bt      .Lafs_ztile
 	mov     #1, r5
 
-	/* Big-endian SH-4: mov.l @r1 loads [b0 | b1 | b2 | b3], so low byte is b3 (p6,p7). */
-	mov     r14, r0
-	shll    r0
-	and     #0x1E, r0
-	mov.b   r0, @(6, r3)
-	mov     r14, r0
-	shlr2   r0
-	shlr    r0
-	and     #0x1E, r0
-	mov.b   r0, @(7, r3)
-	shlr8   r14
-
-	mov     r14, r0
-	shll    r0
-	and     #0x1E, r0
-	mov.b   r0, @(4, r3)
-	mov     r14, r0
-	shlr2   r0
-	shlr    r0
-	and     #0x1E, r0
-	mov.b   r0, @(5, r3)
-	shlr8   r14
-
-	mov     r14, r0
-	shll    r0
-	and     #0x1E, r0
-	mov.b   r0, @(2, r3)
-	mov     r14, r0
-	shlr2   r0
-	shlr    r0
-	and     #0x1E, r0
-	mov.b   r0, @(3, r3)
-	shlr8   r14
-
-	mov     r14, r0
-	shll    r0
-	and     #0x1E, r0
-	mov.b   r0, @(0, r3)
-	mov     r14, r0
-	shlr2   r0
-	shlr    r0
-	and     #0x1E, r0
-	mov.b   r0, @(1, r3)
+	CGBA_UNPACK_4BPP_TILE_LUT r14, r3, r12
 
 	add     #32, r1
 	dt      r2
@@ -3744,6 +3867,7 @@ _cgba_render_obj_4bpp_affine_scale_sh4:
 	/* Phase 3: inner pixel loop — 10 insns transparent, 12 insns opaque. */
 	.balign 4
 .Lafs_draw_start:
+	mov     #-8, r12                    /* restore r12 = -8 (shad >> 8) */
 .Lafs_draw:
 	mov.b   @(r0, r10), r0              /* linear[px] = pixval << 1 (0..30) */
 	tst     r0, r0
@@ -3770,6 +3894,10 @@ _cgba_render_obj_4bpp_affine_scale_sh4:
 	mov.l   @r15+, r9
 	rts
 	mov.l   @r15+, r8
+
+	.balign 4
+.Lafs_nib2_ptr:
+	.long   _cgba_nib2_lut
 	.size   _cgba_render_obj_4bpp_affine_scale_sh4, .-_cgba_render_obj_4bpp_affine_scale_sh4
 
 /* ============================================================================
@@ -3850,28 +3978,7 @@ _cgba_render_obj_4bpp_affine_scale_strip_sh4:
 	bt      .Lafss_ztile
 	mov     #1, r4
 
-	extu.b  r6, r0
-	add     r0, r0
-	mov.w   @(r0, r7), r0
-	shlr8   r6
-	mov.w   r0, @(6, r3)
-
-	extu.b  r6, r0
-	add     r0, r0
-	mov.w   @(r0, r7), r0
-	shlr8   r6
-	mov.w   r0, @(4, r3)
-
-	extu.b  r6, r0
-	add     r0, r0
-	mov.w   @(r0, r7), r0
-	shlr8   r6
-	mov.w   r0, @(2, r3)
-
-	extu.b  r6, r0
-	add     r0, r0
-	mov.w   @(r0, r7), r0
-	mov.w   r0, @r3
+	CGBA_UNPACK_4BPP_TILE_LUT r6, r3, r7
 
 	add     #32, r1
 	dt      r2
@@ -3962,19 +4069,22 @@ _cgba_render_obj_4bpp_affine_scale_strip_sh4:
 
 	.balign 4
 .Lafss_nib2_ptr:
-	.long   .Lafss_nib2_lut
+	.long   _cgba_nib2_lut
 .Lafss_480:
 	.word   480
 	.size   _cgba_render_obj_4bpp_affine_scale_strip_sh4, .-_cgba_render_obj_4bpp_affine_scale_strip_sh4
 
-	.section .rodata
+	.section .rodata._cgba_nib2_lut,"a",@progbits
 	.balign 4
-.Lafss_nib2_lut:
+	.global _cgba_nib2_lut
+	.type   _cgba_nib2_lut, @object
+_cgba_nib2_lut:
 	.set _nib_i, 0
 	.rept 256
 	.word (((_nib_i & 0x0F) << 9) | ((_nib_i & 0xF0) >> 3))
 	.set _nib_i, _nib_i + 1
 	.endr
+	.size   _cgba_nib2_lut, 512
 
 /* ============================================================================
  * _cgba_render_obj_4bpp_affine_rot_sh4
@@ -4656,22 +4766,7 @@ _cgba_sparse_override_band_sh4:
 	mov.l   .Lspo_ovf_all, r2
 	tst     r2, r0
 	bt      .Lspo_no_sat
-	mov.l   .Lspo_ovfg, r2
-	tst     r2, r0
-	bt      1f
-	mov.l   .Lspo_satg, r2
-	or      r2, r0
-1:
-	mov.l   .Lspo_ovfr, r2
-	tst     r2, r0
-	bt      2f
-	mov.w   .Lspo_satr, r2
-	extu.w  r2, r2
-	or      r2, r0
-2:
-	tst     #0x20, r0
-	bt      .Lspo_no_sat
-	or      #0x1F, r0
+	CGBA_SWAR_SAT_PFE r0, r2, r2, r1
 .Lspo_no_sat:
 	and     r13, r0
 	swap.w  r0, r2
@@ -4687,14 +4782,6 @@ _cgba_sparse_override_band_sh4:
 	.balign 4
 .Lspo_ovf_all:
 	.long   0x08010020
-.Lspo_ovfg:
-	.long   0x08000000
-.Lspo_satg:
-	.long   0x07E00000
-.Lspo_ovfr:
-	.long   0x00010000
-.Lspo_satr:
-	.word   0xF800
 .Lspo_7fe0_b:
 	.word   0x7FE0
 .Lspo_2048:
@@ -5578,163 +5665,75 @@ _cgba_render_obj_4bpp_tiles_blend_sh4:
 	tst     #1, r0                      /* T = !hflip */
 	bt      .Lobjb_norm_loop
 
-	/* ---- hflip == true ---- */
+.macro CGBA_OBJB_PIX reg, shift_next, disp, next_lbl
+	mov     \reg, r0
+	and     #0x3C, r0
+	tst     r0, r0
+.if \shift_next
+	bt.s    \next_lbl
+	shlr8   \reg
+.else
+	bt      \next_lbl
+.endif
+.if \disp == 0
+	bsr     .Lobjb_blend_pix
+	mov     r6, r1
+.else
+	mov     r6, r1
+	bsr     .Lobjb_blend_pix
+	add     #\disp, r1
+.endif
+.endm
+
+.macro CGBA_OBJB_TILE_LOOP pfx, hflip
 	.balign 4
-.Lobjb_hf_loop:
+\pfx\()_loop:
 	mov.l   @r4, r9                     /* [b0 | b1 | b2 | b3] */
 	tst     r9, r9
-	bt      .Lobjb_hf_next
+	bt      \pfx\()_next
 	mov     r9, r10
 	shlr2   r10                         /* odd nibbles << 2 */
 	add     r9, r9
 	add     r9, r9                      /* even nibbles << 2 */
-
-	mov     r9, r0
-	and     #0x3C, r0
-	tst     r0, r0
-	bt.s    1f
-	shlr8   r9
-	mov     r6, r1
-	bsr     .Lobjb_blend_pix
-	add     #2, r1                      /* dst[1] = p6 */
-1:	mov     r9, r0
-	and     #0x3C, r0
-	tst     r0, r0
-	bt.s    2f
-	shlr8   r9
-	mov     r6, r1
-	bsr     .Lobjb_blend_pix
-	add     #6, r1                      /* dst[3] = p4 */
-2:	mov     r9, r0
-	and     #0x3C, r0
-	tst     r0, r0
-	bt.s    3f
-	shlr8   r9
-	mov     r6, r1
-	bsr     .Lobjb_blend_pix
-	add     #10, r1                     /* dst[5] = p2 */
-3:	mov     r9, r0
-	and     #0x3C, r0
-	tst     r0, r0
-	bt      4f
-	mov     r6, r1
-	bsr     .Lobjb_blend_pix
-	add     #14, r1                     /* dst[7] = p0 */
-4:	mov     r10, r0
-	and     #0x3C, r0
-	tst     r0, r0
-	bt.s    5f
-	shlr8   r10
-	bsr     .Lobjb_blend_pix
-	mov     r6, r1                      /* dst[0] = p7 */
-5:	mov     r10, r0
-	and     #0x3C, r0
-	tst     r0, r0
-	bt.s    6f
-	shlr8   r10
-	mov     r6, r1
-	bsr     .Lobjb_blend_pix
-	add     #4, r1                      /* dst[2] = p5 */
-6:	mov     r10, r0
-	and     #0x3C, r0
-	tst     r0, r0
-	bt.s    7f
-	shlr8   r10
-	mov     r6, r1
-	bsr     .Lobjb_blend_pix
-	add     #8, r1                      /* dst[4] = p3 */
-7:	mov     r10, r0
-	and     #0x3C, r0
-	tst     r0, r0
-	bt      .Lobjb_hf_next
-	mov     r6, r1
-	bsr     .Lobjb_blend_pix
-	add     #12, r1                     /* dst[6] = p1 */
-.Lobjb_hf_next:
+.if \hflip
+	CGBA_OBJB_PIX r9,  1,  2, 1f
+1:	CGBA_OBJB_PIX r9,  1,  6, 2f
+2:	CGBA_OBJB_PIX r9,  1, 10, 3f
+3:	CGBA_OBJB_PIX r9,  0, 14, 4f
+4:	CGBA_OBJB_PIX r10, 1,  0, 5f
+5:	CGBA_OBJB_PIX r10, 1,  4, 6f
+6:	CGBA_OBJB_PIX r10, 1,  8, 7f
+7:	CGBA_OBJB_PIX r10, 0, 12, \pfx\()_next
+.else
+	CGBA_OBJB_PIX r9,  1, 12, 1f
+1:	CGBA_OBJB_PIX r9,  1,  8, 2f
+2:	CGBA_OBJB_PIX r9,  1,  4, 3f
+3:	CGBA_OBJB_PIX r9,  0,  0, 4f
+4:	CGBA_OBJB_PIX r10, 1, 14, 5f
+5:	CGBA_OBJB_PIX r10, 1, 10, 6f
+6:	CGBA_OBJB_PIX r10, 1,  6, 7f
+7:	CGBA_OBJB_PIX r10, 0,  2, \pfx\()_next
+.endif
+\pfx\()_next:
+.if \hflip
 	add     #-32, r4
+.else
+	add     #32, r4
+.endif
 	dt      r5
-	bf.s    .Lobjb_hf_loop
+	bf.s    \pfx\()_loop
 	add     #16, r6
+.endm
+
+	/* ---- hflip == true ---- */
+	CGBA_OBJB_TILE_LOOP .Lobjb_hf, 1
 	bra     .Lobjb_done
 	nop
 
 	/* ---- hflip == false ---- */
-	.balign 4
-.Lobjb_norm_loop:
-	mov.l   @r4, r9                     /* [b0 | b1 | b2 | b3] */
-	tst     r9, r9
-	bt      .Lobjb_norm_next
-	mov     r9, r10
-	shlr2   r10                         /* odd nibbles << 2 */
-	add     r9, r9
-	add     r9, r9                      /* even nibbles << 2 */
-
-	mov     r9, r0
-	and     #0x3C, r0
-	tst     r0, r0
-	bt.s    1f
-	shlr8   r9
-	mov     r6, r1
-	bsr     .Lobjb_blend_pix
-	add     #12, r1                     /* dst[6] = p6 */
-1:	mov     r9, r0
-	and     #0x3C, r0
-	tst     r0, r0
-	bt.s    2f
-	shlr8   r9
-	mov     r6, r1
-	bsr     .Lobjb_blend_pix
-	add     #8, r1                      /* dst[4] = p4 */
-2:	mov     r9, r0
-	and     #0x3C, r0
-	tst     r0, r0
-	bt.s    3f
-	shlr8   r9
-	mov     r6, r1
-	bsr     .Lobjb_blend_pix
-	add     #4, r1                      /* dst[2] = p2 */
-3:	mov     r9, r0
-	and     #0x3C, r0
-	tst     r0, r0
-	bt      4f
-	bsr     .Lobjb_blend_pix
-	mov     r6, r1                      /* dst[0] = p0 */
-4:	mov     r10, r0
-	and     #0x3C, r0
-	tst     r0, r0
-	bt.s    5f
-	shlr8   r10
-	mov     r6, r1
-	bsr     .Lobjb_blend_pix
-	add     #14, r1                     /* dst[7] = p7 */
-5:	mov     r10, r0
-	and     #0x3C, r0
-	tst     r0, r0
-	bt.s    6f
-	shlr8   r10
-	mov     r6, r1
-	bsr     .Lobjb_blend_pix
-	add     #10, r1                     /* dst[5] = p5 */
-6:	mov     r10, r0
-	and     #0x3C, r0
-	tst     r0, r0
-	bt.s    7f
-	shlr8   r10
-	mov     r6, r1
-	bsr     .Lobjb_blend_pix
-	add     #6, r1                      /* dst[3] = p3 */
-7:	mov     r10, r0
-	and     #0x3C, r0
-	tst     r0, r0
-	bt      .Lobjb_norm_next
-	mov     r6, r1
-	bsr     .Lobjb_blend_pix
-	add     #2, r1                      /* dst[1] = p1 */
-.Lobjb_norm_next:
-	add     #32, r4
-	dt      r5
-	bf.s    .Lobjb_norm_loop
-	add     #16, r6
+	CGBA_OBJB_TILE_LOOP .Lobjb_norm, 0
+	.purgem CGBA_OBJB_PIX
+	.purgem CGBA_OBJB_TILE_LOOP
 
 .Lobjb_done:
 	lds.l   @r15+, pr
@@ -5771,28 +5770,16 @@ _cgba_render_obj_4bpp_tiles_blend_sh4:
 	mov.w   r0, @r1
 
 .Lobjb_sat:
-	mov.l   .Lobjb_ovfg, r8
-	tst     r8, r0
-	bt      1f
-	mov.l   .Lobjb_satg, r8
+	CGBA_SWAR_SAT_PFE r0, r13, r8, r3
+	and     r12, r0
+	swap.w  r0, r8
 	or      r8, r0
-1:	mov.l   .Lobjb_ovfr, r8
-	tst     r8, r0
-	bt      2f
-	mov.l   .Lobjb_satr, r8
-	or      r8, r0
-2:	tst     #0x20, r0
-	bt      .Lobjb_sat_ret
-	bra     .Lobjb_sat_ret
-	or      #0x1F, r0
+	rts
+	mov.w   r0, @r1
 
 	.balign 4
 .Lobjb_blnd_msk: .long 0x07E0F81F
 .Lobjb_ovf_all:  .long 0x08010020
-.Lobjb_ovfg:     .long 0x08000000
-.Lobjb_satg:     .long 0x07E00000
-.Lobjb_ovfr:     .long 0x00010000
-.Lobjb_satr:     .long 0x0000F800
 	.size   _cgba_render_obj_4bpp_tiles_blend_sh4, .-_cgba_render_obj_4bpp_tiles_blend_sh4
 
 /* ============================================================================
@@ -5957,7 +5944,8 @@ _cgba_merge_blend_sh4:
 
 	mov.l   @(12, r8), r2               /* sat_mask (0 when a+b <= 16) */
 	tst     r2, r0
-	bf      .Lmbl_sat
+	bt      .Lmbl_sat_ret
+	CGBA_SWAR_SAT_PFE r0, r2, r2, r3
 .Lmbl_sat_ret:
 	and     r11, r0
 	swap.w  r0, r2
@@ -5965,22 +5953,6 @@ _cgba_merge_blend_sh4:
 	mov     r0, r10
 	bra     .Lmbl_hit
 	nop
-
-.Lmbl_sat:
-	mov.l   .Lmbl_ovfg, r2
-	tst     r2, r0
-	bt      1f
-	mov.l   .Lmbl_satg, r2
-	or      r2, r0
-1:	mov.l   .Lmbl_ovfr, r2
-	tst     r2, r0
-	bt      2f
-	mov.l   .Lmbl_satr, r2
-	or      r2, r0
-2:	tst     #0x20, r0
-	bt      .Lmbl_sat_ret
-	bra     .Lmbl_sat_ret
-	or      #0x1F, r0
 
 	.balign 4
 .Lmbl_no_alpha:
@@ -6030,10 +6002,6 @@ _cgba_merge_blend_sh4:
 	.balign 4
 .Lmbl_blnd_msk: .long 0x07E0F81F
 .Lmbl_tgt2_bit: .long 0x04000000
-.Lmbl_ovfg:     .long 0x08000000
-.Lmbl_satg:     .long 0x07E00000
-.Lmbl_ovfr:     .long 0x00010000
-.Lmbl_satr:     .long 0x0000F800
 .Lmbl_1ff:      .word 0x01FF
 	.size   _cgba_merge_blend_sh4, .-_cgba_merge_blend_sh4
 
@@ -6141,48 +6109,7 @@ _cgba_render_8bpp_strip_base_sh4:
 	or      r3, r0
 	tst     r0, r0
 	bt      .L8ba_zero_nf
-	extu.b  r2, r0                      /* p3 */
-	shll    r0
-	mov.w   @(r0, r10), r1
-	shlr8   r2
-	extu.b  r2, r0                      /* p2 */
-	shll    r0
-	mov.w   @(r0, r10), r0
-	shlr8   r2
-	swap.w  r1, r1
-	xtrct   r0, r1
-	mov.l   r1, @(4, r12)
-	extu.b  r2, r0                      /* p1 */
-	shll    r0
-	mov.w   @(r0, r10), r1
-	shlr8   r2
-	mov     r2, r0                      /* p0 */
-	shll    r0
-	mov.w   @(r0, r10), r0
-	swap.w  r1, r1
-	xtrct   r0, r1
-	mov.l   r1, @r12
-	extu.b  r3, r0                      /* p7 */
-	shll    r0
-	mov.w   @(r0, r10), r1
-	shlr8   r3
-	extu.b  r3, r0                      /* p6 */
-	shll    r0
-	mov.w   @(r0, r10), r0
-	shlr8   r3
-	swap.w  r1, r1
-	xtrct   r0, r1
-	mov.l   r1, @(12, r12)
-	extu.b  r3, r0                      /* p5 */
-	shll    r0
-	mov.w   @(r0, r10), r1
-	shlr8   r3
-	mov     r3, r0                      /* p4 */
-	shll    r0
-	mov.w   @(r0, r10), r0
-	swap.w  r1, r1
-	xtrct   r0, r1
-	mov.l   r1, @(8, r12)
+	CGBA_8BPP_BLIT8_XTRCT r2, r3, r12, r10, 0
 .L8ba_nf_next:
 	add     r8, r11
 	dt      r14
@@ -6212,48 +6139,7 @@ _cgba_render_8bpp_strip_base_sh4:
 	or      r3, r0
 	tst     r0, r0
 	bt      .L8ba_zero_hf
-	extu.b  r2, r0                      /* p3 -> dst[4] */
-	shll    r0
-	mov.w   @(r0, r10), r1
-	shlr8   r2
-	extu.b  r2, r0                      /* p2 -> dst[5] */
-	shll    r0
-	mov.w   @(r0, r10), r0
-	shlr8   r2
-	swap.w  r0, r0
-	xtrct   r1, r0
-	mov.l   r0, @(8, r12)
-	extu.b  r2, r0                      /* p1 -> dst[6] */
-	shll    r0
-	mov.w   @(r0, r10), r1
-	shlr8   r2
-	mov     r2, r0                      /* p0 -> dst[7] */
-	shll    r0
-	mov.w   @(r0, r10), r0
-	swap.w  r0, r0
-	xtrct   r1, r0
-	mov.l   r0, @(12, r12)
-	extu.b  r3, r0                      /* p7 -> dst[0] */
-	shll    r0
-	mov.w   @(r0, r10), r1
-	shlr8   r3
-	extu.b  r3, r0                      /* p6 -> dst[1] */
-	shll    r0
-	mov.w   @(r0, r10), r0
-	shlr8   r3
-	swap.w  r0, r0
-	xtrct   r1, r0
-	mov.l   r0, @r12
-	extu.b  r3, r0                      /* p5 -> dst[2] */
-	shll    r0
-	mov.w   @(r0, r10), r1
-	shlr8   r3
-	mov     r3, r0                      /* p4 -> dst[3] */
-	shll    r0
-	mov.w   @(r0, r10), r0
-	swap.w  r0, r0
-	xtrct   r1, r0
-	mov.l   r0, @(4, r12)
+	CGBA_8BPP_BLIT8_XTRCT r2, r3, r12, r10, 1
 .L8ba_hf_next:
 	add     r8, r11
 	dt      r14
@@ -6325,44 +6211,7 @@ _cgba_render_8bpp_strip_base_sh4:
 	or      r3, r0
 	tst     r0, r0
 	bt      .L8bu_zero_nf
-	extu.b  r2, r0
-	shll    r0
-	mov.w   @(r0, r10), r0
-	shlr8   r2
-	mov.w   r0, @(6, r12)
-	extu.b  r2, r0
-	shll    r0
-	mov.w   @(r0, r10), r0
-	shlr8   r2
-	mov.w   r0, @(4, r12)
-	extu.b  r2, r0
-	shll    r0
-	mov.w   @(r0, r10), r0
-	shlr8   r2
-	mov.w   r0, @(2, r12)
-	mov     r2, r0
-	shll    r0
-	mov.w   @(r0, r10), r0
-	mov.w   r0, @r12
-	extu.b  r3, r0
-	shll    r0
-	mov.w   @(r0, r10), r0
-	shlr8   r3
-	mov.w   r0, @(14, r12)
-	extu.b  r3, r0
-	shll    r0
-	mov.w   @(r0, r10), r0
-	shlr8   r3
-	mov.w   r0, @(12, r12)
-	extu.b  r3, r0
-	shll    r0
-	mov.w   @(r0, r10), r0
-	shlr8   r3
-	mov.w   r0, @(10, r12)
-	mov     r3, r0
-	shll    r0
-	mov.w   @(r0, r10), r0
-	mov.w   r0, @(8, r12)
+	CGBA_8BPP_BLIT8_W16 r2, r3, r12, r10, 0
 .L8bu_nf_next:
 	add     r8, r11
 	dt      r14
@@ -6394,44 +6243,7 @@ _cgba_render_8bpp_strip_base_sh4:
 	or      r3, r0
 	tst     r0, r0
 	bt      .L8bu_zero_hf
-	extu.b  r2, r0
-	shll    r0
-	mov.w   @(r0, r10), r0
-	shlr8   r2
-	mov.w   r0, @(8, r12)
-	extu.b  r2, r0
-	shll    r0
-	mov.w   @(r0, r10), r0
-	shlr8   r2
-	mov.w   r0, @(10, r12)
-	extu.b  r2, r0
-	shll    r0
-	mov.w   @(r0, r10), r0
-	shlr8   r2
-	mov.w   r0, @(12, r12)
-	mov     r2, r0
-	shll    r0
-	mov.w   @(r0, r10), r0
-	mov.w   r0, @(14, r12)
-	extu.b  r3, r0
-	shll    r0
-	mov.w   @(r0, r10), r0
-	shlr8   r3
-	mov.w   r0, @r12
-	extu.b  r3, r0
-	shll    r0
-	mov.w   @(r0, r10), r0
-	shlr8   r3
-	mov.w   r0, @(2, r12)
-	extu.b  r3, r0
-	shll    r0
-	mov.w   @(r0, r10), r0
-	shlr8   r3
-	mov.w   r0, @(4, r12)
-	mov     r3, r0
-	shll    r0
-	mov.w   @(r0, r10), r0
-	mov.w   r0, @(6, r12)
+	CGBA_8BPP_BLIT8_W16 r2, r3, r12, r10, 1
 .L8bu_hf_next:
 	add     r8, r11
 	dt      r14
@@ -6836,157 +6648,109 @@ _cgba_render_8bpp_strip_blend_sh4:
 .L8bl_ovf_all:   .long 0x08010020
 .L8bl_tile_mask: .word 0xFFC0
 
-	/* ---- !hflip 8-bpp blend row loop ---- */
-	.balign 4
-.L8bl_row_nf:
-	mov     r8, r0
-	tst     #2, r0
-	bf      .L8bl_nf_slow
-	mov.l   @(28, r15), r2              /* bd_pair */
-	mov.l   @r8, r0
-	cmp/eq  r2, r0
-	bf      .L8bl_nf_slow
-	mov.l   @(4, r8), r0
-	cmp/eq  r2, r0
-	bf      .L8bl_nf_slow
-	mov.l   @(8, r8), r0
-	cmp/eq  r2, r0
-	bf      .L8bl_nf_slow
-	mov.l   @(12, r8), r0
-	cmp/eq  r2, r0
-	bf      .L8bl_nf_slow
-	/* Whole 8-pixel dst row == backdrop: 2-pixel mov.l LUT via bd_pal256! */
-	mov.l   @r7, r2
-	mov.l   @(4, r7), r3
-	mov     r2, r0
-	or      r3, r0
-	tst     r0, r0
-	bt      .L8bl_nf_bd_skip
-	mov.l   @(24, r15), r14             /* r14 = bd_pal256 */
-	extu.b  r2, r0
-	shll    r0
-	mov.w   @(r0, r14), r1
-	shlr8   r2
-	extu.b  r2, r0
-	shll    r0
-	mov.w   @(r0, r14), r0
-	shlr8   r2
-	swap.w  r1, r1
-	xtrct   r0, r1
-	mov.l   r1, @(4, r8)
-	extu.b  r2, r0
-	shll    r0
-	mov.w   @(r0, r14), r1
-	shlr8   r2
-	mov     r2, r0
-	shll    r0
-	mov.w   @(r0, r14), r0
-	swap.w  r1, r1
-	xtrct   r0, r1
-	mov.l   r1, @r8
-	extu.b  r3, r0
-	shll    r0
-	mov.w   @(r0, r14), r1
-	shlr8   r3
-	extu.b  r3, r0
-	shll    r0
-	mov.w   @(r0, r14), r0
-	shlr8   r3
-	swap.w  r1, r1
-	xtrct   r0, r1
-	mov.l   r1, @(12, r8)
-	extu.b  r3, r0
-	shll    r0
-	mov.w   @(r0, r14), r1
-	shlr8   r3
-	mov     r3, r0
-	shll    r0
-	mov.w   @(r0, r14), r0
-	swap.w  r1, r1
-	xtrct   r0, r1
-	mov.l   r1, @(8, r8)
-.L8bl_nf_bd_skip:
-	bra     .L8bl_nf_next
-	nop
-
-	.balign 4
-.L8bl_nf_slow:
-	mov.l   @r7, r14                    /* [p0 p1 p2 p3] */
+/* Emit one 4-pixel 8bpp blend half-word check ([b0 b1 b2 b3] in r14). */
+.macro CGBA_8BPP_BLEND_HALF off_src, d0, d1, d2, d3, next_lbl
+.if \off_src == 0
+	mov.l   @r7, r14
+.else
+	mov.l   @(\off_src, r7), r14
+.endif
 	tst     r14, r14
-	bt      .L8bl_nf_hi
-	extu.b  r14, r0                     /* p3 */
+	bt      \next_lbl
+	extu.b  r14, r0
 	tst     r0, r0
 	bt.s    1f
 	shlr8   r14
 	shll2   r0
+.if \d0 == 0
+	bsr     .L8bl_blend_pix
+	mov     r8, r1
+.else
 	mov     r8, r1
 	bsr     .L8bl_blend_pix
-	add     #6, r1
-1:	extu.b  r14, r0                     /* p2 */
+	add     #\d0, r1
+.endif
+1:	extu.b  r14, r0
 	tst     r0, r0
 	bt.s    2f
 	shlr8   r14
 	shll2   r0
 	mov     r8, r1
 	bsr     .L8bl_blend_pix
-	add     #4, r1
-2:	extu.b  r14, r0                     /* p1 */
+	add     #\d1, r1
+2:	extu.b  r14, r0
 	tst     r0, r0
 	bt.s    3f
 	shlr8   r14
 	shll2   r0
 	mov     r8, r1
 	bsr     .L8bl_blend_pix
-	add     #2, r1
-3:	tst     r14, r14                    /* p0 */
-	bt      .L8bl_nf_hi
+	add     #\d2, r1
+3:	tst     r14, r14
+	bt      \next_lbl
 	mov     r14, r0
 	shll2   r0
+.if \d3 == 0
 	bsr     .L8bl_blend_pix
 	mov     r8, r1
-.L8bl_nf_hi:
-	mov.l   @(4, r7), r14               /* [p4 p5 p6 p7] */
-	tst     r14, r14
-	bt      .L8bl_nf_next
-	extu.b  r14, r0                     /* p7 */
+.else
+	mov     r8, r1
+	bsr     .L8bl_blend_pix
+	add     #\d3, r1
+.endif
+.endm
+
+.macro CGBA_8BPP_BLEND_ROW_LOOP pfx, hflip, stride_lbl
+	.balign 4
+\pfx\()_row:
+	mov     r8, r0
+	tst     #2, r0
+	bf      \pfx\()_slow
+	mov.l   @(28, r15), r2              /* bd_pair */
+	mov.l   @r8, r0
+	cmp/eq  r2, r0
+	bf      \pfx\()_slow
+	mov.l   @(4, r8), r0
+	cmp/eq  r2, r0
+	bf      \pfx\()_slow
+	mov.l   @(8, r8), r0
+	cmp/eq  r2, r0
+	bf      \pfx\()_slow
+	mov.l   @(12, r8), r0
+	cmp/eq  r2, r0
+	bf      \pfx\()_slow
+	/* Whole 8-pixel dst row == backdrop: 2-pixel mov.l LUT via bd_pal256! */
+	mov.l   @r7, r2
+	mov.l   @(4, r7), r3
+	mov     r2, r0
+	or      r3, r0
 	tst     r0, r0
-	bt.s    4f
-	shlr8   r14
-	shll2   r0
-	mov     r8, r1
-	bsr     .L8bl_blend_pix
-	add     #14, r1
-4:	extu.b  r14, r0                     /* p6 */
-	tst     r0, r0
-	bt.s    5f
-	shlr8   r14
-	shll2   r0
-	mov     r8, r1
-	bsr     .L8bl_blend_pix
-	add     #12, r1
-5:	extu.b  r14, r0                     /* p5 */
-	tst     r0, r0
-	bt.s    6f
-	shlr8   r14
-	shll2   r0
-	mov     r8, r1
-	bsr     .L8bl_blend_pix
-	add     #10, r1
-6:	tst     r14, r14                    /* p4 */
-	bt      .L8bl_nf_next
-	mov     r14, r0
-	shll2   r0
-	mov     r8, r1
-	bsr     .L8bl_blend_pix
-	add     #8, r1
-.L8bl_nf_next:
+	bt      \pfx\()_bd_skip
+	mov.l   @(24, r15), r14             /* r14 = bd_pal256 */
+	CGBA_8BPP_BLIT8_XTRCT r2, r3, r8, r14, \hflip
+\pfx\()_bd_skip:
+	bra     \pfx\()_next
+	nop
+
+	.balign 4
+\pfx\()_slow:
+.if \hflip
+	CGBA_8BPP_BLEND_HALF 0, 8, 10, 12, 14, \pfx\()_hi
+\pfx\()_hi:
+	CGBA_8BPP_BLEND_HALF 4, 0,  2,  4,  6, \pfx\()_next
+.else
+	CGBA_8BPP_BLEND_HALF 0,  6,  4,  2, 0, \pfx\()_hi
+\pfx\()_hi:
+	CGBA_8BPP_BLEND_HALF 4, 14, 12, 10, 8, \pfx\()_next
+.endif
+\pfx\()_next:
 	mov.l   @(8, r15), r0               /* tstep */
 	add     r0, r7
-	mov.w   .L8bl_stride_nf, r0
+	mov.w   \stride_lbl, r0
 	dt      r9
 	bt.s    7f
 	add     r0, r8
-	bra     .L8bl_row_nf
+	bra     \pfx\()_row
 	nop
 7:	dt      r5
 	bt.s    8f
@@ -6995,166 +6759,18 @@ _cgba_render_8bpp_strip_blend_sh4:
 	nop
 8:	bra     .L8bl_span2
 	nop
+.endm
 
+.L8bl_row_nf:
+	CGBA_8BPP_BLEND_ROW_LOOP .L8bl_nf, 0, .L8bl_stride_nf
 	.balign 2
 .L8bl_stride_nf: .word 480
 
 	/* ---- hflip 8-bpp blend row loop ---- */
-	.balign 4
 .L8bl_row_hf:
-	mov     r8, r0
-	tst     #2, r0
-	bf      .L8bl_hf_slow
-	mov.l   @(28, r15), r2              /* bd_pair */
-	mov.l   @r8, r0
-	cmp/eq  r2, r0
-	bf      .L8bl_hf_slow
-	mov.l   @(4, r8), r0
-	cmp/eq  r2, r0
-	bf      .L8bl_hf_slow
-	mov.l   @(8, r8), r0
-	cmp/eq  r2, r0
-	bf      .L8bl_hf_slow
-	mov.l   @(12, r8), r0
-	cmp/eq  r2, r0
-	bf      .L8bl_hf_slow
-	mov.l   @r7, r2
-	mov.l   @(4, r7), r3
-	mov     r2, r0
-	or      r3, r0
-	tst     r0, r0
-	bt      .L8bl_hf_bd_skip
-	mov.l   @(24, r15), r14             /* r14 = bd_pal256 */
-	extu.b  r2, r0                      /* p3 -> dst[4] */
-	shll    r0
-	mov.w   @(r0, r14), r1
-	shlr8   r2
-	extu.b  r2, r0                      /* p2 -> dst[5] */
-	shll    r0
-	mov.w   @(r0, r14), r0
-	shlr8   r2
-	swap.w  r0, r0
-	xtrct   r1, r0
-	mov.l   r0, @(8, r8)
-	extu.b  r2, r0                      /* p1 -> dst[6] */
-	shll    r0
-	mov.w   @(r0, r14), r1
-	shlr8   r2
-	mov     r2, r0                      /* p0 -> dst[7] */
-	shll    r0
-	mov.w   @(r0, r14), r0
-	swap.w  r0, r0
-	xtrct   r1, r0
-	mov.l   r0, @(12, r8)
-	extu.b  r3, r0                      /* p7 -> dst[0] */
-	shll    r0
-	mov.w   @(r0, r14), r1
-	shlr8   r3
-	extu.b  r3, r0                      /* p6 -> dst[1] */
-	shll    r0
-	mov.w   @(r0, r14), r0
-	shlr8   r3
-	swap.w  r0, r0
-	xtrct   r1, r0
-	mov.l   r0, @r8
-	extu.b  r3, r0                      /* p5 -> dst[2] */
-	shll    r0
-	mov.w   @(r0, r14), r1
-	shlr8   r3
-	mov     r3, r0                      /* p4 -> dst[3] */
-	shll    r0
-	mov.w   @(r0, r14), r0
-	swap.w  r0, r0
-	xtrct   r1, r0
-	mov.l   r0, @(4, r8)
-.L8bl_hf_bd_skip:
-	bra     .L8bl_hf_next
-	nop
-
-	.balign 4
-.L8bl_hf_slow:
-	mov.l   @r7, r14                    /* [p0 p1 p2 p3] -> dst[7..4] */
-	tst     r14, r14
-	bt      .L8bl_hf_hi
-	extu.b  r14, r0                     /* p3 -> dst[4] */
-	tst     r0, r0
-	bt.s    1f
-	shlr8   r14
-	shll2   r0
-	mov     r8, r1
-	bsr     .L8bl_blend_pix
-	add     #8, r1
-1:	extu.b  r14, r0                     /* p2 -> dst[5] */
-	tst     r0, r0
-	bt.s    2f
-	shlr8   r14
-	shll2   r0
-	mov     r8, r1
-	bsr     .L8bl_blend_pix
-	add     #10, r1
-2:	extu.b  r14, r0                     /* p1 -> dst[6] */
-	tst     r0, r0
-	bt.s    3f
-	shlr8   r14
-	shll2   r0
-	mov     r8, r1
-	bsr     .L8bl_blend_pix
-	add     #12, r1
-3:	tst     r14, r14                    /* p0 -> dst[7] */
-	bt      .L8bl_hf_hi
-	mov     r14, r0
-	shll2   r0
-	mov     r8, r1
-	bsr     .L8bl_blend_pix
-	add     #14, r1
-.L8bl_hf_hi:
-	mov.l   @(4, r7), r14               /* [p4 p5 p6 p7] -> dst[3..0] */
-	tst     r14, r14
-	bt      .L8bl_hf_next
-	extu.b  r14, r0                     /* p7 -> dst[0] */
-	tst     r0, r0
-	bt.s    4f
-	shlr8   r14
-	shll2   r0
-	bsr     .L8bl_blend_pix
-	mov     r8, r1
-4:	extu.b  r14, r0                     /* p6 -> dst[1] */
-	tst     r0, r0
-	bt.s    5f
-	shlr8   r14
-	shll2   r0
-	mov     r8, r1
-	bsr     .L8bl_blend_pix
-	add     #2, r1
-5:	extu.b  r14, r0                     /* p5 -> dst[2] */
-	tst     r0, r0
-	bt.s    6f
-	shlr8   r14
-	shll2   r0
-	mov     r8, r1
-	bsr     .L8bl_blend_pix
-	add     #4, r1
-6:	tst     r14, r14                    /* p4 -> dst[3] */
-	bt      .L8bl_hf_next
-	mov     r14, r0
-	shll2   r0
-	mov     r8, r1
-	bsr     .L8bl_blend_pix
-	add     #6, r1
-.L8bl_hf_next:
-	mov.l   @(8, r15), r0
-	add     r0, r7
-	mov.w   .L8bl_stride, r0
-	dt      r9
-	bt.s    7f
-	add     r0, r8
-	bra     .L8bl_row_hf
-	nop
-7:	dt      r5
-	bt.s    .L8bl_span2
-	add     #16, r6
-	bra     .L8bl_tile_loop
-	nop
+	CGBA_8BPP_BLEND_ROW_LOOP .L8bl_hf, 1, .L8bl_stride
+	.purgem CGBA_8BPP_BLEND_HALF
+	.purgem CGBA_8BPP_BLEND_ROW_LOOP
 
 .L8bl_span2:
 	mov.l   @(12, r15), r5
@@ -7217,26 +6833,14 @@ _cgba_render_8bpp_strip_blend_sh4:
 	mov.w   r0, @r1
 
 .L8bl_sat:
-	mov.l   .L8bl_ovfg, r2
-	tst     r2, r0
-	bt      1f
-	mov.l   .L8bl_satg, r2
+	CGBA_SWAR_SAT_PFE r0, r13, r2, r3
+	and     r12, r0
+	swap.w  r0, r2
 	or      r2, r0
-1:	mov.l   .L8bl_ovfr, r2
-	tst     r2, r0
-	bt      2f
-	mov.l   .L8bl_satr, r2
-	or      r2, r0
-2:	tst     #0x20, r0
-	bt      .L8bl_sat_ret
-	bra     .L8bl_sat_ret
-	or      #0x1F, r0
+	rts
+	mov.w   r0, @r1
 
-	.balign 4
-.L8bl_ovfg:      .long 0x08000000
-.L8bl_satg:      .long 0x07E00000
-.L8bl_ovfr:      .long 0x00010000
-.L8bl_satr:      .long 0x0000F800
+	.balign 2
 .L8bl_stride:    .word 480
 	.size   _cgba_render_8bpp_strip_blend_sh4, .-_cgba_render_8bpp_strip_blend_sh4
 
@@ -7284,20 +6888,15 @@ _cgba_render_affine_rot_base_sh4:
 	mov.l   @(36, r0), r12              /* r12 = pix_shift (-(25 - map_size)) */
 	mov.l   @(40, r0), r2               /* row_shift */
 	lds     r2, macl                    /* macl = row_shift */
-	mov.l   @(44, r0), r1               /* use_same_texel */
 
 	mov     r12, r13
 	add     #3, r13                     /* r13 = sub_y_shift = -(22 - map_size) */
-	neg     r12, r0                     /* 25 - map_size (22..25) */
-	mov     #-1, r5
-	shld    r0, r5                      /* r5  = texel_mask */
-	mov     r5, r6
-	shll2   r6
-	add     r6, r6                      /* r6  = tile_mask = texel_mask << 3 */
-	tst     r1, r1
-	bf      .Lafbg_b_same_miss
+	mov     #3, r0
+	sub     r12, r0                     /* 28 - map_size (25..28) */
+	mov     #-1, r6
+	shld    r0, r6                      /* r6  = tile_mask */
 
-	/* Same-tile cached loop (horizon / larger steps: skips map read on ~78% of pixels). */
+	/* Same-tile cached loop (large steps |dx|>=2048 || |dy|>=2048). */
 	.balign 4
 .Lafbg_b_tile_miss:
 	mov     r8, r0
@@ -7374,85 +6973,6 @@ _cgba_render_affine_rot_base_sh4:
 	mov.l   @r15+, r9
 	rts
 	mov.l   @r15+, r8
-
-	/* Same-texel + same-tile 2-level cached loop (small steps). */
-	.balign 4
-.Lafbg_b_same_miss:
-	mov     r8, r0
-	shld    r12, r0
-	mov     r0, r1
-	and     #7, r0
-	mov     r0, r2
-	shlr2   r1
-	shlr    r1
-
-	mov     r9, r0
-	shld    r12, r0
-	mov     r0, r3
-	and     #7, r0
-	xor     r0, r3
-	shll2   r0
-	add     r0, r0
-	or      r0, r2
-	mov     r3, r0
-	sts     macl, r3
-	shld    r3, r0
-	or      r1, r0
-
-	mov.l   @(0, r15), r1
-	mov.b   @(r0, r1), r0               /* tile_id */
-	extu.b  r0, r0
-	shll8   r0
-	shlr2   r0                          /* tile_id << 6 */
-	mov.l   @(4, r15), r3
-	add     r0, r3                      /* r3 = cur_tile_ptr */
-	mov     r2, r0
-	mov.b   @(r0, r3), r0               /* pval */
-	extu.b  r0, r0
-	add     r0, r0
-	mov.w   @(r0, r7), r1               /* r1 = cached color */
-	mov.w   r1, @-r4
-	dt      r14
-	bt      .Lafbg_b_done
-
-	.balign 4
-.Lafbg_b_same_next:
-	mov     r8, r2
-	add     r10, r8
-	xor     r8, r2
-	mov     r9, r0
-	add     r11, r9
-	xor     r9, r0
-	or      r0, r2
-	tst     r5, r2                      /* same texel? */
-	bf      .Lafbg_b_check_tile
-	mov.w   r1, @-r4
-	dt      r14
-	bf      .Lafbg_b_same_next
-	bra     .Lafbg_b_done
-	nop
-
-	.balign 4
-.Lafbg_b_check_tile:
-	tst     r6, r2                      /* same 8x8 tile? */
-	bf      .Lafbg_b_same_miss
-	mov     r8, r0
-	shld    r12, r0
-	and     #7, r0
-	mov     r0, r2
-	mov     r9, r0
-	shld    r13, r0
-	and     #0x38, r0
-	or      r2, r0
-	mov.b   @(r0, r3), r0
-	extu.b  r0, r0
-	add     r0, r0
-	mov.w   @(r0, r7), r1
-	mov.w   r1, @-r4
-	dt      r14
-	bf      .Lafbg_b_same_next
-	bra     .Lafbg_b_done
-	nop
 	.size   _cgba_render_affine_rot_base_sh4, .-_cgba_render_affine_rot_base_sh4
 
 /* ============================================================================
@@ -8604,46 +8124,83 @@ _cgba_render_affine_rot_over_sh4:
 	mov.l   @(0, r0), r4
 	mov.l   @(4, r0), r5
 	mov.l   @(8, r0), r6
-	mov.l   @(12, r0), r7
+	mov.l   @(12, r0), r7               /* r7 = signed pal (+128) */
 	mov.l   @(16, r0), r8
 	mov.l   @(20, r0), r9
 	mov.l   @(24, r0), r10
 	mov.l   @(28, r0), r11
 	mov.l   @(32, r0), r14
-	mov.l   @(36, r0), r12
-	mov.l   @(40, r0), r13
+	mov.l   @(36, r0), r12              /* r12 = pix_shift */
+	mov.l   @(40, r0), r13              /* row_shift */
+	lds     r13, macl                   /* macl = row_shift */
 	mov.l   @(44, r0), r0               /* flags: bit0=same_texel */
+	mov     r12, r13
+	add     #3, r13                     /* r13 = sub_y_shift = -(22 - map_size) */
+	mov     #3, r2
+	sub     r12, r2                     /* 28 - map_size (25..28) */
+	mov     #-1, r1
+	shld    r2, r1                      /* r1 = tile_mask */
+	lds     r1, mach
 	tst     #1, r0
-	bt      .Lafbg_o_loop_t0
+	bt      .Lafbg_o_t0_miss
 	bra     .Lafbg_o_same_miss
 	nop
 
-.Lafbg_o_done:
-	add     #4, r15
-	mov.l   @r15+, r14
-	mov.l   @r15+, r13
-	mov.l   @r15+, r12
-	mov.l   @r15+, r11
-	mov.l   @r15+, r10
-	mov.l   @r15+, r9
-	rts
-	mov.l   @r15+, r8
+	/* Shared tile-classified empty & solid fast loops (12 insns/px). */
+.macro AFBG_OVER_EMPTY_SOLID pfx
+	.balign 4
+\pfx\()_empty_step:
+	sts     mach, r1                    /* r1 = tile_mask */
+	dt      r14
+	bt      \pfx\()_done_bra
+\pfx\()_empty_next:
+	mov     r8, r2
+	add     r10, r8
+	xor     r8, r2
+	mov     r9, r0
+	add     r11, r9
+	xor     r9, r0
+	or      r0, r2
+	tst     r1, r2                      /* same empty 8x8 tile? */
+	bf      \pfx\()_miss
+	dt      r14
+	bf.s    \pfx\()_empty_next
+	add     #-2, r4
+	bra     .Lafbg_o_done
+	nop
+
+	.balign 4
+\pfx\()_solid_enter:
+	mov.b   @r3, r0
+	add     r0, r0
+	mov.w   @(r0, r7), r3               /* r3 = solid RGB565 color (signed pal) */
+	mov.w   r3, @r4
+	dt      r14
+	bt      \pfx\()_done_bra
+\pfx\()_solid_next:
+	mov     r8, r2
+	add     r10, r8
+	xor     r8, r2
+	mov     r9, r0
+	add     r11, r9
+	xor     r9, r0
+	or      r0, r2
+	tst     r1, r2                      /* same solid 8x8 tile? */
+	bf      \pfx\()_miss
+	mov.w   r3, @-r4
+	dt      r14
+	bf      \pfx\()_solid_next
+\pfx\()_done_bra:
+	bra     .Lafbg_o_done
+	nop
+.endm
 
 	/* Tile-classified overlay loop using per-CBB tile_kind[256]:
-	 *   kind == 0 (empty): 12 insns/pixel, zero memory reads.
-	 *   kind == 1 (solid): 12 insns/pixel, direct mov.w r3, @-r4.
-	 *   kind == 2 (mixed): cur_tile_ptr cached in r3, skips map reads.
-	 *   mach = tile_mask (kept live in r1); macl = row_shift; r13 = pix_shift + 3. */
-	.balign 4
-.Lafbg_o_loop_t0:
-	lds     r13, macl
-	mov     r12, r13
-	add     #3, r13                     /* r13 = sub_y_shift = -(22 - map_size) */
-	mov     #3, r0
-	sub     r12, r0                     /* 28 - map_size (25..28) */
-	mov     #-1, r1
-	shld    r0, r1                      /* r1 = tile_mask */
-	lds     r1, mach
+	 *   kind == 0 (empty):  12 insns/pixel, zero memory reads.
+	 *   kind == 1 (solid):  12 insns/pixel, direct mov.w r3, @-r4.
+	 *   kind == 3 (opaque): no zero-check per texel, signed pal lookup.
+	 *   kind == 2 (mixed):  cur_tile_ptr cached in r3, signed pal lookup. */
+	AFBG_OVER_EMPTY_SOLID .Lafbg_o_t0
 
 	.balign 4
 .Lafbg_o_t0_miss:
@@ -8672,7 +8229,7 @@ _cgba_render_affine_rot_over_sh4:
 	extu.b  r0, r0
 	mov     r0, r1
 	mov.l   @(0, r15), r3               /* tile_kind */
-	mov.b   @(r0, r3), r0               /* 0=empty, 1=solid, 2=mixed */
+	mov.b   @(r0, r3), r0               /* 0=empty, 1=solid, 2=mixed, 3=opaque */
 	tst     r0, r0
 	bt.s    .Lafbg_o_t0_empty_step
 	add     #-2, r4
@@ -8683,17 +8240,21 @@ _cgba_render_affine_rot_over_sh4:
 	sts     mach, r1                    /* r1 = tile_mask */
 	cmp/eq  #1, r0
 	bt      .Lafbg_o_t0_solid_enter
+	cmp/eq  #3, r0
+	bt      .Lafbg_o_t0_opaq_enter
 
+	/* Mixed textured tile (tile_kind == 2). */
 	mov     r2, r0
 	mov.b   @(r0, r3), r0
 	tst     r0, r0
 	bt      1f
-	extu.b  r0, r0
 	add     r0, r0
 	mov.w   @(r0, r7), r0
 	mov.w   r0, @r4
 1:	dt      r14
-	bt      .Lafbg_o_t0_done_bra
+	bf      .Lafbg_o_t0_tile_next
+	bra     .Lafbg_o_done
+	nop
 
 	.balign 4
 .Lafbg_o_t0_tile_next:
@@ -8718,47 +8279,27 @@ _cgba_render_affine_rot_over_sh4:
 	tst     r0, r0
 	bt.s    2f
 	add     #-2, r4
-	extu.b  r0, r0
 	add     r0, r0
 	mov.w   @(r0, r7), r0
 	mov.w   r0, @r4
 2:	dt      r14
 	bf      .Lafbg_o_t0_tile_next
-.Lafbg_o_t0_done_bra:
 	bra     .Lafbg_o_done
 	nop
 
+	/* Opaque textured tile (tile_kind == 3): zero transparent pixels, no tst/bt. */
 	.balign 4
-.Lafbg_o_t0_empty_step:
-	sts     mach, r1                    /* r1 = tile_mask */
-	dt      r14
-	bt      .Lafbg_o_t0_done_bra
-.Lafbg_o_t0_empty_next:
-	mov     r8, r2
-	add     r10, r8
-	xor     r8, r2
-	mov     r9, r0
-	add     r11, r9
-	xor     r9, r0
-	or      r0, r2
-	tst     r1, r2                      /* same empty 8x8 tile? */
-	bf      .Lafbg_o_t0_miss
-	dt      r14
-	bf.s    .Lafbg_o_t0_empty_next
-	add     #-2, r4
-	bra     .Lafbg_o_done
-	nop
-
-	.balign 4
-.Lafbg_o_t0_solid_enter:
-	mov.b   @r3, r0
-	extu.b  r0, r0
+.Lafbg_o_t0_opaq_enter:
+	mov     r2, r0
+	mov.b   @(r0, r3), r0
 	add     r0, r0
-	mov.w   @(r0, r7), r3               /* r3 = solid RGB565 color */
-	mov.w   r3, @r4
+	mov.w   @(r0, r7), r0
+	mov.w   r0, @r4
 	dt      r14
-	bt      .Lafbg_o_t0_done_bra
-.Lafbg_o_t0_solid_next:
+	bf      .Lafbg_o_t0_opaq_next
+	bra     .Lafbg_o_done
+	nop
+.Lafbg_o_t0_opaq_next:
 	mov     r8, r2
 	add     r10, r8
 	xor     r8, r2
@@ -8766,14 +8307,38 @@ _cgba_render_affine_rot_over_sh4:
 	add     r11, r9
 	xor     r9, r0
 	or      r0, r2
-	tst     r1, r2                      /* same solid 8x8 tile? */
+	tst     r1, r2                      /* same opaque 8x8 tile? */
 	bf      .Lafbg_o_t0_miss
-	mov.w   r3, @-r4
+	mov     r8, r0
+	shld    r12, r0
+	and     #7, r0
+	mov     r0, r2
+	mov     r9, r0
+	shld    r13, r0
+	and     #0x38, r0
+	or      r2, r0
+	mov.b   @(r0, r3), r0
+	add     r0, r0
+	mov.w   @(r0, r7), r0
 	dt      r14
-	bf      .Lafbg_o_t0_solid_next
+	bf.s    .Lafbg_o_t0_opaq_next
+	mov.w   r0, @-r4
 	bra     .Lafbg_o_done
 	nop
 
+	.balign 4
+.Lafbg_o_done:
+	add     #4, r15
+	mov.l   @r15+, r14
+	mov.l   @r15+, r13
+	mov.l   @r15+, r12
+	mov.l   @r15+, r11
+	mov.l   @r15+, r10
+	mov.l   @r15+, r9
+	rts
+	mov.l   @r15+, r8
+
+	/* Small-step same-texel cached loop with tile_kind empty/solid fast paths. */
 	.balign 4
 .Lafbg_o_same_miss:
 	mov     r8, r0
@@ -8793,21 +8358,30 @@ _cgba_render_affine_rot_over_sh4:
 	add     r0, r0
 	or      r0, r2
 	mov     r3, r0
-	shld    r13, r0
+	sts     macl, r3
+	shld    r3, r0
 	or      r1, r0
 
-	mov.b   @(r0, r5), r0
+	mov.b   @(r0, r5), r0               /* tile_id */
 	extu.b  r0, r0
-	shll8   r0
-	shlr2   r0
+	mov     r0, r1
+	mov.l   @(0, r15), r3               /* tile_kind */
+	mov.b   @(r0, r3), r0               /* 0=empty, 1=solid, 2/3=textured */
+	tst     r0, r0
+	bt.s    .Lafbg_o_same_empty_step
+	add     #-2, r4
+	shll8   r1
+	shlr2   r1                          /* tile_id << 6 */
 	mov     r6, r3
-	add     r0, r3                      /* r3 = cur_tile_ptr */
+	add     r1, r3                      /* r3 = cur_tile_ptr */
+	sts     mach, r1                    /* r1 = tile_mask */
+	cmp/eq  #1, r0
+	bt      .Lafbg_o_same_solid_enter
+
 	mov     r2, r0
 	mov.b   @(r0, r3), r0
-	extu.b  r0, r0
 	tst     r0, r0
-	bt.s    .Lafbg_o_same_trans
-	add     #-2, r4
+	bt      .Lafbg_o_same_trans
 	add     r0, r0
 	mov.w   @(r0, r7), r1
 	extu.w  r1, r1                      /* r1 >= 0: opaque cached color */
@@ -8819,7 +8393,7 @@ _cgba_render_affine_rot_over_sh4:
 .Lafbg_o_same_trans:
 	mov     #-1, r1                     /* r1 < 0: transparent */
 	dt      r14
-	bt      .Lafbg_o_done_far
+	bt      .Lafbg_o_same_done_bra
 
 	.balign 4
 .Lafbg_o_same_next:
@@ -8839,7 +8413,6 @@ _cgba_render_affine_rot_over_sh4:
 	mov.w   r1, @r4
 2:	dt      r14
 	bf      .Lafbg_o_same_next
-.Lafbg_o_done_far:
 	bra     .Lafbg_o_done
 	nop
 
@@ -8854,13 +8427,10 @@ _cgba_render_affine_rot_over_sh4:
 	and     #7, r0
 	mov     r0, r2
 	mov     r9, r0
-	shld    r12, r0
-	and     #7, r0
-	shll2   r0
-	add     r0, r0
+	shld    r13, r0
+	and     #0x38, r0
 	or      r2, r0
 	mov.b   @(r0, r3), r0
-	extu.b  r0, r0
 	tst     r0, r0
 	bt.s    .Lafbg_o_same_trans
 	add     #-2, r4
@@ -8872,6 +8442,9 @@ _cgba_render_affine_rot_over_sh4:
 	bf      .Lafbg_o_same_next
 	bra     .Lafbg_o_done
 	nop
+
+	AFBG_OVER_EMPTY_SOLID .Lafbg_o_same
+	.purgem AFBG_OVER_EMPTY_SOLID
 	.size   _cgba_render_affine_rot_over_sh4, .-_cgba_render_affine_rot_over_sh4
 
 /* ============================================================================
@@ -9096,16 +8669,7 @@ _cgba_render_4bpp_span_blend_evb16_sh4:
 	 *   out: r0 = clamped expanded pfe, r3 = swap.w(r0) (preserves r2, r4..r14) */
 	.balign 4
 .Lsbe16_sat:
-	mov     r0, r3
-	and     r14, r3                     /* ovf = pfe & 0x08010020 */
-	mov     r3, r1
-	shlr2   r1
-	shlr2   r1
-	shlr    r1                          /* ovf >> 5 */
-	sub     r1, r3
-	shlr    r1                          /* ovf >> 6 */
-	or      r1, r3
-	or      r3, r0
+	CGBA_SWAR_SAT_PFE r0, r14, r3, r1
 	and     r13, r0
 	rts
 	swap.w  r0, r3
@@ -9228,7 +8792,6 @@ _cgba_unpack_4bpp_nibs_sh4:
 	mov.l   @r15+, r8
 
 .Lun4_ret_empty:
-	cmp/pz  r7                          /* unused; return expected_subpal if >=0 else 16 */
 	mov.l   @(8, r15), r0
 	cmp/pz  r0
 	bt      1f
@@ -10123,15 +9686,29 @@ _cgba_render_4bpp_part_strip_sh4:
  *   const u8 *src,        // r4: 8-bpp Mode 4 pixels (1 byte/pixel)
  *   u32 count,            // r5: pixel count
  *   u16 *dst,             // r6: RGB565 scanline destination
- *   const u16 *pal        // r7: 256-entry RGB565 palette_ram_converted
+ *   const u16 *pal_signed // r7: 256-entry signed RGB565 palette (+128)
  * );
- * Unconditional 8-bpp palette lookup (index 0 maps to pal[0] = backdrop).
+ * Unconditional 8-bpp signed-palette lookup with paired 32-bit mov.l stores
+ * (handles arbitrary 2-byte dst alignment; zero callee-saved spills).
  * ============================================================================ */
 	.section .text._cgba_render_mode4_blit_base_sh4,"ax",@progbits
 	.global _cgba_render_mode4_blit_base_sh4
 	.type   _cgba_render_mode4_blit_base_sh4, @function
 	.balign 4
 _cgba_render_mode4_blit_base_sh4:
+	tst     r5, r5
+	bt      .Lm4b_done
+	/* Align dst (r6) to 4 bytes if starting at odd u16 address. */
+	mov     r6, r0
+	tst     #2, r0
+	bt      .Lm4b_aligned
+	mov.b   @r4+, r0
+	add     r0, r0
+	mov.w   @(r0, r7), r0
+	mov.w   r0, @r6
+	add     #2, r6
+	add     #-1, r5
+.Lm4b_aligned:
 	mov     r5, r3
 	shlr2   r3
 	tst     r3, r3
@@ -10139,28 +9716,24 @@ _cgba_render_mode4_blit_base_sh4:
 	.balign 4
 .Lm4b_loop4:
 	mov.b   @r4+, r0
-	extu.b  r0, r0
 	add     r0, r0
-	mov.w   @(r0, r7), r0
-	mov.w   r0, @r6
+	mov.w   @(r0, r7), r2               /* r2[15:0] = p0 */
+	mov.b   @r4+, r0
+	add     r0, r0
+	mov.w   @(r0, r7), r1               /* r1[15:0] = p1 */
+	swap.w  r1, r1                      /* r1[31:16] = p1 */
+	xtrct   r2, r1                      /* r1 = (p0 << 16) | p1 */
+	mov.l   r1, @r6
 
 	mov.b   @r4+, r0
-	extu.b  r0, r0
 	add     r0, r0
-	mov.w   @(r0, r7), r0
-	mov.w   r0, @(2, r6)
-
+	mov.w   @(r0, r7), r2               /* r2[15:0] = p2 */
 	mov.b   @r4+, r0
-	extu.b  r0, r0
 	add     r0, r0
-	mov.w   @(r0, r7), r0
-	mov.w   r0, @(4, r6)
-
-	mov.b   @r4+, r0
-	extu.b  r0, r0
-	add     r0, r0
-	mov.w   @(r0, r7), r0
-	mov.w   r0, @(6, r6)
+	mov.w   @(r0, r7), r1               /* r1[15:0] = p3 */
+	swap.w  r1, r1                      /* r1[31:16] = p3 */
+	xtrct   r2, r1                      /* r1 = (p2 << 16) | p3 */
+	mov.l   r1, @(4, r6)
 
 	dt      r3
 	bf.s    .Lm4b_loop4
@@ -10173,7 +9746,6 @@ _cgba_render_mode4_blit_base_sh4:
 	mov     r0, r3
 .Lm4b_loop1:
 	mov.b   @r4+, r0
-	extu.b  r0, r0
 	add     r0, r0
 	mov.w   @(r0, r7), r0
 	mov.w   r0, @r6
@@ -10283,6 +9855,37 @@ _cgba_blend_mode4_st4bpp_sh4:
 	shlr    r3
 	tst     r3, r3
 	bt      .Lbs_tail
+/* Shared single-pixel blend core for _cgba_blend_mode4_st4bpp_sh4:
+ *   in:  r0 = st_val (low4 = 1..15), r2 = zero-ext RGB565 bg pixel,
+ *        r8 = BLND_MSK, r9 = OVF_MSK (0 or 0x08010020), r10 = ta, r11 = evb
+ *   out: r0 = blended RGB565; clobbers r1, r2, MACL, T. */
+.macro M4_ST4_BLEND_PIX inline_sat
+	and     #0x0F, r0
+	shll2   r0
+	mov.l   @(r0, r10), r0
+	mov     r2, r1
+	shll16  r1
+	or      r1, r2
+	and     r8, r2
+	mul.l   r11, r2
+	sts     macl, r2
+	add     r2, r0
+	shlr2   r0
+	shlr2   r0
+	tst     r9, r0
+	bt      9f
+.if \inline_sat
+	CGBA_SWAR_SAT_PFE r0, r9, r2, r1
+.else
+	bsr     .Lbs_sat
+	nop
+.endif
+9:	and     r8, r0
+	mov     r0, r2
+	shlr16  r2
+	or      r2, r0
+.endm
+
 	.balign 4
 .Lbs_pair:
 	mov.l   @r6, r12                    /* big-endian: hi16=st[0], lo16=st[1] */
@@ -10296,26 +9899,7 @@ _cgba_blend_mode4_st4bpp_sh4:
 	bt      .Lbs_p1
 	mov.w   @r5, r2
 	extu.w  r2, r2
-	and     #0x0F, r0
-	shll2   r0
-	mov.l   @(r0, r10), r0
-	mov     r2, r1
-	shll16  r1
-	or      r1, r2
-	and     r8, r2
-	mul.l   r11, r2
-	sts     macl, r2
-	add     r2, r0
-	shlr2   r0
-	shlr2   r0
-	tst     r9, r0
-	bt      3f
-	bsr     .Lbs_sat
-	nop
-3:	and     r8, r0
-	mov     r0, r2
-	shlr16  r2
-	or      r2, r0
+	M4_ST4_BLEND_PIX 0
 	mov.w   r0, @r4
 .Lbs_p1:
 	extu.w  r12, r0                     /* low16 = st[1] */
@@ -10324,26 +9908,7 @@ _cgba_blend_mode4_st4bpp_sh4:
 	mov.w   @(2, r5), r0
 	extu.w  r0, r2
 	mov     r12, r0
-	and     #0x0F, r0
-	shll2   r0
-	mov.l   @(r0, r10), r0
-	mov     r2, r1
-	shll16  r1
-	or      r1, r2
-	and     r8, r2
-	mul.l   r11, r2
-	sts     macl, r2
-	add     r2, r0
-	shlr2   r0
-	shlr2   r0
-	tst     r9, r0
-	bt      4f
-	bsr     .Lbs_sat
-	nop
-4:	and     r8, r0
-	mov     r0, r2
-	shlr16  r2
-	or      r2, r0
+	M4_ST4_BLEND_PIX 0
 	mov.w   r0, @(2, r4)
 .Lbs_pair_next:
 	add     #4, r6
@@ -10379,51 +9944,17 @@ _cgba_blend_mode4_st4bpp_sh4:
 	.balign 4
 /* Leaf helper for odd lead/tail pixel: r0=st_val, r2=bg_pix -> r0=blended. */
 .Lbs_blend_one:
-	and     #0x0F, r0
-	shll2   r0
-	mov.l   @(r0, r10), r0
-	mov     r2, r1
-	shll16  r1
-	or      r1, r2
-	and     r8, r2
-	mul.l   r11, r2
-	sts     macl, r2
-	add     r2, r0
-	shlr2   r0
-	shlr2   r0
-	tst     r9, r0
-	bt      .Lbs_pack
-	mov     r0, r2
-	and     r9, r2
-	mov     r2, r1
-	shlr2   r1
-	shlr2   r1
-	shlr    r1
-	sub     r1, r2
-	shlr    r1
-	or      r1, r2
-	or      r2, r0
-.Lbs_pack:
-	and     r8, r0
-	mov     r0, r2
-	shlr16  r2
+	M4_ST4_BLEND_PIX 1
 	rts
-	or      r2, r0
+	nop
+	.purgem M4_ST4_BLEND_PIX
 
 	/* Branchless SWAR RGB565 per-channel saturation (ovf bits at 27, 16, 5). */
 	.balign 4
 .Lbs_sat:
-	mov     r0, r2
-	and     r9, r2
-	mov     r2, r1
-	shlr2   r1
-	shlr2   r1
-	shlr    r1
-	sub     r1, r2
-	shlr    r1
-	or      r1, r2
+	CGBA_SWAR_SAT_PFE r0, r9, r2, r1
 	rts
-	or      r2, r0
+	nop
 
 	.balign 4
 .Lbs_blnd_msk:
@@ -10549,29 +10080,62 @@ _cgba_render_affine_rot_blend_sh4:
 	.balign 4
 .Lafbl_sat:
 	mov.l   @(12, r15), r2              /* OVF_MSK = 0x08010020 */
-	and     r0, r2                      /* ovf */
-	mov     r2, r1
-	shlr2   r1
-	shlr2   r1
-	shlr    r1                          /* ovf >> 5 */
-	sub     r1, r2                      /* ovf - (ovf >> 5) */
-	shlr    r1                          /* ovf >> 6 */
-	or      r1, r2
-	or      r2, r0
+	CGBA_SWAR_SAT_PFE r0, r2, r2, r1
 	mov.l   @(8, r15), r1               /* BLND_MSK */
 	and     r1, r0
 	sts     mach, r1                    /* restore r1 = tile_mask */
 	rts
 	swap.w  r0, r2
 
-/* ---- Fast path: evb == 16 (zero multiplies: pfe = term_a_s4[pix] + p2e) ---- */
+/* Parameterized tile-classified affine blend loops:
+ *   evb16 == 1: zero multiplies (pfe = term_a_s4[pix] + p2e)
+ *   evb16 == 0: general 0 <= evb < 16 (pfe = (term_a[pix] + p2e * evb) >> 4)
+ * Supports tile_kind 0 (empty), 1 (solid), 2 (mixed), and 3 (opaque textured). */
+.macro AFBL_BLEND_PIXEL evb16, ta_reg, tmp_reg
+	mov.w   @r4, r0
+	extu.w  r0, r0
+	swap.w  r0, \tmp_reg
+	or      \tmp_reg, r0
+	mov.l   @(8, r15), \tmp_reg         /* BLND_MSK */
+	and     \tmp_reg, r0
+.if \evb16
+	add     \ta_reg, r0
+	mov.l   @(12, r15), \tmp_reg        /* OVF_MSK */
+	tst     \tmp_reg, r0
+	bt.s    1f
+	swap.w  r0, r2
+	bsr     .Lafbl_sat
+	nop
+1:	or      r2, r0
+.else
+	mov.l   @(20, r15), \tmp_reg        /* evb */
+	mul.l   \tmp_reg, r0
+	sts     macl, r0
+	add     \ta_reg, r0
+	shlr2   r0
+	shlr2   r0
+	mov.l   @(12, r15), \tmp_reg        /* sat_mask */
+	tst     \tmp_reg, r0
+	bt      1f
+	bsr     .Lafbl_sat
+	nop
+	bra     2f
+	nop
+1:	mov.l   @(8, r15), \tmp_reg         /* BLND_MSK */
+	and     \tmp_reg, r0
+	swap.w  r0, r2
+2:	or      r2, r0
+.endif
+.endm
+
+.macro AFBL_MODE_LOOPS pfx, evb16
 	.balign 4
-.Lafbl16_empty_step:
+\pfx\()_empty_step:
 	sts     mach, r1                    /* r1 = tile_mask */
 	add     #-2, r4
 	dt      r14
-	bt      .Lafbl_done
-.Lafbl16_empty_next:
+	bt      \pfx\()_done_br
+\pfx\()_empty_next:
 	mov     r8, r2
 	add     r10, r8
 	xor     r8, r2
@@ -10580,98 +10144,23 @@ _cgba_render_affine_rot_blend_sh4:
 	xor     r9, r0
 	or      r0, r2
 	tst     r1, r2                      /* same empty 8x8 tile? */
-	bf      .Lafbl16_miss
+	bf      \pfx\()_miss
 	dt      r14
-	bf.s    .Lafbl16_empty_next
+	bf.s    \pfx\()_empty_next
 	add     #-2, r4
+\pfx\()_done_br:
 	bra     .Lafbl_done
 	nop
 
 	.balign 4
-.Lafbl16_miss:
-	mov.l   @(4, r15), r2               /* tile_shift */
-	mov     r8, r0
-	shld    r2, r0                      /* tx */
-	mov     r0, r1
-	mov     r9, r0
-	shld    r2, r0                      /* ty */
-	sts     macl, r2                    /* row_shift */
-	shld    r2, r0                      /* ty << (map_size + 4) */
-	or      r1, r0                      /* map_idx */
-	mov.b   @(r0, r5), r0               /* tile_id */
-	extu.b  r0, r0
-	mov     r0, r1
-	mov.l   @(0, r15), r3               /* tile_kind */
-	mov.b   @(r0, r3), r0               /* 0=empty, 1=solid, 2/3=textured */
-	tst     r0, r0
-	bt.s    .Lafbl16_empty_step
-	shll8   r1
-	shlr2   r1                          /* tile_id << 6 */
-	mov     r6, r3
-	add     r1, r3                      /* r3 = cur_tile_ptr */
-	sts     mach, r1                    /* r1 = tile_mask */
-	cmp/eq  #1, r0
-	bt      .Lafbl16_solid_enter
-	bra     .Lafbl16_mix_draw
-	nop
-
-	.balign 4
-.Lafbl16_mix_next:
-	mov     r8, r2
-	add     r10, r8
-	xor     r8, r2
-	mov     r9, r0
-	add     r11, r9
-	xor     r9, r0
-	or      r0, r2
-	tst     r1, r2                      /* same 8x8 tile? */
-	bf      .Lafbl16_miss
-.Lafbl16_mix_draw:
-	mov     r8, r0
-	shld    r12, r0
-	and     #7, r0
-	mov     r0, r2
-	mov     r9, r0
-	shld    r13, r0
-	and     #0x38, r0
-	or      r2, r0
-	mov.b   @(r0, r3), r0
-	tst     r0, r0
-	bt.s    2f
-	add     #-2, r4
-	extu.b  r0, r0
-	shll2   r0
-	mov.l   @(r0, r7), r2               /* term_a_s4[pix] */
-	mov.w   @r4, r0
-	extu.w  r0, r0
-	swap.w  r0, r1
-	or      r1, r0
-	mov.l   @(8, r15), r1               /* BLND_MSK */
-	and     r1, r0
-	add     r2, r0
-	mov.l   @(12, r15), r1              /* OVF_MSK */
-	tst     r1, r0
-	bt.s    1f
-	swap.w  r0, r2
-	bsr     .Lafbl_sat
-	nop
-1:	or      r2, r0
-	mov.w   r0, @r4
-	sts     mach, r1
-2:	dt      r14
-	bf      .Lafbl16_mix_next
-	bra     .Lafbl_done
-	nop
-
-	.balign 4
-.Lafbl16_solid_enter:
+\pfx\()_solid_enter:
 	mov.b   @r3, r0
 	extu.b  r0, r0
 	shll2   r0
-	bra     .Lafbl16_solid_blend
-	mov.l   @(r0, r7), r3               /* r3 = solid term_a_s4 */
+	bra     \pfx\()_solid_blend
+	mov.l   @(r0, r7), r3               /* r3 = solid term_a */
 	.balign 4
-.Lafbl16_solid_next:
+\pfx\()_solid_next:
 	mov     r8, r2
 	add     r10, r8
 	xor     r8, r2
@@ -10680,84 +10169,52 @@ _cgba_render_affine_rot_blend_sh4:
 	xor     r9, r0
 	or      r0, r2
 	tst     r1, r2                      /* same solid 8x8 tile? */
-	bf      .Lafbl16_miss
-.Lafbl16_solid_blend:
+	bf      \pfx\()_miss
+\pfx\()_solid_blend:
 	add     #-2, r4
-	mov.w   @r4, r0
-	extu.w  r0, r0
-	swap.w  r0, r2
-	or      r2, r0
-	mov.l   @(8, r15), r2               /* BLND_MSK */
-	and     r2, r0
-	add     r3, r0
-	mov.l   @(12, r15), r2              /* OVF_MSK */
-	tst     r2, r0
-	bt.s    1f
-	swap.w  r0, r2
-	bsr     .Lafbl_sat
-	nop
-1:	or      r2, r0
+	AFBL_BLEND_PIXEL \evb16, r3, r2
 	dt      r14
-	bf.s    .Lafbl16_solid_next
+	bf.s    \pfx\()_solid_next
 	mov.w   r0, @r4
 	bra     .Lafbl_done
 	nop
 
-/* ---- General path: 0 <= evb < 16 (pfe = (term_a[pix] + p2e * evb) >> 4) ---- */
 	.balign 4
-.Lafblg_empty_step:
-	sts     mach, r1                    /* r1 = tile_mask */
-	add     #-2, r4
-	dt      r14
-	bf      .Lafblg_empty_next
-	bra     .Lafbl_done
-	nop
-.Lafblg_empty_next:
-	mov     r8, r2
-	add     r10, r8
-	xor     r8, r2
-	mov     r9, r0
-	add     r11, r9
-	xor     r9, r0
-	or      r0, r2
-	tst     r1, r2                      /* same empty 8x8 tile? */
-	bf      .Lafblg_miss
-	dt      r14
-	bf.s    .Lafblg_empty_next
-	add     #-2, r4
-	bra     .Lafbl_done
-	nop
-
-	.balign 4
-.Lafblg_miss:
+\pfx\()_miss:
 	mov.l   @(4, r15), r2               /* tile_shift */
 	mov     r8, r0
 	shld    r2, r0                      /* tx */
 	mov     r0, r1
 	mov     r9, r0
 	shld    r2, r0                      /* ty */
-	mov.l   @(16, r15), r2              /* row_shift */
-	shld    r2, r0
+.if \evb16
+	sts     macl, r2                    /* row_shift */
+.else
+	mov.l   @(16, r15), r2              /* row_shift (mul.l clobbers macl) */
+.endif
+	shld    r2, r0                      /* ty << (map_size + 4) */
 	or      r1, r0                      /* map_idx */
 	mov.b   @(r0, r5), r0               /* tile_id */
 	extu.b  r0, r0
 	mov     r0, r1
 	mov.l   @(0, r15), r3               /* tile_kind */
-	mov.b   @(r0, r3), r0               /* 0=empty, 1=solid, 2/3=textured */
+	mov.b   @(r0, r3), r0               /* 0=empty, 1=solid, 2=mixed, 3=opaque */
 	tst     r0, r0
-	bt.s    .Lafblg_empty_step
+	bt.s    \pfx\()_empty_step
 	shll8   r1
 	shlr2   r1                          /* tile_id << 6 */
 	mov     r6, r3
 	add     r1, r3                      /* r3 = cur_tile_ptr */
 	sts     mach, r1                    /* r1 = tile_mask */
 	cmp/eq  #1, r0
-	bt      .Lafblg_solid_enter
-	bra     .Lafblg_mix_draw
+	bt      \pfx\()_solid_enter
+	cmp/eq  #3, r0
+	bt      \pfx\()_opaq_draw
+	bra     \pfx\()_mix_draw
 	nop
 
 	.balign 4
-.Lafblg_mix_next:
+\pfx\()_mix_next:
 	mov     r8, r2
 	add     r10, r8
 	xor     r8, r2
@@ -10766,8 +10223,8 @@ _cgba_render_affine_rot_blend_sh4:
 	xor     r9, r0
 	or      r0, r2
 	tst     r1, r2                      /* same 8x8 tile? */
-	bf      .Lafblg_miss
-.Lafblg_mix_draw:
+	bf      \pfx\()_miss
+\pfx\()_mix_draw:
 	mov     r8, r0
 	shld    r12, r0
 	and     #7, r0
@@ -10783,45 +10240,16 @@ _cgba_render_affine_rot_blend_sh4:
 	extu.b  r0, r0
 	shll2   r0
 	mov.l   @(r0, r7), r2               /* term_a[pix] */
-	mov.w   @r4, r0
-	extu.w  r0, r0
-	swap.w  r0, r1
-	or      r1, r0
-	mov.l   @(8, r15), r1               /* BLND_MSK */
-	and     r1, r0
-	mov.l   @(20, r15), r1              /* evb */
-	mul.l   r1, r0
-	sts     macl, r0
-	add     r2, r0
-	shlr2   r0
-	shlr2   r0
-	mov.l   @(12, r15), r1              /* sat_mask */
-	tst     r1, r0
-	bt      1f
-	bsr     .Lafbl_sat
-	nop
-	bra     2f
-	nop
-1:	mov.l   @(8, r15), r1               /* BLND_MSK */
-	and     r1, r0
-	swap.w  r0, r2
-2:	or      r2, r0
+	AFBL_BLEND_PIXEL \evb16, r2, r1
 	mov.w   r0, @r4
 	sts     mach, r1
 3:	dt      r14
-	bf      .Lafblg_mix_next
+	bf      \pfx\()_mix_next
 	bra     .Lafbl_done
 	nop
 
 	.balign 4
-.Lafblg_solid_enter:
-	mov.b   @r3, r0
-	extu.b  r0, r0
-	shll2   r0
-	bra     .Lafblg_solid_blend
-	mov.l   @(r0, r7), r3               /* r3 = solid term_a */
-	.balign 4
-.Lafblg_solid_next:
+\pfx\()_opaq_next:
 	mov     r8, r2
 	add     r10, r8
 	xor     r8, r2
@@ -10829,50 +10257,48 @@ _cgba_render_affine_rot_blend_sh4:
 	add     r11, r9
 	xor     r9, r0
 	or      r0, r2
-	tst     r1, r2                      /* same solid 8x8 tile? */
-	bf      .Lafblg_miss
-.Lafblg_solid_blend:
-	add     #-2, r4
-	mov.w   @r4, r0
-	extu.w  r0, r0
-	swap.w  r0, r2
+	tst     r1, r2                      /* same opaque 8x8 tile? */
+	bf      \pfx\()_miss
+\pfx\()_opaq_draw:
+	mov     r8, r0
+	shld    r12, r0
+	and     #7, r0
+	mov     r0, r2
+	mov     r9, r0
+	shld    r13, r0
+	and     #0x38, r0
 	or      r2, r0
-	mov.l   @(8, r15), r2               /* BLND_MSK */
-	and     r2, r0
-	mov.l   @(20, r15), r2              /* evb */
-	mul.l   r2, r0
-	sts     macl, r0
-	add     r3, r0
-	shlr2   r0
-	shlr2   r0
-	mov.l   @(12, r15), r2              /* sat_mask */
-	tst     r2, r0
-	bt      1f
-	bsr     .Lafbl_sat
-	nop
-	bra     2f
-	nop
-1:	mov.l   @(8, r15), r2               /* BLND_MSK */
-	and     r2, r0
-	swap.w  r0, r2
-2:	or      r2, r0
-	dt      r14
-	bf.s    .Lafblg_solid_next
+	mov.b   @(r0, r3), r0
+	add     #-2, r4
+	extu.b  r0, r0
+	shll2   r0
+	mov.l   @(r0, r7), r2               /* term_a[pix] */
+	AFBL_BLEND_PIXEL \evb16, r2, r1
 	mov.w   r0, @r4
+	sts     mach, r1
+	dt      r14
+	bf      \pfx\()_opaq_next
 	bra     .Lafbl_done
 	nop
+.endm
+
+	/* ---- Fast path: evb == 16 ---- */
+	AFBL_MODE_LOOPS .Lafbl16, 1
+	/* ---- General path: 0 <= evb < 16 ---- */
+	AFBL_MODE_LOOPS .Lafblg, 0
+	.purgem AFBL_BLEND_PIXEL
+	.purgem AFBL_MODE_LOOPS
 	.size   _cgba_render_affine_rot_blend_sh4, .-_cgba_render_affine_rot_blend_sh4
 
 /* ============================================================================
- * 8-bpp rotated/scaled affine BG direct alpha-blend kernel for evb == 16,
- * wrap == false (clipped to non-empty bbox), and |dx| < 2048 && |dy| < 2048:
+ * 8-bpp rotated/scaled affine BG direct alpha-blend kernel for evb == 16
+ * (BOTH wrap == false and wrap == true) and |dx| < 2048 && |dy| < 2048:
  *   void cgba_render_affine_rot_blend_evb16_329_sh4(
  *     const cgba_aff_t329_blend_params *p)
  *
  * Uses 3.29 unsigned intra-tile stepping (`addc`) so carries fire ONLY on
- * 8-pixel tile boundaries (not on every pixel), handling all 4 step quadrants
- * via qflip (0, 7, 56, 63) and all |dx|, |dy| < 2048 (including |dx| == 256
- * and |dy| == 256).  Provides:
+ * 8-pixel tile boundaries, handling all 4 step quadrants via qflip (0,7,56,63),
+ * all 4 map sizes (16..128 tiles), and both wrapped & pre-clipped non-wrap spans.
  *   - no_sat == 1 path (when palette bounds prove no RGB565 channel can
  *     overflow): blends in 3 instructions (mov.w / add / mov.w) with r5 = qflip,
  *     7-insn empty tiles, 10-insn solid tiles, 20-insn opaque textured tiles,
@@ -10880,9 +10306,9 @@ _cgba_render_affine_rot_blend_sh4:
  *   - no_sat == 0 path: 16-bit SWAR carry-detect addition (r5 = 0x00010820)
  *     with cold .Lb3_sat16 clamping on overflow.
  *
- * Struct layout (cgba_aff_t329_blend_params):
+ * Struct layout (cgba_aff_t329_blend_params, 64 bytes):
  *   +0  dst_end        (u16 *)
- *   +4  map_ptr        (const u8 *: map_base + (ty << (map_size+4)) + tx)
+ *   +4  map_base       (const u8 *: base of affine tilemap)
  *   +8  tile_base      (const u8 *)
  *   +12 signed_term_a  (const u16 *, pointing to +128; RGB565 term_a_s4)
  *   +16 lx_dir         (u32: 3.29 unsigned intra-tile x)
@@ -10895,6 +10321,8 @@ _cgba_render_affine_rot_blend_sh4:
  *   +44 qflip          (u32: 0, 7, 56, or 63)
  *   +48 tile_kind      (const u8 *: 0=empty, 1=solid, 2=mixed, 3=opaque)
  *   +52 no_sat         (u32: 1 if proven no saturation, 0 otherwise)
+ *   +56 map_off        (u32: (ty << (map_size+4)) | tx, within [0, map_mask])
+ *   +60 t_mask         (u32: (16 << map_size) - 1, i.e. 0x0F/0x1F/0x3F/0x7F)
  * ============================================================================ */
 	.section .text._cgba_render_affine_rot_blend_evb16_329_sh4,"ax",@progbits
 	.balign 4
@@ -10911,6 +10339,16 @@ _cgba_render_affine_rot_blend_evb16_329_sh4:
 	sts.l   pr, @-r15
 
 	mov     r4, r3
+	mov.l   @(60, r3), r1               /* t_mask = dim - 1 */
+	mov     r1, r2
+	add     #1, r2                      /* dim = 16, 32, 64, or 128 */
+	mulu.w  r2, r2
+	sts     macl, r2
+	add     #-1, r2                     /* map_mask = dim*dim - 1 */
+	mov.l   r2, @-r15                   /* @(20, r15) = map_mask */
+	mov.l   r1, @-r15                   /* @(16, r15) = t_mask */
+	mov.l   @(4, r3), r1                /* map_base */
+	mov.l   r1, @-r15                   /* @(12, r15) = map_base */
 	mov.l   @(44, r3), r5               /* r5 = qflip */
 	mov.l   r5, @-r15                   /* @(8, r15) = qflip */
 	mov.l   @(8, r3), r1                /* tile_base */
@@ -10925,7 +10363,7 @@ _cgba_render_affine_rot_blend_evb16_329_sh4:
 
 	mov.l   @(52, r3), r0               /* no_sat */
 	mov.l   @(0, r3), r4                /* r4  = dst_end */
-	mov.l   @(4, r3), r6                /* r6  = map_ptr */
+	mov.l   @(56, r3), r6               /* r6  = map_off */
 	mov.l   @(12, r3), r7               /* r7  = signed_term_a (+128) */
 	mov.l   @(16, r3), r8               /* r8  = lx_dir (3.29) */
 	mov.l   @(20, r3), r9               /* r9  = ly_dir (3.29) */
@@ -10950,7 +10388,7 @@ _cgba_render_affine_rot_blend_evb16_329_sh4:
 
 	.balign 4
 .Lb3_done:
-	add     #12, r15
+	add     #24, r15
 	lds.l   @r15+, pr
 	mov.l   @r15+, r14
 	mov.l   @r15+, r13
@@ -10979,15 +10417,7 @@ _cgba_render_affine_rot_blend_evb16_329_sh4:
 	and     r5, r3                      /* p1e */
 	add     r3, r0                      /* pfe = p1e + p2e */
 	mov.l   .Lb3_ovf_msk, r3            /* 0x08010020 */
-	and     r0, r3                      /* ovf */
-	mov     r3, r1
-	shlr2   r1
-	shlr2   r1
-	shlr    r1                          /* ovf >> 5 */
-	sub     r1, r3                      /* ovf - (ovf >> 5): R/B fill, G 5 bits */
-	shlr    r1                          /* ovf >> 6 */
-	or      r1, r3                      /* G 6th bit filled (R/B bit 0 already 1) */
-	or      r3, r0
+	CGBA_SWAR_SAT_PFE r0, r3, r3, r1
 	and     r5, r0
 	swap.w  r0, r1
 	or      r1, r0
@@ -11002,7 +10432,9 @@ _cgba_render_affine_rot_blend_evb16_329_sh4:
 .Lb3_ovf_msk:
 	.long   0x08010020
 
-	/* Shared tile-miss dispatch + empty-tile fast loop for both no_sat paths. */
+	/* Shared tile-miss dispatch + empty-tile fast loop for both no_sat paths.
+	 * Wraps tx modulo (t_mask+1) without borrowing/carrying into ty, and wraps
+	 * ty modulo (t_mask+1) via map_mask — exact for both wrap and non-wrap! */
 .macro AFBL329_MISS pfx, is_sat
 	.balign 4
 .Lb3_\pfx\()_miss_x:
@@ -11011,18 +10443,29 @@ _cgba_render_affine_rot_blend_evb16_329_sh4:
 	bf      1f
 	sts     macl, r0
 	add     r0, r6
+	mov.l   @(20, r15), r0              /* map_mask */
+	and     r0, r6
 1:	sts     mach, r0
+	mov     r6, r1
+	add     r0, r1
+	xor     r6, r1
+	mov.l   @(16, r15), r0              /* t_mask */
+	and     r0, r1
 	bra     .Lb3_\pfx\()_miss
-	add     r0, r6
+	xor     r1, r6
 
 	.balign 4
 .Lb3_\pfx\()_miss_y:
 	sts     macl, r0
 	add     r0, r6
+	mov.l   @(20, r15), r0              /* map_mask */
+	and     r0, r6
 
 	.balign 4
 .Lb3_\pfx\()_miss:
-	mov.b   @r6, r0                     /* tile_id */
+	mov.l   @(12, r15), r2              /* map_base */
+	mov     r6, r0
+	mov.b   @(r0, r2), r0               /* tile_id */
 	extu.b  r0, r0
 	mov     r0, r1
 	mov.l   @(0, r15), r2               /* tile_kind */

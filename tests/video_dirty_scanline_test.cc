@@ -1388,6 +1388,156 @@ static bool run_tests(void)
     cgba_blend_caches_invalidate();
     cgba_video_io_dirty = 1u;
     CHECK(verify_frame("mode2_affine_bg2_blend_backdrop"));
+
+    /* 8. Commit 4 P2 generalizations:
+     *    8a. Mode 0 strip alpha-blend over an opaque lower 4bpp BG when backdrop
+     *        is NOT in 2nd target (tgt2 & 0x20 == 0), plus charblock VRAM write
+     *        invalidation when an opaque tile becomes transparent. */
+    init_scene();
+    write_ioreg(REG_DISPCNT, 0x0340u); /* Mode 0, BG0 + BG1 */
+    write_ioreg(REG_BG0CNT, 0x1E03u);  /* prio 3 (bottom), cbb 0, sbb 30, 4bpp */
+    write_ioreg(REG_BG1CNT, 0x1D01u);  /* prio 1 (top),    cbb 1, sbb 29, 4bpp */
+    write_ioreg(REG_BG0HOFS, 7u);
+    write_ioreg(REG_BG0VOFS, 19u);
+    write_ioreg(REG_BG1HOFS, 3u);
+    write_ioreg(REG_BG1VOFS, 5u);
+    memset(&vram[0x0020u], 0x35, 32u); /* cbb 0 tile 1: 100% opaque */
+    memset(&vram[0x0040u], 0x72, 32u); /* cbb 0 tile 2: 100% opaque */
+    memset(&vram[16384u + 0x0020u], 0x04, 32u); /* cbb 1 tile 1: half-transparent */
+    memset(&vram[16384u + 0x0040u], 0x66, 32u); /* cbb 1 tile 2: solid */
+    {
+      u16 *m0 = (u16 *)&vram[30u * 2048u];
+      u16 *m1 = (u16 *)&vram[29u * 2048u];
+      for (u32 i = 0; i < 1024u; i++) {
+        m0[i] = eswap16((u16)(((i & 1u) ? 1u : 2u) | (1u << 12)));
+        m1[i] = eswap16((u16)((i % 3u) | (2u << 12)));
+      }
+    }
+    write_ioreg(REG_BLDCNT, 0x0142u);  /* BLEND: 1st=BG1, 2nd=BG0 only (NO backdrop!) */
+    write_ioreg(REG_BLDALPHA, 0x0808u);
+    cgba_vram_dirty = CGBA_VRAM_DIRTY_BG;
+    cgba_vram_sb_dirty = 0xFFFFFFFFu;
+    cgba_video_io_dirty = 1u;
+    CHECK(verify_frame("mode0_opaque_bg_backdrop_proof_50_50"));
+    CHECK(cgba_m0.blend_bg_layer == 1u);
+
+    write_ioreg(REG_BLDALPHA, 0x0C0Cu); /* saturating */
+    cgba_video_io_dirty = 1u;
+    CHECK(verify_frame("mode0_opaque_bg_backdrop_proof_sat"));
+    CHECK(cgba_m0.blend_bg_layer == 1u);
+
+    /* Mutate ONLY BG0's charblock (cbb 0 -> sb 0) to introduce a transparent
+     * nibble without touching BG0's tilemap or IO registers: cgba_m0.used_sb_mask
+     * must invalidate cgba_bg_plan_valid so BG1 stops blending over backdrop. */
+    vram[0x0020u] = 0x05u;
+    cgba_vram_dirty = CGBA_VRAM_DIRTY_BG;
+    cgba_vram_sb_dirty = (1u << 0);
+    CHECK(verify_frame("mode0_opaque_bg_cbb_invalidation"));
+    CHECK(cgba_m0.blend_bg_layer == 0xFFu);
+
+    /*    8b. Mode 1 affine BG2 blend with lower OBJ beneath BG2, wrap=1,
+     *        evb < 16 (50/50) and evb == 16. */
+    init_scene();
+    write_ioreg(REG_DISPCNT, 0x1641u); /* Mode 1, BG1 + BG2 + OBJ */
+    write_ioreg(REG_BG1CNT, 0x1E03u);  /* prio 3, cbb 0, sbb 30, 4bpp */
+    write_ioreg(REG_BG2CNT, 0x6F8Au);  /* prio 2, cbb 2, sbb 15, 256x256, wrap=1 */
+    memset(&vram[0x0020u], 0x24, 32u);
+    {
+      u16 *m1 = (u16 *)&vram[30u * 2048u];
+      for (u32 i = 0; i < 1024u; i++)
+        m1[i] = eswap16((u16)(1u | (1u << 12)));
+      memset(&vram[2u * 16384u], 0, 16384u);
+      for (u32 k = 0; k < 64u; k++)
+        vram[2u * 16384u + 64u + k] = (u8)((k & 3u) ? (1u + (k % 10u)) : 0u);
+      u8 *m2 = &vram[15u * 2048u];
+      for (u32 i = 0; i < 1024u; i++)
+        m2[i] = (u8)((i & 3u) ? 1u : 0u);
+    }
+    /* Lower OBJ at priority 3 (strictly below BG2 at prio 2). */
+    oam16[0] = eswap16(24u);           /* y=24, normal, 4bpp */
+    oam16[1] = eswap16(40u | 0x4000u); /* x=40, 16x16 */
+    oam16[2] = eswap16(1u | (3u << 10) | (1u << 12)); /* prio 3 */
+    memset(&vram[0x10020u], 0x37, 128u);
+    reg[OAM_UPDATED] = 1u;
+    write_ioreg(REG_BLDCNT, 0x1244u);  /* 1st=BG2, 2nd=BG1+OBJ (no backdrop) */
+    write_ioreg(REG_BG2PA, (u16)181);
+    write_ioreg(REG_BG2PB, (u16)-181);
+    write_ioreg(REG_BG2PC, (u16)181);
+    write_ioreg(REG_BG2PD, (u16)181);
+    affine_reference_x[0] = -32 * 256;
+    affine_reference_y[0] = -16 * 256;
+    cgba_vram_dirty = CGBA_VRAM_DIRTY_BG | CGBA_VRAM_DIRTY_OBJ;
+    cgba_vram_sb_dirty = 0xFFFFFFFFu;
+    write_ioreg(REG_BLDALPHA, 0x0808u); /* evb < 16 */
+    cgba_video_io_dirty = 1u;
+    CHECK(verify_frame("mode1_affine_wrap_lower_obj_evb8"));
+    write_ioreg(REG_BLDALPHA, 0x100Au); /* evb == 16 */
+    cgba_video_io_dirty = 1u;
+    CHECK(verify_frame("mode1_affine_wrap_lower_obj_evb16"));
+
+    /*    8c. Mode 2 with BOTH BG2 (non-wrap sparse base) and BG3 (non-wrap
+     *        sparse blended overlay) + 2-slot cgba_aff_bbox_cache and selective
+     *        dep_sb_mask invalidation! */
+    init_scene();
+    write_ioreg(REG_DISPCNT, 0x0C42u); /* Mode 2, BG2 + BG3 */
+    write_ioreg(REG_BG2CNT, 0x4E0Bu);  /* prio 3, cbb 2, sbb 14, 256x256, wrap=0 */
+    write_ioreg(REG_BG3CNT, 0x4F0Du);  /* prio 1, cbb 3, sbb 15, 256x256, wrap=0 */
+    memset(&vram[2u * 16384u], 0, 16384u);
+    memset(&vram[3u * 16384u], 0, 16384u);
+    for (u32 k = 0; k < 64u; k++) {
+      vram[2u * 16384u + 64u + k] = (u8)(1u + (k % 15u));
+      vram[3u * 16384u + 64u + k] = (u8)((k & 5u) ? (16u + (k % 15u)) : 0u);
+    }
+    memset(&vram[14u * 2048u], 0, 2048u);
+    memset(&vram[15u * 2048u], 0, 2048u);
+    for (u32 ty = 6u; ty < 14u; ty++) {
+      for (u32 tx = 8u; tx < 16u; tx++) {
+        vram[14u * 2048u + ty * 32u + tx] = 1u;
+        vram[15u * 2048u + (ty + 2u) * 32u + (tx - 2u)] = 1u;
+      }
+    }
+    write_ioreg(REG_BG2PA, (u16)192);
+    write_ioreg(REG_BG2PB, (u16)-96);
+    write_ioreg(REG_BG2PC, (u16)96);
+    write_ioreg(REG_BG2PD, (u16)192);
+    write_ioreg(REG_BG3PA, (u16)-160);
+    write_ioreg(REG_BG3PB, (u16)120);
+    write_ioreg(REG_BG3PC, (u16)-120);
+    write_ioreg(REG_BG3PD, (u16)-160);
+    affine_reference_x[0] = 32 << 8;
+    affine_reference_y[0] = 16 << 8;
+    affine_reference_x[1] = 180 << 8;
+    affine_reference_y[1] = 140 << 8;
+    write_ioreg(REG_BLDCNT, 0x2448u);  /* 1st=BG3, 2nd=BG2+backdrop */
+    write_ioreg(REG_BLDALPHA, 0x1008u);
+    cgba_vram_dirty = CGBA_VRAM_DIRTY_BG;
+    cgba_vram_sb_dirty = 0xFFFFFFFFu;
+    cgba_video_io_dirty = 1u;
+    CHECK(verify_frame("mode2_bg3_blend_over_bg2_nonwrap_bbox"));
+    /* Both BG2 (cbb=2,sbb=14) and BG3 (cbb=3,sbb=15) must coexist in 2-slot cache. */
+    CHECK(cgba_aff_bbox_valid_mask == 3u);
+
+    /* Unrelated BG VRAM write (SB 0) must NOT evict either affine bbox slot! */
+    cgba_vram_dirty = CGBA_VRAM_DIRTY_BG;
+    cgba_vram_sb_dirty = (1u << 0);
+    cgba_bg_vram_invalidate();
+    CHECK(cgba_aff_bbox_valid_mask == 3u);
+
+    /* Modifying BG2 map SB (SB 14) must invalidate ONLY BG2's slot, preserving BG3! */
+    vram[14u * 2048u + 1u * 32u + 1u] = 1u;
+    cgba_vram_dirty = CGBA_VRAM_DIRTY_BG;
+    cgba_vram_sb_dirty = (1u << 14);
+    cgba_bg_vram_invalidate();
+    CHECK(cgba_aff_bbox_valid_mask != 3u && cgba_aff_bbox_valid_mask != 0u);
+    CHECK(verify_frame("mode2_bg2_bbox_selective_invalidation"));
+
+    /* Non-blend Mode 2 sparse non-wrap base+over + all-empty BG3 map. */
+    memset(&vram[15u * 2048u], 0, 1024u);
+    write_ioreg(REG_BLDCNT, 0x0000u);
+    cgba_vram_dirty = CGBA_VRAM_DIRTY_BG;
+    cgba_vram_sb_dirty = (1u << 15);
+    cgba_video_io_dirty = 1u;
+    CHECK(verify_frame("mode2_nonwrap_bbox_empty_bg3"));
   }
 
   /* 6. Mode 4 direct 16-bit OBJ_BLEND fast path vs STCKCOLOR + merge_blend<OBJ_BLEND, true>:
