@@ -126,11 +126,78 @@ static void test_subrange_and_dual_hot_preserved(void)
         iwram_code_min, cgba_iwram_code_end);
 }
 
+static void test_smc_change_predicates(void)
+{
+  u8 dst[16], src[16], tags[16];
+  u8 pat4[4] = { 0x11, 0x22, 0x33, 0x44 };
+  u8 pat2[2] = { 0xAA, 0xBB };
+  unsigned i;
+
+  for (i = 0; i < sizeof(dst); i++) {
+    dst[i] = (u8)(0x10u + i);
+    src[i] = dst[i];
+    tags[i] = 0u;
+  }
+
+  /* Identical copy over tagged code must NOT signal SMC. */
+  tags[4] = 1u; tags[5] = 1u; tags[6] = 1u; tags[7] = 1u;
+  CHECK(cgba_smc_copy_changes_tagged(dst, src, tags, sizeof(dst)) == 0,
+        "identical copy over tagged code falsely flagged SMC");
+
+  /* Changing only untagged data bytes in a mixed span must NOT signal SMC. */
+  src[0] = 0xFFu;
+  src[12] = 0xEEu;
+  CHECK(cgba_smc_copy_changes_tagged(dst, src, tags, sizeof(dst)) == 0,
+        "untagged-only copy diff falsely flagged SMC");
+
+  /* Changing any tagged code byte MUST signal SMC. */
+  src[6] = 0x99u;
+  CHECK(cgba_smc_copy_changes_tagged(dst, src, tags, sizeof(dst)) == 1,
+        "tagged byte modification failed to flag SMC");
+
+  /* Fill over tagged bytes with identical pattern must NOT signal SMC. */
+  for (i = 0; i < sizeof(dst); i++)
+    dst[i] = pat4[i & 3u];
+  CHECK(cgba_smc_fill_changes_tagged(dst, pat4, 4u, tags, sizeof(dst)) == 0,
+        "identical 32-bit fill over tagged code falsely flagged SMC");
+  dst[1] = 0x00u; /* untagged differs, tagged matches */
+  CHECK(cgba_smc_fill_changes_tagged(dst, pat4, 4u, tags, sizeof(dst)) == 0,
+        "32-bit fill differing only at untagged byte falsely flagged SMC");
+  dst[5] = 0x00u; /* tagged differs */
+  CHECK(cgba_smc_fill_changes_tagged(dst, pat4, 4u, tags, sizeof(dst)) == 1,
+        "32-bit fill changing tagged byte failed to flag SMC");
+
+  /* 16-bit fill check. */
+  for (i = 0; i < sizeof(dst); i++)
+    dst[i] = pat2[i & 1u];
+  CHECK(cgba_smc_fill_changes_tagged(dst, pat2, 2u, tags, sizeof(dst)) == 0,
+        "identical 16-bit fill over tagged code falsely flagged SMC");
+  dst[7] = 0x00u;
+  CHECK(cgba_smc_fill_changes_tagged(dst, pat2, 2u, tags, sizeof(dst)) == 1,
+        "16-bit fill changing tagged byte failed to flag SMC");
+
+  /* Scalar 1/2/4-byte store checks (incl. partial-tag word store). */
+  memset(tags, 0, sizeof(tags));
+  dst[0] = 0x78u; dst[1] = 0x56u; dst[2] = 0x34u; dst[3] = 0x12u;
+  tags[0] = 1u; tags[1] = 1u; /* lower halfword tagged, upper untagged */
+  CHECK(cgba_smc_scalar_changes_tagged(dst, tags, 4u, 0x12345678u) == 0,
+        "identical scalar 32-bit store falsely flagged SMC");
+  CHECK(cgba_smc_scalar_changes_tagged(dst, tags, 4u, 0xABCD5678u) == 0,
+        "scalar 32-bit store changing only untagged upper halfword falsely flagged SMC");
+  CHECK(cgba_smc_scalar_changes_tagged(dst, tags, 4u, 0x12345679u) == 1,
+        "scalar 32-bit store changing tagged byte failed to flag SMC");
+  CHECK(cgba_smc_scalar_changes_tagged(dst, tags, 1u, 0x78u) == 0,
+        "identical scalar 8-bit store falsely flagged SMC");
+  CHECK(cgba_smc_scalar_changes_tagged(dst, tags, 1u, 0x79u) == 1,
+        "changing scalar 8-bit store failed to flag SMC");
+}
+
 int main(void)
 {
   test_iwram_offset_zero();
   test_ewram_offset_zero();
   test_subrange_and_dual_hot_preserved();
+  test_smc_change_predicates();
 
   CHECK(flush_ram_count == 3,
         "production RAM flush call count=%u expected=3", flush_ram_count);

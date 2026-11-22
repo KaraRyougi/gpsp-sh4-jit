@@ -999,12 +999,35 @@ extern int cgba_diff_stop_on_budget;
  * DMA into IWRAM/EWRAM return CPU_ALERT_SMC (which the interpreter loop
  * otherwise ignores). Check both so ram_translation_cache is always flushed
  * before returning to JIT code. */
-static inline void cgba_interp_smc_check(u32 address, unsigned bytes,
-                                         cpu_alert_type *alert)
+static inline int cgba_interp_smc_precheck(u32 address, unsigned bytes,
+                                           u32 new_val)
 {
   const u8 *tag;
-  u32 hit = 0;
+  const u8 *data;
 
+  if (!(cgba_diff_stop_on_budget | cgba_diff_stop_on_bios_exit))
+    return 0;
+  switch (address >> 24) {
+  case 0x03: {
+    u32 off = address & 0x7FFFu;
+    tag = iwram + off;
+    data = iwram + 0x8000u + off;
+    break;
+  }
+  case 0x02: {
+    u32 off = address & 0x3FFFFu;
+    tag = ewram + off + 0x40000u;
+    data = ewram + off;
+    break;
+  }
+  default:
+    return 0;
+  }
+  return cgba_smc_scalar_changes_tagged(data, tag, bytes, new_val);
+}
+
+static inline void cgba_interp_smc_post(int ram_smc, cpu_alert_type *alert)
+{
   if (!(cgba_diff_stop_on_budget | cgba_diff_stop_on_bios_exit))
     return;
   if (*alert & CPU_ALERT_SMC) {
@@ -1012,18 +1035,12 @@ static inline void cgba_interp_smc_check(u32 address, unsigned bytes,
     flush_translation_cache_ram();
     return;
   }
-  switch (address >> 24) {
-  case 0x03: tag = iwram + (address & 0x7FFF); break;
-  case 0x02: tag = ewram + (address & 0x3FFFF) + 0x40000; break;
-  default:   return;
-  }
-  for (unsigned k = 0; k < bytes; k++)
-    hit |= tag[k];
-  if (hit)
+  if (ram_smc)
     flush_translation_cache_ram();
 }
 #else
-#define cgba_interp_smc_check(address, bytes, alert) ((void)0)
+#define cgba_interp_smc_precheck(address, bytes, new_val) (0)
+#define cgba_interp_smc_post(ram_smc, alert) ((void)(ram_smc))
 #endif
 
 #define fast_write_memory(size, type, address, value)                         \
@@ -1032,6 +1049,8 @@ static inline void cgba_interp_smc_check(u32 address, unsigned bytes,
   u32 _address = ((_raw_addr >> 24) == 0x0E || (_raw_addr >> 24) == 0x0F)     \
     ? _raw_addr                                                               \
     : (_raw_addr & ~(aligned_address_mask##size & 0x03));                     \
+  u32 _val = (u32)(value);                                                    \
+  int _ram_smc = cgba_interp_smc_precheck(_address, (size) / 8, _val);        \
   if(_address < 0x10000000)                                                   \
   {                                                                           \
     u8 region = _address >> 24;                                               \
@@ -1040,8 +1059,8 @@ static inline void cgba_interp_smc_check(u32 address, unsigned bytes,
   }                                                                           \
                                                                               \
   cgba_pf_check_store(_address, (size) / 8);                                  \
-  cpu_alert |= write_memory##size(_address, value);                           \
-  cgba_interp_smc_check(_address, (size) / 8, &cpu_alert);                    \
+  cpu_alert |= write_memory##size(_address, _val);                            \
+  cgba_interp_smc_post(_ram_smc, &cpu_alert);                                 \
 }                                                                             \
 
 #define load_aligned32(address, dest)                                         \
@@ -1071,6 +1090,8 @@ static inline void cgba_interp_smc_check(u32 address, unsigned bytes,
 #define store_aligned32(address, value)                                       \
 {                                                                             \
   u32 _address = address;                                                     \
+  u32 _val = (u32)(value);                                                    \
+  int _ram_smc = cgba_interp_smc_precheck(_address, 4, _val);                 \
   if(_address < 0x10000000)                                                   \
   {                                                                           \
     /* Account for cycles and other stats */                                  \
@@ -1079,8 +1100,8 @@ static inline void cgba_interp_smc_check(u32 address, unsigned bytes,
     STATS_MEMORY_ACCESS(write, u32, region);                                  \
   }                                                                           \
   cgba_pf_check_store(_address, 4);                                           \
-  cpu_alert |= write_memory32(_address, value);                               \
-  cgba_interp_smc_check(_address, 4, &cpu_alert);                             \
+  cpu_alert |= write_memory32(_address, _val);                                \
+  cgba_interp_smc_post(_ram_smc, &cpu_alert);                                 \
 }                                                                             \
 
 #define load_memory_u8(address, dest)                                         \

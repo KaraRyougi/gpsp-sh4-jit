@@ -2079,11 +2079,14 @@ const dma_region_type dma_region_map[17] =
 #define dma_read_ext(type, tfsize)                                            \
   read_value = read_memory##tfsize(type##_ptr)                                \
 
-#define dma_write_iwram(type, tfsize)                                         \
-  address##tfsize(iwram + 0x8000, type##_ptr & 0x7FFF) =                      \
-                                          eswap##tfsize(read_value);          \
-  if (address##tfsize(iwram, type##_ptr & 0x7FFF))                            \
+#define dma_write_iwram(type, tfsize) do {                                    \
+  u32 _off = type##_ptr & 0x7FFF;                                             \
+  u##tfsize _nv = eswap##tfsize(read_value);                                  \
+  if (address##tfsize(iwram, _off) &&                                         \
+      address##tfsize(iwram + 0x8000, _off) != _nv)                           \
     alerts |= CPU_ALERT_SMC;                                                  \
+  address##tfsize(iwram + 0x8000, _off) = _nv;                                \
+} while (0)
 
 #define dma_write_vram(type, tfsize) {                                        \
   u32 wraddr = type##_ptr & 0x1FFFF;                                          \
@@ -2104,10 +2107,14 @@ const dma_region_type dma_region_map[17] =
 #define dma_write_ext(type, tfsize)                                           \
   write_memory##tfsize(type##_ptr, read_value)                                \
 
-#define dma_write_ewram(type, tfsize)                                         \
-  address##tfsize(ewram, type##_ptr & 0x3FFFF) = eswap##tfsize(read_value);   \
-  if (address##tfsize(ewram, (type##_ptr & 0x3FFFF) + 0x40000))               \
+#define dma_write_ewram(type, tfsize) do {                                    \
+  u32 _off = type##_ptr & 0x3FFFF;                                            \
+  u##tfsize _nv = eswap##tfsize(read_value);                                  \
+  if (address##tfsize(ewram, _off + 0x40000) &&                               \
+      address##tfsize(ewram, _off) != _nv)                                    \
     alerts |= CPU_ALERT_SMC;                                                  \
+  address##tfsize(ewram, _off) = _nv;                                         \
+} while (0)
 
 #define print_line()                                                          \
   dma_print(src_op, dest_op, tfsize);                                         \
@@ -2454,12 +2461,14 @@ static bool dma_bulk_copy(dma_transfer_type *dmach, u32 src, u32 dst,
 
   /* Fixed-source fill (DmaFill16 / DmaFill32) into contiguous RAM/VRAM/OAM. */
   if (dmach->source_direction == 2) {
+    int smc_changed;
     s = dma_bulk_span(src, width, false, &st);
     d = dma_bulk_span(dst, bytes, true, &dt);
     if (!s || !d) return false;
     if ((uintptr_t)s < (uintptr_t)d + bytes &&
         (uintptr_t)d < (uintptr_t)s + width)
       return false;
+    smc_changed = cgba_smc_fill_changes_tagged(d, s, width, dt, bytes);
     if (width == 2) {
       u16 host_v = readaddress16(s, 0);
       dma_bus_val = host_v;
@@ -2483,7 +2492,7 @@ static bool dma_bulk_copy(dma_transfer_type *dmach, u32 src, u32 dst,
           dp[i] = raw32;
       }
     }
-    *alert = cgba_smc_tags_nonzero(dt, bytes) ? CPU_ALERT_SMC : CPU_ALERT_NONE;
+    *alert = smc_changed ? CPU_ALERT_SMC : CPU_ALERT_NONE;
     if ((dst >> 24) == 6) {
       u32 voff = dst & 0x1FFFFu;
       if (voff >= 0x18000u) voff -= 0x8000u;
@@ -2529,6 +2538,7 @@ static bool dma_bulk_copy(dma_transfer_type *dmach, u32 src, u32 dst,
   d = dma_bulk_span(dst, bytes, true, &dt);
   if (!d) return false;
 
+  int smc_changed = 0;
   s = dma_bulk_span(src, bytes, false, &st);
   if (s) {
     /* DMA copies in address order. memmove is not equivalent for overlapping
@@ -2538,6 +2548,7 @@ static bool dma_bulk_copy(dma_transfer_type *dmach, u32 src, u32 dst,
       return false;
     dma_bus_val = width == 2 ? readaddress16(s, bytes - 2) :
                               readaddress32(s, bytes - 4);
+    smc_changed = cgba_smc_copy_changes_tagged(d, s, dt, bytes);
     memcpy(d, s, bytes);  /* Both spans have the same guest byte order. */
   } else {
     /* Multi-4KiB-page ROM source -> contiguous RAM/VRAM/OAM destination. */
@@ -2559,11 +2570,14 @@ static bool dma_bulk_copy(dma_transfer_type *dmach, u32 src, u32 dst,
     }
     u32 cur_src = src, rem = bytes;
     u8 *cur_dst = d;
+    u8 *cur_dt = dt;
     while (rem > 0) {
       u32 page_off = cur_src & 0xFFFu;
       u32 chunk = 0x1000u - page_off;
       if (chunk > rem) chunk = rem;
       u8 *cs = cgba_gamepak_resolve_4k(cur_src) + page_off;
+      if (!smc_changed && cur_dt)
+        smc_changed = cgba_smc_copy_changes_tagged(cur_dst, cs, cur_dt, chunk);
       memcpy(cur_dst, cs, chunk);
       if (chunk == rem) {
         dma_bus_val = width == 2 ? readaddress16(cs, chunk - 2) :
@@ -2571,11 +2585,12 @@ static bool dma_bulk_copy(dma_transfer_type *dmach, u32 src, u32 dst,
       }
       cur_src += chunk;
       cur_dst += chunk;
+      if (cur_dt) cur_dt += chunk;
       rem -= chunk;
     }
   }
 
-  *alert = cgba_smc_tags_nonzero(dt, bytes) ? CPU_ALERT_SMC : CPU_ALERT_NONE;
+  *alert = smc_changed ? CPU_ALERT_SMC : CPU_ALERT_NONE;
   if ((dst >> 24) == 6) {
     u32 voff = dst & 0x1FFFFu;
     if (voff >= 0x18000u) voff -= 0x8000u;

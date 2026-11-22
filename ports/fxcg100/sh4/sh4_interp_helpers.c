@@ -434,19 +434,32 @@ static u32 cgba_sh4_align_store_address(u32 address, unsigned bytes)
 extern void cgba_sh4_note_iwram_smc(u32 iwram_off);
 #endif
 
-static cpu_alert_type cgba_sh4_smc_check(u32 address, unsigned bytes)
+static cpu_alert_type cgba_sh4_smc_precheck(u32 address, unsigned bytes,
+                                            u32 new_val)
 {
   const u8 *tag;
+  const u8 *data;
   /* Width-align like the ARM bus (and the gpSP interpreter's fast_write_memory,
    * cpu.cc) so the tag read lands on the same code bytes the access really hits
    * and never walks past the end of the mirror for an unaligned half/word. */
   address = cgba_sh4_align_store_address(address, bytes);
   switch (address >> 24) {
-  case 0x03: tag = iwram + (address & 0x7FFF); break;              /* 32 KB  */
-  case 0x02: tag = ewram + (address & 0x3FFFF) + 0x40000; break;   /* 256 KB */
-  default:   return CPU_ALERT_NONE;
+  case 0x03: {
+    u32 off = address & 0x7FFFu;
+    tag = iwram + off;
+    data = iwram + 0x8000u + off;
+    break;
   }
-  if (cgba_smc_tags_nonzero(tag, bytes)) {
+  case 0x02: {
+    u32 off = address & 0x3FFFFu;
+    tag = ewram + off + 0x40000u;
+    data = ewram + off;
+    break;
+  }
+  default:
+    return CPU_ALERT_NONE;
+  }
+  if (cgba_smc_scalar_changes_tagged(data, tag, bytes, new_val)) {
 #ifdef SH4_ARCH
     if ((address >> 24) == 0x03u)
       cgba_sh4_note_iwram_smc(address & 0x7FFFu);
@@ -459,8 +472,8 @@ static cpu_alert_type cgba_sh4_smc_check(u32 address, unsigned bytes)
 void function_cc execute_store_u8(u32 address, u32 source)
 {
   cgba_sh4_charge_mem(address, 0);
+  cgba_store_alert |= cgba_sh4_smc_precheck(address, 1, source);
   cgba_store_alert |= write_memory8(address, (u8)source);
-  cgba_store_alert |= cgba_sh4_smc_check(address, 1);
 }
 
 void function_cc execute_store_u16(u32 address, u32 source)
@@ -474,8 +487,8 @@ void function_cc execute_store_u16(u32 address, u32 source)
   u32 aligned = cgba_sh4_align_store_address(address, 2);
   cgba_sh4_charge_mem(aligned, 0);
   cgba_sh4_note_dma_ctl16(aligned, source);
+  cgba_store_alert |= cgba_sh4_smc_precheck(aligned, 2, source);
   cgba_store_alert |= write_memory16(aligned, (u16)source);
-  cgba_store_alert |= cgba_sh4_smc_check(aligned, 2);
 }
 
 void function_cc execute_store_u32(u32 address, u32 source)
@@ -488,8 +501,8 @@ void function_cc execute_store_u32(u32 address, u32 source)
   }
   u32 aligned = cgba_sh4_align_store_address(address, 4);
   cgba_sh4_charge_mem(aligned, 1);
+  cgba_store_alert |= cgba_sh4_smc_precheck(aligned, 4, source);
   cgba_store_alert |= write_memory32(aligned, source);
-  cgba_store_alert |= cgba_sh4_smc_check(aligned, 4);
 }
 
 /* Consume any pending store alert. If set, point PC at the next instruction,
@@ -2850,6 +2863,7 @@ static u32 cgba_swi_fastset_engine(s32 remaining)
         u8 fbytes[4];
         cgba_le32_write(fbytes, reg[2]);
         if (dh) {
+          int smc_changed = cgba_smc_fill_changes_tagged(dh, fbytes, 4u, tags, bytes);
           if (reg[2] == 0u) {
             memset(dh, 0, bytes);
           } else {
@@ -2857,7 +2871,7 @@ static u32 cgba_swi_fastset_engine(s32 remaining)
             for (i = 0; i < bytes; i += 4)
               cgba_le32_write(dh + i, reg[2]);
           }
-          if (cgba_smc_tags_nonzero(tags, bytes))
+          if (smc_changed)
             flush_translation_cache_ram();     /* SMC: see note at copy site */
         } else if (!cgba_swi_bulk_video_fill(dst, fbytes, 4u, bytes)) {
           int saved = cgba_sh4_extra_cycles;
@@ -2874,19 +2888,24 @@ static u32 cgba_swi_fastset_engine(s32 remaining)
         if (!sh)
           return CGBA_FS_DECLINE;              /* state stays canonical */
         if (dh) {
+          int smc_changed;
 #if CGBA_SH4_SWI_FORWARD_OVERLAP
-          if (cgba_sh4_swi_is_forward_overlap(dh, sh, bytes))
+          if (cgba_sh4_swi_is_forward_overlap(dh, sh, bytes)) {
+            smc_changed = cgba_smc_tags_nonzero(tags, bytes);
             cgba_sh4_swi_copy_forward(dh, sh, bytes, 4);
-          else
+          } else
 #endif
+          {
+            smc_changed = cgba_smc_copy_changes_tagged(dh, sh, tags, bytes);
             memmove(dh, sh, bytes);
+          }
           /* The copy just overwrote tagged RAM code. The engine's return and
              park points do NOT run the common HLE tail, so flush the RAM
              translation cache HERE — otherwise a stale block could execute
              at the next park (ISR) or on completion. Safe mid-copy: the
              engine's state lives in guest memory + registers, not the cache,
              and dh/tags point into the GBA RAM arrays, not the cache. */
-          if (cgba_smc_tags_nonzero(tags, bytes))
+          if (smc_changed)
             flush_translation_cache_ram();
         } else if (!cgba_swi_bulk_video_copy(dst, sh, bytes)) {
           int saved = cgba_sh4_extra_cycles;
@@ -3174,6 +3193,7 @@ static u32 cgba_swi_cpuset_engine(s32 remaining)
         cgba_le32_write(fbytes, fv);
         dh = cgba_bulk_ram_host(dst, bytes, &tags);
         if (dh) {
+          int smc_changed = cgba_smc_fill_changes_tagged(dh, fbytes, width, tags, bytes);
           if ((half ? (fv & 0xFFFFu) : fv) == 0u) {
             memset(dh, 0, bytes);
           } else if (!half) {
@@ -3188,7 +3208,7 @@ static u32 cgba_swi_cpuset_engine(s32 remaining)
               dh[i + 1] = b1;
             }
           }
-          if (cgba_smc_tags_nonzero(tags, bytes))
+          if (smc_changed)
             flush_translation_cache_ram();
         } else if (!cgba_swi_bulk_video_fill(dst, fbytes, width, bytes)) {
           int saved = cgba_sh4_extra_cycles;
@@ -3215,13 +3235,18 @@ static u32 cgba_swi_cpuset_engine(s32 remaining)
           return CGBA_FS_DECLINE;
         dh = cgba_bulk_ram_host(dst, bytes, &tags);
         if (dh) {
+          int smc_changed;
 #if CGBA_SH4_SWI_FORWARD_OVERLAP
-          if (cgba_sh4_swi_is_forward_overlap(dh, sh, bytes))
+          if (cgba_sh4_swi_is_forward_overlap(dh, sh, bytes)) {
+            smc_changed = cgba_smc_tags_nonzero(tags, bytes);
             cgba_sh4_swi_copy_forward(dh, sh, bytes, width);
-          else
+          } else
 #endif
+          {
+            smc_changed = cgba_smc_copy_changes_tagged(dh, sh, tags, bytes);
             memmove(dh, sh, bytes);
-          if (cgba_smc_tags_nonzero(tags, bytes))
+          }
+          if (smc_changed)
             flush_translation_cache_ram();
         }
 #ifdef CGBA_SH4_SWI_OAM_BULK
@@ -4041,6 +4066,7 @@ static int cgba_swi_apply_faithful(u32 src, u32 dst, u32 cnt, int fastset,
         reg[0] = pred->r0;
       }
     } else {
+      int smc_changed = 0;
       if (!fill) {
         sp = cgba_bulk_src_host(eff_src, len);
         if (!sp)
@@ -4049,11 +4075,13 @@ static int cgba_swi_apply_faithful(u32 src, u32 dst, u32 cnt, int fastset,
 #if CGBA_SH4_SWI_FORWARD_OVERLAP
           if (!cgba_sh4_swi_is_forward_overlap(d, sp, len))
             return 0;                            /* equal/backward: interpreter */
+          smc_changed = cgba_smc_tags_nonzero(tags, len);
           cgba_sh4_swi_copy_forward(d, sp, len, width);
 #else
           return 0;                              /* overlap: interpreter semantics */
 #endif
         } else {
+          smc_changed = cgba_smc_copy_changes_tagged(d, sp, tags, len);
           memmove(d, sp, len);
         }
       } else {
@@ -4064,10 +4092,11 @@ static int cgba_swi_apply_faithful(u32 src, u32 dst, u32 cnt, int fastset,
           return 0;
         b[0] = vp[0]; b[1] = vp[1];
         if (word) { b[2] = vp[2]; b[3] = vp[3]; }
+        smc_changed = cgba_smc_fill_changes_tagged(d, b, width, tags, len);
         for (i = 0; i < len; i += width)
           memcpy(d + i, b, width);
       }
-      if (cgba_smc_tags_nonzero(tags, len))
+      if (smc_changed)
         cgba_store_alert |= CPU_ALERT_SMC;
       if (pred->r0_from_last_word)
         reg[0] = cgba_le32_read(d + len - 4);

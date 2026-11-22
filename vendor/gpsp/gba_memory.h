@@ -451,6 +451,54 @@ static inline int cgba_smc_tags_nonzero(const u8 *tags, u32 len)
     if (tags[i]) return 1;
   return 0;
 }
+
+/* Return 1 only if a non-overlapping copy of [src, src+len) into [dst, dst+len)
+ * modifies at least one byte covered by a non-zero SMC tag.  Must be called
+ * BEFORE overwriting dst.  Zero overhead when no tags are set in the span. */
+static inline int cgba_smc_copy_changes_tagged(
+  const u8 *dst, const u8 *src, const u8 *tags, u32 len)
+{
+  u32 i;
+  if (!cgba_smc_tags_nonzero(tags, len))
+    return 0;
+  if (memcmp(dst, src, len) == 0)
+    return 0;
+  for (i = 0; i < len; i++)
+    if (tags[i] && dst[i] != src[i])
+      return 1;
+  return 0;
+}
+
+/* Return 1 only if filling [dst, dst+len) with repeating pat[0..pat_len-1]
+ * (pat_len is a power of two: 1, 2, or 4) modifies a tagged byte.  Must be
+ * called BEFORE overwriting dst. */
+static inline int cgba_smc_fill_changes_tagged(
+  const u8 *dst, const u8 *pat, u32 pat_len, const u8 *tags, u32 len)
+{
+  u32 i, mask = pat_len - 1u;
+  if (!cgba_smc_tags_nonzero(tags, len))
+    return 0;
+  for (i = 0; i < len; i++)
+    if (tags[i] && dst[i] != pat[i & mask])
+      return 1;
+  return 0;
+}
+
+/* Return 1 only if a 1/2/4-byte little-endian store of new_val into dst
+ * modifies at least one byte covered by a non-zero SMC tag.  Must be called
+ * BEFORE overwriting dst. */
+static inline int cgba_smc_scalar_changes_tagged(
+  const u8 *dst, const u8 *tags, u32 bytes, u32 new_val)
+{
+  u32 i;
+  if (!cgba_smc_tags_nonzero(tags, bytes))
+    return 0;
+  for (i = 0; i < bytes; i++) {
+    if (tags[i] && dst[i] != (u8)(new_val >> (i * 8u)))
+      return 1;
+  }
+  return 0;
+}
 extern u16 io_registers[512];
 extern u8 vram[1024 * 96];
 extern u8 bios_rom[1024 * 16];
