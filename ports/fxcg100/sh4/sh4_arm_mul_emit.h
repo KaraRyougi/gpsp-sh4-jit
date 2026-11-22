@@ -24,36 +24,28 @@
 #include "ports/fxcg100/sh4/sh4_emit_glue.h"
 
 /* CPSR N/Z from a 64-bit result in (rlo, rhi): N = rhi bit31, Z = (rlo|rhi)==0;
- * C and V preserved. Mirrors sh4g_set_nz but over the full 64-bit value. rlo and
- * rhi must not be R0/R5/R6 (the scratch used here). */
-static inline void sh4g_set_nz64(u8 **tp, unsigned rlo, unsigned rhi)
+ * C and V preserved. Operates directly on cached SH4_REG_CPSR (R8) with
+ * SHLL/SHLL2 + ROTCR, respecting live-flag mask `flag_status`. Clobbers R0. */
+static inline void sh4g_set_nz64(u8 **tp, unsigned rlo, unsigned rhi,
+                                 u32 flag_status)
 {
-  sh4_codegen cg = sh4g_open(tp);
-  const unsigned cpsr = SH4_REG_ARG1;          /* R5 (rlo/rhi live in R1/R2) */
-  const unsigned tmp  = SH4_REG_ARG2;          /* R6 */
-
-  sh4_emit_load_greg(&cg, SH4_GREG_CPSR, cpsr);
-  sh4_emit_shll2(&cg, cpsr);                   /* clear bits 31..30 (N,Z) */
-  sh4_emit_shlr2(&cg, cpsr);
-
-  /* N = rhi & 0x80000000 (already in bit position 31) */
-  sh4_emit_mov_reg(&cg, rhi, tmp);
-  sh4_emit_mov_imm(&cg, 1, SH4_REG_RET);
-  sh4_emit_rotr(&cg, SH4_REG_RET);             /* R0 = 0x80000000 */
-  sh4_emit_and(&cg, SH4_REG_RET, tmp);
-  sh4_emit_or(&cg, tmp, cpsr);
-
-  /* Z = ((rlo | rhi) == 0) << 30 */
-  sh4_emit_mov_reg(&cg, rlo, tmp);
-  sh4_emit_or(&cg, rhi, tmp);
-  sh4_emit_tst(&cg, tmp, tmp);
-  sh4_emit_movt(&cg, tmp);
-  sh4_emit_mov_imm(&cg, 30, SH4_REG_RET);
-  sh4_emit_shld(&cg, SH4_REG_RET, tmp);
-  sh4_emit_or(&cg, tmp, cpsr);
-
-  sh4_emit_store_greg(&cg, cpsr, SH4_GREG_CPSR);
-  sh4g_close(tp, &cg);
+  u32 eff = sh4g_flags_round(flag_status & 0xCu);
+  if (eff == 0u)
+    return;
+  { sh4_codegen cg = sh4g_open(tp);
+    if (eff == 0x8u) {                         /* N only (4 insns) */
+      sh4_emit_shll(&cg, SH4_REG_CPSR);
+    } else {                                   /* N and Z (8 insns) */
+      sh4_emit_shll2(&cg, SH4_REG_CPSR);
+      sh4_emit_mov_reg(&cg, rlo, SH4_REG_RET);
+      sh4_emit_or(&cg, rhi, SH4_REG_RET);
+      sh4_emit_tst(&cg, SH4_REG_RET, SH4_REG_RET);
+      sh4_emit_rotcr(&cg, SH4_REG_CPSR);
+    }
+    sh4_emit_mov_reg(&cg, rhi, SH4_REG_RET);
+    sh4_emit_shll(&cg, SH4_REG_RET);
+    sh4_emit_rotcr(&cg, SH4_REG_CPSR);
+    sh4g_close(tp, &cg); }
 }
 
 /* MUL (rd = rm*rs) / MLA (rd = rm*rs + rn). Returns 0 to fall back to C.
@@ -167,7 +159,7 @@ static inline int sh4g_arm_multiply_long_native(u8 **tp, u32 opcode, u32 flag_st
     sh4_emit_store_greg(&cg, SH4_REG_T1, rdhi);      /* reg[rdhi] = high */
     sh4g_close(tp, &cg); }
   if (set_flags && (flag_status & 0xC))
-    sh4g_set_nz64(tp, SH4_REG_T0, SH4_REG_T1);       /* N=bit63, Z=64-bit==0 */
+    sh4g_set_nz64(tp, SH4_REG_T0, SH4_REG_T1, flag_status); /* N=b63, Z=64b==0 */
   return 1;
 }
 

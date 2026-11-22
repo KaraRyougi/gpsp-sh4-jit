@@ -1470,87 +1470,151 @@ int main(void)
                 }
   }
 
-  /* ---- ARM DP with register-specified shifts (all 12 non-S ops) ---- */
+  /* ---- ARM DP with register-specified shifts (all 16 ops, S=0 and S=1) ---- */
   {
     static const u32 vals3[] = {
       0, 1, 0x80000000u, 0x7FFFFFFFu, 0xFFFFFFFFu, 0x12345678u, 0xA5A50000u
     };
-    static const u32 amounts[] = { 0, 1, 4, 31, 32, 33, 64, 255, 256 };
-    static const u32 ops[] = { 0, 1, 2, 3, 4, 5, 6, 7, 0xC, 0xD, 0xE, 0xF };
+    static const u32 amounts[] = { 0, 1, 4, 15, 31, 32, 33, 64, 255, 256 };
+    static const u32 rmasks[] = { 0x0u, 0x8u, 0xCu, 0xEu, 0xFu };
     const u32 rn_val = 0x3C5A960Fu;
-    for (unsigned oi = 0; oi < sizeof ops / sizeof *ops; oi++) {
-      u32 aop = ops[oi];
-      int uses_c = (aop == 5 || aop == 6 || aop == 7);
-      for (u32 cin = 0; cin <= (u32)uses_c; cin++)
-        for (u32 type = 0; type < 4; type++)
-          for (unsigned vi = 0; vi < sizeof vals3 / sizeof *vals3; vi++)
-            for (unsigned ai = 0; ai < sizeof amounts / sizeof *amounts; ai++) {
-              u32 opcode = 0xE0000000u | (aop << 21) | (2u << 16) | (3u << 12)
-                         | (5u << 8) | (type << 5) | 0x10u | 4u;
-              static u8 abuf[1024]; u8 *ap = abuf;
-              u32 val = vals3[vi], amount = amounts[ai] & 0xFF;
-              u32 shifted, want;
-              u32 cpsr = 0x8000001Fu | (cin << 29);
+    for (u32 aop = 0; aop <= 0xFu; aop++) {
+      int is_test = (aop >= 8u && aop <= 0xBu);
+      int arith = (aop >= 2u && aop <= 7u) || aop == 0xAu || aop == 0xBu;
+      for (int S = is_test ? 1 : 0; S <= 1; S++) {
+        unsigned nmasks = S ? (unsigned)(sizeof rmasks / sizeof *rmasks) : 1u;
+        for (unsigned mi = 0; mi < nmasks; mi++) {
+          u32 fm2 = S ? rmasks[mi] : 0u;
+          for (u32 cin = 0; cin <= 1u; cin++)
+            for (u32 type = 0; type < 4u; type++)
+              for (unsigned vi = 0; vi < sizeof vals3 / sizeof *vals3; vi++)
+                for (unsigned ai = 0; ai < sizeof amounts / sizeof *amounts; ai++) {
+                  u32 opcode = 0xE0000000u | (aop << 21) | ((u32)S << 20)
+                             | (2u << 16) | (3u << 12)
+                             | (5u << 8) | (type << 5) | 0x10u | 4u;
+                  static u8 abuf[1024]; u8 *ap = abuf;
+                  u32 val = vals3[vi], amount = amounts[ai] & 0xFFu;
+                  u32 shifted, sh_c = cin;
+                  u32 cpsr = 0x9000001Fu | (cin << 29);
+                  u32 res = 0, cf = cin, vf = (cpsr >> 28) & 1u;
+                  u64 tmp;
 
-              if (!sh4g_arm_dp_native(&ap, opcode, pc, 0)) {
-                printf("FAIL adp-regshift op=%08X: native rejected\n", opcode);
-                fails++; continue;
-              }
-              cases++;
+                  if (!sh4g_arm_dp_native(&ap, opcode, pc, fm2)) {
+                    printf("FAIL adp-regshift op=%08X fm=%X: native rejected\n",
+                           opcode, fm2);
+                    fails++; continue;
+                  }
+                  cases++;
 
-              memset(g_reg, 0, sizeof g_reg);
-              for (int i = 0; i < 16; i++) g_reg[i] = 0xCD000000u + (u32)i;
-              g_reg[2] = rn_val;
-              g_reg[3] = 0x51515151u;
-              g_reg[4] = val;
-              g_reg[5] = amounts[ai];
-              g_reg[SH4_GREG_CPSR] = cpsr;
+                  memset(g_reg, 0, sizeof g_reg);
+                  for (int i = 0; i < 16; i++) g_reg[i] = 0xCD000000u + (u32)i;
+                  g_reg[2] = rn_val;
+                  g_reg[3] = 0x51515151u;
+                  g_reg[4] = val;
+                  g_reg[5] = amounts[ai];
+                  g_reg[SH4_GREG_CPSR] = cpsr;
 
-              if (!run_sh4x(abuf, (size_t)(ap - abuf))) {
-                printf("FAIL adp-regshift op=%08X: interpreter: %s\n",
-                       opcode, unmodeled);
-                fails++; continue;
-              }
+                  if (!run_sh4x(abuf, (size_t)(ap - abuf))) {
+                    printf("FAIL adp-regshift op=%08X fm=%X: interpreter: %s\n",
+                           opcode, fm2, unmodeled);
+                    fails++; continue;
+                  }
 
-              if (amount == 0) {
-                shifted = val;
-              } else {
-                switch (type) {
-                case 0: shifted = (amount < 32) ? (val << amount) : 0; break;
-                case 1: shifted = (amount < 32) ? (val >> amount) : 0; break;
-                case 2: shifted = (amount < 32) ? (u32)((s32)val >> amount)
-                                                : (u32)((s32)val >> 31); break;
-                default: {
-                  u32 rot = amount & 31;
-                  shifted = rot ? ((val >> rot) | (val << (32 - rot))) : val;
-                  break;
+                  if (amount == 0) {
+                    shifted = val;
+                    sh_c = cin;
+                  } else {
+                    switch (type) {
+                    case 0:
+                      if (amount < 32) { shifted = val << amount; sh_c = (val >> (32 - amount)) & 1u; }
+                      else { shifted = 0; sh_c = (amount == 32) ? (val & 1u) : 0u; }
+                      break;
+                    case 1:
+                      if (amount < 32) { shifted = val >> amount; sh_c = (val >> (amount - 1)) & 1u; }
+                      else { shifted = 0; sh_c = (amount == 32) ? ((val >> 31) & 1u) : 0u; }
+                      break;
+                    case 2:
+                      if (amount < 32) { shifted = (u32)((s32)val >> amount); sh_c = (val >> (amount - 1)) & 1u; }
+                      else { shifted = (u32)((s32)val >> 31); sh_c = (val >> 31) & 1u; }
+                      break;
+                    default: {
+                      u32 rot = amount & 31u;
+                      if (rot == 0) { shifted = val; sh_c = (val >> 31) & 1u; }
+                      else { shifted = (val >> rot) | (val << (32 - rot)); sh_c = (val >> (rot - 1)) & 1u; }
+                      break;
+                    }
+                    }
+                  }
+
+                  cf = sh_c;
+                  switch (aop) {
+                  case 0x0: res = rn_val & shifted; break;
+                  case 0x1: res = rn_val ^ shifted; break;
+                  case 0x2: tmp = (u64)rn_val - shifted; res = (u32)tmp; cf = rn_val >= shifted;
+                            vf = ((rn_val ^ shifted) & (rn_val ^ res)) >> 31; break;
+                  case 0x3: tmp = (u64)shifted - rn_val; res = (u32)tmp; cf = shifted >= rn_val;
+                            vf = ((shifted ^ rn_val) & (shifted ^ res)) >> 31; break;
+                  case 0x4: tmp = (u64)rn_val + shifted; res = (u32)tmp; cf = (u32)(tmp >> 32);
+                            vf = (~(rn_val ^ shifted) & (rn_val ^ res)) >> 31; break;
+                  case 0x5: tmp = (u64)rn_val + shifted + cin; res = (u32)tmp; cf = (u32)(tmp >> 32);
+                            vf = (~(rn_val ^ shifted) & (rn_val ^ res)) >> 31; break;
+                  case 0x6: tmp = (u64)rn_val - shifted - (1u - cin); res = (u32)tmp;
+                            cf = rn_val >= ((u64)shifted + (1u - cin));
+                            vf = ((rn_val ^ shifted) & (rn_val ^ res)) >> 31; break;
+                  case 0x7: tmp = (u64)shifted - rn_val - (1u - cin); res = (u32)tmp;
+                            cf = shifted >= ((u64)rn_val + (1u - cin));
+                            vf = ((shifted ^ rn_val) & (shifted ^ res)) >> 31; break;
+                  case 0x8: res = rn_val & shifted; break;
+                  case 0x9: res = rn_val ^ shifted; break;
+                  case 0xA: tmp = (u64)rn_val - shifted; res = (u32)tmp; cf = rn_val >= shifted;
+                            vf = ((rn_val ^ shifted) & (rn_val ^ res)) >> 31; break;
+                  case 0xB: tmp = (u64)rn_val + shifted; res = (u32)tmp; cf = (u32)(tmp >> 32);
+                            vf = (~(rn_val ^ shifted) & (rn_val ^ res)) >> 31; break;
+                  case 0xC: res = rn_val | shifted; break;
+                  case 0xD: res = shifted; break;
+                  case 0xE: res = rn_val & ~shifted; break;
+                  default:  res = ~shifted; break;
+                  }
+                  u32 want_rd = is_test ? 0x51515151u : res;
+                  if (g_reg[3] != want_rd || g_reg[2] != rn_val || g_reg[4] != val ||
+                      g_reg[5] != amounts[ai]) {
+                    printf("FAIL adp-regshift op=%08X val=%08X amt=%08X cin=%u fm=%X: "
+                           "rd=%08X want %08X r2=%08X r4=%08X r5=%08X\n",
+                           opcode, val, amounts[ai], cin, fm2, g_reg[3], want_rd,
+                           g_reg[2], g_reg[4], g_reg[5]);
+                    fails++; continue;
+                  }
+                  u32 got = g_reg[SH4_GREG_CPSR];
+                  if (!S) {
+                    if (got != cpsr) {
+                      printf("FAIL adp-regshift op=%08X: CPSR changed w/o S %08X->%08X\n",
+                             opcode, cpsr, got);
+                      fails++;
+                    }
+                    continue;
+                  }
+                  u32 wN = (res >> 31) & 1u, wZ = (res == 0);
+                  u32 wC = arith ? (cf & 1u) : (sh_c & 1u);
+                  u32 wV = arith ? (vf & 1u) : ((cpsr >> 28) & 1u);
+                  u32 arch = (cpsr & 0x0FFFFFFFu) |
+                             (wN << 31) | (wZ << 30) | (wC << 29) | (wV << 28);
+                  int bad = ((got & 0x0FFFFFFFu) != (cpsr & 0x0FFFFFFFu));
+                  for (int fb = 0; fb < 4; fb++) {
+                    u32 bit = 1u << (28 + fb);
+                    u32 m = (fm2 >> fb) & 1u;
+                    u32 gf = got & bit, af = arch & bit, of = cpsr & bit;
+                    if (m) { if (gf != af) bad = 1; }
+                    else if (gf != of && gf != af) bad = 1;
+                  }
+                  if (bad) {
+                    printf("FAIL adp-regshift op=%08X val=%08X amt=%08X cin=%u fm=%X: "
+                           "CPSR=%08X arch=%08X old=%08X\n",
+                           opcode, val, amounts[ai], cin, fm2, got, arch, cpsr);
+                    fails++;
+                  }
                 }
-                }
-              }
-
-              switch (aop) {
-              case 0x0: want = rn_val & shifted; break;
-              case 0x1: want = rn_val ^ shifted; break;
-              case 0x2: want = rn_val - shifted; break;
-              case 0x3: want = shifted - rn_val; break;
-              case 0x4: want = rn_val + shifted; break;
-              case 0x5: want = rn_val + shifted + cin; break;
-              case 0x6: want = rn_val - shifted - (1u - cin); break;
-              case 0x7: want = shifted - rn_val - (1u - cin); break;
-              case 0xC: want = rn_val | shifted; break;
-              case 0xD: want = shifted; break;
-              case 0xE: want = rn_val & ~shifted; break;
-              default:  want = ~shifted; break;
-              }
-              if (g_reg[3] != want || g_reg[2] != rn_val || g_reg[4] != val ||
-                  g_reg[5] != amounts[ai] || g_reg[SH4_GREG_CPSR] != cpsr) {
-                printf("FAIL adp-regshift op=%08X val=%08X amt=%08X cin=%u: "
-                       "rd=%08X want %08X r2=%08X r4=%08X r5=%08X cpsr=%08X\n",
-                       opcode, val, amounts[ai], cin, g_reg[3], want, g_reg[2],
-                       g_reg[4], g_reg[5], g_reg[SH4_GREG_CPSR]);
-                fails++;
-              }
-            }
+        }
+      }
     }
   }
 
@@ -1727,21 +1791,21 @@ int main(void)
     /* ARM single transfers: every kind x addressing form x target */
     struct form { u32 op_base; int kind; int is_load; int wb; const char *nm; } forms[] = {
       /* word/byte form: cond=E, bits fixed; imm offset 0x10, rn=2, rd=3 */
-      { 0xE5923010u, LDK_W, 1, 0, "ldr  [r2,#imm]" },
-      { 0xE5D23010u, LDK_B, 1, 0, "ldrb [r2,#imm]" },
-      { 0xE5B23010u, LDK_W, 1, 1, "ldr  [r2,#imm]!" },
-      { 0xE4923010u, LDK_W, 1, 1, "ldr  [r2],#imm" },
-      { 0xE5823010u, LDK_W, 0, 0, "str  [r2,#imm]" },
-      { 0xE5C23010u, LDK_B, 0, 0, "strb [r2,#imm]" },
-      { 0xE4823010u, LDK_W, 0, 1, "str  [r2],#imm" },
-      { 0xE7923004u, LDK_W, 1, 0, "ldr  [r2,r4]" },
-      { 0xE7923104u, LDK_W, 1, 0, "ldr  [r2,r4,lsl#2]" },
+      { 0xE5923010u, CGBA_FM_LOAD_W, 1, 0, "ldr  [r2,#imm]" },
+      { 0xE5D23010u, CGBA_FM_LOAD_B, 1, 0, "ldrb [r2,#imm]" },
+      { 0xE5B23010u, CGBA_FM_LOAD_W, 1, 1, "ldr  [r2,#imm]!" },
+      { 0xE4923010u, CGBA_FM_LOAD_W, 1, 1, "ldr  [r2],#imm" },
+      { 0xE5823010u, CGBA_FM_LOAD_W, 0, 0, "str  [r2,#imm]" },
+      { 0xE5C23010u, CGBA_FM_LOAD_B, 0, 0, "strb [r2,#imm]" },
+      { 0xE4823010u, CGBA_FM_LOAD_W, 0, 1, "str  [r2],#imm" },
+      { 0xE7923004u, CGBA_FM_LOAD_W, 1, 0, "ldr  [r2,r4]" },
+      { 0xE7923104u, CGBA_FM_LOAD_W, 1, 0, "ldr  [r2,r4,lsl#2]" },
       /* halfword/signed form: imm offset 0x10 (hi nibble 1, lo 0) */
-      { 0xE1D231B0u, LDK_UH, 1, 0, "ldrh [r2,#imm]" },
-      { 0xE1D231D0u, LDK_SB, 1, 0, "ldrsb[r2,#imm]" },
-      { 0xE1D231F0u, LDK_SH, 1, 0, "ldrsh[r2,#imm]" },
-      { 0xE1C231B0u, LDK_UH, 0, 0, "strh [r2,#imm]" },
-      { 0xE1F231B0u, LDK_UH, 1, 1, "ldrh [r2,#imm]!" },
+      { 0xE1D231B0u, CGBA_FM_LOAD_UH, 1, 0, "ldrh [r2,#imm]" },
+      { 0xE1D231D0u, CGBA_FM_LOAD_SB, 1, 0, "ldrsb[r2,#imm]" },
+      { 0xE1D231F0u, CGBA_FM_LOAD_SH, 1, 0, "ldrsh[r2,#imm]" },
+      { 0xE1C231B0u, CGBA_FM_LOAD_UH, 0, 0, "strh [r2,#imm]" },
+      { 0xE1F231B0u, CGBA_FM_LOAD_UH, 1, 1, "ldrh [r2,#imm]!" },
     };
 
     for (unsigned fi = 0; fi < sizeof forms / sizeof *forms; fi++)
@@ -1751,8 +1815,8 @@ int main(void)
           u8 *sp = sbuf;
           u32 op = forms[fi].op_base;
           int kind = forms[fi].kind, is_load = forms[fi].is_load;
-          int align = (kind == LDK_W) ? 3 :
-                      (kind == LDK_UH || kind == LDK_SH) ? 1 : 0;
+          int align = (kind == CGBA_FM_LOAD_W) ? 3 :
+                      (kind == CGBA_FM_LOAD_UH || kind == CGBA_FM_LOAD_SH) ? 1 : 0;
           int pre = (op >> 24) & 1, up = (op >> 23) & 1;
           u32 imm_form = ((op & 0x0E000090u) == 0x90u)
             ? ((op >> 22) & 1) : !((op >> 25) & 1);
@@ -1782,7 +1846,7 @@ int main(void)
           else if (reg == 3) { page = giwram + 0x8000; poff = eff & 0x7FFF; }
           else if (reg == 6) {
             page = vram;
-            poff = (!is_load && kind == LDK_W) ? (eff & 0x7FFCu)
+            poff = (!is_load && kind == CGBA_FM_LOAD_W) ? (eff & 0x7FFCu)
                  : (!is_load)                  ? (eff & 0x7FFEu)
                                                : (eff & 0x7FFFu);
           }
@@ -1824,7 +1888,7 @@ int main(void)
           else {
             want_slow = tgts[ti].slow_st;
             if (want_slow == 2) want_slow = 1;                  /* smc tag */
-            else if (kind == LDK_UH && orc_fastmem_io16_direct_store(eff))
+            else if (kind == CGBA_FM_LOAD_UH && orc_fastmem_io16_direct_store(eff))
               want_slow = 0;
           }
           if (want_slow != slow) {
@@ -1838,7 +1902,7 @@ int main(void)
 
           {
             u32 cost = ws_cyc_nseq[(eff >> 24) & 0xFu]
-                                      [kind == LDK_W ? 1 : 0];
+                                      [kind == CGBA_FM_LOAD_W ? 1 : 0];
             if (orc_final_cycles != 0u - cost) {
               printf("FAIL fm %s @%s: cycles=%u want %u\n",
                      forms[fi].nm, tgts[ti].nm, orc_final_cycles, 0u - cost);
@@ -1852,31 +1916,31 @@ int main(void)
             u32 lo = page[poff], b1 = page[poff+1], b2 = page[poff+2], b3 = page[poff+3];
             u32 lev = lo | (b1 << 8) | (b2 << 16) | (b3 << 24);
             switch (kind) {
-            case LDK_W:  want_rd = lev; break;
-            case LDK_B:  want_rd = lev & 0xFF; break;
-            case LDK_UH: want_rd = lev & 0xFFFF; break;
-            case LDK_SH: want_rd = (u32)(s32)(int16_t)(lev & 0xFFFF); break;
+            case CGBA_FM_LOAD_W:  want_rd = lev; break;
+            case CGBA_FM_LOAD_B:  want_rd = lev & 0xFF; break;
+            case CGBA_FM_LOAD_UH: want_rd = lev & 0xFFFF; break;
+            case CGBA_FM_LOAD_SH: want_rd = (u32)(s32)(int16_t)(lev & 0xFFFF); break;
             default:     want_rd = (u32)(s32)(s8)(lev & 0xFF); break;
             }
           } else if (is_load && (eff >> 24) == 4) {
             const u8 *iop = (const u8 *)io_registers + (eff & 0x3FF);
-            u32 lev = iop[0] | (iop[1] << 8) | ((kind == LDK_W) ?
+            u32 lev = iop[0] | (iop[1] << 8) | ((kind == CGBA_FM_LOAD_W) ?
                       ((u32)iop[2] << 16) | ((u32)iop[3] << 24) : 0);
             switch (kind) {
-            case LDK_W:  want_rd = lev; break;
-            case LDK_B:  want_rd = lev & 0xFF; break;
-            case LDK_UH: want_rd = lev & 0xFFFF; break;
-            case LDK_SH: want_rd = (u32)(s32)(int16_t)(lev & 0xFFFF); break;
+            case CGBA_FM_LOAD_W:  want_rd = lev; break;
+            case CGBA_FM_LOAD_B:  want_rd = lev & 0xFF; break;
+            case CGBA_FM_LOAD_UH: want_rd = lev & 0xFFFF; break;
+            case CGBA_FM_LOAD_SH: want_rd = (u32)(s32)(int16_t)(lev & 0xFFFF); break;
             default:     want_rd = (u32)(s32)(s8)(lev & 0xFF); break;
             }
           } else if (is_load && (eff >> 24) == 8) {
             const u8 *rp = rom + (eff & 0x7FFF);
             u32 lev = rp[0] | (rp[1] << 8) | ((u32)rp[2] << 16) | ((u32)rp[3] << 24);
             switch (kind) {
-            case LDK_W:  want_rd = lev; break;
-            case LDK_B:  want_rd = lev & 0xFF; break;
-            case LDK_UH: want_rd = lev & 0xFFFF; break;
-            case LDK_SH: want_rd = (u32)(s32)(int16_t)(lev & 0xFFFF); break;
+            case CGBA_FM_LOAD_W:  want_rd = lev; break;
+            case CGBA_FM_LOAD_B:  want_rd = lev & 0xFF; break;
+            case CGBA_FM_LOAD_UH: want_rd = lev & 0xFFFF; break;
+            case CGBA_FM_LOAD_SH: want_rd = (u32)(s32)(int16_t)(lev & 0xFFFF); break;
             default:     want_rd = (u32)(s32)(s8)(lev & 0xFF); break;
             }
           }
@@ -1899,9 +1963,9 @@ int main(void)
             u32 v = 0xCAFE1234u;
             u8 want[4] = { mem_before[0], mem_before[1], mem_before[2], mem_before[3] };
             switch (kind) {
-            case LDK_W: want[0] = (u8)v; want[1] = (u8)(v >> 8);
+            case CGBA_FM_LOAD_W: want[0] = (u8)v; want[1] = (u8)(v >> 8);
                         want[2] = (u8)(v >> 16); want[3] = (u8)(v >> 24); break;
-            case LDK_UH: want[0] = (u8)v; want[1] = (u8)(v >> 8); break;
+            case CGBA_FM_LOAD_UH: want[0] = (u8)v; want[1] = (u8)(v >> 8); break;
             default:
               want[0] = (u8)v;
               if (reg == 6) want[1] = (u8)v; /* GBA VRAM 8-bit store duplicates byte */
@@ -1930,12 +1994,12 @@ int main(void)
       const u32 fpage = faddr >> 15;
       const u32 fblock = (faddr & 0x01FFFFFFu) >> 12;
       struct fload { u32 op; int kind; int wb; const char *nm; } floads[] = {
-        { 0xE5923000u, LDK_W,  0, "fragment-ldr"   },
-        { 0xE5D23000u, LDK_B,  0, "fragment-ldrb"  },
-        { 0xE1D230B0u, LDK_UH, 0, "fragment-ldrh"  },
-        { 0xE1D230D0u, LDK_SB, 0, "fragment-ldrsb" },
-        { 0xE1D230F0u, LDK_SH, 0, "fragment-ldrsh" },
-        { 0xE5B23010u, LDK_W,  1, "fragment-ldr-wb" },
+        { 0xE5923000u, CGBA_FM_LOAD_W,  0, "fragment-ldr"   },
+        { 0xE5D23000u, CGBA_FM_LOAD_B,  0, "fragment-ldrb"  },
+        { 0xE1D230B0u, CGBA_FM_LOAD_UH, 0, "fragment-ldrh"  },
+        { 0xE1D230D0u, CGBA_FM_LOAD_SB, 0, "fragment-ldrsb" },
+        { 0xE1D230F0u, CGBA_FM_LOAD_SH, 0, "fragment-ldrsh" },
+        { 0xE5B23010u, CGBA_FM_LOAD_W,  1, "fragment-ldr-wb" },
       };
 
       for (unsigned i = 0; i < sizeof fragment; i++)
@@ -1993,10 +2057,10 @@ int main(void)
           continue;
         }
         switch (floads[fi].kind) {
-        case LDK_W:  want = lev; break;
-        case LDK_B:  want = lev & 0xFFu; break;
-        case LDK_UH: want = lev & 0xFFFFu; break;
-        case LDK_SH: want = (u32)(s32)(int16_t)(lev & 0xFFFFu); break;
+        case CGBA_FM_LOAD_W:  want = lev; break;
+        case CGBA_FM_LOAD_B:  want = lev & 0xFFu; break;
+        case CGBA_FM_LOAD_UH: want = lev & 0xFFFFu; break;
+        case CGBA_FM_LOAD_SH: want = (u32)(s32)(int16_t)(lev & 0xFFFFu); break;
         default:     want = (u32)(s32)(s8)(lev & 0xFFu); break;
         }
         if (g_reg[3] != want || g_reg[2] != (floads[fi].wb ? faddr : base)) {
@@ -2510,12 +2574,12 @@ int main(void)
      * (pc+8 +/- imm) synthesized into the site; lands in the rom page. */
     {
       static const struct { u32 op; int kind; const char *nm; } pcf[] = {
-        { 0xE59F3010u, LDK_W,  "ldr  r3,[pc,#0x10]"  },
-        { 0xE51F3010u, LDK_W,  "ldr  r3,[pc,-#0x10]" },
-        { 0xE5DF3010u, LDK_B,  "ldrb r3,[pc,#0x10]"  },
-        { 0xE1DF31B0u, LDK_UH, "ldrh r3,[pc,#0x10]"  },
-        { 0xE1DF31F0u, LDK_SH, "ldrsh r3,[pc,#0x10]" },
-        { 0xE15F31B0u, LDK_UH, "ldrh r3,[pc,-#0x10]" },
+        { 0xE59F3010u, CGBA_FM_LOAD_W,  "ldr  r3,[pc,#0x10]"  },
+        { 0xE51F3010u, CGBA_FM_LOAD_W,  "ldr  r3,[pc,-#0x10]" },
+        { 0xE5DF3010u, CGBA_FM_LOAD_B,  "ldrb r3,[pc,#0x10]"  },
+        { 0xE1DF31B0u, CGBA_FM_LOAD_UH, "ldrh r3,[pc,#0x10]"  },
+        { 0xE1DF31F0u, CGBA_FM_LOAD_SH, "ldrsh r3,[pc,#0x10]" },
+        { 0xE15F31B0u, CGBA_FM_LOAD_UH, "ldrh r3,[pc,-#0x10]" },
       };
       for (unsigned fi = 0; fi < sizeof pcf / sizeof *pcf; fi++) {
         static u8 sbuf[512];
@@ -2564,16 +2628,82 @@ int main(void)
           fails++; continue;
         }
         switch (pcf[fi].kind) {
-        case LDK_W:  want = lev; break;
-        case LDK_B:  want = lev & 0xFF; break;
-        case LDK_UH: want = lev & 0xFFFF; break;
-        case LDK_SH: want = (u32)(s32)(int16_t)(lev & 0xFFFF); break;
+        case CGBA_FM_LOAD_W:  want = lev; break;
+        case CGBA_FM_LOAD_B:  want = lev & 0xFF; break;
+        case CGBA_FM_LOAD_UH: want = lev & 0xFFFF; break;
+        case CGBA_FM_LOAD_SH: want = (u32)(s32)(int16_t)(lev & 0xFFFF); break;
         default:     want = (u32)(s32)(s8)(lev & 0xFF); break;
         }
         if (g_reg[3] != want) {
           printf("FAIL pcldr %s: rd=%08X want %08X (eff=%08X)\n",
                  pcf[fi].nm, g_reg[3], want, eff);
           fails++;
+        }
+      }
+      /* Native ARM constant-base direct loads (sh4g_arm_ldst_const_native):
+       * all 5 widths across IWRAM/EWRAM/IO with +imm, -imm, +reg, -reg, plus
+       * rejections on unaligned/writeback/ROM. */
+      {
+        static const struct {
+          u32 op; u32 base; u32 rm_val; int kind; int want_debit; const char *nm;
+        } acs[] = {
+          { 0xE5923010u, 0x03000100u, 0u,   CGBA_FM_LOAD_W,  1, "iw-ldr+16" },
+          { 0xE5123010u, 0x03000120u, 0u,   CGBA_FM_LOAD_W,  1, "iw-ldr-16" },
+          { 0xE5D23003u, 0x02000200u, 0u,   CGBA_FM_LOAD_B,  3, "ew-ldrb+3" },
+          { 0xE5923004u, 0x02000200u, 0u,   CGBA_FM_LOAD_W,  6, "ew-ldr+4"  },
+          { 0xE1D230B6u, 0x04000000u, 0u,   CGBA_FM_LOAD_UH, 1, "io-ldrh+6" },
+          { 0xE1D230F2u, 0x03000100u, 0u,   CGBA_FM_LOAD_SH, 1, "iw-ldrsh"  },
+          { 0xE1D230D5u, 0x03000100u, 0u,   CGBA_FM_LOAD_SB, 1, "iw-ldrsb"  },
+          { 0xE7923004u, 0x03000100u, 0x8u, CGBA_FM_LOAD_W,  1, "iw-ldr+r4" },
+          { 0xE7123004u, 0x03000108u, 0x8u, CGBA_FM_LOAD_W,  1, "iw-ldr-r4" },
+          { 0xE5923002u, 0x03000100u, 0u,   CGBA_FM_LOAD_W,  0, "unaligned" },
+          { 0xE5B23010u, 0x03000100u, 0u,   CGBA_FM_LOAD_W,  0, "writeback" },
+          { 0xE5923000u, 0x08000100u, 0u,   CGBA_FM_LOAD_W,  0, "rom-reject"},
+        };
+        for (unsigned ai = 0; ai < sizeof(acs) / sizeof(acs[0]); ai++) {
+          u8 sbuf[128], *sp = sbuf;
+          u32 cval[16] = {0};
+          u32 cmask = (1u << 2) | (1u << 4);
+          cval[2] = acs[ai].base;
+          cval[4] = acs[ai].rm_val;
+          int debit = sh4g_arm_ldst_const_native(&sp, acs[ai].op, cmask, cval);
+          cases++;
+          if (debit != acs[ai].want_debit) {
+            printf("FAIL arm-const-ld %s: debit=%d want %d\n",
+                   acs[ai].nm, debit, acs[ai].want_debit);
+            fails++; continue;
+          }
+          if (debit == 0) continue;
+          u32 up = (acs[ai].op >> 23) & 1u;
+          u32 off = ((acs[ai].op & 0x0E000090u) == 0x00000090u)
+            ? (((acs[ai].op >> 4) & 0xF0u) | (acs[ai].op & 0xFu))
+            : ((acs[ai].op & 0x02000000u) ? acs[ai].rm_val : (acs[ai].op & 0xFFFu));
+          u32 eff = up ? (acs[ai].base + off) : (acs[ai].base - off);
+          const u8 *src = (eff >> 24) == 3u ? (giwram + 0x8000u + (eff & 0x7FFFu))
+                        : (eff >> 24) == 2u ? (ewram + (eff & 0x3FFFFu))
+                        : ((const u8 *)io_registers + (eff & 0x3FFu));
+          u32 lev = src[0] | ((u32)src[1] << 8) | ((u32)src[2] << 16) | ((u32)src[3] << 24);
+          u32 want;
+          switch (acs[ai].kind) {
+          case CGBA_FM_LOAD_W:  want = lev; break;
+          case CGBA_FM_LOAD_B:  want = lev & 0xFFu; break;
+          case CGBA_FM_LOAD_UH: want = lev & 0xFFFFu; break;
+          case CGBA_FM_LOAD_SH: want = (u32)(s32)(int16_t)(lev & 0xFFFFu); break;
+          default:              want = (u32)(s32)(s8)(lev & 0xFFu); break;
+          }
+          memset(g_reg, 0, sizeof g_reg);
+          g_reg[3] = 0xDEADBEEFu;
+          orc_reset_windows();
+          orc_add_window(sbuf, sizeof sbuf, 0);
+          orc_add_window(giwram, giwram_size, 0);
+          orc_add_window(ewram, sizeof ewram, 0);
+          orc_add_window(io_registers, sizeof io_registers, 0);
+          if (!run_at((u32)(uintptr_t)sbuf, (u32)(uintptr_t)sp) ||
+              g_reg[3] != want) {
+            printf("FAIL arm-const-ld %s: rd=%08X want %08X (%s)\n",
+                   acs[ai].nm, g_reg[3], want, unmodeled);
+            fails++;
+          }
         }
       }
       /* STRH to REG_IF / REG_IE: native interrupt-register fast path in
@@ -2749,15 +2879,15 @@ int main(void)
   {
     /* rd=0, rb=1, ro=2 forms; imm5 slot 4 (word: <<2, half: <<1, byte: <<0) */
     struct tf { u32 op; int kind; int is_load; const char *nm; } tforms[] = {
-      { 0x6908u, SH4_THUMB_LDK_W, 1, "ldr  [r1,#16]" },
-      { 0x6108u, SH4_THUMB_LDK_W, 0, "str  [r1,#16]" },
-      { 0x7C08u, SH4_THUMB_LDK_B, 1, "ldrb [r1,#16]" },
-      { 0x7408u, SH4_THUMB_LDK_B, 0, "strb [r1,#16]" },
-      { 0x8A08u, SH4_THUMB_LDK_UH, 1, "ldrh [r1,#16]" },
-      { 0x8208u, SH4_THUMB_LDK_UH, 0, "strh [r1,#16]" },
-      { 0x5888u, SH4_THUMB_LDK_W, 1, "ldr  [r1,r2]" },
-      { 0x5688u, SH4_THUMB_LDK_SB, 1, "ldrsb[r1,r2]" },
-      { 0x5E88u, SH4_THUMB_LDK_SH, 1, "ldrsh[r1,r2]" },
+      { 0x6908u, CGBA_FM_LOAD_W, 1, "ldr  [r1,#16]" },
+      { 0x6108u, CGBA_FM_LOAD_W, 0, "str  [r1,#16]" },
+      { 0x7C08u, CGBA_FM_LOAD_B, 1, "ldrb [r1,#16]" },
+      { 0x7408u, CGBA_FM_LOAD_B, 0, "strb [r1,#16]" },
+      { 0x8A08u, CGBA_FM_LOAD_UH, 1, "ldrh [r1,#16]" },
+      { 0x8208u, CGBA_FM_LOAD_UH, 0, "strh [r1,#16]" },
+      { 0x5888u, CGBA_FM_LOAD_W, 1, "ldr  [r1,r2]" },
+      { 0x5688u, CGBA_FM_LOAD_SB, 1, "ldrsb[r1,r2]" },
+      { 0x5E88u, CGBA_FM_LOAD_SH, 1, "ldrsh[r1,r2]" },
     };
     u32 tbases[] = { 0x03000400u, 0x02000500u, 0x06000600u, 0x08000700u };
     for (unsigned fi = 0; fi < sizeof tforms / sizeof *tforms; fi++)
@@ -2831,10 +2961,10 @@ int main(void)
                       ((u32)page[poff+2] << 16) | ((u32)page[poff+3] << 24);
             u32 want;
             switch (kind) {
-            case SH4_THUMB_LDK_W:  want = lev; break;
-            case SH4_THUMB_LDK_B:  want = lev & 0xFF; break;
-            case SH4_THUMB_LDK_UH: want = lev & 0xFFFF; break;
-            case SH4_THUMB_LDK_SH: want = (u32)(s32)(int16_t)(lev & 0xFFFF); break;
+            case CGBA_FM_LOAD_W:  want = lev; break;
+            case CGBA_FM_LOAD_B:  want = lev & 0xFF; break;
+            case CGBA_FM_LOAD_UH: want = lev & 0xFFFF; break;
+            case CGBA_FM_LOAD_SH: want = (u32)(s32)(int16_t)(lev & 0xFFFF); break;
             default:               want = (u32)(s32)(s8)(lev & 0xFF); break;
             }
             if (g_reg[0] != want) {
@@ -2846,9 +2976,9 @@ int main(void)
             u32 v = 0xBEEF5678u;
             u8 want[4] = { mem_before[0], mem_before[1], mem_before[2], mem_before[3] };
             switch (kind) {
-            case SH4_THUMB_LDK_W: want[0]=(u8)v; want[1]=(u8)(v>>8);
+            case CGBA_FM_LOAD_W: want[0]=(u8)v; want[1]=(u8)(v>>8);
                                   want[2]=(u8)(v>>16); want[3]=(u8)(v>>24); break;
-            case SH4_THUMB_LDK_UH: want[0]=(u8)v; want[1]=(u8)(v>>8); break;
+            case CGBA_FM_LOAD_UH: want[0]=(u8)v; want[1]=(u8)(v>>8); break;
             default:
               want[0]=(u8)v;
               if (regn == 6) want[1]=(u8)v;
@@ -2879,15 +3009,15 @@ int main(void)
       { 0x0000C11Cu, 0, 0, "stmia r1!,{r2-r4}"    },
       { 0x0000C91Cu, 0, 0, "ldmia r1!,{r2-r4}"    },
       { 0x0000C916u, 0, 0, "ldmia r1!,{r1,r2,r4}" },
-      { 0x0000C803u, 0, (2 < CGBA_SH4_FASTMEM_BLOCK_MIN), "ldmia r0!,{r0,r1}" },
-      { 0x0000B500u, 0, (1 < CGBA_SH4_FASTMEM_BLOCK_MIN), "push {lr}"            },
-      { 0x0000B510u, 0, (2 < CGBA_SH4_FASTMEM_BLOCK_MIN), "push {r4,lr}"         },
-      { 0x0000BC01u, 0, (1 < CGBA_SH4_FASTMEM_BLOCK_MIN), "pop  {r0}"            },
-      { 0x0000BC02u, 0, (1 < CGBA_SH4_FASTMEM_BLOCK_MIN), "pop  {r1}"            },
-      { 0x0000B403u, 0, (2 < CGBA_SH4_FASTMEM_BLOCK_MIN), "push {r0,r1}"         },
-      { 0x0000B502u, 0, (2 < CGBA_SH4_FASTMEM_BLOCK_MIN), "push {r1,lr}"         },
-      { 0x0000C203u, 0, (2 < CGBA_SH4_FASTMEM_BLOCK_MIN), "stmia r2!,{r0,r1}"    },
-      { 0x0000CA03u, 0, (2 < CGBA_SH4_FASTMEM_BLOCK_MIN), "ldmia r2!,{r0,r1}"    },
+      { 0x0000C803u, 0, 0, "ldmia r0!,{r0,r1}" },
+      { 0x0000B500u, 0, 0, "push {lr}"            },
+      { 0x0000B510u, 0, 0, "push {r4,lr}"         },
+      { 0x0000BC01u, 0, 0, "pop  {r0}"            },
+      { 0x0000BC02u, 0, 0, "pop  {r1}"            },
+      { 0x0000B403u, 0, 0, "push {r0,r1}"         },
+      { 0x0000B502u, 0, 0, "push {r1,lr}"         },
+      { 0x0000C203u, 0, 0, "stmia r2!,{r0,r1}"    },
+      { 0x0000CA03u, 0, 0, "ldmia r2!,{r0,r1}"    },
     };
     struct bt2 { u32 base; int slow_ld; int slow_st; const char *nm; } btgts[] = {
       { 0x03000200u, 0, 0, "iwram" },

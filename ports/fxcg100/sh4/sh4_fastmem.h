@@ -52,13 +52,6 @@
 
 #include "ports/fxcg100/sh4/sh4_emit_glue.h"
 
-/* Block lists with at least this many registers use the shared runtime-rlist
- * routine (40-byte site); smaller lists keep the faster unrolled inline path.
- * Tunable for capacity-vs-speed A/B on hardware. */
-#ifndef CGBA_SH4_FASTMEM_BLOCK_MIN
-#define CGBA_SH4_FASTMEM_BLOCK_MIN 1
-#endif
-
 /* Routine variants: kind x direction, plus ARM writeback twins. */
 enum {
   CGBA_FM_LOAD_W = 0, CGBA_FM_LOAD_B, CGBA_FM_LOAD_UH, CGBA_FM_LOAD_SH,
@@ -352,6 +345,165 @@ static inline u32 sh4g_fastmem_block_params(u32 rlist, u32 count, int wb_rn)
     }
   }
   return m | (count << 16) | wb_field;
+}
+
+/* Emit a direct host load from @base_reg into dst_reg and byteswap/extend for
+ * `kind` (CGBA_FM_LOAD_W..CGBA_FM_LOAD_SB). */
+static inline void sh4g_emit_host_load_at(sh4_codegen *cg, int kind,
+                                          unsigned base_reg, unsigned dst_reg)
+{
+  switch (kind) {
+  case CGBA_FM_LOAD_W:
+    sh4_emit_mov_l_load(cg, base_reg, dst_reg);
+    sh4_emit_bswap32(cg, dst_reg, dst_reg);
+    break;
+  case CGBA_FM_LOAD_B:
+    sh4_emit_mov_b_load(cg, base_reg, dst_reg);
+    sh4_emit_extu_b(cg, dst_reg, dst_reg);
+    break;
+  case CGBA_FM_LOAD_UH:
+    sh4_emit_mov_w_load(cg, base_reg, dst_reg);
+    sh4_emit_swap_b(cg, dst_reg, dst_reg);
+    sh4_emit_extu_w(cg, dst_reg, dst_reg);
+    break;
+  case CGBA_FM_LOAD_SH:
+    sh4_emit_mov_w_load(cg, base_reg, dst_reg);
+    sh4_emit_swap_b(cg, dst_reg, dst_reg);
+    sh4_emit_exts_w(cg, dst_reg, dst_reg);
+    break;
+  default: /* CGBA_FM_LOAD_SB */
+    sh4_emit_mov_b_load(cg, base_reg, dst_reg);
+    break;
+  }
+}
+
+/* Emit an indexed host load from @(R0, base_reg) into dst_reg and
+ * byteswap/extend for `kind` (CGBA_FM_LOAD_W..CGBA_FM_LOAD_SB). */
+static inline void sh4g_emit_host_load_r0(sh4_codegen *cg, int kind,
+                                          unsigned base_reg, unsigned dst_reg)
+{
+  switch (kind) {
+  case CGBA_FM_LOAD_W:
+    sh4_emit_mov_l_load_r0(cg, base_reg, dst_reg);
+    sh4_emit_bswap32(cg, dst_reg, dst_reg);
+    break;
+  case CGBA_FM_LOAD_B:
+    sh4_emit_mov_b_load_r0(cg, base_reg, dst_reg);
+    sh4_emit_extu_b(cg, dst_reg, dst_reg);
+    break;
+  case CGBA_FM_LOAD_UH:
+    sh4_emit_mov_w_load_r0(cg, base_reg, dst_reg);
+    sh4_emit_swap_b(cg, dst_reg, dst_reg);
+    sh4_emit_extu_w(cg, dst_reg, dst_reg);
+    break;
+  case CGBA_FM_LOAD_SH:
+    sh4_emit_mov_w_load_r0(cg, base_reg, dst_reg);
+    sh4_emit_swap_b(cg, dst_reg, dst_reg);
+    sh4_emit_exts_w(cg, dst_reg, dst_reg);
+    break;
+  default: /* CGBA_FM_LOAD_SB */
+    sh4_emit_mov_b_load_r0(cg, base_reg, dst_reg);
+    break;
+  }
+}
+
+/* Emit a zero-branch direct load from a compile-time-known aligned IWRAM,
+ * EWRAM, or I/O guest address into reg[rd]. Returns the fixed non-sequential
+ * cycle debit (1 for IWRAM/IO, 3 or 6 for EWRAM), or 0 if unaligned or outside
+ * those static host regions. Shared by Thumb and ARM constant-base loads. */
+static inline int sh4g_emit_const_addr_load(u8 **tp, int kind, u32 address,
+                                            unsigned rd)
+{
+  u32 align_mask = (kind == CGBA_FM_LOAD_W) ? 3u
+                 : (kind == CGBA_FM_LOAD_UH || kind == CGBA_FM_LOAD_SH) ? 1u : 0u;
+  u32 region = address >> 24;
+  uintptr_t host_addr;
+  int debit;
+
+  if (align_mask && (address & align_mask))
+    return 0;
+  if (region == 0x03u) {
+    host_addr = (uintptr_t)(iwram + 0x8000u + (address & 0x7FFFu));
+    debit = 1;
+  } else if (region == 0x02u) {
+    host_addr = (uintptr_t)(ewram + (address & 0x3FFFFu));
+    debit = (kind == CGBA_FM_LOAD_W) ? 6 : 3;
+  } else if (region == 0x04u) {
+    host_addr = (uintptr_t)(((u8 *)io_registers) + (address & 0x3FFu));
+    debit = 1;
+  } else {
+    return 0;
+  }
+
+  sh4g_const(tp, (u32)host_addr, SH4_REG_T2);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4g_emit_host_load_at(&cg, kind, SH4_REG_T2, SH4_REG_T1);
+    sh4_emit_store_greg(&cg, SH4_REG_T1, rd);
+    sh4g_close(tp, &cg); }
+  return debit;
+}
+
+/* Prepare the effective address R1 = reg[base_greg] + soff for a compact
+ * fastmem load site, returning the final instruction opcode to pack into the
+ * JSR @R0 delay slot (saving 2 bytes + 1 cycle per load site). Shared by both
+ * Thumb and ARM compact loads. */
+static inline uint16_t sh4g_emit_compact_load_delay_imm(u8 **tp,
+                                                        unsigned base_greg,
+                                                        s32 soff)
+{
+  if (soff == 0) {
+#if CGBA_SH4_REG_FORWARD
+    if (*tp == sh4_forward_at && base_greg == sh4_forward_guest) {
+      if (sh4_forward_host == SH4_REG_RET) {
+        sh4_codegen cg = sh4g_open(tp);
+        sh4_emit_load_greg(&cg, base_greg, SH4_REG_T0);
+        sh4g_close(tp, &cg);
+        return 0x0009u;
+      } else if (sh4_forward_host == SH4_REG_T0) {
+        sh4_forward_at = NULL;
+        return 0x0009u;
+      } else {
+        uint16_t op = (uint16_t)(0x6103u | (sh4_forward_host << 4));
+        sh4_forward_at = NULL;
+        return op;
+      }
+    }
+#endif
+#if CGBA_SH4_PIN_GUEST_R0
+    if (base_greg == 0u)
+      return 0x61B3u;                                /* MOV R11, R1 */
+#endif
+#if CGBA_SH4_PIN_GUEST_R1
+    if (base_greg == 1u)
+      return 0x61C3u;                                /* MOV R12, R1 */
+#endif
+    return (uint16_t)(0x51E0u | (base_greg & 0xFu)); /* MOV.L @(rn,R14), R1 */
+  }
+  if (soff >= -128 && soff <= 127) {
+    sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_load_greg(&cg, base_greg, SH4_REG_T0);
+    sh4g_close(tp, &cg);
+    return (uint16_t)(0x7100u | ((u32)soff & 0xFFu));
+  }
+  if (soff > 127 && soff <= 254) {
+    sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_load_greg(&cg, base_greg, SH4_REG_T0);
+    sh4_emit_add_imm(&cg, 127, SH4_REG_T0);
+    sh4g_close(tp, &cg);
+    return (uint16_t)(0x7100u | ((u32)(soff - 127) & 0xFFu));
+  }
+  if (soff < -128 && soff >= -256) {
+    sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_load_greg(&cg, base_greg, SH4_REG_T0);
+    sh4_emit_add_imm(&cg, -128, SH4_REG_T0);
+    sh4g_close(tp, &cg);
+    return (uint16_t)(0x7100u | ((u32)(soff + 128) & 0xFFu));
+  }
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_load_greg(&cg, base_greg, SH4_REG_T0);
+    sh4g_close(tp, &cg); }
+  sh4g_const(tp, (u32)soff, SH4_REG_T1);
+  return 0x312Cu;                                    /* ADD R2, R1 */
 }
 
 #endif /* CGBA_SH4_FASTMEM_H */

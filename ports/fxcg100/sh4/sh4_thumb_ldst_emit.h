@@ -3,34 +3,85 @@
 #ifndef CGBA_SH4_THUMB_LDST_EMIT_H
 #define CGBA_SH4_THUMB_LDST_EMIT_H
 
-enum {
-  SH4_THUMB_LDK_W = 0,
-  SH4_THUMB_LDK_B,
-  SH4_THUMB_LDK_UH,
-  SH4_THUMB_LDK_SH,
-  SH4_THUMB_LDK_SB
-};
+#ifdef CGBA_SH4_THUMB_LDST_NATIVE
+typedef struct sh4g_thumb_ldst_info {
+  u32 rd, rb, ro, offset;
+  int kind, is_load, reg_offset, pc_relative;
+} sh4g_thumb_ldst_info;
 
-static inline void sh4g_charge_mem_cell(u8 **tp, const u8 *cell)
+/* Decode Thumb single load/store (formats 6..11). Returns 1 on match, 0 else. */
+static inline int sh4g_thumb_ldst_decode(u32 opcode, sh4g_thumb_ldst_info *out)
 {
-  sh4g_const(tp, (uint32_t)(uintptr_t)cell, SH4_REG_T2);
-  { sh4_codegen cg = sh4g_open(tp);
-    sh4_emit_mov_b_load(&cg, SH4_REG_T2, SH4_REG_T1);
-    sh4_emit_extu_b(&cg, SH4_REG_T1, SH4_REG_T1);
-    sh4_emit_sub(&cg, SH4_REG_T1, SH4_REG_CYCLES);
-    sh4g_close(tp, &cg); }
+  u32 hi = (opcode >> 8) & 0xFFu;
+  out->rd = opcode & 7u;
+  out->rb = (opcode >> 3) & 7u;
+  out->ro = 0u;
+  out->offset = 0u;
+  out->kind = CGBA_FM_LOAD_W;
+  out->is_load = 1;
+  out->reg_offset = 0;
+  out->pc_relative = 0;
+
+  if (hi >= 0x48u && hi <= 0x4Fu) {                  /* LDR Rd,[PC,#imm8*4] */
+    out->rd = (opcode >> 8) & 7u;
+    out->offset = (opcode & 0xFFu) << 2;
+    out->pc_relative = 1;
+    return 1;
+  }
+  if (hi >= 0x50u && hi <= 0x5Fu) {                  /* register-offset forms */
+    u32 op = (opcode >> 10) & 3u;
+    out->ro = (opcode >> 6) & 7u;
+    out->reg_offset = 1;
+    if (opcode & 0x0200u) {                          /* format 8: H/S */
+      switch (op) {
+      case 0: out->kind = CGBA_FM_LOAD_UH; out->is_load = 0; break;
+      case 1: out->kind = CGBA_FM_LOAD_SB; break;
+      case 2: out->kind = CGBA_FM_LOAD_UH; break;
+      case 3: out->kind = CGBA_FM_LOAD_SH; break;
+      }
+    } else {                                         /* format 7: L/B */
+      switch (op) {
+      case 0: out->kind = CGBA_FM_LOAD_W; out->is_load = 0; break;
+      case 1: out->kind = CGBA_FM_LOAD_B; out->is_load = 0; break;
+      case 2: out->kind = CGBA_FM_LOAD_W; break;
+      case 3: out->kind = CGBA_FM_LOAD_B; break;
+      }
+    }
+    return 1;
+  }
+  if (hi >= 0x60u && hi <= 0x7Fu) {                  /* imm5 word/byte */
+    u32 imm5 = (opcode >> 6) & 0x1Fu;
+    u32 is_byte = (opcode >> 12) & 1u;
+    out->is_load = (int)((opcode >> 11) & 1u);
+    out->offset = imm5 << (is_byte ? 0 : 2);
+    out->kind = is_byte ? CGBA_FM_LOAD_B : CGBA_FM_LOAD_W;
+    return 1;
+  }
+  if (hi >= 0x80u && hi <= 0x8Fu) {                  /* imm5 halfword */
+    out->is_load = (int)((opcode >> 11) & 1u);
+    out->offset = ((opcode >> 6) & 0x1Fu) << 1;
+    out->kind = CGBA_FM_LOAD_UH;
+    return 1;
+  }
+  if (hi >= 0x90u && hi <= 0x9Fu) {                  /* SP-relative word */
+    out->is_load = (int)((opcode >> 11) & 1u);
+    out->rd = (opcode >> 8) & 7u;
+    out->rb = 13u;                                   /* REG_SP */
+    out->offset = (opcode & 0xFFu) << 2;
+    return 1;
+  }
+  return 0;
 }
+#endif
 
 /* Fast path for the hot Thumb shape:
  *   LDR rB, [pc, #literal]   ; rB = fixed IO / IWRAM / EWRAM address
  *   LDRH/LDRB/LDR rD, [rB, #offset]
  *
- * The generic native load is still correct, but it must call into the ILRAM
- * fastmem routine, probe region/alignment, and return via JMP. When translation
- * knows the effective address is aligned static IO/IWRAM/EWRAM, the host
- * pointer is permanent and the read emits directly with zero branches. Returns
- * the fixed non-sequential cycle debit (1 for IO/IWRAM, 3 or 6 for EWRAM) so
- * the caller folds it into block cycle_count without emitting an extra ADD. */
+ * When translation knows the effective address is aligned static IO/IWRAM/EWRAM,
+ * the host pointer is permanent and the read emits directly with zero branches.
+ * Returns the fixed non-sequential cycle debit (1 for IO/IWRAM, 3 or 6 for
+ * EWRAM) so the caller folds it into block cycle_count. */
 static inline int sh4g_thumb_ldst_const_native(u8 **tp, u32 opcode,
   u32 const_mask, const u32 const_val[16])
 {
@@ -41,119 +92,31 @@ static inline int sh4g_thumb_ldst_const_native(u8 **tp, u32 opcode,
   (void)const_val;
   return 0;
 #else
-  u32 hi = (opcode >> 8) & 0xFF;
-  u32 rd = opcode & 7, rb = (opcode >> 3) & 7;
-  u32 ro = 0, offset = 0, address, region;
-  int reg_offset = 0, kind = SH4_THUMB_LDK_W, align_mask = 3, is_load = 1;
-  uintptr_t host_addr;
+  sh4g_thumb_ldst_info d;
+  u32 address;
   int debit;
 
-  if (hi >= 0x50 && hi <= 0x5F) {
-    u32 op = (opcode >> 10) & 3;
-    ro = (opcode >> 6) & 7;
-    reg_offset = 1;
-    if (opcode & 0x0200) {
-      switch (op) {
-      case 0: kind = SH4_THUMB_LDK_UH; align_mask = 1; is_load = 0; break;
-      case 1: kind = SH4_THUMB_LDK_SB; align_mask = 0; break;
-      case 2: kind = SH4_THUMB_LDK_UH; align_mask = 1; break;
-      case 3: kind = SH4_THUMB_LDK_SH; align_mask = 1; break;
-      }
-    } else {
-      switch (op) {
-      case 0: kind = SH4_THUMB_LDK_W; align_mask = 3; is_load = 0; break;
-      case 1: kind = SH4_THUMB_LDK_B; align_mask = 0; is_load = 0; break;
-      case 2: kind = SH4_THUMB_LDK_W; align_mask = 3; break;
-      case 3: kind = SH4_THUMB_LDK_B; align_mask = 0; break;
-      }
-    }
-  } else if (hi >= 0x60 && hi <= 0x7F) {
-    u32 imm5 = (opcode >> 6) & 0x1F;
-    u32 is_byte = (opcode >> 12) & 1;
-    is_load = (opcode >> 11) & 1;
-    offset = imm5 << (is_byte ? 0 : 2);
-    kind = is_byte ? SH4_THUMB_LDK_B : SH4_THUMB_LDK_W;
-    align_mask = is_byte ? 0 : 3;
-  } else if (hi >= 0x80 && hi <= 0x8F) {
-    is_load = (opcode >> 11) & 1;
-    offset = ((opcode >> 6) & 0x1F) << 1;
-    kind = SH4_THUMB_LDK_UH;
-    align_mask = 1;
-  } else if (hi >= 0x90 && hi <= 0x9F) {
-    is_load = (opcode >> 11) & 1;
-    rd = (opcode >> 8) & 7;
-    rb = 13;
-    offset = (opcode & 0xFF) << 2;
-    kind = SH4_THUMB_LDK_W;
-    align_mask = 3;
-  } else {
+  if (!sh4g_thumb_ldst_decode(opcode, &d) || !d.is_load || d.pc_relative)
     return 0;
-  }
-
-  if (!is_load)
+  if (!(const_mask & (1u << d.rb)))
     return 0;
-  if (!(const_mask & (1u << rb)))
-    return 0;
-  if (reg_offset && !(const_mask & (1u << ro)))
+  if (d.reg_offset && !(const_mask & (1u << d.ro)))
     return 0;
 
-  address = const_val[rb] + offset + (reg_offset ? const_val[ro] : 0);
-  if (align_mask && (address & (u32)align_mask))
-    return 0;
-
-  region = address >> 24;
-  if (region == 0x03u) {
-    host_addr = (uintptr_t)(iwram + 0x8000u + (address & 0x7FFFu));
-    debit = 1;
-  } else if (region == 0x02u) {
-    host_addr = (uintptr_t)(ewram + (address & 0x3FFFFu));
-    debit = (kind == SH4_THUMB_LDK_W) ? 6 : 3;
-  } else if (region == 0x04u) {
-    host_addr = (uintptr_t)(((u8 *)io_registers) + (address & 0x3FFu));
-    debit = 1;
-  } else {
-    return 0;
-  }
-
+  address = const_val[d.rb] + d.offset + (d.reg_offset ? const_val[d.ro] : 0u);
+  debit = sh4g_emit_const_addr_load(tp, d.kind, address, d.rd);
 #if (defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)) && \
   CGBA_SH4_LDST_DETAIL_COUNTERS
-  sh4g_const(tp, (u32)(uintptr_t)&cgba_sh4_native_thumb_const_io_count,
-             SH4_REG_T0);
-  { sh4_codegen cg = sh4g_open(tp);
-    sh4_emit_mov_l_load(&cg, SH4_REG_T0, SH4_REG_T1);
-    sh4_emit_add_imm(&cg, 1, SH4_REG_T1);
-    sh4_emit_mov_l_store(&cg, SH4_REG_T1, SH4_REG_T0);
-    sh4g_close(tp, &cg); }
+  if (debit) {
+    sh4g_const(tp, (u32)(uintptr_t)&cgba_sh4_native_thumb_const_io_count,
+               SH4_REG_T0);
+    { sh4_codegen cg = sh4g_open(tp);
+      sh4_emit_mov_l_load(&cg, SH4_REG_T0, SH4_REG_T1);
+      sh4_emit_add_imm(&cg, 1, SH4_REG_T1);
+      sh4_emit_mov_l_store(&cg, SH4_REG_T1, SH4_REG_T0);
+      sh4g_close(tp, &cg); }
+  }
 #endif
-
-  sh4g_const(tp, (u32)host_addr, SH4_REG_T2);
-  { sh4_codegen cg = sh4g_open(tp);
-    switch (kind) {
-    case SH4_THUMB_LDK_W:
-      sh4_emit_mov_l_load(&cg, SH4_REG_T2, SH4_REG_T1);
-      sh4_emit_bswap32(&cg, SH4_REG_T1, SH4_REG_T1);
-      break;
-    case SH4_THUMB_LDK_B:
-      sh4_emit_mov_b_load(&cg, SH4_REG_T2, SH4_REG_T1);
-      sh4_emit_extu_b(&cg, SH4_REG_T1, SH4_REG_T1);
-      break;
-    case SH4_THUMB_LDK_UH:
-      sh4_emit_mov_w_load(&cg, SH4_REG_T2, SH4_REG_T1);
-      sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
-      sh4_emit_extu_w(&cg, SH4_REG_T1, SH4_REG_T1);
-      break;
-    case SH4_THUMB_LDK_SH:
-      sh4_emit_mov_w_load(&cg, SH4_REG_T2, SH4_REG_T1);
-      sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
-      sh4_emit_exts_w(&cg, SH4_REG_T1, SH4_REG_T1);
-      break;
-    default:
-      sh4_emit_mov_b_load(&cg, SH4_REG_T2, SH4_REG_T1);
-      break;
-    }
-    sh4_emit_store_greg(&cg, SH4_REG_T1, rd);
-    sh4g_close(tp, &cg); }
-
   return debit;
 #endif
 }
@@ -172,140 +135,52 @@ SH4G_NOINLINE int sh4g_thumb_ldst_native(u8 **tp, u32 opcode, u32 pc,
   (void)cycle_count;
   return 0;
 #else
-  u32 hi = (opcode >> 8) & 0xFF;
-  u32 rd = opcode & 7, rb = (opcode >> 3) & 7;
-  u32 offset = 0, ro = 0, reg_offset = 0;
-  int pc_relative = 0;
-  int kind = SH4_THUMB_LDK_W, is_load = 1;
+  sh4g_thumb_ldst_info d;
 
-  if (hi >= 0x48 && hi <= 0x4F) {                    /* LDR Rd,[PC,#imm8*4] */
-    rd = (opcode >> 8) & 7;
-    offset = (opcode & 0xFF) << 2;
-    pc_relative = 1;
-    kind = SH4_THUMB_LDK_W;
-  } else if (hi >= 0x50 && hi <= 0x5F) {             /* register-offset forms */
-    u32 op = (opcode >> 10) & 3;
-    ro = (opcode >> 6) & 7;
-    reg_offset = 1;
-    if (opcode & 0x0200) {                            /* format 8: H/S */
-      switch (op) {
-      case 0: kind = SH4_THUMB_LDK_UH; is_load = 0; break; /* STRH */
-      case 1: kind = SH4_THUMB_LDK_SB; break;              /* LDRSB */
-      case 2: kind = SH4_THUMB_LDK_UH; break;              /* LDRH */
-      case 3: kind = SH4_THUMB_LDK_SH; break;              /* LDRSH */
-      }
-    } else {                                          /* format 7: L/B */
-      switch (op) {
-      case 0: kind = SH4_THUMB_LDK_W; is_load = 0; break;  /* STR */
-      case 1: kind = SH4_THUMB_LDK_B; is_load = 0; break;  /* STRB */
-      case 2: kind = SH4_THUMB_LDK_W; break;               /* LDR */
-      case 3: kind = SH4_THUMB_LDK_B; break;               /* LDRB */
-      }
-    }
-  } else if (hi >= 0x60 && hi <= 0x7F) {             /* imm5 word/byte */
-    u32 imm5 = (opcode >> 6) & 0x1F;
-    u32 is_byte = (opcode >> 12) & 1;
-    is_load = (opcode >> 11) & 1;
-    offset = imm5 << (is_byte ? 0 : 2);
-    kind = is_byte ? SH4_THUMB_LDK_B : SH4_THUMB_LDK_W;
-  } else if (hi >= 0x80 && hi <= 0x8F) {             /* imm5 halfword */
-    is_load = (opcode >> 11) & 1;
-    offset = ((opcode >> 6) & 0x1F) << 1;
-    kind = SH4_THUMB_LDK_UH;
-  } else if (hi >= 0x90 && hi <= 0x9F) {             /* SP-relative word */
-    is_load = (opcode >> 11) & 1;
-    rd = (opcode >> 8) & 7;
-    rb = 13;                                         /* REG_SP */
-    offset = (opcode & 0xFF) << 2;
-    kind = SH4_THUMB_LDK_W;
-  } else {
+  if (!sh4g_thumb_ldst_decode(opcode, &d))
     return 0;
-  }
 
-  if (is_load && !pc_relative) {
-    uint16_t load_delay_op = 0x0009u;
-    if (reg_offset) {
+  if (d.is_load && !d.pc_relative) {
+    uint16_t load_delay_op;
+    if (d.reg_offset) {
       sh4_codegen cg = sh4g_open(tp);
-      sh4_emit_load_greg(&cg, rb, SH4_REG_T0);
-      sh4_emit_load_greg(&cg, ro, SH4_REG_T1);
+      sh4_emit_load_greg(&cg, d.rb, SH4_REG_T0);
+      sh4_emit_load_greg(&cg, d.ro, SH4_REG_T1);
       sh4g_close(tp, &cg);
       load_delay_op = 0x312Cu;                       /* ADD R2, R1 */
-    } else if (offset == 0u) {
-#if CGBA_SH4_REG_FORWARD
-      if (*tp == sh4_forward_at && rb == sh4_forward_guest) {
-        if (sh4_forward_host == SH4_REG_RET) {
-          sh4_codegen cg = sh4g_open(tp);
-          sh4_emit_load_greg(&cg, rb, SH4_REG_T0);
-          sh4g_close(tp, &cg);
-        } else if (sh4_forward_host == SH4_REG_T0) {
-          sh4_forward_at = NULL;
-        } else {
-          load_delay_op = (uint16_t)(0x6103u | (sh4_forward_host << 4));
-          sh4_forward_at = NULL;
-        }
-      } else
-#endif
-      {
-#if CGBA_SH4_PIN_GUEST_R0
-        if (rb == 0u)
-          load_delay_op = 0x61B3u;                   /* MOV R11, R1 */
-        else
-#endif
-#if CGBA_SH4_PIN_GUEST_R1
-        if (rb == 1u)
-          load_delay_op = 0x61C3u;                   /* MOV R12, R1 */
-        else
-#endif
-          load_delay_op = (uint16_t)(0x51E0u | (rb & 0xFu));
-      }
-    } else if (offset <= 127u) {
-      sh4_codegen cg = sh4g_open(tp);
-      sh4_emit_load_greg(&cg, rb, SH4_REG_T0);
-      sh4g_close(tp, &cg);
-      load_delay_op = (uint16_t)(0x7100u | (offset & 0xFFu));
-    } else if (offset <= 254u) {
-      sh4_codegen cg = sh4g_open(tp);
-      sh4_emit_load_greg(&cg, rb, SH4_REG_T0);
-      sh4_emit_add_imm(&cg, 127, SH4_REG_T0);
-      sh4g_close(tp, &cg);
-      load_delay_op = (uint16_t)(0x7100u | ((offset - 127u) & 0xFFu));
     } else {
-      { sh4_codegen cg = sh4g_open(tp);
-        sh4_emit_load_greg(&cg, rb, SH4_REG_T0);
-        sh4g_close(tp, &cg); }
-      sh4g_const(tp, offset, SH4_REG_T1);
-      load_delay_op = 0x312Cu;                       /* ADD R2, R1 */
+      load_delay_op = sh4g_emit_compact_load_delay_imm(tp, d.rb, (s32)d.offset);
     }
-    sh4g_fastmem_site_compact(tp, (int)kind,
+    sh4g_fastmem_site_compact(tp, d.kind,
                               (const void *)cgba_sh4_thumb_ldst, (u32)opcode,
-                              (u32)pc, cycle_count, rd, load_delay_op);
+                              (u32)pc, cycle_count, d.rd, load_delay_op);
     return 1;
   }
 
-  if (pc_relative) {
-    sh4g_const(tp, ((pc & ~2u) + 4u + offset), SH4_REG_T0);
+  if (d.pc_relative) {
+    sh4g_const(tp, ((pc & ~2u) + 4u + d.offset), SH4_REG_T0);
   } else {
     { sh4_codegen cg = sh4g_open(tp);
-      sh4_emit_load_greg(&cg, rb, SH4_REG_T0);       /* R1 = base */
+      sh4_emit_load_greg(&cg, d.rb, SH4_REG_T0);     /* R1 = base */
       sh4g_close(tp, &cg); }
-    if (reg_offset) {
+    if (d.reg_offset) {
       sh4_codegen cg = sh4g_open(tp);
-      sh4_emit_load_greg(&cg, ro, SH4_REG_T1);
+      sh4_emit_load_greg(&cg, d.ro, SH4_REG_T1);
       sh4_emit_add_reg(&cg, SH4_REG_T1, SH4_REG_T0); /* R1 = base + reg[ro] */
       sh4g_close(tp, &cg);
-    } else if (offset) {
-      if (offset <= 127u) {
+    } else if (d.offset) {
+      if (d.offset <= 127u) {
         sh4_codegen cg = sh4g_open(tp);
-        sh4_emit_add_imm(&cg, (int)offset, SH4_REG_T0); /* R1 = base + offset */
+        sh4_emit_add_imm(&cg, (int)d.offset, SH4_REG_T0);
         sh4g_close(tp, &cg);
-      } else if (offset <= 254u) {
+      } else if (d.offset <= 254u) {
         sh4_codegen cg = sh4g_open(tp);
         sh4_emit_add_imm(&cg, 127, SH4_REG_T0);
-        sh4_emit_add_imm(&cg, (int)(offset - 127u), SH4_REG_T0);
+        sh4_emit_add_imm(&cg, (int)(d.offset - 127u), SH4_REG_T0);
         sh4g_close(tp, &cg);
       } else {
-        sh4g_const(tp, offset, SH4_REG_T1);
-        sh4g_add_reg(tp, SH4_REG_T1, SH4_REG_T0);      /* R1 = base + offset */
+        sh4g_const(tp, d.offset, SH4_REG_T1);
+        sh4g_add_reg(tp, SH4_REG_T1, SH4_REG_T0);
       }
     }
   }
@@ -313,12 +188,12 @@ SH4G_NOINLINE int sh4g_thumb_ldst_native(u8 **tp, u32 opcode, u32 pc,
   /* Out-of-line fast path (see sh4_fastmem.h): shared routine + compact
    * site; guard failures fall to cgba_sh4_thumb_ldst via the tramp. */
   {
-    int fm = is_load ? (int)kind
-      : (kind == SH4_THUMB_LDK_W ? CGBA_FM_STORE_W
-         : kind == SH4_THUMB_LDK_UH ? CGBA_FM_STORE_UH : CGBA_FM_STORE_B);
+    int fm = d.is_load ? d.kind
+      : (d.kind == CGBA_FM_LOAD_W ? CGBA_FM_STORE_W
+         : d.kind == CGBA_FM_LOAD_UH ? CGBA_FM_STORE_UH : CGBA_FM_STORE_B);
     sh4g_fastmem_site(tp, fm,
                       (const void *)cgba_sh4_thumb_ldst, (u32)opcode, (u32)pc,
-                      cycle_count, rd, -1);
+                      cycle_count, d.rd, -1);
   }
   return 1;
 #endif
@@ -372,11 +247,11 @@ static inline int sh4g_thumb_ram_idx_load_native(u8 **tp, u32 op0, u32 op1,
   }
 
   if ((op1 & 0xF800u) == 0x7800u) {                  /* LDRB rD, [rA, #imm5] */
-    kind = SH4_THUMB_LDK_B; off = (op1 >> 6) & 31u; align = 0;
+    kind = CGBA_FM_LOAD_B; off = (op1 >> 6) & 31u; align = 0;
   } else if ((op1 & 0xF800u) == 0x8800u) {           /* LDRH rD, [rA, #imm5*2] */
-    kind = SH4_THUMB_LDK_UH; off = ((op1 >> 6) & 31u) << 1; align = 1;
+    kind = CGBA_FM_LOAD_UH; off = ((op1 >> 6) & 31u) << 1; align = 1;
   } else if ((op1 & 0xF800u) == 0x6800u) {           /* LDR rD, [rA, #imm5*4] */
-    kind = SH4_THUMB_LDK_W; off = ((op1 >> 6) & 31u) << 2; align = 3;
+    kind = CGBA_FM_LOAD_W; off = ((op1 >> 6) & 31u) << 2; align = 3;
   } else {
     return 0;
   }
@@ -395,7 +270,7 @@ static inline int sh4g_thumb_ram_idx_load_native(u8 **tp, u32 op0, u32 op1,
     if (base_off >= 0x40000u || base_off + off >= 0x40000u) return 0;
     limit = 0x40000u - (base_off + off);
     host_base = (u32)(uintptr_t)(ewram + base_off + off);
-    debit = (kind == SH4_THUMB_LDK_W) ? 6 : 3;
+    debit = (kind == CGBA_FM_LOAD_W) ? 6 : 3;
   } else {
     return 0;
   }
@@ -432,23 +307,9 @@ static inline int sh4g_thumb_ram_idx_load_native(u8 **tp, u32 op0, u32 op1,
   { sh4_codegen cg = sh4g_open(tp);
     unsigned dst = SH4_REG_T0;
     int pin = sh4_pinned_reg(rD);
-    if (pin >= 0 && kind != SH4_THUMB_LDK_W)
+    if (pin >= 0 && kind != CGBA_FM_LOAD_W)
       dst = (unsigned)pin;
-    switch (kind) {
-    case SH4_THUMB_LDK_B:
-      sh4_emit_mov_b_load_r0(&cg, SH4_REG_T2, dst);
-      sh4_emit_extu_b(&cg, dst, dst);
-      break;
-    case SH4_THUMB_LDK_UH:
-      sh4_emit_mov_w_load_r0(&cg, SH4_REG_T2, dst);
-      sh4_emit_swap_b(&cg, dst, dst);
-      sh4_emit_extu_w(&cg, dst, dst);
-      break;
-    default: /* SH4_THUMB_LDK_W */
-      sh4_emit_mov_l_load_r0(&cg, SH4_REG_T2, SH4_REG_T0);
-      sh4_emit_bswap32(&cg, SH4_REG_T0, SH4_REG_T0);
-      break;
-    }
+    sh4g_emit_host_load_r0(&cg, kind, SH4_REG_T2, dst);
     if (dst == SH4_REG_T0)
       sh4_emit_store_greg(&cg, SH4_REG_T0, rD);
     sh4g_close(tp, &cg); }
@@ -583,11 +444,9 @@ static inline int sh4g_thumb_strh_stride_run_native(u8 **tp, const u32 *ops,
  * (`0x6000..0x8FFF`: LDR/STR, LDRB/STRB, LDRH/STRH [rB, #imm]).
  * Validates canonical aligned IWRAM rB + range + SMC tags ONCE (with fast
  * cgba_iwram_code_end bypass), eliminates dead IWRAM loads overwritten later in
- * the same run, runs all accesses inline (2..6 insns each), and debits cnt
- * IWRAM cycles once. For cnt<=3 fallback emits fastmem sites (keeping ROM/EWRAM
- * Fast path guards canonical IWRAM + alignment + SMC once, then executes direct
- * host transfers (zero JSR overhead). On miss, emits compact8+OOL fastmem sites
- * so EWRAM/VRAM/IO stay on native fastmem instead of C interp. */
+ * the same run, runs all accesses inline (zero JSR overhead), and debits cnt
+ * IWRAM cycles once. On miss, emits compact8+OOL fastmem sites so EWRAM/VRAM/IO
+ * stay on native fastmem instead of C interp. */
 static inline int sh4g_thumb_base_run_native(u8 **tp, const u32 *ops,
   const int *ccs, int cnt, u32 pc)
 {

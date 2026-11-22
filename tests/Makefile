@@ -28,10 +28,12 @@ all: smoke core litpool thumb cond native-ldst rtc pacing backup-dirty nor-world
 # Execution oracle: run emitted native code in a mini SH4 interpreter against
 # the C-helper semantics (closes the pixel-soak blind spot on the audio path).
 exec: $(ROOT)/tests/sh4_exec_oracle.c $(ROOT)/ports/fxcg100/sh4/sh4_thumb_dp_emit.h \
+      $(ROOT)/ports/fxcg100/sh4/sh4_arm_psr_emit.h \
       $(ROOT)/ports/fxcg100/sh4/sh4_thumb_ldst_emit.h \
       $(ROOT)/ports/fxcg100/sh4/sh4_arm_dp_emit.h \
       $(ROOT)/ports/fxcg100/sh4/sh4_arm_mul_emit.h \
       $(ROOT)/ports/fxcg100/sh4/sh4_arm_block_emit.h \
+      $(ROOT)/ports/fxcg100/sh4/sh4_iwram_mixer_skip.h \
       $(ROOT)/ports/fxcg100/sh4/sh4_bbra_emit.h \
       $(ROOT)/ports/fxcg100/sh4/sh4_emit_glue.h $(ROOT)/ports/fxcg100/sh4/sh4_fastmem.h \
       $(ROOT)/ports/fxcg100/sh4/sh4_fastmem_emit.h
@@ -282,6 +284,7 @@ cond: $(ROOT)/tests/sh4_cond_audit.c $(ROOT)/ports/fxcg100/sh4/sh4_emit_glue.h \
 native-ldst: $(ROOT)/tests/sh4_native_ldst_audit.c \
 	      $(ROOT)/ports/fxcg100/sh4/sh4_arm_ldst_emit.h \
 	      $(ROOT)/ports/fxcg100/sh4/sh4_arm_block_emit.h \
+      $(ROOT)/ports/fxcg100/sh4/sh4_iwram_mixer_skip.h \
 	      $(ROOT)/ports/fxcg100/sh4/sh4_thumb_dp_emit.h \
 	      $(ROOT)/ports/fxcg100/sh4/sh4_thumb_ldst_emit.h \
 	      $(ROOT)/ports/fxcg100/sh4/sh4_arm_dp_emit.h \

@@ -183,6 +183,8 @@ static inline void sh4g_thumb_bbra_const_step(u32 op, u32 *cmask, u32 cval[16])
     }
   } else if (hi >= 0x40u && hi <= 0x43u) {    /* ALU reg-reg */
     unsigned alu = (op >> 6) & 0xFu, rs = (op >> 3) & 7u, rd = op & 7u;
+    if (alu == 0x8u || alu == 0xAu || alu == 0xBu)
+      return;                                 /* TST/CMP/CMN do not write rd */
     if ((m & (1u << rs)) && (alu == 0x9u || alu == 0xFu || (m & (1u << rd)))) {
       u32 a = cval[rd], b = cval[rs];
       switch (alu) {
@@ -192,7 +194,8 @@ static inline void sh4g_thumb_bbra_const_step(u32 op, u32 *cmask, u32 cval[16])
       case 0xCu: cval[rd] = a | b; break;
       case 0xDu: cval[rd] = a * b; break;
       case 0xEu: cval[rd] = a & ~b; break;
-      default:   cval[rd] = ~b; break;        /* 0xF MVN */
+      case 0xFu: cval[rd] = ~b; break;
+      default:   *cmask = m & ~(1u << rd); return; /* ADC/SBC/shifts */
       }
       *cmask = m | (1u << rd);
     } else {
@@ -201,7 +204,9 @@ static inline void sh4g_thumb_bbra_const_step(u32 op, u32 *cmask, u32 cval[16])
   } else if (hi == 0x44u || hi == 0x46u) {    /* ADD/MOV Hd, Hm */
     unsigned rd = (op & 7u) | ((op >> 4) & 8u);
     unsigned rs = (op >> 3) & 0xFu;
-    if (hi == 0x46u) {
+    if (rd == 15u) {
+      *cmask = 0u;
+    } else if (hi == 0x46u) {
       if (m & (1u << rs)) { cval[rd] = cval[rs]; *cmask = m | (1u << rd); }
       else                { *cmask = m & ~(1u << rd); }
     } else if ((m & (1u << rd)) && (m & (1u << rs))) {
@@ -340,41 +345,7 @@ SH4G_NOINLINE int sh4g_thumb_alu_run_native_const(u8 **tp, const u16 *ops,
         unsigned r_src = BBRA_GET_SRC(&cg, rm, SH4_REG_T0);
         if (r_src != r_dst)
           sh4_emit_mov_reg(&cg, r_src, r_dst);
-        if (sub == 0u) {
-          switch (imm5) {
-          case 0: break;
-          case 1: sh4_emit_shll(&cg, r_dst); break;
-          case 2: sh4_emit_shll2(&cg, r_dst); break;
-          case 8: sh4_emit_shll8(&cg, r_dst); break;
-          case 16: sh4_emit_shll16(&cg, r_dst); break;
-          default:
-            sh4_emit_mov_imm(&cg, (int)imm5, SH4_REG_RET);
-            sh4_emit_shld(&cg, SH4_REG_RET, r_dst);
-            break;
-          }
-        } else if (sub == 1u) {
-          switch (imm5) {
-          case 1: sh4_emit_shlr(&cg, r_dst); break;
-          case 2: sh4_emit_shlr2(&cg, r_dst); break;
-          case 8: sh4_emit_shlr8(&cg, r_dst); break;
-          case 16: sh4_emit_shlr16(&cg, r_dst); break;
-          default:
-            sh4_emit_mov_imm(&cg, -(int)imm5, SH4_REG_RET);
-            sh4_emit_shld(&cg, SH4_REG_RET, r_dst);
-            break;
-          }
-        } else {                              /* ASR */
-          if (imm5 == 0u) {
-            sh4_emit_mov_imm(&cg, -31, SH4_REG_RET);
-            sh4_emit_shad(&cg, SH4_REG_RET, r_dst);
-            sh4_emit_shar(&cg, r_dst);
-          } else if (imm5 == 1u) {
-            sh4_emit_shar(&cg, r_dst);
-          } else {
-            sh4_emit_mov_imm(&cg, -(int)imm5, SH4_REG_RET);
-            sh4_emit_shad(&cg, SH4_REG_RET, r_dst);
-          }
-        }
+        sh4g_emit_shift_imm(&cg, sub, imm5, r_dst, NULL);
       }
       BBRA_COMMIT_DST(&cg, rd, r_dst);
       sh4g_close(tp, &cg);
@@ -547,14 +518,6 @@ SH4G_NOINLINE int sh4g_thumb_alu_run_native_const(u8 **tp, const u16 *ops,
   return 1;
 }
 
-static inline int sh4g_thumb_alu_run_native_ex(u8 **tp, const u16 *ops,
-                                               const u32 *rm_in, const u32 *wm_in,
-                                               int len, u32 *written_mask_out)
-{
-  return sh4g_thumb_alu_run_native_const(tp, ops, rm_in, wm_in, len,
-                                         written_mask_out, NULL, NULL);
-}
-
 static inline int sh4g_thumb_alu_run_native(u8 **tp, const u16 *ops, int len,
                                             u32 *written_mask_out)
 {
@@ -632,57 +595,8 @@ static inline void sh4g_bbra_emit_arm_shift(sh4_codegen *cg, unsigned sh_type,
 {
   if (r_in != r_out)
     sh4_emit_mov_reg(cg, r_in, r_out);
-  if (sh_imm == 0u)
-    return;
-  if (sh_type == 0u) {
-    switch (sh_imm) {
-    case 1:  sh4_emit_shll(cg, r_out); return;
-    case 2:  sh4_emit_shll2(cg, r_out); return;
-    case 3:  sh4_emit_shll2(cg, r_out); sh4_emit_shll(cg, r_out); return;
-    case 4:  sh4_emit_shll2(cg, r_out); sh4_emit_shll2(cg, r_out); return;
-    case 8:  sh4_emit_shll8(cg, r_out); return;
-    case 9:  sh4_emit_shll8(cg, r_out); sh4_emit_shll(cg, r_out); return;
-    case 10: sh4_emit_shll8(cg, r_out); sh4_emit_shll2(cg, r_out); return;
-    case 16: sh4_emit_shll16(cg, r_out); return;
-    case 17: sh4_emit_shll16(cg, r_out); sh4_emit_shll(cg, r_out); return;
-    case 18: sh4_emit_shll16(cg, r_out); sh4_emit_shll2(cg, r_out); return;
-    case 24: sh4_emit_shll16(cg, r_out); sh4_emit_shll8(cg, r_out); return;
-    default: break;
-    }
-    if (*cached_sh != (int)sh_imm) {
-      sh4_emit_mov_imm(cg, (int)sh_imm, SH4_REG_RET);
-      *cached_sh = (int)sh_imm;
-    }
-    sh4_emit_shld(cg, SH4_REG_RET, r_out);
-  } else if (sh_type == 1u) {
-    switch (sh_imm) {
-    case 1:  sh4_emit_shlr(cg, r_out); return;
-    case 2:  sh4_emit_shlr2(cg, r_out); return;
-    case 3:  sh4_emit_shlr2(cg, r_out); sh4_emit_shlr(cg, r_out); return;
-    case 4:  sh4_emit_shlr2(cg, r_out); sh4_emit_shlr2(cg, r_out); return;
-    case 8:  sh4_emit_shlr8(cg, r_out); return;
-    case 9:  sh4_emit_shlr8(cg, r_out); sh4_emit_shlr(cg, r_out); return;
-    case 10: sh4_emit_shlr8(cg, r_out); sh4_emit_shlr2(cg, r_out); return;
-    case 16: sh4_emit_shlr16(cg, r_out); return;
-    case 17: sh4_emit_shlr16(cg, r_out); sh4_emit_shlr(cg, r_out); return;
-    case 18: sh4_emit_shlr16(cg, r_out); sh4_emit_shlr2(cg, r_out); return;
-    case 24: sh4_emit_shlr16(cg, r_out); sh4_emit_shlr8(cg, r_out); return;
-    default: break;
-    }
-    if (*cached_sh != -(int)sh_imm) {
-      sh4_emit_mov_imm(cg, -(int)sh_imm, SH4_REG_RET);
-      *cached_sh = -(int)sh_imm;
-    }
-    sh4_emit_shld(cg, SH4_REG_RET, r_out);
-  } else { /* ASR */
-    if (sh_imm == 1u) { sh4_emit_shar(cg, r_out); return; }
-    if (sh_imm == 2u) { sh4_emit_shar(cg, r_out); sh4_emit_shar(cg, r_out); return; }
-    if (*cached_sh != -(int)sh_imm) {
-      sh4_emit_mov_imm(cg, -(int)sh_imm, SH4_REG_RET);
-      *cached_sh = -(int)sh_imm;
-    }
-    sh4_emit_shad(cg, SH4_REG_RET, r_out);
-  }
+  if (sh_imm != 0u)
+    sh4g_emit_shift_imm(cg, sh_type, sh_imm, r_out, cached_sh);
 }
 
 SH4G_NOINLINE int sh4g_arm_alu_run_native_ex(u8 **tp, const u32 *ops,

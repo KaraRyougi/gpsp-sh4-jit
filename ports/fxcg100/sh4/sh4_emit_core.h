@@ -64,9 +64,6 @@
 #define SH4_REG_ARG1      5
 #define SH4_REG_ARG2      6
 #define SH4_REG_ARG3      7
-#if !CGBA_SH4_PIN_GUEST_R1
-#define SH4_REG_FM_REGION 12   /* fastmem-only preserved region / tramp cursor */
-#endif
 
 static inline int sh4_pinned_reg(unsigned idx)
 {
@@ -80,18 +77,12 @@ static inline int sh4_pinned_reg(unsigned idx)
 }
 
 /* ---- guest reg[] indices (mirror of vendor/gpsp/cpu.h ext_reg_numbers) ---- */
-#define SH4_GREG_SP        13
-#define SH4_GREG_LR        14
-#define SH4_GREG_PC        15
-#define SH4_GREG_CPSR      16
-#define SH4_GREG_CPU_MODE  17
-#define SH4_GREG_HALT      18
-#define SH4_GREG_N_FLAG    20
-#define SH4_GREG_Z_FLAG    21
-#define SH4_GREG_C_FLAG    22
-#define SH4_GREG_V_FLAG    23
+#define SH4_GREG_SP          13
+#define SH4_GREG_LR          14
+#define SH4_GREG_PC          15
+#define SH4_GREG_CPSR        16
+#define SH4_GREG_CPU_MODE    17
 #define SH4_GREG_OAM_UPDATED 25
-#define SH4_GREG_SAVE      26
 
 /* ---- literal pool ---- */
 

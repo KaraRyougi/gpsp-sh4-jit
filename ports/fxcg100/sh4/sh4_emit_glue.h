@@ -12,9 +12,9 @@
  * ones, each re-reading *tp.
  *
  * CURRENT MODEL:
- *   - Guest ARM r0 is resident in SH-4 R11 and CPSR in R8 while translated
- *     code runs; the assembly funnels synchronize both around C boundaries.
- *     Other guest registers live in reg[].
+ *   - Guest ARM r0 is resident in SH-4 R11, r1 in R12, and CPSR in R8 while
+ *     translated code runs; the assembly funnels synchronize all three around
+ *     C boundaries. Other guest registers live in reg[].
  *   - NZCV are materialized in the cached CPSR, with per-instruction liveness
  *     allowing dead flag work to be omitted.
  *   - Large 32-bit constants use bounded, forward segmented literal pools while
@@ -25,9 +25,8 @@
  *     cases retain compact C-helper fallbacks.
  *
  * Host register model (mirrors sh4_emit_core.h): R14 = reg[] base, R13 = cycle
- * counter, R11 = guest r0, R10 = block exit, R9 = vector table, R8 = CPSR;
- * R0 = scratch/C return, R1..R3 = scratch, R4..R7 = C args. R12 is reserved
- * for resident fastmem/trampoline state.
+ * counter, R12 = guest r1, R11 = guest r0, R10 = block exit, R9 = vector table,
+ * R8 = CPSR; R0 = scratch/C return, R1..R3 = scratch, R4..R7 = C args.
  */
 
 #include "ports/fxcg100/sh4/sh4_codegen.h"
@@ -481,8 +480,6 @@ static inline void sh4g_add_reg(u8 **tp, unsigned rm, unsigned rn)
 { sh4_codegen cg = sh4g_open(tp); sh4_emit_add_reg(&cg, rm, rn); sh4g_close(tp, &cg); }
 static inline void sh4g_sub_reg(u8 **tp, unsigned rm, unsigned rn)
 { sh4_codegen cg = sh4g_open(tp); sh4_emit_sub(&cg, rm, rn); sh4g_close(tp, &cg); }
-static inline void sh4g_mov_reg(u8 **tp, unsigned rm, unsigned rn)
-{ sh4_codegen cg = sh4g_open(tp); sh4_emit_mov_reg(&cg, rm, rn); sh4g_close(tp, &cg); }
 
 /* ---- guest reg[] access -------------------------------------------------- */
 
@@ -500,34 +497,7 @@ static inline void sh4g_store_greg(u8 **tp, unsigned rn, unsigned idx)
   sh4g_close(tp, &cg);
 }
 
-/* ---- far call / jump via inline literal ---------------------------------- */
-
-/* JSR @literal(fn) then return: literal is skipped on return via BRA. */
-static inline void sh4g_far_call(u8 **tp, const void *fn)
-{
-  u8 *load = *tp, *lit;
-  SH4G_EMSTAT(cgba_em_fcall_n++);
-  long ld_disp, bra_disp;
-
-  /* MOV.L(2) JSR(2) NOP(2) BRA(2) NOP(2) [pad] .long ; 9: */
-  lit = (u8 *)(((uintptr_t)(load + 10) + 3u) & ~(uintptr_t)3u);
-
-  ld_disp = ((long)lit - (((long)load & ~3L) + 4)) / 4;
-  sh4g_u16(tp, (uint16_t)(0xD000 | (SH4_REG_RET << 8) | (ld_disp & 0xFF))); /* MOV.L @(d,PC),R0 */
-  sh4g_u16(tp, (uint16_t)(0x400B | (SH4_REG_RET << 8)));                    /* JSR @R0 */
-  sh4g_u16(tp, 0x0009);                                                     /* NOP (delay) */
-  bra_disp = ((long)(lit + 4) - ((long)(*tp) + 4)) / 2;
-  sh4g_u16(tp, (uint16_t)(0xA000 | (bra_disp & 0x0FFF)));                   /* BRA 9f */
-  sh4g_u16(tp, 0x0009);                                                     /* NOP (delay) */
-  while (*tp < lit)
-    sh4g_u16(tp, 0x0009);
-  {
-    sh4_codegen cg = sh4g_open(tp);
-    sh4_emit_u32_be(&cg, (uint32_t)(uintptr_t)fn);
-    sh4g_close(tp, &cg);
-  }
-  SH4G_EMSTAT(cgba_em_fcall_bytes += (unsigned long)(*tp - load));
-}
+/* ---- far jump via inline literal ----------------------------------------- */
 
 /* JMP @literal(fn), no return; literal sits after the (taken) JMP. */
 static inline void sh4g_far_jmp(u8 **tp, const void *fn)
@@ -710,13 +680,11 @@ static inline void sh4g_set_nz_m(u8 **tp, unsigned result, u32 mask)
 /* ---- data-processing core ------------------------------------------------ */
 
 enum {
-  SH4DP_AND, SH4DP_ORR, SH4DP_EOR, SH4DP_BIC, SH4DP_ADD, SH4DP_SUB,
-  SH4DP_RSB, SH4DP_MOV, SH4DP_MVN, SH4DP_NEG, SH4DP_ADC, SH4DP_SBC,
-  SH4DP_RSC, SH4DP_CMP, SH4DP_CMN, SH4DP_TST, SH4DP_TEQ, SH4DP_MUL
+  SH4DP_AND, SH4DP_ORR, SH4DP_EOR, SH4DP_BIC,
+  SH4DP_MOV, SH4DP_MVN, SH4DP_TST, SH4DP_MUL
 };
 
-/* Compute (op of Rn-value, second) into R1 (result). first in R1, second in R2.
- * C/V are not produced (bring-up). */
+/* Compute logical/unary/mul op of (first in R1, second in R2) into R1. */
 static inline void sh4g_dp_compute(sh4_codegen *cg, int op)
 {
   const unsigned a = SH4_REG_T0; /* R1 = first / result */
@@ -725,19 +693,11 @@ static inline void sh4g_dp_compute(sh4_codegen *cg, int op)
   switch (op) {
   case SH4DP_AND: case SH4DP_TST: sh4_emit_and(cg, b, a); break;
   case SH4DP_ORR:                 sh4_emit_or(cg, b, a);  break;
-  case SH4DP_EOR: case SH4DP_TEQ: sh4_emit_xor(cg, b, a); break;
+  case SH4DP_EOR:                 sh4_emit_xor(cg, b, a); break;
   case SH4DP_BIC: sh4_emit_not(cg, b, b); sh4_emit_and(cg, b, a); break;
-  case SH4DP_ADD: case SH4DP_CMN: case SH4DP_ADC:
-                  sh4_emit_add_reg(cg, b, a); break;
-  case SH4DP_SUB: case SH4DP_CMP: case SH4DP_SBC:
-                  sh4_emit_sub(cg, b, a); break;       /* a = a - b */
-  case SH4DP_RSB: case SH4DP_RSC:
-                  sh4_emit_sub(cg, a, b);              /* b = b - a */
-                  sh4_emit_mov_reg(cg, b, a); break;   /* result in a */
   case SH4DP_MUL: sh4_emit_mul_l(cg, b, a); sh4_emit_sts_macl(cg, a); break;
   case SH4DP_MOV: sh4_emit_mov_reg(cg, b, a); break;   /* result = second */
   case SH4DP_MVN: sh4_emit_not(cg, b, a); break;       /* result = ~second */
-  case SH4DP_NEG: sh4_emit_neg(cg, b, a); break;       /* result = -second */
   default: break;
   }
 }
@@ -745,8 +705,126 @@ static inline void sh4g_dp_compute(sh4_codegen *cg, int op)
 /* ---- shifts (LSL/LSR/ASR/ROR by imm or reg) ------------------------------ */
 enum { SH4SH_LSL, SH4SH_LSR, SH4SH_ASR, SH4SH_ROR };
 
+/* Unified immediate shift in place on `dst`. `type`: 0=LSL 1=LSR 2=ASR 3=ROR
+ * (ROR requires amount 1..31; RRX #0 excluded). For LSR/ASR, amount == 0 means
+ * shift by 32. Uses 1-2 cycle SH-4 fixed shifts for common amounts; otherwise
+ * loads the shift count into R0 (reusing *cached_sh when non-NULL). For ROR
+ * with amount != 16, SH4_REG_T2 (R3) is used as a scratch register. */
+static inline void sh4g_emit_shift_imm(sh4_codegen *cg, unsigned type,
+                                       unsigned amount, unsigned dst,
+                                       int *cached_sh)
+{
+  if (type == SH4SH_LSL) {
+    switch (amount) {
+    case 0:  return;
+    case 1:  sh4_emit_shll(cg, dst); return;
+    case 2:  sh4_emit_shll2(cg, dst); return;
+    case 3:  sh4_emit_shll2(cg, dst); sh4_emit_shll(cg, dst); return;
+    case 4:  sh4_emit_shll2(cg, dst); sh4_emit_shll2(cg, dst); return;
+    case 8:  sh4_emit_shll8(cg, dst); return;
+    case 9:  sh4_emit_shll8(cg, dst); sh4_emit_shll(cg, dst); return;
+    case 10: sh4_emit_shll8(cg, dst); sh4_emit_shll2(cg, dst); return;
+    case 16: sh4_emit_shll16(cg, dst); return;
+    case 17: sh4_emit_shll16(cg, dst); sh4_emit_shll(cg, dst); return;
+    case 18: sh4_emit_shll16(cg, dst); sh4_emit_shll2(cg, dst); return;
+    case 24: sh4_emit_shll16(cg, dst); sh4_emit_shll8(cg, dst); return;
+    default: break;
+    }
+    if (!cached_sh || *cached_sh != (int)amount) {
+      sh4_emit_mov_imm(cg, (int)amount, SH4_REG_RET);
+      if (cached_sh) *cached_sh = (int)amount;
+    }
+    sh4_emit_shld(cg, SH4_REG_RET, dst);
+  } else if (type == SH4SH_LSR) {
+    switch (amount) {
+    case 0:  sh4_emit_mov_imm(cg, 0, dst); return;
+    case 1:  sh4_emit_shlr(cg, dst); return;
+    case 2:  sh4_emit_shlr2(cg, dst); return;
+    case 3:  sh4_emit_shlr2(cg, dst); sh4_emit_shlr(cg, dst); return;
+    case 4:  sh4_emit_shlr2(cg, dst); sh4_emit_shlr2(cg, dst); return;
+    case 8:  sh4_emit_shlr8(cg, dst); return;
+    case 9:  sh4_emit_shlr8(cg, dst); sh4_emit_shlr(cg, dst); return;
+    case 10: sh4_emit_shlr8(cg, dst); sh4_emit_shlr2(cg, dst); return;
+    case 16: sh4_emit_shlr16(cg, dst); return;
+    case 17: sh4_emit_shlr16(cg, dst); sh4_emit_shlr(cg, dst); return;
+    case 18: sh4_emit_shlr16(cg, dst); sh4_emit_shlr2(cg, dst); return;
+    case 24: sh4_emit_shlr16(cg, dst); sh4_emit_shlr8(cg, dst); return;
+    default: break;
+    }
+    if (!cached_sh || *cached_sh != -(int)amount) {
+      sh4_emit_mov_imm(cg, -(int)amount, SH4_REG_RET);
+      if (cached_sh) *cached_sh = -(int)amount;
+    }
+    sh4_emit_shld(cg, SH4_REG_RET, dst);
+  } else if (type == SH4SH_ASR) {
+    int sh;
+    if (amount == 1u) { sh4_emit_shar(cg, dst); return; }
+    if (amount == 2u) { sh4_emit_shar(cg, dst); sh4_emit_shar(cg, dst); return; }
+    sh = (amount == 0u) ? -31 : -(int)amount;
+    if (!cached_sh || *cached_sh != sh) {
+      sh4_emit_mov_imm(cg, sh, SH4_REG_RET);
+      if (cached_sh) *cached_sh = sh;
+    }
+    sh4_emit_shad(cg, SH4_REG_RET, dst);
+  } else if (amount == 16u) {
+    sh4_emit_swap_w(cg, dst, dst);
+  } else if (amount == 8u) {
+    sh4_emit_mov_reg(cg, dst, SH4_REG_T2);
+    sh4_emit_shlr8(cg, dst);
+    sh4_emit_shll16(cg, SH4_REG_T2);
+    sh4_emit_shll8(cg, SH4_REG_T2);
+    sh4_emit_or(cg, SH4_REG_T2, dst);
+  } else if (amount == 24u) {
+    sh4_emit_mov_reg(cg, dst, SH4_REG_T2);
+    sh4_emit_shll8(cg, dst);
+    sh4_emit_shlr16(cg, SH4_REG_T2);
+    sh4_emit_shlr8(cg, SH4_REG_T2);
+    sh4_emit_or(cg, SH4_REG_T2, dst);
+  } else {
+    sh4_emit_mov_reg(cg, dst, SH4_REG_T2);
+    sh4_emit_mov_imm(cg, -(int)amount, SH4_REG_RET);
+    sh4_emit_shld(cg, SH4_REG_RET, dst);
+    sh4_emit_mov_imm(cg, (int)(32u - amount), SH4_REG_RET);
+    sh4_emit_shld(cg, SH4_REG_RET, SH4_REG_T2);
+    sh4_emit_or(cg, SH4_REG_T2, dst);
+    if (cached_sh) *cached_sh = (int)(32u - amount);
+  }
+}
+
+/* Extract the shifter carry-out (0 or 1) for immediate shift (type, amount)
+ * from the unshifted `src` value (or from `shifted` for ROR #1..31) into `dst`.
+ * Caller ensures (type != LSL || amount != 0). Clobbers R0 and `dst`. */
+static inline void sh4g_emit_shift_imm_carry(sh4_codegen *cg, unsigned type,
+                                             unsigned amount, unsigned src,
+                                             unsigned shifted, unsigned dst)
+{
+  if (type == SH4SH_ROR) {
+    /* ROR #n (n=1..31): carry = bit(n-1) of src == bit31 of shifted result. */
+    sh4_emit_mov_reg(cg, shifted, dst);
+    sh4_emit_shll(cg, dst);
+    sh4_emit_movt(cg, dst);
+  } else if (amount == 0u || (type == SH4SH_LSL && amount == 1u)) {
+    /* LSR#32, ASR#32, LSL#1: carry = bit31 of src. */
+    if (src != dst) sh4_emit_mov_reg(cg, src, dst);
+    sh4_emit_shll(cg, dst);
+    sh4_emit_movt(cg, dst);
+  } else if (type != SH4SH_LSL && amount == 1u) {
+    /* LSR#1, ASR#1: carry = bit0 of src. */
+    if (src != dst) sh4_emit_mov_reg(cg, src, dst);
+    sh4_emit_shlr(cg, dst);
+    sh4_emit_movt(cg, dst);
+  } else {
+    int cshift = (type == SH4SH_LSL) ? -(int)(32u - amount) : -(int)(amount - 1u);
+    if (src != dst) sh4_emit_mov_reg(cg, src, dst);
+    sh4_emit_mov_imm(cg, cshift, SH4_REG_RET);
+    sh4_emit_shld(cg, SH4_REG_RET, dst);
+    sh4_emit_shlr(cg, dst);
+    sh4_emit_movt(cg, dst);
+  }
+}
+
 /* fmask = live-flag mask (N=8 Z=4 C=2 V=1); the shifter carry is computed only
- * when C is live, which drops 6 instructions from the common dead-flag case. */
+ * when C is live, which drops the carry instructions from dead-flag shifts. */
 static inline void sh4g_shift_imm(u8 **tp, int kind, unsigned rd, unsigned rs,
                                   unsigned imm5, u32 fmask)
 {
@@ -755,78 +833,40 @@ static inline void sh4g_shift_imm(u8 **tp, int kind, unsigned rd, unsigned rs,
   int preserves_c = (kind == SH4SH_LSL && imm5 == 0);
   int want_c = (fmask & 0x2) && !preserves_c;
   sh4_emit_load_greg(&cg, rs, SH4_REG_T0);
-  if (imm5 != 0) {
-    if (want_c) {
-      sh4_emit_mov_reg(&cg, SH4_REG_T0, carry);
-      sh4_emit_mov_imm(&cg,
-        (kind == SH4SH_LSL) ? -(int)(32 - imm5) : -(int)(imm5 - 1),
-        SH4_REG_RET);
-      sh4_emit_shld(&cg, SH4_REG_RET, carry);
-      sh4_emit_mov_reg(&cg, carry, SH4_REG_RET);
-      sh4_emit_and_imm(&cg, 1);
-      sh4_emit_mov_reg(&cg, SH4_REG_RET, carry);
-    }
-    sh4_emit_mov_imm(&cg, (kind == SH4SH_LSL) ? (int)imm5 : -(int)imm5,
-      SH4_REG_RET);
-    if (kind == SH4SH_ASR)
-      sh4_emit_shad(&cg, SH4_REG_RET, SH4_REG_T0);
-    else                                              /* LSL / LSR */
-      sh4_emit_shld(&cg, SH4_REG_RET, SH4_REG_T0);
-  } else if (kind == SH4SH_LSR) {
-    /* Thumb LSR #0 means LSR #32 -> result is 0. */
-    if (want_c) {
-      sh4_emit_mov_reg(&cg, SH4_REG_T0, carry);
-      sh4_emit_shll(&cg, carry);
-      sh4_emit_movt(&cg, carry);
-    }
-    sh4_emit_mov_imm(&cg, 0, SH4_REG_T0);
-  } else if (kind == SH4SH_ASR) {
-    /* Thumb ASR #0 means ASR #32 -> sign extension (0 or -1). */
-    if (want_c) {
-      sh4_emit_mov_reg(&cg, SH4_REG_T0, carry);
-      sh4_emit_shll(&cg, carry);
-      sh4_emit_movt(&cg, carry);
-    }
-    sh4_emit_mov_imm(&cg, -31, SH4_REG_RET);
-    sh4_emit_shad(&cg, SH4_REG_RET, SH4_REG_T0);
-  }                                                   /* LSL #0 is a no-op */
+  if (want_c)
+    sh4g_emit_shift_imm_carry(&cg, (unsigned)kind, imm5, SH4_REG_T0,
+                              SH4_REG_T0, carry);
+  sh4g_emit_shift_imm(&cg, (unsigned)kind, imm5, SH4_REG_T0, NULL);
   sh4_emit_store_greg(&cg, SH4_REG_T0, rd);
   sh4g_close(tp, &cg);
   sh4g_set_flags(tp, SH4_REG_T0, carry, carry,
                  sh4g_flags_round(fmask & (want_c ? 0xE : 0xC)));
 }
 
-/* Register-amount shifts (LSL/LSR/ASR/ROR Rd,Rs) are routed to a C helper
- * (cgba_sh4_thumb_shift_reg): SH4 SHLD/SHAD only use the low 5 bits + sign of
- * the count, and ROR is not a logical shift, so the full ARM semantics + carry
- * cannot be expressed by a single SH4 op. */
-
 /* ---- cycle counter ------------------------------------------------------- */
 
-static inline void sh4g_cycle_debit(u8 **tp, int n)
+static inline void sh4g_cycle_debit_reg(u8 **tp, int n, unsigned tmp_reg)
 {
   if (n == 0)
     return;
   if (n >= -128 && n <= 127) {
     sh4g_u16(tp, (uint16_t)(0x7000 | (SH4_REG_CYCLES << 8) | ((-n) & 0xFF))); /* ADD #-n */
   } else {
-    sh4g_const(tp, (uint32_t)(-n), SH4_REG_T0);
-    sh4g_u16(tp, (uint16_t)(0x300C | (SH4_REG_CYCLES << 8) | (SH4_REG_T0 << 4))); /* ADD R1 */
+    sh4g_const(tp, (uint32_t)(-n), tmp_reg);
+    sh4g_u16(tp, (uint16_t)(0x300C | (SH4_REG_CYCLES << 8) | (tmp_reg << 4))); /* ADD tmp_reg */
   }
+}
+
+static inline void sh4g_cycle_debit(u8 **tp, int n)
+{
+  sh4g_cycle_debit_reg(tp, n, SH4_REG_T0);
 }
 
 /* Same as sh4g_cycle_debit but uses R0 (SH4_REG_RET) for large debits so R1/R2
  * operands survive intact across fused CMP/TST/SUBS + Bcc taken paths. */
 static inline void sh4g_cycle_debit_r0(u8 **tp, int n)
 {
-  if (n == 0)
-    return;
-  if (n >= -128 && n <= 127) {
-    sh4g_u16(tp, (uint16_t)(0x7000 | (SH4_REG_CYCLES << 8) | ((-n) & 0xFF))); /* ADD #-n */
-  } else {
-    sh4g_const(tp, (uint32_t)(-n), SH4_REG_RET);
-    sh4g_u16(tp, (uint16_t)(0x300C | (SH4_REG_CYCLES << 8) | (SH4_REG_RET << 4))); /* ADD R0 */
-  }
+  sh4g_cycle_debit_reg(tp, n, SH4_REG_RET);
 }
 
 static inline void sh4g_cycle_debit_from_global(u8 **tp, const int *extra_cycles)
@@ -993,10 +1033,10 @@ static inline void sh4g_cycle_gate(u8 **tp, uint32_t pc, int is_word)
 #define CGBA_SH4_LAZY_CHAIN 1
 #endif
 
-/* ---- branch exit (patchable far jump) ------------------------------------ *
- * Emits a fixed self-contained jump whose target literal is back-patched by
- * sh4g_patch_jump(). Returns the patch site (the MOV.L address).             */
-static inline u8 *sh4g_emit_patch_jump(u8 **tp)
+/* ---- branch exit (patchable far jump / call) ----------------------------- *
+ * Emits a fixed self-contained jump/call whose target literal is back-patched
+ * by sh4g_patch_jump(). Returns the patch site (the MOV.L address).          */
+static inline u8 *sh4g_emit_patch_branch(u8 **tp, uint16_t branch_op)
 {
   u8 *site = *tp, *lit;
   long ld_disp;
@@ -1004,7 +1044,7 @@ static inline u8 *sh4g_emit_patch_jump(u8 **tp)
   lit = (u8 *)(((uintptr_t)(site + 6) + 3u) & ~(uintptr_t)3u);
   ld_disp = ((long)lit - (((long)site & ~3L) + 4)) / 4;
   sh4g_u16(tp, (uint16_t)(0xD000 | (SH4_REG_RET << 8) | (ld_disp & 0xFF)));   /* MOV.L @(d,PC),R0 */
-  sh4g_u16(tp, (uint16_t)(0x402B | (SH4_REG_RET << 8)));                      /* JMP @R0 */
+  sh4g_u16(tp, (uint16_t)(branch_op | (SH4_REG_RET << 8)));                   /* JMP/JSR @R0 */
   sh4g_u16(tp, 0x0009);                                                       /* NOP */
   while (*tp < lit)
     sh4g_u16(tp, 0x0009);
@@ -1017,6 +1057,11 @@ static inline u8 *sh4g_emit_patch_jump(u8 **tp)
   return site;
 }
 
+static inline u8 *sh4g_emit_patch_jump(u8 **tp)
+{
+  return sh4g_emit_patch_branch(tp, 0x402B);                                   /* JMP @R0 */
+}
+
 #if CGBA_SH4_LAZY_CHAIN
 /* Same geometry as sh4g_emit_patch_jump, but uses JSR @R0 so an unpatched
  * exit passes PR = site + 6 to sh4_lazy_link_rom_{arm,thumb}, which computes
@@ -1025,23 +1070,7 @@ static inline u8 *sh4g_emit_patch_jump(u8 **tp)
  * BRA + NOP identically. */
 static inline u8 *sh4g_emit_patch_call(u8 **tp)
 {
-  u8 *site = *tp, *lit;
-  long ld_disp;
-
-  lit = (u8 *)(((uintptr_t)(site + 6) + 3u) & ~(uintptr_t)3u);
-  ld_disp = ((long)lit - (((long)site & ~3L) + 4)) / 4;
-  sh4g_u16(tp, (uint16_t)(0xD000 | (SH4_REG_RET << 8) | (ld_disp & 0xFF)));   /* MOV.L @(d,PC),R0 */
-  sh4g_u16(tp, (uint16_t)(0x400B | (SH4_REG_RET << 8)));                      /* JSR @R0 */
-  sh4g_u16(tp, 0x0009);                                                       /* NOP */
-  while (*tp < lit)
-    sh4g_u16(tp, 0x0009);
-  {
-    sh4_codegen cg = sh4g_open(tp);
-    sh4_emit_u32_be(&cg, 0);                                                  /* target placeholder */
-    sh4g_close(tp, &cg);
-  }
-  SH4G_EMSTAT((cgba_em_pj_n++, cgba_em_pj_bytes += (unsigned long)(*tp - site)));
-  return site;
+  return sh4g_emit_patch_branch(tp, 0x400B);                                   /* JSR @R0 */
 }
 #endif
 
