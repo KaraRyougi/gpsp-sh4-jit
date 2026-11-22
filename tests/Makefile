@@ -18,10 +18,10 @@ DEAD_STRIP := $(if $(filter Darwin,$(shell uname -s)),\
 	-Wl$(comma)-dead_strip,-Wl$(comma)--gc-sections)
 
 .PHONY: all smoke audit core litpool thumb cond native-ldst input config-version storage lcd-cleanup backlight-overlay state-codec scale classpad fxcg-ui fxcg-sync txt-reader rtc backup-dirty nor-world-switch rom-library save-path overclock cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc \
-	swi-overlap swi-oam udiv udiv-emitter idle-signature \
+	swi-overlap swi-oam bios-swi-hle udiv udiv-emitter idle-signature \
 	video-backdrop-shadow video-sprite-decode video-text-fastpaths video-dirty-scanline arm-mixer arm-pcm-clamp m4a-skip ea-mixer clean
 
-all: smoke core litpool thumb cond native-ldst rtc pacing backup-dirty nor-world-switch rom-library save-path overclock input config-version storage lcd-cleanup backlight-overlay state-codec scale classpad fxcg-ui fxcg-sync txt-reader cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc swi-overlap swi-oam udiv \
+all: smoke core litpool thumb cond native-ldst rtc pacing backup-dirty nor-world-switch rom-library save-path overclock input config-version storage lcd-cleanup backlight-overlay state-codec scale classpad fxcg-ui fxcg-sync txt-reader cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc swi-overlap swi-oam bios-swi-hle udiv \
 	udiv-emitter idle-signature \
 	video-backdrop-shadow video-sprite-decode video-text-fastpaths video-dirty-scanline arm-mixer arm-pcm-clamp m4a-skip ea-mixer audit
 
@@ -360,6 +360,12 @@ swi-oam: $(ROOT)/tests/sh4_swi_oam_test.c \
 	$(CC) $(CFLAGS) -O2 -I$(ROOT) $(ROOT)/tests/sh4_swi_oam_test.c \
 	  -o $(BIN)-swi-oam
 	$(BIN)-swi-oam
+
+bios-swi-hle: $(ROOT)/tests/sh4_bios_swi_hle_test.c \
+	      $(ROOT)/vendor/gpsp/bios/open_gba_bios.bin
+	$(CC) $(CFLAGS) -O2 -I$(ROOT) $(ROOT)/tests/sh4_bios_swi_hle_test.c \
+	  -o $(BIN)-bios-swi-hle
+	$(BIN)-bios-swi-hle
 
 udiv: $(ROOT)/tests/sh4_udiv_fastpath_test.c \
 	$(ROOT)/ports/fxcg100/sh4/sh4_thumb_udiv.h

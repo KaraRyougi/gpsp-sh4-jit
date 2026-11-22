@@ -258,8 +258,8 @@ static inline u8 *sh4g_fastmem_emit_io16_store(u8 **tp)
 {
   u8 *entry = *tp;
   const void *const slow_tramp = (const void *)sh4_fastmem_compact8_tramp;
-  u8 *io_check, *store_tail, *video_store_tail, *not_if, *not_ie;
-  u8 *fail_odd, *fail_ie, *fail_range, *hit_a, *hit_b, *slow_label;
+  u8 *io_check, *store_tail, *video_store_tail, *not_if, *not_ie, *not_ime;
+  u8 *fail_odd, *fail_ie, *fail_ime, *fail_range, *hit_a, *hit_b, *slow_label;
 #ifdef CGBA_VIDEO_DEFERRED_ACTIVE
   u8 *fail_pending;
 #endif
@@ -361,6 +361,51 @@ static inline u8 *sh4g_fastmem_emit_io16_store(u8 **tp)
   fail_ie = sh4g_emit_bra_placeholder(tp);
 
   sh4g_patch_cond(not_ie, *tp);
+  /* REG_IME (0x04000208): hot inside HBlank/nested IRQ dispatchers (saves &
+   * restores IME on every scanline). Write io_registers[REG_IME] inline and
+   * stay on the fast path whenever IME==0, CPSR.I==1, or (IE & IF)==0. */
+  sh4g_const(tp, 0x04000208u, SH4_REG_T1);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_cmpeq(&cg, SH4_REG_T1, SH4_REG_T0);   /* T = REG_IME */
+    sh4g_close(tp, &cg); }
+  not_ime = sh4g_emit_bf_placeholder(tp);
+
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_reg(&cg, SH4_REG_ARG1, SH4_REG_T1);
+    sh4_emit_swap_b(&cg, SH4_REG_T1, SH4_REG_T1);
+    sh4g_close(tp, &cg); }
+  sh4g_const(tp, (u32)(uintptr_t)((u8 *)io_registers + 0x208), SH4_REG_T2);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_w_store(&cg, SH4_REG_T1, SH4_REG_T2);
+    sh4_emit_extu_w(&cg, SH4_REG_ARG1, SH4_REG_RET);
+    sh4_emit_tst(&cg, SH4_REG_RET, SH4_REG_RET);   /* T=1: stored IME == 0 */
+    sh4g_close(tp, &cg); }
+  { u8 *sk = sh4g_emit_bf_placeholder(tp);
+    u8 *b = sh4g_emit_bra_placeholder(tp);
+    sh4g_patch_bra(b, store_tail);
+    sh4g_patch_cond(sk, *tp); }
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_reg(&cg, SH4_REG_CPSR, SH4_REG_RET);
+    sh4_emit_tst_imm(&cg, 0x80);                   /* T=1: IRQs enabled */
+    sh4g_close(tp, &cg); }
+  { u8 *sk = sh4g_emit_bt_placeholder(tp);
+    u8 *b = sh4g_emit_bra_placeholder(tp);
+    sh4g_patch_bra(b, store_tail);
+    sh4g_patch_cond(sk, *tp); }
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_add_imm(&cg, -8, SH4_REG_T2);         /* io_registers + 0x200 */
+    sh4_emit_mov_w_load(&cg, SH4_REG_T2, SH4_REG_ARG0);
+    sh4_emit_add_imm(&cg, 2, SH4_REG_T2);          /* io_registers + 0x202 */
+    sh4_emit_mov_w_load(&cg, SH4_REG_T2, SH4_REG_RET);
+    sh4_emit_tst(&cg, SH4_REG_ARG0, SH4_REG_RET);  /* T=1: (IE & IF) == 0 */
+    sh4g_close(tp, &cg); }
+  { u8 *sk = sh4g_emit_bf_placeholder(tp);
+    u8 *b = sh4g_emit_bra_placeholder(tp);
+    sh4g_patch_bra(b, store_tail);
+    sh4g_patch_cond(sk, *tp); }
+  fail_ime = sh4g_emit_bra_placeholder(tp);
+
+  sh4g_patch_cond(not_ime, *tp);
 #ifdef CGBA_VIDEO_DEFERRED_ACTIVE
   /* Flush pending deferred scanlines via slow_tramp before any video IO write. */
   sh4g_const(tp, (u32)(uintptr_t)&cgba_pending_sl_count, SH4_REG_T1);
@@ -424,6 +469,7 @@ static inline u8 *sh4g_fastmem_emit_io16_store(u8 **tp)
   slow_label = *tp;
   sh4g_patch_bra(fail_odd, slow_label);
   sh4g_patch_bra(fail_ie, slow_label);
+  sh4g_patch_bra(fail_ime, slow_label);
 #ifdef CGBA_VIDEO_DEFERRED_ACTIVE
   sh4g_patch_bra(fail_pending, slow_label);
 #endif
