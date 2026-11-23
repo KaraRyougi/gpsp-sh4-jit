@@ -354,6 +354,7 @@ static inline u8 *sh4g_fastmem_emit_io16_store(u8 **tp)
     sh4_emit_mov_w_store(&cg, SH4_REG_T1, SH4_REG_T2);
     sh4_emit_add_imm(&cg, 2, SH4_REG_T2);
     sh4_emit_mov_w_load(&cg, SH4_REG_T2, SH4_REG_ARG0);
+    sh4_emit_extu_w(&cg, SH4_REG_T1, SH4_REG_T1);
     sh4_emit_tst(&cg, SH4_REG_T1, SH4_REG_ARG0);   /* T=1: none pending */
     sh4g_close(tp, &cg); }
   { u8 *sk = sh4g_emit_bf_placeholder(tp);

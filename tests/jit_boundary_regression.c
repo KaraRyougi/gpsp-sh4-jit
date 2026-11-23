@@ -638,11 +638,66 @@ static void test_masked_latched_timer_reslice(void)
         (unsigned)a_other);
 }
 
+static void test_timer_start_and_cascade_reslice(void)
+{
+  reset_fixture();
+  write_ioreg(REG_IE, IRQ_TIMER0 | IRQ_TIMER1);
+  write_ioreg(REG_IF, 0);
+  write_ioreg(REG_IME, 1);
+
+  /* Mid-slice with execute_cycles = 960 and remaining_cycles = 800:
+   * starting a short IRQ timer (reload = 64 < 960) MUST NOT shrink global
+   * execute_cycles (which would underflow completed_cycles = execute_cycles - remaining_cycles),
+   * and MUST return CPU_ALERT_RESLICE. */
+  video_count = 960;
+  execute_cycles = 960;
+  write_memory16(0x04000100, (u16)(0x10000 - 64)); /* TM0D reload = 64 */
+  cpu_alert_type a_start = write_memory16(0x04000102, 0x00C0); /* TM0CNT enable + IRQ */
+  CHECK(execute_cycles == 960u,
+        "trigger_timer mutated execute_cycles mid-slice (%u != 960)",
+        (unsigned)execute_cycles);
+  CHECK((a_start & CPU_ALERT_RESLICE) != 0,
+        "short capping timer start must return CPU_ALERT_RESLICE (got %u)",
+        (unsigned)a_start);
+
+  /* Defensive clamp: even if remaining_cycles > execute_cycles, update_gba
+   * must not underflow completed_cycles / cpu_ticks. */
+  u32 ticks_before = cpu_ticks;
+  execute_cycles = 64;
+  (void)update_gba(800);
+  CHECK(cpu_ticks == ticks_before,
+        "update_gba underflowed cpu_ticks (%u -> %u)",
+        (unsigned)ticks_before, (unsigned)cpu_ticks);
+
+  /* 2-level cascade: TM0 prescale (no IRQ) -> TM1 cascade (IRQ enabled).
+   * Updating TM0D reload mid-slice must request CPU_ALERT_RESLICE so the
+   * 2-level cascade slice cap is recomputed. */
+  reset_fixture();
+  write_ioreg(REG_IE, IRQ_TIMER1);
+  write_ioreg(REG_IF, 0);
+  write_ioreg(REG_IME, 1);
+  video_count = 960;
+  execute_cycles = 960;
+  write_memory16(0x04000100, (u16)(0x10000 - 200)); /* TM0D */
+  write_memory16(0x04000102, 0x0080);               /* TM0CNT enable, no IRQ */
+  write_memory16(0x04000104, (u16)(0x10000 - 4));   /* TM1D */
+  cpu_alert_type a_casc = write_memory16(0x04000106, 0x00C4); /* TM1CNT enable + cascade + IRQ */
+  CHECK((a_casc & CPU_ALERT_RESLICE) != 0,
+        "enabling cascade IRQ child must return CPU_ALERT_RESLICE (got %u)",
+        (unsigned)a_casc);
+
+  cpu_alert_type a_reload = write_memory16(0x04000100, (u16)(0x10000 - 16)); /* TM0D reload */
+  CHECK((a_reload & CPU_ALERT_RESLICE) != 0,
+        "updating TM0D feeding cascade IRQ TM1 must return CPU_ALERT_RESLICE (got %u)",
+        (unsigned)a_reload);
+}
+
 int main(void)
 {
   test_palette_cache_notifications();
   test_init_memory_clears_converted_palette();
   test_masked_latched_timer_reslice();
+  test_timer_start_and_cascade_reslice();
   test_silent_timer_batch();
   test_bulk_dma_equivalence();
   test_waitcnt_invalidation();

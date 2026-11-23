@@ -40,6 +40,8 @@ static u32 observed_address;
 static unsigned read_calls;
 static unsigned write_calls;
 static cpu_alert_type write_alert;
+static int override_read_active;
+static u32 override_read_val;
 
 static u32 protected_bios_value(u32 pc)
 {
@@ -56,6 +58,9 @@ static u32 modeled_read(u32 address)
   observed_pc = reg[REG_PC];
   observed_address = address;
   read_calls++;
+
+  if (override_read_active)
+    return override_read_val;
 
   if (active_model == MEMORY_BIOS_PROTECTED) {
     /* A stale PC below 0x4000 leaks BIOS; a correctly published JIT PC does
@@ -263,6 +268,25 @@ static void test_io16_routes_through_canonical_write(void)
   }
 }
 
+static void test_arm_ldm_pc_word_alignment(void)
+{
+  const char *name = "ARM LDM {pc} without S-bit masks bit 1";
+  const u32 pc = 0x08020000u;
+  int result;
+
+  memset(reg, 0, sizeof(reg));
+  override_read_active = 1;
+  override_read_val = 0x08021237u;
+  reg[13] = 0x03000100u;
+  reg[REG_CPSR] = 0x0000001Fu; /* ARM mode */
+  /* LDMIA sp!, {pc} (no S-bit): 0xE8BD8000 */
+  result = cgba_sh4_arm_block(0xE8BD8000u, pc);
+  override_read_active = 0;
+  CHECK(name, result == 1, "helper returned %d (expected 1)", result);
+  CHECK(name, reg[REG_PC] == 0x08021234u,
+        "reg[REG_PC]=%08X (expected 08021234)", reg[REG_PC]);
+}
+
 int main(void)
 {
   static const helper_case cases[] = {
@@ -285,6 +309,7 @@ int main(void)
   }
   test_timing_alert_redispatch();
   test_io16_routes_through_canonical_write();
+  test_arm_ldm_pc_word_alignment();
 
   if (failures)
     return 1;

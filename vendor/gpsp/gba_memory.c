@@ -270,20 +270,34 @@ static void sound_control_x(u32 value)
 
 /* Main */
 extern timer_type timer[4];
+extern u32 cgba_timer_cap_mask;             /* main.c */
 static const u32 prescale_table[] = { 0, 6, 8, 10 };
 
 #if defined(CGBA_SILENT_TIMERS) && CGBA_SILENT_TIMERS
-#define count_timer(timer_number)                                             \
+static inline cpu_alert_type count_timer(u32 timer_number, u32 value)
+{
   timer[timer_number].reload = 0x10000 - value;
+  /* When a running prescale timer feeds a cascade IRQ chain, its reload
+   * changes the 2-level cascade cap computed in cgba_ugba_timer_cap(). */
+  if (timer_number < 3u &&
+      timer[timer_number].status == TIMER_PRESCALE &&
+      timer[timer_number + 1u].status == TIMER_CASCADE &&
+      (cgba_timer_cap_mask & (1u << timer_number)) != 0u)
+    return CPU_ALERT_RESLICE;
+  return CPU_ALERT_NONE;
+}
 #else
-#define count_timer(timer_number)                                             \
-  timer[timer_number].reload = 0x10000 - value;                               \
-  if(timer_number < 2)                                                        \
-  {                                                                           \
-    u32 timer_reload =                                                        \
-     timer[timer_number].reload << timer[timer_number].prescale;              \
-    sound_update_frequency_step(timer_number);                                \
+static inline cpu_alert_type count_timer(u32 timer_number, u32 value)
+{
+  timer[timer_number].reload = 0x10000 - value;
+  if (timer_number < 2u)
+  {
+    u32 timer_reload =
+     timer[timer_number].reload << timer[timer_number].prescale;
+    sound_update_frequency_step(timer_number);
   }
+  return CPU_ALERT_NONE;
+}
 #endif
 
 #define adjust_sound_buffer(timer_number, channel)                            \
@@ -295,8 +309,13 @@ static const u32 prescale_table[] = { 0, 6, 8, 10 };
 
 void cgba_recompute_timer_cap_mask(void);   /* main.c */
 
-static void trigger_timer(u32 timer_number, u32 value)
+static cpu_alert_type trigger_timer(u32 timer_number, u32 value)
 {
+   bool started = false;
+   bool started_cascade = false;
+   u32 started_reload = 0;
+   u32 old_cap_mask = cgba_timer_cap_mask;
+
    if (value & 0x80)
    {
       if(timer[timer_number].status == TIMER_INACTIVE)
@@ -320,8 +339,9 @@ static void trigger_timer(u32 timer_number, u32 value)
          timer_reload <<= prescale;
          timer[timer_number].count = timer_reload;
 
-         if(timer_reload < execute_cycles)
-            execute_cycles = timer_reload;
+         started = true;
+         started_cascade = cascade;
+         started_reload = timer_reload;
 
 #if !(defined(CGBA_SILENT_TIMERS) && CGBA_SILENT_TIMERS)
          if(timer_number < 2)
@@ -347,6 +367,17 @@ static void trigger_timer(u32 timer_number, u32 value)
    write_ioreg(REG_TMXCNT(timer_number), value);
 
    cgba_recompute_timer_cap_mask();
+
+   /* Never mutate execute_cycles mid-slice while remaining_cycles is live;
+    * instead request a clean reslice when a newly started/promoted capping
+    * timer may overflow before the current slice ends. */
+   if (started && !started_cascade &&
+       (cgba_timer_cap_mask & (1u << timer_number)) != 0u &&
+       started_reload < execute_cycles)
+     return CPU_ALERT_RESLICE;
+   if ((cgba_timer_cap_mask & ~old_cap_mask) != 0u)
+     return CPU_ALERT_RESLICE;
+   return CPU_ALERT_NONE;
 }
 
 bool is_known_game = false;
@@ -1115,16 +1146,16 @@ cpu_alert_type function_cc write_io_register16(u32 address, u32 value)
     case REG_DMA3CNT_H: return trigger_dma(3, value);
 
     // Timer counter reload
-    case REG_TM0D: count_timer(0); break;
-    case REG_TM1D: count_timer(1); break;
-    case REG_TM2D: count_timer(2); break;
-    case REG_TM3D: count_timer(3); break;
+    case REG_TM0D: return count_timer(0, value);
+    case REG_TM1D: return count_timer(1, value);
+    case REG_TM2D: return count_timer(2, value);
+    case REG_TM3D: return count_timer(3, value);
 
     /* Timer control register (0..3)*/
-    case REG_TM0CNT: trigger_timer(0, value); break;
-    case REG_TM1CNT: trigger_timer(1, value); break;
-    case REG_TM2CNT: trigger_timer(2, value); break;
-    case REG_TM3CNT: trigger_timer(3, value); break;
+    case REG_TM0CNT: return trigger_timer(0, value);
+    case REG_TM1CNT: return trigger_timer(1, value);
+    case REG_TM2CNT: return trigger_timer(2, value);
+    case REG_TM3CNT: return trigger_timer(3, value);
 
     // Serial port registers
     case REG_SIOCNT:
@@ -2500,7 +2531,8 @@ static bool dma_bulk_copy(dma_transfer_type *dmach, u32 src, u32 dst,
       s = dma_bulk_span(src, bytes, false, &st);
       if (s) {
         u8 *iod = (u8 *)io_registers + ioff;
-        if (width == 4 && length == 4u && ioff == 0x020u) {
+        if (width == 4 && length == 4u && ioff == 0x020u &&
+            (((uintptr_t)s & 3u) == 0u)) {
           /* Hot 4-word BG2PA..BG2Y affine block (e.g., Mode-7 per-scanline HDMA). */
           cgba_commit_bg2_affine_dma_4words(s);
         } else {
@@ -2512,14 +2544,26 @@ static bool dma_bulk_copy(dma_transfer_type *dmach, u32 src, u32 dst,
             old_vcnt = read_ioreg(REG_VCOUNT);
           }
           if (width == 4) {
-            const u32 *s32 = (const u32 *)s;
             u32 *d32 = (u32 *)iod;
-            for (u32 i = 0; i < length; i++) {
-              u32 v = s32[i];
-              if (d32[i] != v) {
-                d32[i] = v;
-                if (ioff + (i << 2) != 0x004u)
-                  vis_diff = 1u;
+            if (((uintptr_t)s & 3u) == 0u) {
+              const u32 *s32 = (const u32 *)s;
+              for (u32 i = 0; i < length; i++) {
+                u32 v = s32[i];
+                if (d32[i] != v) {
+                  d32[i] = v;
+                  if (ioff + (i << 2) != 0x004u)
+                    vis_diff = 1u;
+                }
+              }
+            } else {
+              for (u32 i = 0; i < length; i++) {
+                u32 v;
+                memcpy(&v, s + (i << 2), 4u);
+                if (d32[i] != v) {
+                  d32[i] = v;
+                  if (ioff + (i << 2) != 0x004u)
+                    vis_diff = 1u;
+                }
               }
             }
             dma_bus_val = readaddress32(s, bytes - 4);
@@ -2999,7 +3043,7 @@ u8 *cgba_gamepak_resolve_4k(u32 address)
       off &= 0x000FFFFFu;
     u32 block = off >> 12;
     const u8 *direct = cgba_gamepak_fragment_blocks[block];
-    if (direct)
+    if (direct && (((uintptr_t)direct & 3u) == 0u))
       return (u8 *)direct;
   }
 #endif

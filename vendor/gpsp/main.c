@@ -785,6 +785,8 @@ static __attribute__((noinline)) u32 cgba_update_gba_slow(int remaining_cycles)
   u32 idle_pass = cgba_idle_wait;
   u32 idle_if_entry = 0;
   unsigned timer_extra = 0;
+  if (__builtin_expect(remaining_cycles > (int)execute_cycles, 0))
+    remaining_cycles = (int)execute_cycles;
   if (__builtin_expect(idle_pass != 0u, 0)) {
     cgba_idle_wait = 0;
     if (idle_pass == 3u) {
@@ -1020,6 +1022,8 @@ CGBA_HOT_TEXT u32 function_cc update_gba(int remaining_cycles)
 
   if (__builtin_expect(remaining_cycles < -64, 0))
     remaining_cycles = -64;
+  if (__builtin_expect(remaining_cycles > (int)execute_cycles, 0))
+    remaining_cycles = (int)execute_cycles;
 
 #if defined(CGBA_GPSP_HEADLESS_TEST) && defined(CGBA_SH4_DIAG_COUNTERS)
   cgba_update_gba_calls++;

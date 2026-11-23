@@ -32,6 +32,14 @@
 #include "ports/fxcg100/sh4/sh4_codegen.h"
 #include "ports/fxcg100/sh4/sh4_emit_core.h"
 
+#ifdef __sh__
+extern void cgba_wild_pc_trap(u32 pc);
+#define SH4G_FAIL_FAST(code) cgba_wild_pc_trap((code))
+#else
+#include <stdlib.h>
+#define SH4G_FAIL_FAST(code) do { (void)(code); abort(); } while (0)
+#endif
+
 /* Large translation-time-only emitters: keep out-of-line so GCC does not clone
  * them across fallback loops and bloat translate_block_arm/thumb (.text). */
 #if defined(__GNUC__) || defined(__clang__)
@@ -269,19 +277,23 @@ static inline void sh4g_litseg_flush_mode(u8 **tp, int emit_bra)
 #endif
     have_entry:
       site_base = ((uintptr_t)site & ~(uintptr_t)3u) + 4u;
-      if ((uintptr_t)entry >= site_base) {
+      if ((uintptr_t)entry < site_base)
+        SH4G_FAIL_FAST(0xDEAD0001u);
+      {
         uintptr_t disp = ((uintptr_t)entry - site_base) >> 2;
-        if (disp <= 255u) {
-          site[1] = (u8)disp;
-          SH4G_RESYNC(site, 2);
-        }
+        if (disp > 255u)
+          SH4G_FAIL_FAST(0xDEAD0002u);
+        site[1] = (u8)disp;
+        SH4G_RESYNC(site, 2);
       }
     }
     *tp = cur;
   }
 
   if (emit_bra) {
-    uintptr_t d = ((uintptr_t)*tp - ((uintptr_t)bra + 4u)) >> 1;
+    long d = ((long)(uintptr_t)*tp - ((long)(uintptr_t)bra + 4)) / 2;
+    if (d < -2048 || d > 2047)
+      SH4G_FAIL_FAST(0xDEAD0003u);
     bra[0] = (u8)(0xA0u | ((d >> 8) & 0x0Fu));
     bra[1] = (u8)d;
     SH4G_RESYNC(bra, 2);
@@ -1378,6 +1390,8 @@ static inline u8 *sh4g_emit_bt_placeholder(u8 **tp)
 static inline void sh4g_patch_cond(u8 *site, const void *target)
 {
   long d = ((long)(uintptr_t)target - ((long)(uintptr_t)site + 4)) / 2;
+  if (d < -128 || d > 127)
+    SH4G_FAIL_FAST(0xDEAD0004u);
   site[1] = (uint8_t)(d & 0xFF);
   SH4G_RESYNC(site, 2);            /* BT/BF is an instruction: re-fetch it */
 }
@@ -1425,6 +1439,8 @@ static inline u8 *sh4g_emit_bra_debit(u8 **tp, int debit)
 static inline void sh4g_patch_bra(u8 *site, const void *target)
 {
   long d = ((long)(uintptr_t)target - ((long)(uintptr_t)site + 4)) / 2;
+  if (d < -2048 || d > 2047)
+    SH4G_FAIL_FAST(0xDEAD0005u);
   site[0] = (uint8_t)(0xA0 | ((d >> 8) & 0x0F));
   site[1] = (uint8_t)(d & 0xFF);
   SH4G_RESYNC(site, 2);
@@ -1604,7 +1620,7 @@ SH4G_NOINLINE void sh4g_emit_ram_ldm_pc(u8 **tp, unsigned base_reg,
     }
     sh4_emit_mov_l_load_r0(&cg, SH4_REG_T2, SH4_REG_T1);
     sh4_emit_bswap32(&cg, SH4_REG_T1, SH4_REG_T1);
-    sh4_emit_mov_imm(&cg, 1, SH4_REG_ARG0);
+    sh4_emit_mov_imm(&cg, is_thumb ? 1 : 3, SH4_REG_ARG0);
     sh4_emit_not(&cg, SH4_REG_ARG0, SH4_REG_ARG0);
     sh4_emit_and(&cg, SH4_REG_ARG0, SH4_REG_T1);
     sh4_emit_store_greg(&cg, SH4_REG_T1, SH4_GREG_PC);

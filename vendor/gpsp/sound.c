@@ -20,6 +20,10 @@
 
 #include "common.h"
 
+#if defined(CGBA_SILENT_TIMERS) && CGBA_SILENT_TIMERS
+#error "sound.c cannot be linked with CGBA_SILENT_TIMERS=1"
+#endif
+
 direct_sound_struct direct_sound_channel[2];
 gbc_sound_struct gbc_sound_channel[4];
 
@@ -618,13 +622,14 @@ bool sound_check_savestate(const u8 *src)
 
   for (i = 0; i < 2; i++)
   {
+    size_t j;
     char tn[4] = {'d', 's', '0' + i, 0};
     const u8 *sndchan = bson_find_key(snddoc, tn);
     if (!sndchan)
       return false;
 
-    for (i = 0; i < sizeof(dsvars)/sizeof(dsvars[0]); i++)
-      if (!bson_contains_key(sndchan, dsvars[i], BSON_TYPE_INT32))
+    for (j = 0; j < sizeof(dsvars)/sizeof(dsvars[0]); j++)
+      if (!bson_contains_key(sndchan, dsvars[j], BSON_TYPE_INT32))
         return false;
 
     if (!bson_contains_key(sndchan, "fifo-bytes", BSON_TYPE_BIN))
@@ -633,13 +638,14 @@ bool sound_check_savestate(const u8 *src)
 
   for (i = 0; i < 4; i++)
   {
+    size_t j;
     char tn[4] = {'g', 's', '0' + i, 0};
     const u8 *sndchan = bson_find_key(snddoc, tn);
     if (!sndchan)
       return false;
 
-    for (i = 0; i < sizeof(gsvars)/sizeof(gsvars[0]); i++)
-      if (!bson_contains_key(sndchan, gsvars[i], BSON_TYPE_INT32))
+    for (j = 0; j < sizeof(gsvars)/sizeof(gsvars[0]); j++)
+      if (!bson_contains_key(sndchan, gsvars[j], BSON_TYPE_INT32))
         return false;
   }
 

@@ -528,7 +528,9 @@ SH4G_NOINLINE void sh4g_arm_access_memory_emit(
       u32 addr = (pc + 8u) + ((opcode & 0x00800000u) ? off : (u32)-(s32)off);
       u32 reg_hi = addr >> 24;
       if ((addr & 3u) == 0u && reg_hi >= 0x08u && reg_hi <= 0x0Du &&
-          (addr & 0x01FFFFFFu) >= 0x200u) {
+          !(reg_hi == 0x0Du && backup_type == BACKUP_EEPROM) &&
+          (addr & 0x01FFFFFFu) >= 0x200u &&
+          (addr & 0x01FFFFFFu) < gamepak_size) {
         u8 *blk = ((addr >> 12) == (pc >> 12))
           ? pc_address_block : cgba_memory_map_read_4k(addr);
         if (blk) {
@@ -4262,6 +4264,11 @@ static void cgba_sh4_register_rom_seam_aliases(u8 **tp_p,
 #endif
 
 #if defined(SH4_ARCH) && !defined(CGBA_SH4_EXACT_CYCLE_BOUNDARIES)
+static inline int cgba_rom_pc_is_interp_stop(u32 cur_pc, u32 cheat_hook)
+{
+  return cur_pc == cheat_hook || cur_pc == idle_loop_target_pc;
+}
+
 /* External ROM flag-liveness lookahead (ARM mirror of sh4_thumb_flags_dead_at_rom_pc):
  * checks if up to 6 straight-line, unconditional, non-store, non-LDM/STM,
  * non-branch ARM instructions starting at `target_pc` (immutable Game Pak ROM)
@@ -4292,7 +4299,7 @@ static inline int sh4_arm_flags_dead_at_rom_pc(u32 target_pc, u32 need_kill,
     u32 op, op28, fclass;
     u32 req = 0u, must_kill = 0u;
     u32 step_cyc = fetch_c;
-    if ((cur_pc >> 12) != region || cur_pc == cheat_hook)
+    if ((cur_pc >> 12) != region || cgba_rom_pc_is_interp_stop(cur_pc, cheat_hook))
       return 0;
     op = readaddress32(page, cur_pc & 0x0FFFu);
     if ((op >> 28) != 0xEu)                        /* conditional: reads flags */
@@ -5174,7 +5181,7 @@ static inline int sh4_thumb_flags_dead_at_rom_pc(u32 target_pc, u32 need_kill,
     u16 info;
     u32 req;
     u32 step_cyc = fetch_c;
-    if ((cur_pc >> 12) != region || cur_pc == cheat_hook)
+    if ((cur_pc >> 12) != region || cgba_rom_pc_is_interp_stop(cur_pc, cheat_hook))
       return 0;
     op = readaddress16(page, cur_pc & 0x0FFFu);
     info = cgba_thumb_scan_info(op);

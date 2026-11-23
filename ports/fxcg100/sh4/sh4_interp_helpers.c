@@ -956,7 +956,12 @@ int cgba_sh4_arm_block(u32 opcode, u32 pc)
     if (pre) addr += 4;
     if (is_load) {
       reg[i] = execute_load_u32(addr);
-      if (i == 15) { reg[REG_PC] = reg[15] & ~1u; wrote_pc = 1; }
+      if (i == 15) {
+        /* ARM LDM {..., pc} without S-bit stays in ARM mode (4-byte aligned);
+         * with S-bit, execute_spsr_restore() below applies the restored T bit. */
+        reg[REG_PC] = reg[15] & (s_bit ? ~1u : ~3u);
+        wrote_pc = 1;
+      }
     } else {
       /* STM stores PC+12 for r15; for the base reg, the OLD base is stored only
          when it is the lowest in the list, otherwise the written-back value. */
@@ -6019,7 +6024,7 @@ u32 cgba_sh4_cold_interp(u32 cycles)
    * with general fastmem (which natively handles both IWRAM and EWRAM). */
   if (!cgba_sp_non_iwram_disable &&
       (reg[REG_CPSR] & 0x20u) != 0u &&
-      (reg[13] & 0xFF000000u) != 0x03000000u) {
+      ((reg[13] - 0x03000000u) >= 0x8000u || (reg[13] & 3u) != 0u)) {
     u32 entry_pc = reg[REG_PC];
     u32 region = entry_pc >> 24;
     if (region == 0x02u || region == 0x03u ||

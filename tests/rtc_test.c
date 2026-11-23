@@ -107,6 +107,7 @@ int64_t filestream_read(RFILE *stream, void *data, int64_t len)
 #endif
 }
 
+u32 cgba_timer_cap_mask;
 void cgba_recompute_timer_cap_mask(void) { }
 void render_gbc_sound(void) { }
 void sound_timer_queue32(u32 channel, u32 value)
