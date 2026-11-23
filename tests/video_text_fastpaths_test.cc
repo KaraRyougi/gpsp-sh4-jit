@@ -173,6 +173,21 @@ static bool run_tests()
   palette_ram_dirty = CGBA_PALETTE_DIRTY_ACTIVE;
   get_backdrop_shadow_palette();
   for (unsigned sub = 0; sub < 16; sub++) CHECK(!pair_palette_valid[sub]);
+  /* Banks that were previously valid take the backdrop-only patch path; bank 5
+   * had color 3 dirtied above and must stay on full rebuild. */
+  CHECK(pair_palette_bd_only_mask == (u16)(0xFFFFu & ~(1u << 5)));
+  for (unsigned sub = 0; sub < 16; sub++) {
+    if (pair_palette_bd_only_mask & (1u << sub))
+      pair_palette_patch_backdrop(sub);
+    else
+      pair_palette_build(sub);
+    CHECK(pair_palette_valid[sub] == 1);
+    for (unsigned b = 0; b < 256; b++) {
+      CHECK(pair_palette[sub][b][0] == backdrop_shadow_palette[sub * 16 + (b & 15)]);
+      CHECK(pair_palette[sub][b][1] == backdrop_shadow_palette[sub * 16 + (b >> 4)]);
+    }
+  }
+  CHECK(pair_palette_bd_only_mask == 0);
 
   /* 8-bpp strip base & overlay differential against reference render_scanline_text. */
   for (unsigned round = 0; round < 40; round++) {

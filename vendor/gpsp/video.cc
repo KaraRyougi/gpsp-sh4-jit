@@ -410,8 +410,14 @@ static u16 backdrop_shadow_palette[256] __attribute__((aligned(4)));
  *
  * Sub-tables are rebuilt lazily; the shadow refresh below invalidates only
  * the sub-palettes whose sixteen colors actually changed. */
+/* Sub-table validity:
+ *   pair_palette_valid[sub] == 1: fully up to date (including backdrop).
+ *   pair_palette_valid[sub] == 0: needs refresh before use.  If bit `sub` is
+ *     set in pair_palette_bd_only_mask, colors 1..15 are still valid and only
+ *     the 31 backdrop-bearing entries need patching (15-iter fast path). */
 static u16 pair_palette[16][256][2] __attribute__((aligned(32)));
 static u8 pair_palette_valid[16];
+static u16 pair_palette_bd_only_mask;
 static u8 pair_palette_any_invalid = 1;
 
 static __attribute__((noinline)) void pair_palette_build(unsigned sub)
@@ -423,14 +429,33 @@ static __attribute__((noinline)) void pair_palette_build(unsigned sub)
     out[b][1] = pal[b >> 4];
   }
   pair_palette_valid[sub] = 1;
+  pair_palette_bd_only_mask &= (u16)~(1u << sub);
+}
+
+static __attribute__((noinline)) void pair_palette_patch_backdrop(unsigned sub)
+{
+  const u16 bd = backdrop_shadow_palette[sub * 16];
+  u16 (*out)[2] = pair_palette[sub];
+  out[0][0] = bd;
+  out[0][1] = bd;
+  for (unsigned b = 1; b < 16; b++) {
+    out[b][1] = bd;
+    out[b << 4][0] = bd;
+  }
+  pair_palette_valid[sub] = 1;
+  pair_palette_bd_only_mask &= (u16)~(1u << sub);
 }
 
 #ifdef CGBA_SH4_ASM_4BPP
 static __attribute__((noinline)) void pair_palette_build_all_invalid(void)
 {
   for (unsigned sub = 0; sub < 16; sub++) {
-    if (!pair_palette_valid[sub])
-      pair_palette_build(sub);
+    if (!pair_palette_valid[sub]) {
+      if (pair_palette_bd_only_mask & (1u << sub))
+        pair_palette_patch_backdrop(sub);
+      else
+        pair_palette_build(sub);
+    }
   }
   pair_palette_any_invalid = 0;
 }
@@ -448,8 +473,12 @@ static inline __attribute__((always_inline)) void cgba_render_4bpp_row_pairs(
   u32 tilepix, unsigned sub, u16 *dest_ptr)
 {
   typedef u32 alias_u32 __attribute__((may_alias));
-  if (__builtin_expect(!pair_palette_valid[sub], 0))
-    pair_palette_build(sub);
+  if (__builtin_expect(!pair_palette_valid[sub], 0)) {
+    if (pair_palette_bd_only_mask & (1u << sub))
+      pair_palette_patch_backdrop(sub);
+    else
+      pair_palette_build(sub);
+  }
   const u16 (*tbl)[2] = pair_palette[sub];
   /* tilepix is in guest order: byte 0 (bits 7..0) holds pixels 0 and 1. */
   const u16 *p0 = tbl[hflip ? (tilepix >> 24)         : (tilepix & 0xFF)];
@@ -486,20 +515,26 @@ static const u16 *get_backdrop_shadow_palette(void)
       const u16 *live = palette_ram_converted + sub * 16;
       u32 *s32 = (u32 *)shadow;
       const u32 *l32 = (const u32 *)live;
-      bool diff = (shadow[0] != backdrop) || (shadow[1] != live[1]);
-      if (!diff) {
-        u32 d = (s32[1] ^ l32[1]) | (s32[2] ^ l32[2]) | (s32[3] ^ l32[3]) |
-                (s32[4] ^ l32[4]) | (s32[5] ^ l32[5]) | (s32[6] ^ l32[6]) |
-                (s32[7] ^ l32[7]);
-        diff = (d != 0u);
-      }
-      if (diff) {
+      bool bd_diff = (shadow[0] != backdrop);
+      u32 d = (u32)(shadow[1] ^ live[1]) |
+              (s32[1] ^ l32[1]) | (s32[2] ^ l32[2]) | (s32[3] ^ l32[3]) |
+              (s32[4] ^ l32[4]) | (s32[5] ^ l32[5]) | (s32[6] ^ l32[6]) |
+              (s32[7] ^ l32[7]);
+      if (d != 0u) {
         shadow[0] = backdrop;
         shadow[1] = live[1];
         s32[1] = l32[1]; s32[2] = l32[2]; s32[3] = l32[3];
         s32[4] = l32[4]; s32[5] = l32[5]; s32[6] = l32[6];
         s32[7] = l32[7];
         pair_palette_valid[sub] = 0;
+        pair_palette_bd_only_mask &= (u16)~(1u << sub);
+        pair_palette_any_invalid = 1;
+      } else if (bd_diff) {
+        shadow[0] = backdrop;
+        if (pair_palette_valid[sub]) {
+          pair_palette_valid[sub] = 0;
+          pair_palette_bd_only_mask |= (u16)(1u << sub);
+        }
         pair_palette_any_invalid = 1;
       }
     }
