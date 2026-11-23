@@ -86,18 +86,41 @@ static void cgba_timer_trace_io_write(u32 ioreg, u32 value)
   write_ioreg(regn, value);                                                   \
 }                                                                             \
 
+#if defined(CGBA_SILENT_TIMERS) && CGBA_SILENT_TIMERS
+#define cgba_gbc_set_tone_freq(channel, rate) ((void)0)
+#define cgba_gbc_sub_sample_idx(channel)      ((void)0)
+#define cgba_gbc_set_wave_freq(rate)          ((void)0)
+#define cgba_gbc_set_noise_freq(dr, fs)       ((void)(dr), (void)(fs))
+#else
+#define cgba_gbc_set_tone_freq(channel, rate)                                 \
+  gbc_sound_channel[channel].frequency_step =                                 \
+   float_to_fp16_16(((131072.0 / (2048 - (rate))) * 8.0) / sound_frequency)
+#define cgba_gbc_sub_sample_idx(channel)                                      \
+  gbc_sound_channel[channel].sample_index -= float_to_fp16_16(1.0 / 12.0)
+#define cgba_gbc_set_wave_freq(rate)                                          \
+  gbc_sound_channel[2].frequency_step =                                       \
+   float_to_fp16_16((2097152.0 / (2048 - (rate))) / sound_frequency)
+#define cgba_gbc_set_noise_freq(dr, fs) do {                                  \
+  if((dr) == 0)                                                               \
+    gbc_sound_channel[3].frequency_step =                                     \
+     float_to_fp16_16(1048576.0 / (1 << ((fs) + 1)) / sound_frequency);       \
+  else                                                                        \
+    gbc_sound_channel[3].frequency_step =                                     \
+     float_to_fp16_16(524288.0 / ((dr) * (1 << ((fs) + 1))) / sound_frequency); \
+} while (0)
+#endif
+
 #define gbc_sound_tone_control_high(channel, regn)                            \
 {                                                                             \
   render_gbc_sound();                                                         \
   u32 rate = value & 0x7FF;                                                   \
   gbc_sound_channel[channel].rate = rate;                                     \
-  gbc_sound_channel[channel].frequency_step =                                 \
-   float_to_fp16_16(((131072.0 / (2048 - rate)) * 8.0) / sound_frequency);    \
+  cgba_gbc_set_tone_freq(channel, rate);                                      \
   gbc_sound_channel[channel].length_status = (value >> 14) & 0x01;            \
   if(value & 0x8000)                                                          \
   {                                                                           \
     gbc_sound_channel[channel].active_flag = 1;                               \
-    gbc_sound_channel[channel].sample_index -= float_to_fp16_16(1.0 / 12.0);  \
+    cgba_gbc_sub_sample_idx(channel);                                         \
     gbc_sound_channel[channel].envelope_ticks =                               \
      gbc_sound_channel[channel].envelope_initial_ticks;                       \
     gbc_sound_channel[channel].envelope_volume =                              \
@@ -151,8 +174,7 @@ static const u32 gbc_sound_wave_volume[4] = { 0, 16384, 8192, 4096 };
   render_gbc_sound();                                                         \
   u32 rate = value & 0x7FF;                                                   \
   gbc_sound_channel[2].rate = rate;                                           \
-  gbc_sound_channel[2].frequency_step =                                       \
-   float_to_fp16_16((2097152.0 / (2048 - rate)) / sound_frequency);           \
+  cgba_gbc_set_wave_freq(rate);                                               \
   gbc_sound_channel[2].length_status = (value >> 14) & 0x01;                  \
   if(value & 0x8000)                                                          \
   {                                                                           \
@@ -167,18 +189,7 @@ static const u32 gbc_sound_wave_volume[4] = { 0, 16384, 8192, 4096 };
   u32 dividing_ratio = value & 0x07;                                          \
   u32 frequency_shift = (value >> 4) & 0x0F;                                  \
   render_gbc_sound();                                                         \
-  if(dividing_ratio == 0)                                                     \
-  {                                                                           \
-    gbc_sound_channel[3].frequency_step =                                     \
-     float_to_fp16_16(1048576.0 / (1 << (frequency_shift + 1)) /              \
-     sound_frequency);                                                        \
-  }                                                                           \
-  else                                                                        \
-  {                                                                           \
-    gbc_sound_channel[3].frequency_step =                                     \
-     float_to_fp16_16(524288.0 / (dividing_ratio *                            \
-     (1 << (frequency_shift + 1))) / sound_frequency);                        \
-  }                                                                           \
+  cgba_gbc_set_noise_freq(dividing_ratio, frequency_shift);                   \
   gbc_sound_channel[3].noise_type = (value >> 3) & 0x01;                      \
   gbc_sound_channel[3].length_status = (value >> 14) & 0x01;                  \
   if(value & 0x8000)                                                          \
@@ -249,14 +260,22 @@ static void sound_control_x(u32 value)
    write_ioreg(REG_SOUNDCNT_X, value);
 }
 
+#if defined(CGBA_SILENT_TIMERS) && CGBA_SILENT_TIMERS
+#define sound_update_frequency_step(timer_number) ((void)0)
+#else
 #define sound_update_frequency_step(timer_number)                             \
   timer[timer_number].frequency_step =                                        \
-   float_to_fp8_24((GBC_BASE_RATE / sound_frequency) / (timer_reload))        \
+   float_to_fp8_24((GBC_BASE_RATE / sound_frequency) / (timer_reload))
+#endif
 
 /* Main */
 extern timer_type timer[4];
 static const u32 prescale_table[] = { 0, 6, 8, 10 };
 
+#if defined(CGBA_SILENT_TIMERS) && CGBA_SILENT_TIMERS
+#define count_timer(timer_number)                                             \
+  timer[timer_number].reload = 0x10000 - value;
+#else
 #define count_timer(timer_number)                                             \
   timer[timer_number].reload = 0x10000 - value;                               \
   if(timer_number < 2)                                                        \
@@ -264,7 +283,8 @@ static const u32 prescale_table[] = { 0, 6, 8, 10 };
     u32 timer_reload =                                                        \
      timer[timer_number].reload << timer[timer_number].prescale;              \
     sound_update_frequency_step(timer_number);                                \
-  }                                                                           \
+  }
+#endif
 
 #define adjust_sound_buffer(timer_number, channel)                            \
   if(timer[timer_number].direct_sound_channels & (0x01 << channel))           \
@@ -303,6 +323,7 @@ static void trigger_timer(u32 timer_number, u32 value)
          if(timer_reload < execute_cycles)
             execute_cycles = timer_reload;
 
+#if !(defined(CGBA_SILENT_TIMERS) && CGBA_SILENT_TIMERS)
          if(timer_number < 2)
          {
             u32 buffer_adjust =
@@ -313,6 +334,7 @@ static void trigger_timer(u32 timer_number, u32 value)
             adjust_sound_buffer(timer_number, 0);
             adjust_sound_buffer(timer_number, 1);
          }
+#endif
       }
    }
    else
@@ -2397,6 +2419,53 @@ static u8 *dma_bulk_span(u32 addr, u32 bytes, bool dest, u8 **tags)
   }
 }
 
+#if defined(CGBA_SH4_ASM_4BPP) && defined(__sh__)
+extern void cgba_dma_copy_movca_sh4(void *dst, const void *src, u32 nbytes);
+extern void cgba_dma_fill32_movca_sh4(void *dst, u32 val, u32 nbytes);
+
+static inline void cgba_dma_fast_copy(void *dst, const void *src, u32 bytes)
+{
+  if (bytes >= 64u && ((((uintptr_t)dst | (uintptr_t)src) & 3u) == 0u)) {
+    cgba_dma_copy_movca_sh4(dst, src, bytes);
+    return;
+  }
+  memcpy(dst, src, bytes);
+}
+
+static inline void cgba_dma_fast_fill32(void *dst, u32 raw32, u32 bytes)
+{
+  if (bytes >= 64u && (((uintptr_t)dst & 3u) == 0u) && ((bytes & 3u) == 0u)) {
+    cgba_dma_fill32_movca_sh4(dst, raw32, bytes);
+    return;
+  }
+  if (raw32 == 0u) {
+    memset(dst, 0, bytes);
+  } else {
+    u32 *dp = (u32 *)dst;
+    u32 n = bytes >> 2;
+    for (u32 i = 0; i < n; i++)
+      dp[i] = raw32;
+  }
+}
+#else
+static inline void cgba_dma_fast_copy(void *dst, const void *src, u32 bytes)
+{
+  memcpy(dst, src, bytes);
+}
+
+static inline void cgba_dma_fast_fill32(void *dst, u32 raw32, u32 bytes)
+{
+  if (raw32 == 0u) {
+    memset(dst, 0, bytes);
+  } else {
+    u32 *dp = (u32 *)dst;
+    u32 n = bytes >> 2;
+    for (u32 i = 0; i < n; i++)
+      dp[i] = raw32;
+  }
+}
+#endif
+
 static bool dma_bulk_copy(dma_transfer_type *dmach, u32 src, u32 dst,
                          u32 length, cpu_alert_type *alert)
 {
@@ -2408,13 +2477,14 @@ static bool dma_bulk_copy(dma_transfer_type *dmach, u32 src, u32 dst,
     return false;
 
   /* PPU I/O register block destination (e.g., HBlank DMA updating
-   * BG2PA..BG3Y / scroll / window / blend regs 0x008..0x054): bypass
-   * per-halfword write_io_register16 dispatch and update affine_reference
-   * latches once per transfer. */
+   * DISPCNT..BLDY / BG2PA..BG3Y / scroll / window / blend regs 0x000..0x056):
+   * bypass per-halfword write_io_register16 dispatch, skip unchanged writes,
+   * preserve DISPSTAT RO bits and VCOUNT, and update affine_reference latches
+   * once per transfer. */
   if ((dst >> 24) == 4 && dmach->source_direction == 0) {
     u32 ioff = dst & 0xFFFFFFu;
     u32 iend = ioff + bytes;
-    if (ioff >= 0x008u && iend <= 0x056u && iend > ioff) {
+    if (ioff <= 0x056u && iend <= 0x058u && iend > ioff) {
       s = dma_bulk_span(src, bytes, false, &st);
       if (s) {
         u8 *iod = (u8 *)io_registers + ioff;
@@ -2422,30 +2492,74 @@ static bool dma_bulk_copy(dma_transfer_type *dmach, u32 src, u32 dst,
           /* Hot 4-word BG2PA..BG2Y affine block (e.g., Mode-7 per-scanline HDMA). */
           cgba_commit_bg2_affine_dma_4words(s);
         } else {
+          u16 old_disp = 0, old_stat = 0, old_vcnt = 0;
+          u32 vis_diff = 0u;
+          if (ioff < 0x008u) {
+            old_disp = read_ioreg(REG_DISPCNT);
+            old_stat = read_ioreg(REG_DISPSTAT);
+            old_vcnt = read_ioreg(REG_VCOUNT);
+          }
           if (width == 4) {
             const u32 *s32 = (const u32 *)s;
             u32 *d32 = (u32 *)iod;
-            for (u32 i = 0; i < length; i++)
-              d32[i] = s32[i];
+            for (u32 i = 0; i < length; i++) {
+              u32 v = s32[i];
+              if (d32[i] != v) {
+                d32[i] = v;
+                if (ioff + (i << 2) != 0x004u)
+                  vis_diff = 1u;
+              }
+            }
             dma_bus_val = readaddress32(s, bytes - 4);
           } else {
             const u16 *s16 = (const u16 *)s;
             u16 *d16 = (u16 *)iod;
-            for (u32 i = 0; i < length; i++)
-              d16[i] = s16[i];
+            for (u32 i = 0; i < length; i++) {
+              u16 v = s16[i];
+              if (d16[i] != v) {
+                u32 off = ioff + (i << 1);
+                d16[i] = v;
+                if (off != 0x004u && off != 0x006u)
+                  vis_diff = 1u;
+              }
+            }
             dma_bus_val = readaddress16(s, bytes - 2);
           }
-#ifdef CGBA_VRAM_DIRTY_ACTIVE
-          cgba_video_io_dirty = 1;
-#endif
-          if (ioff < 0x02Cu && iend > 0x028u)
+          if (ioff < 0x008u) {
+            if (ioff == 0x000u) {
+              reg[OAM_UPDATED] |=
+                ((read_ioreg(REG_DISPCNT) & 0x07u) != (old_disp & 0x07u));
+            }
+            if (ioff <= 0x004u && iend > 0x004u) {
+              u16 new_stat = read_ioreg(REG_DISPSTAT);
+              write_ioreg(REG_DISPSTAT, (old_stat & 0x07u) | (new_stat & ~0x07u));
+            }
+            if (ioff <= 0x006u && iend > 0x006u) {
+              write_ioreg(REG_VCOUNT, old_vcnt);
+            }
+          }
+          if (ioff < 0x02Cu && iend > 0x028u) {
             affine_reference_x[0] = signext28(read_ioreg32(REG_BG2X_L));
-          if (ioff < 0x030u && iend > 0x02Cu)
+            vis_diff = 1u;
+          }
+          if (ioff < 0x030u && iend > 0x02Cu) {
             affine_reference_y[0] = signext28(read_ioreg32(REG_BG2Y_L));
-          if (ioff < 0x03Cu && iend > 0x038u)
+            vis_diff = 1u;
+          }
+          if (ioff < 0x03Cu && iend > 0x038u) {
             affine_reference_x[1] = signext28(read_ioreg32(REG_BG3X_L));
-          if (ioff < 0x040u && iend > 0x03Cu)
+            vis_diff = 1u;
+          }
+          if (ioff < 0x040u && iend > 0x03Cu) {
             affine_reference_y[1] = signext28(read_ioreg32(REG_BG3Y_L));
+            vis_diff = 1u;
+          }
+#ifdef CGBA_VRAM_DIRTY_ACTIVE
+          if (vis_diff)
+            cgba_video_io_dirty = 1;
+#else
+          (void)vis_diff;
+#endif
         }
         *alert = CPU_ALERT_NONE;
         dmach->source_address = src + bytes;
@@ -2473,23 +2587,29 @@ static bool dma_bulk_copy(dma_transfer_type *dmach, u32 src, u32 dst,
       u16 host_v = readaddress16(s, 0);
       dma_bus_val = host_v;
       if (host_v == 0) {
-        memset(d, 0, bytes);
+        if (((uintptr_t)d & 3u) == 0u && (bytes & 3u) == 0u)
+          cgba_dma_fast_fill32(d, 0u, bytes);
+        else
+          memset(d, 0, bytes);
       } else {
         u16 raw16 = address16(s, 0);
-        u16 *dp = (u16 *)d;
-        for (u32 i = 0; i < length; i++)
-          dp[i] = raw16;
+        if (((uintptr_t)d & 3u) == 0u && (bytes & 3u) == 0u) {
+          u32 raw32 = ((u32)raw16 << 16) | (u32)raw16;
+          cgba_dma_fast_fill32(d, raw32, bytes);
+        } else {
+          u16 *dp = (u16 *)d;
+          for (u32 i = 0; i < length; i++)
+            dp[i] = raw16;
+        }
       }
     } else {
       u32 host_v = readaddress32(s, 0);
       dma_bus_val = host_v;
       if (host_v == 0) {
-        memset(d, 0, bytes);
+        cgba_dma_fast_fill32(d, 0u, bytes);
       } else {
         u32 raw32 = address32(s, 0);
-        u32 *dp = (u32 *)d;
-        for (u32 i = 0; i < length; i++)
-          dp[i] = raw32;
+        cgba_dma_fast_fill32(d, raw32, bytes);
       }
     }
     *alert = smc_changed ? CPU_ALERT_SMC : CPU_ALERT_NONE;
@@ -2549,7 +2669,7 @@ static bool dma_bulk_copy(dma_transfer_type *dmach, u32 src, u32 dst,
     dma_bus_val = width == 2 ? readaddress16(s, bytes - 2) :
                               readaddress32(s, bytes - 4);
     smc_changed = cgba_smc_copy_changes_tagged(d, s, dt, bytes);
-    memcpy(d, s, bytes);  /* Both spans have the same guest byte order. */
+    cgba_dma_fast_copy(d, s, bytes);  /* Both spans have the same guest byte order. */
   } else {
     /* Multi-4KiB-page ROM source -> contiguous RAM/VRAM/OAM destination. */
     u32 sreg = src >> 24;
@@ -2578,7 +2698,7 @@ static bool dma_bulk_copy(dma_transfer_type *dmach, u32 src, u32 dst,
       u8 *cs = cgba_gamepak_resolve_4k(cur_src) + page_off;
       if (!smc_changed && cur_dt)
         smc_changed = cgba_smc_copy_changes_tagged(cur_dst, cs, cur_dt, chunk);
-      memcpy(cur_dst, cs, chunk);
+      cgba_dma_fast_copy(cur_dst, cs, chunk);
       if (chunk == rem) {
         dma_bus_val = width == 2 ? readaddress16(cs, chunk - 2) :
                                   readaddress32(cs, chunk - 4);
