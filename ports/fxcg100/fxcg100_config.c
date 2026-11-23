@@ -228,7 +228,7 @@ static void config_extract_hotkeys(uint16_t out[FXCG100_HOTKEY_COUNT],
 static int config_options_valid(const fxcg100_config_file *config)
 {
   return config->screen_scale < 5 &&
-    config->screen_filter < 4 &&
+    config->screen_filter < 3 &&
     config->frameskip_type < 3 &&
     config->frameskip_value < 100 &&
     config->frameskip_variation < 2 &&
@@ -417,27 +417,10 @@ static int update_existing_blob(storage_request *request, int fd)
     }
     return !run_size || write_range(request, fd, run_start, run_size);
   }
-  unsigned run_start = 0, run_size = 0;
-  for (unsigned offset = 0; offset < request->size;) {
-    unsigned size = request->size - offset;
-    if (size > STORAGE_COMPARE_BLOCK)
-      size = STORAGE_COMPARE_BLOCK;
-    if (os_bfile_read(fd, storage_compare_buffer, (int)size,
-                      (int)offset) != (int)size)
-      return 0;
-    if (memcmp(storage_compare_buffer,
-               (const uint8_t *)request->src + offset, size) != 0) {
-      if (!run_size)
-        run_start = offset;
-      run_size += size;
-    } else if (run_size) {
-      if (!write_range(request, fd, run_start, run_size))
-        return 0;
-      run_size = 0;
-    }
-    offset += size;
-  }
-  return !run_size || write_range(request, fd, run_start, run_size);
+  /* For files larger than the 512 KiB dirty-bitmap limit, never interleave
+   * os_bfile_read after os_bfile_write on the same Fugue handle; fall back to
+   * a single sequential write of the full payload. */
+  return write_range(request, fd, 0, request->size);
 }
 
 /* Return the index of the last backslash after the \\fls0\ device prefix, or 0
@@ -530,8 +513,7 @@ static int create_and_write_blob(storage_request *request)
       continue;
     int fd = os_bfile_open(request->path, CGBA_BFILE_WRITE_ONLY);
     if (fd < 0) {
-      if (initial_size < full_size)
-        (void)os_bfile_remove(request->path);
+      (void)os_bfile_remove(request->path);
       return 0;
     }
     int ok = os_bfile_write(fd, request->src, full_size) == full_size;
@@ -539,8 +521,7 @@ static int create_and_write_blob(storage_request *request)
     if (ok) {
       if (closed >= 0)
         return 1;
-      if (initial_size < full_size)
-        (void)os_bfile_remove(request->path);
+      (void)os_bfile_remove(request->path);
       return 0;
     }
     if (initial_size < full_size) {
@@ -548,6 +529,7 @@ static int create_and_write_blob(storage_request *request)
         return 0;
       continue;
     }
+    (void)os_bfile_remove(request->path);
     return 0;
   }
   return 0;

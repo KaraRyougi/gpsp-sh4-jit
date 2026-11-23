@@ -77,7 +77,10 @@ enum {
 	SCREEN_COUNT
 };
 
-enum { CONFIRM_NONE = 0, CONFIRM_RESTART, CONFIRM_EXIT, CONFIRM_SAVE };
+enum {
+	CONFIRM_NONE = 0, CONFIRM_RESTART, CONFIRM_EXIT, CONFIRM_SAVE,
+	CONFIRM_SWITCH_GAME
+};
 
 enum {
 	MODAL_NONE = 0, MODAL_CONFIRM, MODAL_CAPTURE, MODAL_CLOCK,
@@ -176,6 +179,7 @@ typedef struct cp_ui {
 	uint32_t toast_out_t0;
 	int settings_dirty;
 	int confirm;
+	uint32_t pending_rom;
 	int sort_open;
 	int capture;               /* binding being captured, -1 if none */
 	int capture_armed;         /* keys were released since capture began */
@@ -1762,6 +1766,15 @@ static fxcg100_menu_result screen_library(cp_ui *ui)
 		row_feedback(ui, r, flags, id);
 		ui_mark(name, r);
 		if(flags & HIT_CLICK) {
+			if(current)
+				return FXCG100_MENU_RETURN;
+			if(ui->in_game) {
+				ui->pending_rom = rom;
+				ui->confirm = CONFIRM_SWITCH_GAME;
+				ui->focus_shown = 0;
+				ui->redraw = 1;
+				return FXCG100_MENU_CONTINUE;
+			}
 			ui->state->rom_source = rom;
 			return FXCG100_MENU_LOAD_GAME;
 		}
@@ -1789,6 +1802,10 @@ static fxcg100_menu_result modal_confirm(cp_ui *ui)
 		title = "Restart this game?";
 		body = "Progress since the last save is lost.";
 		go = "Restart";
+	} else if(ui->confirm == CONFIRM_SWITCH_GAME) {
+		title = "Switch game?";
+		body = "Progress since the last save is lost.";
+		go = "Switch";
 	} else {
 		title = "Exit gpSP?";
 		body = "The in-game save is written first.";
@@ -1809,6 +1826,10 @@ static fxcg100_menu_result modal_confirm(cp_ui *ui)
 		ui->confirm = CONFIRM_NONE;
 		if(c == CONFIRM_SAVE)
 			return FXCG100_MENU_SAVE_STATE;
+		if(c == CONFIRM_SWITCH_GAME) {
+			ui->state->rom_source = ui->pending_rom;
+			return FXCG100_MENU_LOAD_GAME;
+		}
 		return c == CONFIRM_RESTART ? FXCG100_MENU_RESET : FXCG100_MENU_QUIT;
 	}
 	return FXCG100_MENU_CONTINUE;
@@ -2583,7 +2604,12 @@ static fxcg100_menu_result screen_clock(cp_ui *ui)
 			ui->clock_test_failed = ram || after != before;
 			ui->clock_tested_on = *e;
 			ui_snack(ui, ui->clock_tested);
-			changed = 1;
+			/* cp_ui_status() wrote into the shared LCD framebuffer mid-render;
+			 * return immediately and redraw the complete page on the next step
+			 * instead of overpainting only the lower steppers onto the banner. */
+			ui->focus_shown = 0;
+			ui->redraw = 1;
+			return FXCG100_MENU_CONTINUE;
 		} else if(apply && !cp_clock_equal(e, &ui->clock_running)) {
 			ui->clock_backup = ui->clock_running;
 			clock_apply(e);
@@ -3444,7 +3470,8 @@ static int ui_modal(const cp_ui *ui)
 {
 	if(ui->screen == SCREEN_LIBRARY && ui->sort_open)
 		return MODAL_SORT;
-	if(ui->screen == SCREEN_PAUSE && ui->confirm != CONFIRM_NONE)
+	if((ui->screen == SCREEN_PAUSE || ui->screen == SCREEN_LIBRARY) &&
+			ui->confirm != CONFIRM_NONE)
 		return MODAL_CONFIRM;
 	if(ui->screen == SCREEN_CONTROLS && ui->capture >= 0)
 		return MODAL_CAPTURE;

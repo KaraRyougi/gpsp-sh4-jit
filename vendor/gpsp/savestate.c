@@ -22,51 +22,79 @@
 const u8 *state_mem_read_ptr;
 u8 *state_mem_write_ptr;
 
-bool bson_contains_key(const u8 *srcp, const char *key, u8 keytype)
+static const u8 *bson_find_typed_key(const u8 *srcp, const char *key,
+                                     int expected_type)
 {
-  unsigned keyl = strlen(key) + 1;
-  unsigned doclen = bson_read_u32(srcp);
-  const u8* p = &srcp[4];
-  while (*p != 0 && (p - srcp) < doclen) {
-    u8 tp = *p;
-    unsigned tlen = strlen((char*)&p[1]) + 1;
-    if (keyl == tlen && !memcmp(key, &p[1], tlen))
-      return tp == keytype;  // Found it, check type
-    p += 1 + tlen;
-    if (tp == BSON_TYPE_DOC || tp == BSON_TYPE_ARR)
-      p += bson_read_u32(p);
-    else if (tp == BSON_TYPE_BIN)
-      p += bson_read_u32(p) + 1 + 4;
-    else if (tp == BSON_TYPE_INT32)
-      p += 4;
-  }
-  return false;
-}
+  size_t keyl;
+  u32 doclen;
+  const u8 *end;
+  const u8 *p;
 
-const u8* bson_find_key(const u8 *srcp, const char *key)
-{
-  unsigned keyl = strlen(key) + 1;
-  unsigned doclen = bson_read_u32(srcp);
-  const u8* p = &srcp[4];
-  while (*p != 0 && (p - srcp) < doclen) {
-    u8 tp = *p;
-    unsigned tlen = strlen((char*)&p[1]) + 1;
-    if (keyl == tlen && !memcmp(key, &p[1], tlen))
-      return &p[tlen + 1];
-    p += 1 + tlen;
-    if (tp == BSON_TYPE_DOC || tp == BSON_TYPE_ARR)
-      p += bson_read_u32(p);
-    else if (tp == BSON_TYPE_BIN)
-      p += bson_read_u32(p) + 1 + 4;
-    else if (tp == BSON_TYPE_INT32)
-      p += 4;
+  if (!srcp || !key)
+    return NULL;
+  keyl = strlen(key) + 1u;
+  doclen = bson_read_u32(srcp);
+  if (doclen < 5u || doclen > GBA_STATE_MEM_SIZE)
+    return NULL;
+  end = srcp + doclen;
+  p = srcp + 4;
+
+  while (p < end && *p != 0) {
+    u8 tp = *p++;
+    const u8 *nul = (const u8 *)memchr(p, 0, (size_t)(end - p));
+    size_t tlen, rem, advance;
+    const u8 *val;
+
+    if (!nul)
+      return NULL;
+    tlen = (size_t)(nul - p) + 1u;
+    val = p + tlen;
+    rem = (size_t)(end - val);
+
+    if (tp == BSON_TYPE_DOC || tp == BSON_TYPE_ARR) {
+      u32 sz;
+      if (rem < 4u)
+        return NULL;
+      sz = bson_read_u32(val);
+      if (sz < 5u || sz > rem)
+        return NULL;
+      advance = sz;
+    } else if (tp == BSON_TYPE_BIN) {
+      u32 sz;
+      if (rem < 5u)
+        return NULL;
+      sz = bson_read_u32(val);
+      if (sz > rem - 5u)
+        return NULL;
+      advance = 5u + (size_t)sz;
+    } else if (tp == BSON_TYPE_INT32) {
+      if (rem < 4u)
+        return NULL;
+      advance = 4u;
+    } else {
+      return NULL;
+    }
+
+    if (keyl == tlen && !memcmp(key, p, tlen))
+      return (expected_type < 0 || tp == (u8)expected_type) ? val : NULL;
+    p = val + advance;
   }
   return NULL;
 }
 
+bool bson_contains_key(const u8 *srcp, const char *key, u8 keytype)
+{
+  return bson_find_typed_key(srcp, key, (int)keytype) != NULL;
+}
+
+const u8* bson_find_key(const u8 *srcp, const char *key)
+{
+  return bson_find_typed_key(srcp, key, -1);
+}
+
 bool bson_read_int32(const u8 *srcp, const char *key, u32* value)
 {
-  const u8* p = srcp ? bson_find_key(srcp, key) : NULL;
+  const u8* p = bson_find_typed_key(srcp, key, BSON_TYPE_INT32);
   if (!p)
     return false;
   *value = bson_read_u32(p);
@@ -75,19 +103,13 @@ bool bson_read_int32(const u8 *srcp, const char *key, u32* value)
 
 bool bson_read_int32_array(const u8 *srcp, const char *key, u32* value, unsigned cnt)
 {
-  const u8* p = srcp ? bson_find_key(srcp, key) : NULL;
+  const u8* p = bson_find_typed_key(srcp, key, BSON_TYPE_ARR);
   if (p) {
-    unsigned arrsz = bson_read_u32(p);
+    u32 arrsz = bson_read_u32(p);
     p += 4;
-    if (arrsz < 5)
+    if (arrsz < 5u || (arrsz - 5u) != (u32)cnt * 8u)
       return false;
-    arrsz = (arrsz - 5) >> 3;
-    /* Trust the caller's requested count rather than the on-disk array
-     * size: a crafted savestate could otherwise overflow the destination
-     * buffer by claiming a larger array than the caller allocated. */
-    if (arrsz != cnt)
-      return false;
-    while (arrsz--) {
+    while (cnt--) {
       p += 4;   // type and name
       *value++ = bson_read_u32(p);
       p += 4;   // value
@@ -99,9 +121,9 @@ bool bson_read_int32_array(const u8 *srcp, const char *key, u32* value, unsigned
 
 bool bson_read_bytes(const u8 *srcp, const char *key, void* buffer, unsigned cnt)
 {
-  const u8* p = srcp ? bson_find_key(srcp, key) : NULL;
+  const u8* p = bson_find_typed_key(srcp, key, BSON_TYPE_BIN);
   if (p) {
-    unsigned bufsz = bson_read_u32(p);
+    u32 bufsz = bson_read_u32(p);
     if (bufsz != cnt)
       return false;
 

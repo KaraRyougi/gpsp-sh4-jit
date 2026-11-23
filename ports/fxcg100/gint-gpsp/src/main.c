@@ -2436,8 +2436,9 @@ static int gpsp_main(void)
 				ff_toggled = 0;
 				previous_fast_forward = 0;
 				ff_overlay_clear_pending = 0;
-				frame = 1;
-				enter_gameplay_display(framebuffer, frame);
+				cgba_pacer_reset(&pacer);
+				frame = 0;
+				enter_gameplay_display(framebuffer, 1);
 				continue;
 			}
 			if(result == FXCG100_MENU_LOAD_GAME) {
@@ -2448,8 +2449,9 @@ static int gpsp_main(void)
 				ff_toggled = 0;
 				previous_fast_forward = 0;
 				ff_overlay_clear_pending = 0;
-				frame = 1;
-				enter_gameplay_display(framebuffer, frame);
+				cgba_pacer_reset(&pacer);
+				frame = 0;
+				enter_gameplay_display(framebuffer, 1);
 				continue;
 			}
 			/* CONFIG SAVE also mutates Fugue while the menu is open. Before
@@ -2523,6 +2525,7 @@ static int gpsp_main(void)
 				wait_status();
 				break;
 			}
+			fxcg100_lcd_sync_pace_reset();
 			previous_app_keys = fxcg100_poll_app_keys();
 			previous_hotkeys =
 				fxcg100_poll_hotkeys_mapped(menu_state.hotkey_map);
@@ -2550,7 +2553,11 @@ static int gpsp_main(void)
 				                : "JIT canary passed", line);
 			}
 			wait_status();
+			previous_app_keys = fxcg100_poll_app_keys();
+			previous_hotkeys =
+				fxcg100_poll_hotkeys_mapped(menu_state.hotkey_map);
 			enter_gameplay_display(framebuffer, frame);
+			continue;
 #else
 			cgba_frame_limiter_stop();
 			fxcg100_lcd_sync_pace_reset();
@@ -2559,7 +2566,11 @@ static int gpsp_main(void)
 			draw_status(cgba_gpsp_state_load(menu_state.savestate_slot)
 				? "State loaded" : "Could not load the state", slot_line);
 			wait_status();
+			previous_app_keys = fxcg100_poll_app_keys();
+			previous_hotkeys =
+				fxcg100_poll_hotkeys_mapped(menu_state.hotkey_map);
 			enter_gameplay_display(framebuffer, frame);
+			continue;
 #endif
 		}
 		if(hotkey_edge & FXCG100_HOTKEY_BIT(FXCG100_HOTKEY_SAVE_STATE)) {
@@ -2578,7 +2589,11 @@ static int gpsp_main(void)
 			draw_status("core switched",
 				dynarec_enable ? "JIT (dynarec)" : "INTERPRETER");
 			wait_status();
+			previous_app_keys = fxcg100_poll_app_keys();
+			previous_hotkeys =
+				fxcg100_poll_hotkeys_mapped(menu_state.hotkey_map);
 			enter_gameplay_display(framebuffer, frame);
+			continue;
 #else
 			{
 				char slot_line[16];
@@ -2615,7 +2630,11 @@ static int gpsp_main(void)
 				}
 			}
 			wait_status();
+			previous_app_keys = fxcg100_poll_app_keys();
+			previous_hotkeys =
+				fxcg100_poll_hotkeys_mapped(menu_state.hotkey_map);
 			enter_gameplay_display(framebuffer, frame);
+			continue;
 #endif
 		}
 

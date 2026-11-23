@@ -1244,6 +1244,24 @@ static void test_ui(const char *dir)
 	ui_shot(dir, "ui-library-playing");
 	CHECK(ui_tap_on("Now playing", 0) == FXCG100_MENU_RETURN,
 		"the now-playing card resumes");
+	/* Tapping the active game row (rom_source=4, Metroid Fusion) resumes;
+	 * tapping a different game asks first. */
+	ui_open(1, CP_VIEW_PORTRAIT_43);
+	ui_tap_on("Games", 0);
+	CHECK(ui_tap_on("Metroid Fusion", 0) == FXCG100_MENU_RETURN,
+		"tapping active ROM row should resume");
+	ui_open(1, CP_VIEW_PORTRAIT_43);
+	ui_tap_on("Games", 0);
+	CHECK(ui_tap_on("Advance Wars", 0) == FXCG100_MENU_CONTINUE &&
+		ui.confirm == CONFIRM_SWITCH_GAME,
+		"tapping another ROM while in-game should ask confirmation");
+	CHECK(ui_tap_on("Cancel", 0) == FXCG100_MENU_CONTINUE &&
+		ui.confirm == CONFIRM_NONE, "Cancel switch game");
+	CHECK(ui_tap_on("Advance Wars", 0) == FXCG100_MENU_CONTINUE &&
+		ui.confirm == CONFIRM_SWITCH_GAME, "ask switch game again");
+	CHECK(ui_tap_on("Switch", 0) == FXCG100_MENU_LOAD_GAME &&
+		ui_state.rom_source == 0,
+		"confirming Switch loads the selected ROM");
 
 	/* Pause menu. */
 	ui_open(1, CP_VIEW_PORTRAIT_43);

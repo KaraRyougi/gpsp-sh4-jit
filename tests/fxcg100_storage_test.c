@@ -253,6 +253,10 @@ int main(void)
   assert(!save(4096)); assert(exists && !creates && !writes);
   reset(8192); exists = 0; fail_create = 1;
   assert(!save(length)); assert(!writes);
+  /* Failing on the final full-size creation attempt must remove the partial file. */
+  reset(8192); exists = 0; reject_zero_create = 1; fail_write = 1;
+  assert(!save(8192));
+  assert(!exists && removes >= 1);
 
   reset(8192);
   assert(fxcg100_storage_blob_size(path) == length && switches == 1);

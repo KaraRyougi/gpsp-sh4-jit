@@ -754,7 +754,7 @@ static void rows_settings(cg_ui *ui)
 }
 
 /* The functions a key can be given, in the order of the key-mapping page:
- * the GBA buttons, which must all have a key, then the shortcuts. */
+ * the GBA buttons, then the shortcuts (both can be cleared to None via DEL). */
 #define BINDING_COUNT 16
 #define GBA_BINDINGS 10
 
@@ -1263,7 +1263,8 @@ static void page_hints(cg_ui *ui)
 
 		if (id == ID_RESET_KEYS)
 			hint_bar(ui, HINTS(reset), HINTS(right));
-		else if (r && r->key && id >= ID_BIND0 + GBA_BINDINGS)
+		else if (r && r->key && id >= ID_BIND0 &&
+				id < ID_BIND0 + BINDING_COUNT)
 			hint_bar(ui, HINTS(clear), HINTS(right));
 		else
 			hint_bar(ui, HINTS(bind), HINTS(right));
@@ -1359,6 +1360,8 @@ static void draw_capture(cg_ui *ui)
 		w = text_w(F_SMALL, line) + 24;
 	if (w < 240)
 		w = 240;
+	if (w > W - 24)
+		w = W - 24;
 	x = (W - w) / 2;
 	rect(ui, x, y, w, 82, 8, ui->t.container_high);
 	text_mid(ui, F_TITLE, x + 12, y + 16, title, ui->t.on_surface);

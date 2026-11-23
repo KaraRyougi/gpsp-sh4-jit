@@ -573,6 +573,21 @@ static const uint16_t cgba_bios_path_gba_dir[] = {
 	'g', 'b', 'a', '_', 'b', 'i', 'o', 's', '.', 'b', 'i', 'n', 0
 };
 
+static int external_bios_image_plausible(const u8 *buf, size_t len)
+{
+	size_t i;
+	u8 first;
+
+	if(!buf || len == 0)
+		return 0;
+	first = buf[0];
+	for(i = 1; i < len; i++) {
+		if(buf[i] != first)
+			return 1;
+	}
+	return 0;
+}
+
 static void probe_external_bios(void)
 {
 	if(cgba_external_bios_probed)
@@ -589,7 +604,10 @@ static void probe_external_bios(void)
 			cgba_bios_path_gba_dir,
 		};
 		for(size_t i = 0; i < sizeof(candidates) / sizeof(candidates[0]); i++) {
-			if(fxcg100_storage_blob_size(candidates[i]) == (int)sizeof(bios_rom)) {
+			if(fxcg100_storage_blob_size(candidates[i]) == (int)sizeof(bios_rom) &&
+					fxcg100_storage_read_blob(candidates[i], bios_rom,
+						sizeof(bios_rom)) &&
+					external_bios_image_plausible(bios_rom, sizeof(bios_rom))) {
 				cgba_external_bios_found = 1;
 				cgba_external_bios_path = candidates[i];
 				return;
@@ -597,21 +615,6 @@ static void probe_external_bios(void)
 		}
 	}
 #endif
-}
-
-static int external_bios_image_plausible(const u8 *buf, size_t len)
-{
-	size_t i;
-	u8 first;
-
-	if(!buf || len == 0)
-		return 0;
-	first = buf[0];
-	for(i = 1; i < len; i++) {
-		if(buf[i] != first)
-			return 1;
-	}
-	return 0;
 }
 
 static void load_active_bios(void)
@@ -1299,11 +1302,12 @@ int cgba_gpsp_state_load(unsigned slot)
 		ok = cgba_state_load_from(path);
 	}
 #ifdef CGBA_DYNAREC
-	flush_translation_cache_rom();      /* clobbered even on a failed load */
-	/* gba_load_state only flushes when dynarec_enable is set; a state loaded
-	 * while interpreting (PROF core-switch hotkey) would otherwise leave the
-	 * RAM cache holding translations of the PREVIOUS state's RAM code. */
-	flush_translation_cache_ram();
+	/* gba_load_state() already flushes both caches on success when
+	 * dynarec_enable is set. Only flush RAM translations when a state loaded
+	 * while interpreting (PROF core-switch hotkey), and never clobber the
+	 * live JIT caches on a failed load. */
+	if (ok && !dynarec_enable)
+		flush_translation_cache_ram();
 #endif
 	return ok;
 }

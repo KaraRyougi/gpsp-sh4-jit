@@ -285,7 +285,7 @@ static int os_bfile_query_blocks(void *opaque)
 			int result = get_block_address(query->fd,
 				(int)(block * CGBA_FLASH_BLOCK_SIZE), &raw);
 
-			cgba_block_addr[block] = raw;
+			cgba_block_addr[block] = (result < 0) ? NULL : raw;
 			if(block == 0)
 				query->first_result = result;
 			if(query->first_failed_block == UINT32_MAX &&
@@ -366,7 +366,7 @@ static int os_bfile_query_blocks(void *opaque)
 		int result = get_block_address(query->fd,
 			(int)(block * CGBA_FLASH_BLOCK_SIZE), &raw);
 
-		cgba_block_addr[block] = raw;
+		cgba_block_addr[block] = (result < 0) ? NULL : raw;
 		if(block == 0)
 			query->first_result = result;
 		if(query->first_failed_block == UINT32_MAX &&
@@ -888,7 +888,7 @@ static int build_block_table_ex(cgba_nor_rom *rom, const uint16_t *reopen_path,
 		if(ptr && ((((uintptr_t)ptr & 3u) != 0) ||
 				(uint64_t)(b + 1u) * CGBA_FLASH_BLOCK_SIZE > rom->size))
 			ptr = NULL;
-		if(ptr && ptr != cgba_block_addr[b]) {
+		if(ptr) {
 			invalidate_nor_block(ptr);
 			cache_invalidated = 1;
 		}

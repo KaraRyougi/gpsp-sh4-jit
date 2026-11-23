@@ -692,12 +692,56 @@ static void test_timer_start_and_cascade_reslice(void)
         (unsigned)a_reload);
 }
 
+static void test_bson_bounds_hardening(void)
+{
+  u8 buf[64];
+  u32 val = 0;
+  u8 out[16];
+
+  /* 1. doclen < 5 or doclen > GBA_STATE_MEM_SIZE must be rejected safely. */
+  memset(buf, 0x41, sizeof(buf));
+  buf[0] = 4; buf[1] = 0; buf[2] = 0; buf[3] = 0;
+  CHECK(bson_find_key(buf, "k") == NULL, "doclen=4 should be rejected");
+  buf[0] = 0xFF; buf[1] = 0xFF; buf[2] = 0xFF; buf[3] = 0x7F;
+  CHECK(bson_find_key(buf, "k") == NULL, "huge doclen should be rejected");
+
+  /* 2. Missing NUL key terminator within doclen must not read past doclen. */
+  memset(buf, 'a', sizeof(buf));
+  buf[0] = 10; buf[1] = 0; buf[2] = 0; buf[3] = 0;
+  buf[4] = BSON_TYPE_INT32;
+  CHECK(!bson_read_int32(buf, "aaaa", &val), "unterminated key should fail");
+
+  /* 3. Truncated INT32 payload (only 2 bytes left inside doclen). */
+  memset(buf, 0, sizeof(buf));
+  buf[0] = 9; /* 4 hdr + 1 type + 2 "k\0" + 2 payload (needs 4) */
+  buf[4] = BSON_TYPE_INT32;
+  buf[5] = 'k'; buf[6] = 0;
+  CHECK(!bson_read_int32(buf, "k", &val), "truncated int32 should fail");
+
+  /* 4. Unknown BSON type must terminate cleanly instead of looping. */
+  memset(buf, 0, sizeof(buf));
+  buf[0] = 16;
+  buf[4] = 0x7Fu;
+  buf[5] = 'x'; buf[6] = 0;
+  CHECK(bson_find_key(buf, "k") == NULL, "unknown BSON type should fail");
+
+  /* 5. Type confusion: INT32 field must fail bson_read_bytes(). */
+  memset(buf, 0, sizeof(buf));
+  buf[0] = 12; /* 4 hdr + 1 type + 2 "k\0" + 4 int32 + 1 NUL */
+  buf[4] = BSON_TYPE_INT32;
+  buf[5] = 'k'; buf[6] = 0;
+  buf[7] = 4; buf[8] = 0; buf[9] = 0; buf[10] = 0;
+  CHECK(bson_read_int32(buf, "k", &val) && val == 4u, "valid int32 should succeed");
+  CHECK(!bson_read_bytes(buf, "k", out, 4u), "type-confused bson_read_bytes should fail");
+}
+
 int main(void)
 {
   test_palette_cache_notifications();
   test_init_memory_clears_converted_palette();
   test_masked_latched_timer_reslice();
   test_timer_start_and_cascade_reslice();
+  test_bson_bounds_hardening();
   test_silent_timer_batch();
   test_bulk_dma_equivalence();
   test_waitcnt_invalidation();

@@ -261,24 +261,25 @@ void cgba_fps_init(cgba_fps_meter *m)
 int cgba_fps_tick(cgba_fps_meter *m, int drawn)
 {
 	uint32_t now = pace_ticks();
-	uint32_t elapsed;
+	uint32_t raw_delta;
 
 	m->emu_frames++;
 	if(drawn)
 		m->draw_frames++;
 
-	elapsed = ticks_elapsed(m->start_ticks, now);
+	raw_delta = now - m->start_ticks;
 	/* A gap far larger than the window (e.g. returning from a paused menu)
-	 * would skew one reading; treat it as a fresh window without reporting. */
-	if(elapsed >= 4u * RTC_HZ) {
+	 * or a midnight RTC rollover (now < start_ticks, so raw_delta wraps past
+	 * 4*RTC_HZ) would skew or stall readings; start a fresh window immediately. */
+	if(raw_delta >= 4u * RTC_HZ) {
 		m->emu_frames = 0;
 		m->draw_frames = 0;
 		m->start_ticks = now;
 		return 0;
 	}
-	if(elapsed >= RTC_HZ) {            /* ~1 s measurement window */
-		m->emu_fps = m->emu_frames * RTC_HZ / elapsed;
-		m->draw_fps = m->draw_frames * RTC_HZ / elapsed;
+	if(raw_delta >= RTC_HZ) {          /* ~1 s measurement window */
+		m->emu_fps = m->emu_frames * RTC_HZ / raw_delta;
+		m->draw_fps = m->draw_frames * RTC_HZ / raw_delta;
 		m->emu_frames = 0;
 		m->draw_frames = 0;
 		m->start_ticks = now;

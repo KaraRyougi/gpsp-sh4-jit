@@ -123,6 +123,7 @@ cpu_alert_type write_siocnt(u16 value) {
   u16 newval = (value & 0x7F8B) | (oldval & 0x0004);
   u32 pvmode = get_serial_mode(oldval, read_ioreg(REG_RCNT));
   u32 nwmode = get_serial_mode(newval, read_ioreg(REG_RCNT));
+  u32 prev_irq_cycles = serial_irq_cycles;
 
   if (pvmode != nwmode)
     serial_irq_cycles = 0;
@@ -175,6 +176,18 @@ cpu_alert_type write_siocnt(u16 value) {
         serial_irq_cycles = CLOCK_CYC_64KHZ_32BIT;
       }
     }
+    else if (serial_mode == SERIAL_MODE_DISABLED ||
+             serial_mode == SERIAL_MODE_AUTO) {
+      // Standalone GBA in normal mode with internal clock: complete the
+      // transfer after its nominal duration so SIOCNT bit 7 clears instead
+      // of hanging forever.
+      if ((newval & 0x0081) == 0x0081 && !serial_irq_cycles) {
+        serial_irq_cycles = (newval & 0x2) ? CLOCK_CYC_2MHZ_8BIT :
+                                             CLOCK_CYC_256KHZ_8BIT;
+        if (newval & 0x1000)
+          serial_irq_cycles <<= 2;
+      }
+    }
     break;
 
   case SERIAL_MODE_MULTI:
@@ -212,6 +225,9 @@ cpu_alert_type write_siocnt(u16 value) {
   // Update reg with its new value
   write_ioreg(REG_SIOCNT, newval);
 
+  if (serial_irq_cycles != 0 && serial_irq_cycles != prev_irq_cycles)
+    return CPU_ALERT_RESLICE;
+
   return CPU_ALERT_NONE;
 }
 
@@ -224,20 +240,20 @@ u32 serial_next_event() {
 
 // Account for consumed cycles and return if a serial IRQ should be raised.
 bool update_serial(unsigned cycles) {
+  bool dev_irq = false;
+  bool timer_irq = false;
+
   // Might wanna check if the connected device has some update (IRQ).
   switch (serial_mode) {
   case SERIAL_MODE_RFU:
-    if (rfu_update(cycles))
-      return true;
+    dev_irq = rfu_update(cycles);
     break;
   case SERIAL_MODE_SERIAL_POKE:
-    if (serialpoke_update(cycles))
-      return true;
+    dev_irq = serialpoke_update(cycles);
     break;
   case SERIAL_MODE_SERIAL_AW1:
   case SERIAL_MODE_SERIAL_AW2:
-    if (serialaw_update(cycles))
-      return true;
+    dev_irq = serialaw_update(cycles);
     break;
   };
 
@@ -260,15 +276,17 @@ bool update_serial(unsigned cycles) {
       // Set the device busy bit, to perform the weird SO/SI handshake.
       write_ioreg(REG_SIOCNT, (read_ioreg(REG_SIOCNT) & ~0x80) | 0x04);
       // Return if IRQs are enabled.
-      return read_ioreg(REG_SIOCNT) & 0x4000;
+      timer_irq = (read_ioreg(REG_SIOCNT) & 0x4000) != 0;
+      break;
     case SERIAL_MODE_MULTI:
       // Clear the start bit, signal data is ready.
       write_ioreg(REG_SIOCNT, (read_ioreg(REG_SIOCNT) & ~0x80));
       // Return if IRQs are enabled.
-      return read_ioreg(REG_SIOCNT) & 0x4000;
+      timer_irq = (read_ioreg(REG_SIOCNT) & 0x4000) != 0;
+      break;
     };
   }
 
-  return false;
+  return dev_irq || timer_irq;
 }
 

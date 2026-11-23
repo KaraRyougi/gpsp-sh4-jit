@@ -153,6 +153,13 @@ int main(void)
     ((uint32_t)FXCG100_BIOS_MODE_COUNT << 4);
   assert(!config_valid(&config));
 
+  /* Only 3 scaling filters exist (SMOOTH=0, SHARP=1, CRISP=2); filter 3 is invalid. */
+  config_from_state(&config, &state);
+  config.screen_filter = 2;
+  assert(config_valid(&config));
+  config.screen_filter = 3;
+  assert(!config_valid(&config));
+
   puts("fx-CG config migration and v4 fields passed");
   return 0;
 }

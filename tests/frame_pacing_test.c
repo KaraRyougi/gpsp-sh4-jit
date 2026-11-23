@@ -181,6 +181,34 @@ int main(void)
 		cgba_frame_limiter_stop();
 	}
 
+	/* Midnight RTC rollover (now < start_ticks): cgba_fps_tick() must reset
+	 * its window immediately instead of stalling for 24 hours. */
+	{
+		cgba_fps_meter fps;
+		int reported = 0;
+
+		/* Set clock 0.5 s before midnight (86400 * 128 - 64). */
+		now_us = ((uint64_t)(86400u * 128u - 64u) * 1000000ull) / 128ull;
+		cgba_fps_init(&fps);
+		for(int i = 0; i < 30; i++) {
+			now_us += 16667ull;
+			(void)cgba_fps_tick(&fps, 1);
+		}
+		/* Roll over past midnight back to ~0.1 s. */
+		now_us = 100000ull;
+		CHECK(cgba_fps_tick(&fps, 1) == 0,
+			"midnight rollover tick should reset window without reporting");
+		/* Run 1.1 s after midnight; FPS meter must recover and report ~60 fps. */
+		for(int i = 0; i < 70; i++) {
+			now_us += 16667ull;
+			if(cgba_fps_tick(&fps, 1))
+				reported++;
+		}
+		CHECK(reported >= 1 && fps.emu_fps >= 55u && fps.emu_fps <= 65u,
+			"FPS meter stalled after midnight rollover (reported=%d fps=%u)",
+			reported, (unsigned)fps.emu_fps);
+	}
+
 	if(failures)
 		return 1;
 	printf("frame_pacing_test: all checks passed\n");
