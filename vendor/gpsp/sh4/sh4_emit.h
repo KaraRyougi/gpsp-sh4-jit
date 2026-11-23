@@ -624,29 +624,41 @@ static inline void sh4g_ea_mixer_entry(u8 **tp, u32 pc)
                       CGBA_SH4_EA_MIXER_W0, pc, 1, 0);
 }
 
+int cgba_sh4_4ch_resample_match_iwram(u32 off);
+
 static inline void sh4g_audio_mixer_entry(u8 **tp, u32 pc)
 {
   u32 off, avail, i;
   uint32_t nwords = 0u;
   uint32_t wbuf[CGBA_SH4_AUDIO_MIXER_MAX_WORDS];
   u32 w0;
-  int kind;
+  int kind = CGBA_SH4_AUDIO_MIXER_NONE;
 
   if ((pc >> 24) != 0x03u || (pc & 3u) != 0u)
     return;
   off = pc & 0x7FFFu;
-  if (off + 29u * 4u > 0x8000u)
+  if (off + 8u * 4u > 0x8000u)
     return;
   w0 = readaddress32(iwram + 0x8000u, off);
   if (w0 != 0xE92D0FF0u && w0 != 0xE92D4FF0u &&
-      w0 != 0xE92D0FF1u && w0 != 0xE92D5FFEu)
+      w0 != 0xE92D0FF1u && w0 != 0xE92D5FFEu &&
+      w0 != 0xE92D4000u)
     return;
-  avail = (0x8000u - off) >> 2;
-  if (avail > CGBA_SH4_AUDIO_MIXER_MAX_WORDS)
-    avail = CGBA_SH4_AUDIO_MIXER_MAX_WORDS;
-  for (i = 0u; i < avail; i++)
-    wbuf[i] = readaddress32(iwram + 0x8000u, off + i * 4u);
-  kind = cgba_sh4_audio_mixer_match_words(wbuf, avail, &nwords);
+  if (w0 == 0xE92D4000u && off + CGBA_SH4_4CH_RESAMPLE_WORDS * 4u <= 0x8000u &&
+      readaddress32(iwram + 0x8000u, off + 4u) == 0xE92D1FFFu) {
+    if (cgba_sh4_4ch_resample_match_iwram(off)) {
+      kind = CGBA_SH4_AUDIO_MIXER_4CH_RESAMPLE;
+      nwords = CGBA_SH4_4CH_RESAMPLE_WORDS;
+    }
+  }
+  if (kind == CGBA_SH4_AUDIO_MIXER_NONE) {
+    avail = (0x8000u - off) >> 2;
+    if (avail > CGBA_SH4_AUDIO_MIXER_MAX_WORDS)
+      avail = CGBA_SH4_AUDIO_MIXER_MAX_WORDS;
+    for (i = 0u; i < avail; i++)
+      wbuf[i] = readaddress32(iwram + 0x8000u, off + i * 4u);
+    kind = cgba_sh4_audio_mixer_match_words(wbuf, avail, &nwords);
+  }
   if (kind == CGBA_SH4_AUDIO_MIXER_NONE)
     return;
   if (sh4g_range_has_observer(pc, pc + nwords * 4u))

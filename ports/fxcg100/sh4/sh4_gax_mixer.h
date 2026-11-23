@@ -30,7 +30,12 @@ enum {
   CGBA_SH4_AUDIO_MIXER_VV_A           = 3, /* 76 words (G0216_AJCE) */
   CGBA_SH4_AUDIO_MIXER_VV_B           = 4, /* 55 words (G0131_ACUJ) */
   CGBA_SH4_AUDIO_MIXER_EUROCOM_INTERP = 5, /* 64 words forward path (G0148_A7HJ) */
-  CGBA_SH4_AUDIO_MIXER_EUROCOM_RAW    = 6  /* 55 words forward path (G0046_ADNJ) */
+  CGBA_SH4_AUDIO_MIXER_EUROCOM_RAW    = 6, /* 55 words forward path (G0046_ADNJ) */
+  CGBA_SH4_AUDIO_MIXER_4CH_SUM1       = 7, /* 8 words: 1-ch byte sum + LUT clamp */
+  CGBA_SH4_AUDIO_MIXER_4CH_SUM2       = 8, /* 10 words: 2-ch byte sum + LUT clamp */
+  CGBA_SH4_AUDIO_MIXER_4CH_SUM3       = 9, /* 12 words: 3-ch byte sum + LUT clamp */
+  CGBA_SH4_AUDIO_MIXER_4CH_SUM4       = 10,/* 14 words: 4-ch byte sum + LUT clamp */
+  CGBA_SH4_AUDIO_MIXER_4CH_RESAMPLE   = 11 /* 195 words: 4-ch resample+mix+clamp (G0226_B6GE) */
 };
 
 enum {
@@ -40,6 +45,7 @@ enum {
   CGBA_SH4_VV_B_WORDS           = 55u,
   CGBA_SH4_EUROCOM_INTERP_WORDS = 64u,
   CGBA_SH4_EUROCOM_RAW_WORDS    = 56u,
+  CGBA_SH4_4CH_RESAMPLE_WORDS   = 195u,
   CGBA_SH4_AUDIO_MIXER_MAX_WORDS = 76u,
   CGBA_SH4_AUDIO_MIXER_MAX_SAMPLES = 4096u
 };
@@ -270,10 +276,123 @@ static inline int cgba_sh4_eurocom_match(const uint32_t *w, unsigned avail)
   return CGBA_SH4_AUDIO_MIXER_NONE;
 }
 
+/* 1..4 channel byte-PCM sum + LUT clamp mixer (e.g. G0226_B6GE):
+ *   stmfd sp!, {lr}
+ *   ldrsb r0, [r3], #1
+ *   [ldrsb r11, [r5/r7/r9], #1; add r0, r0, r11] * (N-1)
+ *   ldrb r0, [r12, r0]; strb r0, [r2], #1; subs r1, r1, #1; bgt loop
+ *   mov r11, #0xff; ldmfd sp!, {pc} */
+static inline int cgba_sh4_4ch_sum_match(const uint32_t *w, unsigned avail,
+                                         uint32_t *words_out)
+{
+  static const uint32_t ch_ld[3] = {
+    0xE0D5B0D1u, 0xE0D7B0D1u, 0xE0D9B0D1u
+  };
+  unsigned nch;
+  if (avail < 8u || w[0] != 0xE92D4000u || w[1] != 0xE0D300D1u)
+    return CGBA_SH4_AUDIO_MIXER_NONE;
+  for (nch = 4u; nch >= 1u; nch--) {
+    unsigned k = 2u * nch;
+    unsigned i;
+    int ok = 1;
+    if (avail < k + 6u)
+      continue;
+    for (i = 0u; i + 1u < nch; i++) {
+      if (w[2u + 2u * i] != ch_ld[i] || w[3u + 2u * i] != 0xE080000Bu) {
+        ok = 0;
+        break;
+      }
+    }
+    if (!ok)
+      continue;
+    if (w[k + 0u] == 0xE7DC0000u &&
+        w[k + 1u] == 0xE4C20001u &&
+        w[k + 2u] == 0xE2511001u &&
+        w[k + 3u] == (0xCAFFFFFCu - k) &&
+        w[k + 4u] == 0xE3A0B0FFu &&
+        w[k + 5u] == 0xE8BD8000u) {
+      if (words_out) *words_out = k + 6u;
+      return (int)(CGBA_SH4_AUDIO_MIXER_4CH_SUM1 + (nch - 1u));
+    }
+  }
+  return CGBA_SH4_AUDIO_MIXER_NONE;
+}
+
+/* 4-channel fixed-point resampling + mix + clamp IWRAM mixer (195 words,
+ * e.g. G0226_B6GE).  Uses a callback or flat word array so callers do not
+ * need a 780-byte stack buffer on every ARM block prologue. */
+static inline int cgba_sh4_4ch_resample_match_words(const uint32_t *w,
+                                                    unsigned avail)
+{
+  static const uint32_t load_ch0[8] = {
+    0xE59A0004u, 0xE59A1008u, 0xE59A300Cu, 0xE5DA4033u,
+    0xE59A2010u, 0xE1DAC1B6u, 0xE35C0000u, 0x03A02000u
+  };
+  static const uint32_t load_ch1[8] = {
+    0xE59A5004u, 0xE59A6008u, 0xE59A800Cu, 0xE5DA9033u,
+    0xE59A7010u, 0xE1DAC1B6u, 0xE35C0000u, 0x03A07000u
+  };
+  static const uint32_t setup[7] = {
+    0xE1DBA4B2u, 0xE004049Au, 0xE009099Au, 0xE59BE048u,
+    0xE1DBA4B0u, 0xE35A0000u, 0x0A00009Fu
+  };
+  static const uint32_t clamp_epilogue[13] = {
+    0xE49B6004u, 0xE1A06746u, 0xE356007Fu, 0xC3A0607Fu,
+    0xE376007Fu, 0xB3E0607Fu, 0xE4CC6001u, 0xE2577001u,
+    0xCAFFFFF6u, 0xE3A00064u, 0xE8BD1FFFu, 0xE8BD4000u,
+    0xE12FFF1Eu
+  };
+  unsigned i;
+  if (avail < CGBA_SH4_4CH_RESAMPLE_WORDS)
+    return 0;
+  if (w[0] != 0xE92D4000u || w[1] != 0xE92D1FFFu || w[2] != 0xE92D0800u ||
+      (w[3] & 0xFFFFF000u) != 0xE59F0000u ||
+      w[4] != 0xE3A01000u || w[5] != 0xE5801000u ||
+      (w[6] & 0xFFFFF000u) != 0xE59FA000u ||
+      (w[15] & 0xFFFFF000u) != 0xE59FA000u)
+    return 0;
+  for (i = 0u; i < 8u; i++) {
+    if (w[7u + i] != load_ch0[i] || w[16u + i] != load_ch1[i])
+      return 0;
+  }
+  for (i = 0u; i < 7u; i++) {
+    if (w[24u + i] != setup[i])
+      return 0;
+  }
+  /* Loop 1 ch0 & ch1 fast-path core + writeback */
+  if (w[31] != 0xE1530001u || w[32] != 0x3A000011u || w[33] != 0xE92D5C00u ||
+      (w[46] & 0xFFFFF000u) != 0xE59F0000u ||
+      w[47] != 0xE3A01D80u || w[48] != 0xE3A02000u || w[49] != 0xE3A03000u ||
+      w[50] != 0xE8BD5C00u || w[51] != 0xE1A0B6A3u || w[52] != 0xE190B0DBu ||
+      w[53] != 0xE00C049Bu || w[54] != 0xE0833002u ||
+      w[55] != 0xE1580006u || w[56] != 0x3A000011u || w[57] != 0xE92D5C00u ||
+      w[75] != 0xE1A0B6A8u || w[76] != 0xE195B0DBu || w[77] != 0xE02CC99Bu ||
+      w[78] != 0xE0888007u || w[79] != 0xE48EC004u || w[80] != 0xE25AA001u ||
+      w[81] != 0xCAFFFFCCu)
+    return 0;
+  /* Loop 2 channel loads, accumulate tail, and 32->8 clamp epilogue */
+  if ((w[90] & 0xFFFFF000u) != 0xE59FA000u ||
+      (w[99] & 0xFFFFF000u) != 0xE59FA000u ||
+      w[163] != 0xE59EB000u || w[164] != 0xE08CC00Bu ||
+      w[165] != 0xE48EC004u || w[166] != 0xE25AA001u ||
+      w[167] != 0xCAFFFFCAu)
+    return 0;
+  for (i = 0u; i < 13u; i++) {
+    if (w[182u + i] != clamp_epilogue[i])
+      return 0;
+  }
+  return 1;
+}
+
 static inline int cgba_sh4_audio_mixer_match_words(const uint32_t *w,
                                                    unsigned avail,
                                                    uint32_t *words_out)
 {
+  if (avail >= 8u && w[0] == 0xE92D4000u) {
+    int sk = cgba_sh4_4ch_sum_match(w, avail, words_out);
+    if (sk != CGBA_SH4_AUDIO_MIXER_NONE)
+      return sk;
+  }
   if (avail < 29u)
     return CGBA_SH4_AUDIO_MIXER_NONE;
   if (w[0] == 0xE92D0FF0u && cgba_sh4_gax_std_match(w, avail)) {
@@ -451,6 +570,55 @@ static inline int cgba_sh4_eurocom_advance_fwd(
   *frac_io = (uint16_t)r11;
   if (samples_done_out) *samples_done_out = 128u;
   return 0;
+}
+
+/* Exact O(1)-fast-forward state model for one channel of the 4-channel
+ * resampling mixer (CGBA_SH4_AUDIO_MIXER_4CH_RESAMPLE).  Updates src, end,
+ * step, pos, and active exactly as the ARM loop does over n_samples samples. */
+static inline void cgba_sh4_4ch_chan_advance(
+  uint32_t *src_io, uint32_t *end_io, uint32_t *step_io, uint32_t *pos_io,
+  uint16_t *active_io, uint32_t silence_ptr, uint8_t loop_flag,
+  uint32_t loop_start, uint32_t loop_end, uint32_t n_samples)
+{
+  uint32_t src = *src_io;
+  uint32_t end = *end_io;
+  uint32_t step = (*active_io == 0u) ? 0u : *step_io;
+  uint32_t pos = *pos_io;
+  uint16_t active = *active_io;
+  uint32_t rem = n_samples;
+
+  while (rem > 0u) {
+    if (pos < end) {
+      if (step == 0u)
+        break;
+      {
+        uint32_t gap = end - pos;
+        uint32_t k = (gap - 1u) / step + 1u;
+        if (k > rem)
+          k = rem;
+        pos += k * step;
+        rem -= k;
+      }
+    } else {
+      if (loop_flag == 0u) {
+        active = 0u;
+        src = silence_ptr;
+        end = 0x2000u;
+        step = 0u;
+        pos = 0u;
+        break;
+      }
+      end = loop_end;
+      pos = loop_start + (pos - loop_end);
+      pos += step;
+      rem--;
+    }
+  }
+  *src_io = src;
+  *end_io = end;
+  *step_io = step;
+  *pos_io = pos;
+  *active_io = active;
 }
 
 #endif /* CGBA_SH4_GAX_MIXER_H */

@@ -67,6 +67,8 @@ u8  cgba_hot_count[16384];
 int cgba_cold_pending;
 int cgba_cold_gate_enable;
 int cgba_cold_gate_probe;   /* >0: gate checks don't heat (external-exit resolution) */
+u32 cgba_sp_non_iwram_disable;
+u32 cgba_sp_non_iwram_deopts;
 #if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
 u32 cgba_dynarec_cold_interp_count;
 #ifdef CGBA_GPSP_HEADLESS_TEST
@@ -1829,6 +1831,31 @@ static inline int cgba_sh4_mixer_src_region_ok(u32 addr)
   return r == 0x02u || r == 0x03u || (r >= 0x08u && r <= 0x0Du);
 }
 
+int __attribute__((noinline)) cgba_sh4_4ch_resample_match_iwram(u32 off)
+{
+  uint32_t wbuf[CGBA_SH4_4CH_RESAMPLE_WORDS];
+  unsigned i;
+  if (off + CGBA_SH4_4CH_RESAMPLE_WORDS * 4u > 0x8000u)
+    return 0;
+  for (i = 0u; i < CGBA_SH4_4CH_RESAMPLE_WORDS; i++)
+    wbuf[i] = readaddress32(iwram + 0x8000u, off + i * 4u);
+  return cgba_sh4_4ch_resample_match_words(wbuf, CGBA_SH4_4CH_RESAMPLE_WORDS);
+}
+
+static inline int cgba_sh4_iwram_pc_lit32(u32 iw_off, u32 wi, u32 *out)
+{
+  u32 insn_off = iw_off + wi * 4u;
+  u32 insn, lit_off;
+  if (insn_off + 4u > 0x8000u)
+    return 0;
+  insn = readaddress32(iwram + 0x8000u, insn_off);
+  lit_off = insn_off + 8u + (insn & 0xFFFu);
+  if ((lit_off & 3u) != 0u || lit_off + 4u > 0x8000u)
+    return 0;
+  *out = readaddress32(iwram + 0x8000u, lit_off);
+  return 1;
+}
+
 /* Soundless fast skips for Shin'en GAX, Vicarious Visions / Krawall, and
  * Eurocom / Factor 5 IWRAM stereo PCM mixers (see sh4_gax_mixer.h). */
 int cgba_sh4_audio_mixer_try(u32 kind, u32 pc)
@@ -1986,6 +2013,140 @@ int cgba_sh4_audio_mixer_try(u32 kind, u32 pc)
       est_c = 28u + samples_done * per_s;
     }
     return cgba_sh4_return_via_lr(lr, (u32)est_c, budget);
+  }
+
+  if (kind >= CGBA_SH4_AUDIO_MIXER_4CH_SUM1 &&
+      kind <= CGBA_SH4_AUDIO_MIXER_4CH_SUM4) {
+    u32 nch = (kind - CGBA_SH4_AUDIO_MIXER_4CH_SUM1) + 1u;
+    u32 n = reg[1];
+    u32 dst = reg[2];
+    u32 s0 = reg[3], s1 = reg[5], s2 = reg[7], s3 = reg[9], lut = reg[12];
+    u32 per_s, est_c;
+    if ((s32)n <= 0 || n > CGBA_SH4_AUDIO_MIXER_MAX_SAMPLES)
+      return 0;
+    if (((dst >> 24) != 0x03u && (dst >> 24) != 0x02u) ||
+        !cgba_sh4_mixer_src_region_ok(s0) ||
+        !cgba_sh4_mixer_src_region_ok(lut))
+      return 0;
+    if ((nch >= 2u && !cgba_sh4_mixer_src_region_ok(s1)) ||
+        (nch >= 3u && !cgba_sh4_mixer_src_region_ok(s2)) ||
+        (nch >= 4u && !cgba_sh4_mixer_src_region_ok(s3)))
+      return 0;
+    per_s = 6u + 2u * nch + (u32)ws_cyc_nseq[s0 >> 24][0] +
+            (u32)ws_cyc_nseq[lut >> 24][0] + (u32)ws_cyc_nseq[dst >> 24][0];
+    if (nch >= 2u) per_s += (u32)ws_cyc_nseq[s1 >> 24][0];
+    if (nch >= 3u) per_s += (u32)ws_cyc_nseq[s2 >> 24][0];
+    if (nch >= 4u) per_s += (u32)ws_cyc_nseq[s3 >> 24][0];
+    reg[1] = 0u;
+    reg[2] = dst + n;
+    reg[3] = s0 + n;
+    if (nch >= 2u) reg[5] = s1 + n;
+    if (nch >= 3u) reg[7] = s2 + n;
+    if (nch >= 4u) reg[9] = s3 + n;
+    reg[11] = 0xFFu;
+    reg[REG_CPSR] = (reg[REG_CPSR] & ~0xF0000000u) | 0x60000000u;
+    est_c = 12u + n * per_s;
+    /* Epilogue is `ldmfd sp!, {pc}` (ARMv4T never switches to Thumb on odd lr). */
+    return cgba_sh4_return_via_lr(lr & ~3u, est_c, budget);
+  }
+
+  if (kind == CGBA_SH4_AUDIO_MIXER_4CH_RESAMPLE) {
+    u32 iw_off = pc & 0x7FFFu;
+    u32 flag_addr, silence_ptr, ch_ptrs[4];
+    u8 *fdata = NULL, *mdata = NULL, *cdata[4];
+    const u8 *ftags = NULL, *mtags = NULL, *ctags[4];
+    u32 foff = 0u, moff = 0u, coff[4];
+    u32 n_samples, mix_buf, pcm_buf, est_c, ch_ws = 0u;
+    unsigned ci;
+
+    if (!cgba_sh4_iwram_pc_lit32(iw_off, 3u, &flag_addr) ||
+        !cgba_sh4_iwram_pc_lit32(iw_off, 6u, &ch_ptrs[0]) ||
+        !cgba_sh4_iwram_pc_lit32(iw_off, 15u, &ch_ptrs[1]) ||
+        !cgba_sh4_iwram_pc_lit32(iw_off, 46u, &silence_ptr) ||
+        !cgba_sh4_iwram_pc_lit32(iw_off, 90u, &ch_ptrs[2]) ||
+        !cgba_sh4_iwram_pc_lit32(iw_off, 99u, &ch_ptrs[3]))
+      return 0;
+    if (!cgba_sh4_mixer_ram_struct(flag_addr, 4u, &fdata, &ftags, &foff) ||
+        cgba_smc_tags_nonzero(ftags + foff, 4u))
+      return 0;
+    if (!cgba_sh4_mixer_ram_struct(reg[11], 0x4Cu, &mdata, &mtags, &moff))
+      return 0;
+    if (fdata == mdata && foff + 4u > moff && foff < moff + 0x4Cu)
+      return 0;
+    n_samples = readaddress16(mdata, moff + 0x40u);
+    if (n_samples == 0u || n_samples > CGBA_SH4_AUDIO_MIXER_MAX_SAMPLES)
+      return 0;
+    pcm_buf = readaddress32(mdata, moff + 0x44u);
+    mix_buf = readaddress32(mdata, moff + 0x48u);
+    if (((pcm_buf >> 24) != 0x03u && (pcm_buf >> 24) != 0x02u) ||
+        ((mix_buf >> 24) != 0x03u && (mix_buf >> 24) != 0x02u))
+      return 0;
+    for (ci = 0u; ci < 4u; ci++) {
+      if (!cgba_sh4_mixer_ram_struct(ch_ptrs[ci], 0x34u,
+                                     &cdata[ci], &ctags[ci], &coff[ci]) ||
+          cgba_smc_tags_nonzero(ctags[ci] + coff[ci], 0x34u) ||
+          (fdata == cdata[ci] && foff + 4u > coff[ci] && foff < coff[ci] + 0x34u))
+        return 0;
+    }
+
+    /* Validate inst_ptr before mutating any channel state so decline is atomic. */
+    {
+      uint32_t src[4], end[4], step[4], pos[4];
+      uint16_t active[4];
+      uint8_t loop_flag[4] = {0, 0, 0, 0};
+      uint32_t loop_start[4] = {0, 0, 0, 0};
+      uint32_t loop_end[4] = {0, 0, 0, 0};
+      for (ci = 0u; ci < 4u; ci++) {
+        u32 inst_ptr = readaddress32(cdata[ci], coff[ci] + 0x00u);
+        src[ci]    = readaddress32(cdata[ci], coff[ci] + 0x04u);
+        end[ci]    = readaddress32(cdata[ci], coff[ci] + 0x08u);
+        pos[ci]    = readaddress32(cdata[ci], coff[ci] + 0x0Cu);
+        step[ci]   = readaddress32(cdata[ci], coff[ci] + 0x10u);
+        active[ci] = readaddress16(cdata[ci], coff[ci] + 0x16u);
+        if (!cgba_sh4_mixer_src_region_ok(src[ci]))
+          return 0;
+        {
+          uint32_t eff_step = (active[ci] == 0u) ? 0u : step[ci];
+          int may_hit_end = (pos[ci] >= end[ci]) ||
+            (eff_step != 0u &&
+             ((uint64_t)pos[ci] + (uint64_t)(n_samples - 1u) * (uint64_t)eff_step >=
+              (uint64_t)end[ci]));
+          if (may_hit_end) {
+            if (!cgba_sh4_mixer_src_region_ok(inst_ptr))
+              return 0;
+            loop_flag[ci] = (uint8_t)read_memory8(inst_ptr + 0x16u);
+            if (loop_flag[ci] != 0u) {
+              loop_start[ci] = (uint32_t)read_memory32(inst_ptr + 0x0Cu);
+              loop_end[ci]   = (uint32_t)read_memory32(inst_ptr + 0x10u);
+              if (loop_end[ci] <= loop_start[ci])
+                return 0;
+            }
+          }
+        }
+        ch_ws += (u32)ws_cyc_nseq[src[ci] >> 24][0];
+      }
+
+      /* Commit: zero the busy flag and advance all 4 channels in O(1). */
+      address32(fdata, foff) = 0u;
+      for (ci = 0u; ci < 4u; ci++) {
+        uint16_t old_active = active[ci];
+        cgba_sh4_4ch_chan_advance(&src[ci], &end[ci], &step[ci], &pos[ci],
+                                  &active[ci], silence_ptr, loop_flag[ci],
+                                  loop_start[ci], loop_end[ci], n_samples);
+        address32(cdata[ci], coff[ci] + 0x04u) = eswap32((u32)src[ci]);
+        address32(cdata[ci], coff[ci] + 0x08u) = eswap32((u32)end[ci]);
+        address32(cdata[ci], coff[ci] + 0x0Cu) = eswap32((u32)pos[ci]);
+        if (ci >= 2u)
+          address32(cdata[ci], coff[ci] + 0x10u) = eswap32((u32)step[ci]);
+        if (active[ci] != old_active)
+          address16(cdata[ci], coff[ci] + 0x16u) = eswap16((u16)active[ci]);
+      }
+    }
+    reg[REG_CPSR] = (reg[REG_CPSR] & ~0xF0000000u) | 0x60000000u;
+    est_c = 120u + n_samples * (55u + ch_ws +
+                                4u * (u32)ws_cyc_nseq[mix_buf >> 24][1] +
+                                (u32)ws_cyc_nseq[pcm_buf >> 24][0]);
+    return cgba_sh4_return_via_lr(lr, est_c, budget);
   }
 
   return 0;
@@ -3092,7 +3253,15 @@ static u32 cgba_swi_fastset_engine(s32 remaining)
 #endif
           {
             smc_changed = cgba_smc_copy_changes_tagged(dh, sh, tags, bytes);
-            memmove(dh, sh, bytes);
+#if defined(CGBA_SH4_ASM_4BPP) && defined(__sh__)
+            if (bytes >= 64u && ((((uintptr_t)dh | (uintptr_t)sh) & 3u) == 0u) &&
+                ((uintptr_t)sh >= (uintptr_t)dh + bytes ||
+                 (uintptr_t)dh >= (uintptr_t)sh + bytes)) {
+              extern void cgba_dma_copy_movca_sh4(void *dst, const void *src, u32 nbytes);
+              cgba_dma_copy_movca_sh4(dh, sh, bytes);
+            } else
+#endif
+              memmove(dh, sh, bytes);
           }
           /* The copy just overwrote tagged RAM code. The engine's return and
              park points do NOT run the common HLE tail, so flush the RAM
@@ -3439,7 +3608,15 @@ static u32 cgba_swi_cpuset_engine(s32 remaining)
 #endif
           {
             smc_changed = cgba_smc_copy_changes_tagged(dh, sh, tags, bytes);
-            memmove(dh, sh, bytes);
+#if defined(CGBA_SH4_ASM_4BPP) && defined(__sh__)
+            if (bytes >= 64u && ((((uintptr_t)dh | (uintptr_t)sh) & 3u) == 0u) &&
+                ((uintptr_t)sh >= (uintptr_t)dh + bytes ||
+                 (uintptr_t)dh >= (uintptr_t)sh + bytes)) {
+              extern void cgba_dma_copy_movca_sh4(void *dst, const void *src, u32 nbytes);
+              cgba_dma_copy_movca_sh4(dh, sh, bytes);
+            } else
+#endif
+              memmove(dh, sh, bytes);
           }
           if (smc_changed)
             flush_translation_cache_ram();
@@ -5690,6 +5867,30 @@ u32 cgba_sh4_cold_interp(u32 cycles)
 
   if (chunk <= 0)
     chunk = 1;                           /* always make forward progress */
+#ifdef SH4_ARCH
+  /* If a Thumb block compiled with the proven-IWRAM SP-span guard is entered
+   * with a non-IWRAM stack (e.g., EWRAM coroutine stack at 0x02xxxxxx in
+   * Shining Soul II), every invocation would otherwise bounce through this
+   * 512-cycle interpreter fallback. After 16 such deopts, disable the IWRAM
+   * SP-span specialization and flush once so shared Thumb blocks retranslate
+   * with general fastmem (which natively handles both IWRAM and EWRAM). */
+  if (!cgba_sp_non_iwram_disable &&
+      (reg[REG_CPSR] & 0x20u) != 0u &&
+      (reg[13] & 0xFF000000u) != 0x03000000u) {
+    u32 entry_pc = reg[REG_PC];
+    u32 region = entry_pc >> 24;
+    if (region == 0x02u || region == 0x03u ||
+        (region >= 0x08u && region <= 0x0Du)) {
+      u16 op = (u16)read_memory16(entry_pc);
+      if ((op & 0xF000u) == 0x9000u && (op & 0xFFu) <= 15u) {
+        if (++cgba_sp_non_iwram_deopts >= 16u) {
+          cgba_sp_non_iwram_disable = 1u;
+          flush_dynarec_caches();
+        }
+      }
+    }
+  }
+#endif
 #if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
   cgba_dynarec_cold_interp_count++;
 #endif

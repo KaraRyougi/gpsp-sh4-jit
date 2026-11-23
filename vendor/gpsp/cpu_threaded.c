@@ -3131,6 +3131,8 @@ extern int cgba_cold_pending;
 #ifdef SH4_ARCH
 extern int cgba_cold_gate_enable;
 extern int cgba_cold_gate_probe;
+extern u32 cgba_sp_non_iwram_disable;
+extern u32 cgba_sp_non_iwram_deopts;
 #else
 #define cgba_cold_gate_enable 0
 #define cgba_cold_gate_probe 0
@@ -6087,6 +6089,8 @@ bool translate_block_thumb(u32 pc, bool ram_region)
        * batches any consecutive covered SP ops under a single `iwram_bias + SP`
        * pointer (5 insns/op, compile-time cycle fold, full reg forwarding). */
       if (!thumb_fused && allow_fuse &&
+          !cgba_sp_non_iwram_disable &&
+          (reg[13] & 0xFF000000u) == 0x03000000u &&
           (cur_op & 0xF000u) == 0x9000u &&
           ((cur_op & 0xFFu) <= 15u)) {
         u32 sp_off = (cur_op & 0xFFu) << 2;
@@ -6562,6 +6566,8 @@ void init_dynarec_caches(void)
   cgba_sh4_fm_ool_reset_all();
   memset(cgba_hot_count, 0, sizeof(cgba_hot_count));
   cgba_cold_pending = 0;
+  cgba_sp_non_iwram_disable = 0;
+  cgba_sp_non_iwram_deopts = 0;
 #endif
 #ifdef SH4_ARCH
   cgba_sh4_scan_caps_reset(&cgba_ram_block_scan_cap,

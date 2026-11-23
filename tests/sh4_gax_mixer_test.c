@@ -166,10 +166,89 @@ static void test_vv_and_eurocom(void)
         "Eurocom ended channel leaves cur/frac untouched");
 }
 
+static void test_4ch_mixers(void)
+{
+  static const uint32_t sum4[14] = {
+    0xE92D4000u, 0xE0D300D1u, 0xE0D5B0D1u, 0xE080000Bu,
+    0xE0D7B0D1u, 0xE080000Bu, 0xE0D9B0D1u, 0xE080000Bu,
+    0xE7DC0000u, 0xE4C20001u, 0xE2511001u, 0xCAFFFFF4u,
+    0xE3A0B0FFu, 0xE8BD8000u
+  };
+  static const uint32_t sum1[8] = {
+    0xE92D4000u, 0xE0D300D1u, 0xE7DC0000u, 0xE4C20001u,
+    0xE2511001u, 0xCAFFFFFAu, 0xE3A0B0FFu, 0xE8BD8000u
+  };
+  uint32_t bad[14];
+  uint32_t nw = 0u;
+
+  check(cgba_sh4_audio_mixer_match_words(sum4, 14u, &nw) ==
+        CGBA_SH4_AUDIO_MIXER_4CH_SUM4 && nw == 14u, "match 4ch sum mixer");
+  check(cgba_sh4_audio_mixer_match_words(sum1, 8u, &nw) ==
+        CGBA_SH4_AUDIO_MIXER_4CH_SUM1 && nw == 8u, "match 1ch sum mixer");
+  memcpy(bad, sum4, sizeof(sum4));
+  bad[8] ^= 1u;
+  check(cgba_sh4_audio_mixer_match_words(bad, 14u, &nw) ==
+        CGBA_SH4_AUDIO_MIXER_NONE, "reject mutated 4ch sum mixer");
+
+  /* Exhaustively cross-check cgba_sh4_4ch_chan_advance against step-by-step */
+  {
+    const uint32_t silence = 0x080F382Cu;
+    struct {
+      uint32_t src, end, step, pos;
+      uint16_t active;
+      uint8_t loop;
+      uint32_t lstart, lend, n;
+    } cases[] = {
+      { 0x08010000u, 0x50000u, 0x1800u, 0x0400u, 1u, 0u, 0u, 0u, 20u },
+      { 0x08010000u, 0x0A000u, 0x1800u, 0x0400u, 1u, 0u, 0u, 0u, 20u },
+      { 0x08010000u, 0x0A000u, 0x1333u, 0x0400u, 1u, 1u, 0x2000u, 0x9000u, 128u },
+      { 0x08010000u, 0x0A000u, 0x1800u, 0x0400u, 0u, 0u, 0u, 0u, 20u },
+      { 0x08010000u, 0x02000u, 0x0700u, 0x2500u, 1u, 1u, 0x1000u, 0x4000u, 50u },
+      { 0x08010000u, 0x02000u, 0x0700u, 0x2500u, 1u, 0u, 0u, 0u, 50u },
+      { 0x08010000u, 0x02000u, 0x0000u, 0x0100u, 1u, 1u, 0x0000u, 0x2000u, 16u },
+      { 0x08010000u, 0x02000u, 0x0700u, 0x1F00u, 1u, 1u, 0x1000u, 0x2000u, 1u },
+      { 0x08010000u, 0xFFFFFFF0u, 0x0100u, 0xFFFFFFE0u, 1u, 0u, 0u, 0u, 10u },
+    };
+    unsigned ci;
+    for (ci = 0u; ci < sizeof(cases) / sizeof(cases[0]); ci++) {
+      uint32_t src = cases[ci].src, end = cases[ci].end;
+      uint32_t step = cases[ci].step, pos = cases[ci].pos;
+      uint16_t act = cases[ci].active;
+      uint32_t r_src = src, r_end = end, r_step = act ? step : 0u, r_pos = pos;
+      uint16_t r_act = act;
+      uint32_t i;
+
+      for (i = 0u; i < cases[ci].n; i++) {
+        if (r_pos >= r_end) {
+          if (cases[ci].loop) {
+            r_end = cases[ci].lend;
+            r_pos = cases[ci].lstart + (r_pos - cases[ci].lend);
+          } else {
+            r_act = 0u;
+            r_src = silence;
+            r_end = 0x2000u;
+            r_step = 0u;
+            r_pos = 0u;
+          }
+        }
+        r_pos += r_step;
+      }
+
+      cgba_sh4_4ch_chan_advance(&src, &end, &step, &pos, &act, silence,
+                                cases[ci].loop, cases[ci].lstart,
+                                cases[ci].lend, cases[ci].n);
+      check(src == r_src && end == r_end && step == r_step &&
+            pos == r_pos && act == r_act,
+            "4ch resample channel advance matches step-by-step reference");
+    }
+  }
+}
+
 int main(void)
 {
   test_gax_std_and_pingpong();
   test_vv_and_eurocom();
+  test_4ch_mixers();
   printf("sh4_gax_mixer_test: all %u checks passed\n", checks);
   return 0;
 }
