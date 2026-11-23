@@ -6,6 +6,8 @@
 #define CGBA_VIDEO_DIRTY_SCANLINE 1
 #define CGBA_VIDEO_SPRITE_DECODE_CACHE 1
 #define CGBA_VIDEO_BACKDROP_SHADOW_PALETTE 1
+#define CGBA_VIDEO_PAIR_PALETTE 1
+#define CGBA_VIDEO_TEST_M1_FOLDED 1
 #define CGBA_VIDEO_OPAQUE_ROW_UNROLL 1
 
 #include "../vendor/gpsp/video.cc"
@@ -1684,6 +1686,114 @@ static bool run_tests(void)
         }
       }
     }
+  }
+
+  /* 7. Mode 1 folded-palette strip pinning (>16 distinct solid colors in a single
+   *    24-row strip + 2-color eviction when 16-slot cache is full) and
+   *    unconditional BG cache invalidation on video_invalidate_scanline_cache(0, 160)
+   *    when cgba_vram_sb_dirty has a partial non-zero mask. */
+  {
+    /* 7a. Mode 1 folded blend: 24 distinct solid colors in strip [0, 24) */
+    memset(io_registers, 0, sizeof(io_registers));
+    memset(vram, 0, sizeof(vram));
+    memset(oam_ram, 0, sizeof(oam_ram));
+    for (u32 i = 0; i < 128u; i++)
+      oam_ram[i * 4u] = eswap16(0x0200u);
+    /* Give every palette index a distinct RGB565 color so keys never collide. */
+    for (u32 i = 0; i < 512u; i++)
+      palette_ram_converted[i] = (u16)((((i * 13u + 5u) & 31u) << 11) |
+                                       (((i * 7u + 3u) & 63u) << 5) |
+                                       ((i * 11u + 1u) & 31u));
+    /* BG0 charblock 0: tiles 1..3 each have 8 scanlines, each scanline solid
+     * with nibble (r+1) so with subpalettes 0, 1, 2 across tile rows 0, 1, 2
+     * we get 24 distinct solid colors inside strip [0, 24). */
+    for (u32 t = 1u; t <= 3u; t++) {
+      for (u32 r = 0u; r < 8u; r++) {
+        u8 nib = (u8)(r + 1u);
+        u8 b = (u8)((nib << 4) | nib);
+        memset(&vram[t * 32u + r * 4u], b, 4u);
+      }
+    }
+    /* Tile 4: 2-row solid tile (row 0 = nibble 1, row 1 = nibble 15) for
+     * testing 2-color full-cache round-robin eviction. */
+    memset(&vram[4u * 32u + 0u * 4u], 0x11u, 4u);
+    memset(&vram[4u * 32u + 1u * 4u], 0xFFu, 4u);
+    /* BG0 map in SB 24 (disjoint from charblocks 0/1): tile row 0 -> tile 1 pal 0,
+     * row 1 -> tile 2 pal 1, row 2 -> tile 3 pal 2 (24 distinct solid colors in y=0..23). */
+    u16 *bg0_map = (u16 *)(void *)(&vram[24u * 2048u]);
+    for (u32 ty = 0u; ty < 3u; ty++) {
+      u16 me = eswap16((u16)((ty << 12) | (ty + 1u)));
+      for (u32 tx = 0u; tx < 32u; tx++)
+        bg0_map[ty * 32u + tx] = me;
+    }
+    /* BG2 affine tile + map in charblock 1 / SB 28 so BG2 renders rich pixels. */
+    for (u32 i = 64u; i < 4096u; i++)
+      vram[16384u + i] = (u8)(1u + ((i * 3u) % 63u));
+    for (u32 i = 0u; i < 1024u; i++)
+      vram[28u * 2048u + i] = (u8)(1u + (i & 7u));
+
+    write_ioreg(REG_DISPCNT, 0x0541u); /* Mode 1, BG0 + BG2 */
+    write_ioreg(REG_BG0CNT, 0x1800u);  /* prio 0, cbb 0, sbb 24, 4bpp */
+    write_ioreg(REG_BG2CNT, 0x7C06u);  /* prio 2, cbb 1, sbb 28, wrap, 256x256 */
+    write_ioreg(REG_BG2PA, 0x0100u);
+    write_ioreg(REG_BG2PB, 0x0010u);
+    write_ioreg(REG_BG2PC, 0xFFF0u);
+    write_ioreg(REG_BG2PD, 0x0100u);
+    affine_reference_x[0] = 0;
+    affine_reference_y[0] = 0;
+    write_ioreg(REG_BLDCNT, 0x2441u);  /* alpha: 1st=BG0, 2nd=BG2+BD */
+    write_ioreg(REG_BLDALPHA, 0x0907u);
+    palette_ram_dirty = CGBA_PALETTE_DIRTY_ACTIVE;
+    cgba_vram_dirty = CGBA_VRAM_DIRTY_ALL;
+    cgba_vram_sb_dirty = 0u;
+    cgba_video_io_dirty = 1u;
+    video_invalidate_scanline_cache(0, 160);
+    /* Exercise deferred Mode 1 batch path directly via cgba_flush_pending_scanlines. */
+    video_reload_counters();
+    render_frame_reference(fb_ref);
+    video_reload_counters();
+    gba_screen_pixels = fb_cached;
+    cgba_pending_sl_start = 0u;
+    cgba_pending_sl_count = 160u;
+    cgba_bg2_snap_count = 0u;
+    cgba_flush_pending_scanlines();
+    CHECK(memcmp(fb_cached, fb_ref, sizeof(fb_cached)) == 0);
+    CHECK(cgba_m1_fpal_count == 16u);
+
+    /* 7b. Full-cache 2-color eviction: slot 0 holds cidx=1 (tile 4 row 0);
+     * set cgba_m1_fpal_rr = 0 and make row 1 use an uncached color (pal 0
+     * nibble 15 -> cidx=15) so rr=0 would have evicted pinned slot 0! */
+    for (u32 ty = 0u; ty < 3u; ty++) {
+      u16 me = (ty == 0u) ? eswap16(0x0004u) : 0u;
+      for (u32 tx = 0u; tx < 32u; tx++)
+        bg0_map[ty * 32u + tx] = me;
+    }
+    cgba_m1_fpal_rr = 0u;
+    cgba_vram_dirty = CGBA_VRAM_DIRTY_BG;
+    cgba_vram_sb_dirty = (1u << 24);
+    cgba_video_io_dirty = 1u;
+    video_reload_counters();
+    render_frame_reference(fb_ref);
+    video_reload_counters();
+    gba_screen_pixels = fb_cached;
+    cgba_pending_sl_start = 0u;
+    cgba_pending_sl_count = 160u;
+    cgba_bg2_snap_count = 0u;
+    cgba_flush_pending_scanlines();
+    CHECK(memcmp(fb_cached, fb_ref, sizeof(fb_cached)) == 0);
+
+    /* 7c. video_invalidate_scanline_cache(0, 160) MUST invalidate all BG
+     * caches even when cgba_vram_sb_dirty has a partial non-zero mask. */
+    cgba_sb_valid_mask = 0x0000FFFFu;
+    cgba_aff_bbox_valid_mask = 3u;
+    cgba_vram_sb_dirty = (1u << 0); /* only SB 0 marked dirty */
+    for (u32 tx = 0u; tx < 32u; tx++)
+      bg0_map[tx] = eswap16(0x0001u);
+    video_invalidate_scanline_cache(0, 160);
+    CHECK(cgba_sb_valid_mask == 0u);
+    CHECK(cgba_aff_bbox_valid_mask == 0u);
+    CHECK(cgba_vram_sb_dirty == 0u);
+    CHECK(verify_frame("full_invalidate_with_partial_sbd"));
   }
 
   return true;

@@ -6391,7 +6391,7 @@ static bool cgba_sl_frame_bg_dirty = true;
 static bool cgba_sl_frame_obj_dirty = true;
 static bool cgba_bg_plan_valid = false;
 
-static inline void cgba_bg_vram_invalidate(void);
+static inline void cgba_bg_vram_invalidate(bool force_all = false);
 static inline void cgba_bg_plan_invalidate_all(void);
 static inline void cgba_blend_caches_invalidate(void);
 
@@ -6412,7 +6412,7 @@ extern "C" void video_invalidate_scanline_cache(u32 start_y, u32 end_y)
     cgba_sl_frame_bg_dirty = true;
     cgba_sl_frame_obj_dirty = true;
     cgba_bg_plan_valid = false;
-    cgba_bg_vram_invalidate();
+    cgba_bg_vram_invalidate(true);
     cgba_bg_plan_invalidate_all();
     cgba_blend_caches_invalidate();
   }
@@ -8041,10 +8041,10 @@ static inline void cgba_sb_opaque_invalidate(u32 sbd)
   }
 }
 
-static inline void cgba_bg_vram_invalidate(void)
+static inline void cgba_bg_vram_invalidate(bool force_all)
 {
 #ifdef CGBA_VRAM_SB_DIRTY_ACTIVE
-  u32 sbd = cgba_vram_sb_dirty;
+  u32 sbd = force_all ? 0u : cgba_vram_sb_dirty;
   cgba_vram_sb_dirty = 0;
   cgba_sb_valid_mask &= sbd ? ~sbd : 0u;
 #if defined(CGBA_SH4_ASM_4BPP) && !defined(USE_XBGR1555_FORMAT)
@@ -8065,6 +8065,7 @@ static inline void cgba_bg_vram_invalidate(void)
     }
   }
 #else
+  (void)force_all;
   cgba_sb_valid_mask = 0;
 #if defined(CGBA_SH4_ASM_4BPP) && !defined(USE_XBGR1555_FORMAT)
   cgba_sb.subpal_valid_mask = 0;
@@ -8398,7 +8399,7 @@ static __attribute__((noinline)) bool cgba_sl_begin_frame(
       cgba_vram_dirty = 0;
       if (vd & CGBA_VRAM_DIRTY_BG) {
         bg_dirty = true;
-        cgba_bg_vram_invalidate();
+        cgba_bg_vram_invalidate(false);
       }
       if (vd & CGBA_VRAM_DIRTY_OBJ) {
         obj_dirty = true;
@@ -8441,7 +8442,7 @@ static __attribute__((noinline)) void cgba_sl_midframe_dirty(
     cgba_sl_cur_uniform = false;
     if (vd & CGBA_VRAM_DIRTY_BG) {
       cgba_sl_frame_bg_dirty = true;
-      cgba_bg_vram_invalidate();
+      cgba_bg_vram_invalidate(false);
     }
     if (vd & CGBA_VRAM_DIRTY_OBJ) {
       cgba_sl_frame_obj_dirty = true;
@@ -8741,10 +8742,8 @@ int cgba_try_batch_hblank_bg2_dma_fast(u32 ch, u32 start_y, u32 lines)
 }
 #endif
 
-#if defined(CGBA_SH4_ASM_4BPP) && \
+#if (defined(CGBA_SH4_ASM_4BPP) || defined(CGBA_VIDEO_TEST_M1_FOLDED)) && \
     defined(CGBA_VIDEO_BACKDROP_SHADOW_PALETTE) && defined(CGBA_VIDEO_PAIR_PALETTE)
-static u16 cgba_folded_pal[512] __attribute__((aligned(32)));
-static u16 cgba_folded_bg_shadow[256] __attribute__((aligned(32)));
 /* Mode 0 folded 4bpp pair LUT (16 KiB) and Mode 1 folded affine/BG/OBJ
  * palettes (20 KiB) are never live simultaneously; sharing storage saves
  * 16 KiB of .cgba.highbss. Ownership transitions invalidate the incoming side. */
@@ -8756,6 +8755,12 @@ static union {
 #define cgba_m1_fpal_data    (cgba_folded_highbss.m1_fpal)
 static u8 cgba_folded_union_owner = 0u; /* 0 = none, 1 = m0 pair_lut, 2 = m1_fpal */
 static u16 cgba_folded_pal_snap[512] __attribute__((aligned(32)));
+#endif
+
+#if defined(CGBA_SH4_ASM_4BPP) && \
+    defined(CGBA_VIDEO_BACKDROP_SHADOW_PALETTE) && defined(CGBA_VIDEO_PAIR_PALETTE)
+static u16 cgba_folded_pal[512] __attribute__((aligned(32)));
+static u16 cgba_folded_bg_shadow[256] __attribute__((aligned(32)));
 static u32 cgba_folded_key = 0xFFFFFFFFu;
 static bool cgba_folded_valid = false;
 
@@ -10992,7 +10997,8 @@ static inline bool cgba_tile_rows_all_zero(
   return any == 0u;
 }
 
-#if defined(CGBA_SH4_ASM_4BPP) && defined(CGBA_VIDEO_BACKDROP_SHADOW_PALETTE) && defined(CGBA_VIDEO_PAIR_PALETTE)
+#if (defined(CGBA_SH4_ASM_4BPP) || defined(CGBA_VIDEO_TEST_M1_FOLDED)) && \
+    defined(CGBA_VIDEO_BACKDROP_SHADOW_PALETTE) && defined(CGBA_VIDEO_PAIR_PALETTE)
 /* Layout per slot (640 u16) in cgba_m1_fpal_data (shared with Mode 0
  * cgba_folded_pair_lut in cgba_folded_highbss): [0..127] = mirror of
  * bg[128..255] for signed-byte SH-4 affine indexing, [128..383] = bg[0..255],
@@ -11065,7 +11071,7 @@ static __attribute__((noinline)) void cgba_m1_fpal_sync_pal(u32 epoch)
 }
 
 static __attribute__((noinline)) const u16 *cgba_m1_folded_pal_get(
-  u16 p1, u32 eva, u32 evb, bool need_obj)
+  u16 p1, u32 eva, u32 evb, bool need_obj, u16 *pinned_mask)
 {
   if (cgba_folded_union_owner != 2u) {
     cgba_m1_fpal_count = 0u;
@@ -11083,6 +11089,8 @@ static __attribute__((noinline)) const u16 *cgba_m1_folded_pal_get(
   const u32 want_mask = need_obj ? 0xFFFFFFFFu : 0x0000FFFFu;
   for (u32 s = 0u; s < cnt; s++) {
     if (cgba_m1_fpal_key[s] == key) {
+      if (pinned_mask)
+        *pinned_mask |= (u16)(1u << s);
       u32 todo = cgba_m1_fpal_dirty[s] & want_mask;
       if (need_obj && !cgba_m1_fpal_has_obj[s]) {
         todo |= 0xFFFF0000u;
@@ -11105,7 +11113,26 @@ static __attribute__((noinline)) const u16 *cgba_m1_folded_pal_get(
       return out;
     }
   }
-  u32 idx = (cnt < 16u) ? cgba_m1_fpal_count++ : (cgba_m1_fpal_rr++ & 15u);
+  u32 idx;
+  if (cnt < 16u) {
+    idx = cgba_m1_fpal_count++;
+  } else {
+    u16 pinned = pinned_mask ? *pinned_mask : 0u;
+    if (pinned == 0xFFFFu)
+      return NULL;
+    u32 start = cgba_m1_fpal_rr & 15u;
+    idx = start;
+    for (u32 step = 0u; step < 16u; step++) {
+      u32 cand = (start + step) & 15u;
+      if ((pinned & (1u << cand)) == 0u) {
+        idx = cand;
+        break;
+      }
+    }
+    cgba_m1_fpal_rr = (idx + 1u) & 15u;
+  }
+  if (pinned_mask)
+    *pinned_mask |= (u16)(1u << idx);
   u16 *out = cgba_m1_fpal_data[idx] + 128;
   u32 ta = (((u32)p1 | ((u32)p1 << 16)) & BLND_MSK) * eva;
   bool sat = (eva + evb) > 16u;
@@ -11531,7 +11558,8 @@ static __attribute__((noinline)) bool cgba_try_render_mode1_batch(
   if (vis_eff & 0x02u)
     cgba_build_mode1_text_plan(1u, &text_plans[1]);
 
-#if defined(CGBA_SH4_ASM_4BPP) && defined(CGBA_VIDEO_BACKDROP_SHADOW_PALETTE) && defined(CGBA_VIDEO_PAIR_PALETTE) && !defined(USE_XBGR1555_FORMAT)
+#if (defined(CGBA_SH4_ASM_4BPP) || defined(CGBA_VIDEO_TEST_M1_FOLDED)) && \
+    defined(CGBA_VIDEO_BACKDROP_SHADOW_PALETTE) && defined(CGBA_VIDEO_PAIR_PALETTE) && !defined(USE_XBGR1555_FORMAT)
   bool can_fold_blend = false;
   u32 fold_lower_obj_mask = 0u;
   if (blend_bg < 2u && !(blend_eva == 0u && blend_evb == 16u) &&
@@ -11667,13 +11695,15 @@ static __attribute__((noinline)) bool cgba_try_render_mode1_batch(
     bool any_folded = false;
     const u16 *row_pal[32];
     u32 strip_n = sy1 - sy0;
-#if defined(CGBA_SH4_ASM_4BPP) && defined(CGBA_VIDEO_BACKDROP_SHADOW_PALETTE) && defined(CGBA_VIDEO_PAIR_PALETTE) && !defined(USE_XBGR1555_FORMAT)
+#if (defined(CGBA_SH4_ASM_4BPP) || defined(CGBA_VIDEO_TEST_M1_FOLDED)) && \
+    defined(CGBA_VIDEO_BACKDROP_SHADOW_PALETTE) && defined(CGBA_VIDEO_PAIR_PALETTE) && !defined(USE_XBGR1555_FORMAT)
     bool any_mixed = false;
     u8 row_mixed[32];
     if (can_fold_blend) {
       const cgba_mode0_bg_plan *bp = &text_plans[blend_bg];
       u32 last_key = 0xFFFFFFFFu;
       const u16 *last_fpal = pal_conv;
+      u16 strip_fpal_pinned = 0u;
       u32 r = 0u;
       while (r < strip_n) {
         u32 y = sy0 + r;
@@ -11695,11 +11725,18 @@ static __attribute__((noinline)) bool cgba_try_render_mode1_batch(
             if (ckey != last_key) {
               last_key = ckey;
               last_fpal = cgba_m1_folded_pal_get(
-                pal_conv[cidx], blend_eva, blend_evb, need_obj);
+                pal_conv[cidx], blend_eva, blend_evb, need_obj,
+                &strip_fpal_pinned);
             }
-            row_pal[rr] = last_fpal;
-            row_mixed[rr] = 0u;
-            any_folded = true;
+            if (last_fpal != NULL) {
+              row_pal[rr] = last_fpal;
+              row_mixed[rr] = 0u;
+              any_folded = true;
+            } else {
+              row_pal[rr] = pal_conv;
+              row_mixed[rr] = 1u;
+              any_mixed = true;
+            }
           } else {
             row_pal[rr] = pal_conv;
             row_mixed[rr] = (kind == 2u) ? 1u : 0u;
@@ -11996,7 +12033,8 @@ static __attribute__((noinline)) bool cgba_try_render_mode1_batch(
           base_done = 1u;
         }
         any_folded = false;
-#if defined(CGBA_SH4_ASM_4BPP) && defined(CGBA_VIDEO_BACKDROP_SHADOW_PALETTE) && defined(CGBA_VIDEO_PAIR_PALETTE) && !defined(USE_XBGR1555_FORMAT)
+#if (defined(CGBA_SH4_ASM_4BPP) || defined(CGBA_VIDEO_TEST_M1_FOLDED)) && \
+    defined(CGBA_VIDEO_BACKDROP_SHADOW_PALETTE) && defined(CGBA_VIDEO_PAIR_PALETTE) && !defined(USE_XBGR1555_FORMAT)
         if (can_fold_blend) {
           if (!any_mixed)
             continue;
@@ -12441,6 +12479,10 @@ static inline void cgba_blend_caches_invalidate(void)
     defined(CGBA_SH4_ASM_4BPP) && defined(CGBA_VIDEO_BACKDROP_SHADOW_PALETTE) && \
     defined(CGBA_VIDEO_PAIR_PALETTE)
   cgba_folded_valid = false;
+#endif
+#if defined(CGBA_VIDEO_DEFERRED_ACTIVE) && \
+    (defined(CGBA_SH4_ASM_4BPP) || defined(CGBA_VIDEO_TEST_M1_FOLDED)) && \
+    defined(CGBA_VIDEO_BACKDROP_SHADOW_PALETTE) && defined(CGBA_VIDEO_PAIR_PALETTE)
   cgba_m1_pal_snap_valid = false;
   cgba_folded_union_owner = 0u;
 #endif
