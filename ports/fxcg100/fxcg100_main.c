@@ -215,6 +215,7 @@ int emain(void)
   init_gamepak_buffer();
   init_sound();
   memcpy(bios_rom, open_gba_bios_rom, sizeof(bios_rom));
+  cgba_using_external_bios = false;
 
   if (load_gamepak_from_memory(cgba_mode3_smoke_gba,
                                cgba_mode3_smoke_gba_len,

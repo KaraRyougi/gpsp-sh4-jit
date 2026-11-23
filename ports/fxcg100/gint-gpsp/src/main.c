@@ -297,6 +297,7 @@ static void apply_display_options(const fxcg100_menu_state *state)
 	fxcg100_lcd_set_sync(state->lcd_sync, state->lcd_sync_offset);
 	fxcg100_lcd_set_refresh(state->lcd_refresh);
 	fxcg100_lcd_set_backlight(state->backlight, state->backlight_pwm);
+	cgba_gpsp_set_bios_mode(state->bios_mode);
 #ifdef CGBA_CLASSPAD
 	fxcg100_lcd_set_rotation(state->rotation);
 	fxcg100_lcd_set_touch_keys(state->touch_keys);

@@ -5,7 +5,7 @@ code can be found at https://github.com/Nebuleon/ReGBA/tree/master/bios
 
 It is distributed under the GPL2 license (see repo)
 
-The shipped `open_gba_bios.bin` carries three small binary patches on top of that
+The shipped `open_gba_bios.bin` carries four small binary patches on top of that
 source while leaving every other address in the image unchanged (which the SH-4
 dynarec's BIOS cycle models depend on):
 1. SWI 6 (Div) and SWI 7 (DivArm) go through wrappers at 0x3E00 and 0x3E0C that
@@ -17,6 +17,13 @@ dynarec's BIOS cycle models depend on):
    routine (`source/intrwait.s`) that uses only `r0-r3, r12` (never keeping
    live state in `r4-r7` across `HALTCNT`/IRQ, matching Nintendo's BIOS so
    game IRQ handlers that clobber `r4` in SYS mode such as Harobots / `AHQJ`
-   do not hang), tests the full 16-bit IRQ mask (fixing `bool CheckInterrupts`
+   do not hang), keeps `r12 = 0x04000000` (`REG_BASE`) and `r2 = 0x208` across
+   `HALTCNT`/IRQ (matching Nintendo's BIOS so game IRQ handlers such as
+   Elevator Action Old & New / `ANWJ` that write `IFBIOS` via `[r12, #-8]`
+   succeed), tests the full 16-bit IRQ mask (fixing `bool CheckInterrupts`
    truncating bits 8..13), and returns immediately without halting when
    `discard == 0` and a matching flag is already pending in `IFBIOS`.
+4. `swi_vector` at 0x0070 branches to a bounds-check trampoline at 0x3EB0..0x3EBF
+   (`cmp ip, #0x2b; bcs 0x00a8; ldr ip, [fp, ip, lsl #2]; b 0x0074`) so
+   out-of-range SWI numbers (`>= 0x2B`) return cleanly instead of reading past
+   `swi_branch_table` and branching to garbage addresses.

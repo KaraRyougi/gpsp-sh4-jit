@@ -2070,6 +2070,21 @@ static fxcg100_menu_result screen_settings(cp_ui *ui)
 		ui_goto(ui, SCREEN_CLOCK);
 	card_end(ui, &y);
 
+	section_label(ui, &y, "System");
+	card_begin(ui, y);
+	{
+		static const char *const bios_modes[FXCG100_BIOS_MODE_COUNT] = {
+			"Auto", "Built-in", "External",
+		};
+		const char *bios_status = fxcg100_external_bios_available()
+			? "gba_bios.bin" : "No gba_bios.bin";
+
+		changed |= ui_segments(ui, setting_row_h(ui, &y, "GBA BIOS",
+			bios_status, CONTROL_H), bios_modes, bios_modes,
+			FXCG100_BIOS_MODE_COUNT, &st->bios_mode);
+	}
+	card_end(ui, &y);
+
 	section_label(ui, &y, "Keys");
 	card_begin(ui, y);
 	if(row_nav(ui, &y, "Key mapping", "Buttons and shortcuts"))
@@ -3709,6 +3724,8 @@ void fxcg100_menu_init(fxcg100_menu_state *state)
 		state->fast_forward_mode = FXCG100_FF_MODE_HOLD;
 	if(state->fast_forward_speed >= FXCG100_FF_SPEED_COUNT)
 		state->fast_forward_speed = FXCG100_FF_SPEED_UNLIMITED;
+	if(state->bios_mode >= FXCG100_BIOS_MODE_COUNT)
+		state->bios_mode = FXCG100_BIOS_AUTO;
 	ui_start_upright = 1;
 	cp_open_reader_direct = 0;
 	txt_reader_init(txt_reader_global());

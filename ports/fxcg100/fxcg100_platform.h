@@ -117,6 +117,13 @@ typedef enum fxcg100_game_sort {
   FXCG100_GAME_SORT_COUNT
 } fxcg100_game_sort;
 
+typedef enum fxcg100_bios_mode {
+  FXCG100_BIOS_AUTO = 0,
+  FXCG100_BIOS_BUILTIN,
+  FXCG100_BIOS_EXTERNAL,
+  FXCG100_BIOS_MODE_COUNT
+} fxcg100_bios_mode;
+
 typedef struct fxcg100_menu_state {
   uint32_t rom_source;
   uint32_t game_sort;
@@ -131,6 +138,11 @@ typedef struct fxcg100_menu_state {
   uint32_t frame_limit;
   uint32_t fast_forward_mode;
   uint32_t fast_forward_speed;
+  /* GBA BIOS selection (FXCG100_BIOS_*): 0 = Auto (use gba_bios.bin when
+   * present on storage, otherwise bundled open_gba_bios), 1 = Built-in,
+   * 2 = External (gba_bios.bin; falls back to built-in if missing). Applied
+   * on ROM load / reset. */
+  uint32_t bios_mode;
   /* ClassPad II only: landscape direction (CP_ROTATION_*) and whether the
    * on-screen touch keys are shown. Unused on the fx-CG models. */
   uint32_t rotation;
@@ -225,6 +237,9 @@ uint32_t fxcg100_rom_source_added_order(uint32_t index);
 /* Nonzero when a savestate file already exists for the running game in
  * `slot` (0..9), so saving to that slot would overwrite it. */
 int fxcg100_savestate_exists(uint32_t slot);
+/* Nonzero when a valid 16 KiB external gba_bios.bin was discovered on storage
+ * at startup (cached; never performs storage I/O while drawing the menu). */
+int fxcg100_external_bios_available(void);
 
 void fxcg100_lcd_init(void);
 void fxcg100_lcd_shutdown(void);

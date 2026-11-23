@@ -55,6 +55,7 @@ int main(void)
   assert(state.dark_mode == 1);
   assert(state.fast_forward_mode == FXCG100_FF_MODE_HOLD);
   assert(state.fast_forward_speed == FXCG100_FF_SPEED_UNLIMITED);
+  assert(state.bios_mode == FXCG100_BIOS_AUTO);
   assert(state.hotkey_map[FXCG100_HOTKEY_SAVE_EXIT] == 0);
 
   /* Version 3 preserved frame_limit=0 and did not populate Save & exit. */
@@ -131,6 +132,25 @@ int main(void)
     assert(state.lcd_refresh == r);
   }
   config.lcd_extra = (10u << 20);
+  assert(!config_valid(&config));
+
+  /* GBA BIOS mode (bits 4..5, 0..2) round-trips in lcd_extra without changing
+   * file size or version, and rejects out-of-range value 3. */
+  for (uint32_t b = 0; b < FXCG100_BIOS_MODE_COUNT; b++) {
+    memset(&state, 0, sizeof(state));
+    state.frame_limit = 1;
+    state.dark_mode = 1;
+    state.bios_mode = b;
+    config_from_state(&config, &state);
+    assert(config_valid(&config));
+    assert(((config.lcd_extra >> 4) & 3u) == b);
+    memset(&state, 0, sizeof(state));
+    state_from_config(&state, &config);
+    assert(state.bios_mode == b);
+  }
+  config_from_state(&config, &state);
+  config.lcd_extra = (config.lcd_extra & ~(3u << 4)) |
+    ((uint32_t)FXCG100_BIOS_MODE_COUNT << 4);
   assert(!config_valid(&config));
 
   puts("fx-CG config migration and v4 fields passed");

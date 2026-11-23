@@ -418,6 +418,7 @@ const u32 def_seq_cycles[16][2] =
 
 
 u8 bios_rom[1024 * 16] CGBA_HIGH_BSS;
+bool cgba_using_external_bios = false;
 
 // Up to 128kb, store SRAM, flash ROM, or EEPROM here.
 u8 gamepak_backup[1024 * 128] CGBA_HIGH_BSS;

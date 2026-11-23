@@ -2762,15 +2762,17 @@ struct cgba_swi_pred {
 #define CGBA_WS_N(reg_, w_) ((u32)ws_cyc_nseq[(reg_) & 0xF][(w_)])
 
 /* Dispatcher entry + return halves, common to every SWI the open BIOS serves.
- * Entry: 13 BIOS fetches, B+BX+table nseq (3*N0), {r11,r12,lr}+{spsr} pushes on
- * the SVC stack (region 3), {r2,r3,lr} push on the caller stack, and LDRB
- * [lr,#-2] (works identically for ARM and Thumb callers in LE memory).
+ * Entry: 17 BIOS fetches (13 in core.s plus the 4-insn bounds-check trampoline
+ * at 0x3EB0 branched to from 0x0070), B+B+table+B+BX nseq (5*N0),
+ * {r11,r12,lr}+{spsr} pushes on the SVC stack (region 3), {r2,r3,lr} push on
+ * the caller stack, and LDRB [lr,#-2] (works identically for ARM and Thumb
+ * callers in LE memory).
  * Return: 6 BIOS fetches, {r2,r3,lr} pop (caller stack), {spsr}+{r11,r12,lr}
  * pops (SVC stack); MOVS pc,lr adds 0 for Thumb or S(lr,1) for ARM callers. */
 static inline u32 cgba_swi_dispatch_entry_cycles(u32 sp_region, u32 lr_region)
 {
   u32 S0 = CGBA_WS_S(0, 1), N0 = CGBA_WS_N(0, 1);
-  return 13u * S0 + 3u * N0 + 4u * CGBA_WS_S(3, 1) +
+  return 17u * S0 + 5u * N0 + 4u * CGBA_WS_S(3, 1) +
          3u * CGBA_WS_S(sp_region, 1) + CGBA_WS_N(lr_region, 0);
 }
 
@@ -4881,7 +4883,7 @@ static u32 cgba_swi_intrwait_loop(s32 remaining)
       if (check_and_raise_interrupts())
         return cgba_parked_swi_irq_exit(remaining, S0, N0);
     }
-    /* 0x0478..0x047C: mov r3, #0; strb r3, [r2, #0x301] (HALTCNT = 0) */
+    /* 0x0478..0x047C: mov r3, #0; strb r3, [r12, #0x301] (HALTCNT = 0) */
     reg[3] = 0u;
     reg[REG_PC] = CGBA_INTRWAIT_RESUME;
     remaining -= (s32)(4u * S0 + 2u * CGBA_WS_N(4, 0));
@@ -4925,7 +4927,7 @@ static u32 cgba_swi_intrwait_resume(s32 remaining)
   u16 ifbios, hit;
 
   if (reg[CPU_MODE] != MODE_SYSTEM || reg[REG_LR] != 0x00000094u ||
-      reg[2] != 0x04000000u || reg[12] != 0x00000208u || reg[3] != 0u)
+      reg[12] != 0x04000000u || reg[2] != 0x00000208u || reg[3] != 0u)
     return CGBA_FS_DECLINE;
 
   /* 0x0480..0x048C: REG_IME = 0; check IFBIOS & r1 */
@@ -4964,8 +4966,8 @@ static u32 cgba_swi_intrwait_enter(int vblank_wait, s32 remaining)
   }
   reg[0] = discard;
   reg[1] = mask;
-  reg[2] = 0x04000000u;
-  reg[12] = 0x00000208u;
+  reg[12] = 0x04000000u;
+  reg[2] = 0x00000208u;
 
   /* 0x0434..0x0454: REG_IME = 0; check IFBIOS & mask */
   write_ioreg(REG_IME, 0);
@@ -5728,11 +5730,11 @@ u32 cgba_sh4_bios_fallback(u32 cycles)
 #ifdef CGBA_GPSP_HEADLESS_TEST
   u32 cgba_entry_pc_bios = reg[REG_PC];
 #endif
-  /* IRQ wrapper HLE: the asm dispatch stubs route every pc < 0x4000 here
-   * before the C resolver can see it, so the vector/epilogue fast paths hook
-   * the fallback itself. On success reg[REG_PC] is the game handler (or the
-   * interrupted code) and the stub's lookup_pc redispatches natively. */
-  if (!CGBA_SH4_DIFF_ACTIVE() && reg[REG_PC] == 0x00000008u &&
+  /* IRQ/SWI HLE fast paths depend on fixed addresses inside the bundled
+   * open_gba_bios.bin. When an external BIOS is loaded, bypass HLE and
+   * interpret the BIOS image directly (stopping immediately on PC >= 0x4000). */
+  if (!CGBA_SH4_DIFF_ACTIVE() && !cgba_using_external_bios) {
+  if (reg[REG_PC] == 0x00000008u &&
       reg[CPU_MODE] == MODE_SUPERVISOR) {
     int h = cgba_hle_bios_swi(cycles);
     if (h == 3)
@@ -5759,7 +5761,7 @@ u32 cgba_sh4_bios_fallback(u32 cycles)
     if (h && h != 9 && h != 10)
       return cycles;                 /* PC/mode restored; stub redispatches */
   }
-  if (!CGBA_SH4_DIFF_ACTIVE() && reg[CPU_MODE] == MODE_SYSTEM) {
+  if (reg[CPU_MODE] == MODE_SYSTEM) {
     if (reg[REG_PC] == CGBA_HALT_RESUME) {
       u32 r = cgba_swi_halt_resume((s32)cycles);
       if (r != CGBA_FS_DECLINE)
@@ -5770,7 +5772,7 @@ u32 cgba_sh4_bios_fallback(u32 cycles)
         return r;
     }
   }
-  if (!CGBA_SH4_DIFF_ACTIVE() && reg[CPU_MODE] == MODE_SYSTEM &&
+  if (reg[CPU_MODE] == MODE_SYSTEM &&
       (reg[REG_PC] == CGBA_FS_COPY_LOOP || reg[REG_PC] == CGBA_FS_FILL_LOOP)) {
     /* Re-entry at a canonical FastSet chunk top (ISR returned into a parked
      * copy, or the interpreter stopped exactly there). Declined -> the
@@ -5779,7 +5781,7 @@ u32 cgba_sh4_bios_fallback(u32 cycles)
     if (r != CGBA_FS_DECLINE)
       return r;
   }
-  if (!CGBA_SH4_DIFF_ACTIVE() && reg[CPU_MODE] == MODE_SYSTEM &&
+  if (reg[CPU_MODE] == MODE_SYSTEM &&
       (reg[REG_PC] == CGBA_CS_WCOPY_LOOP || reg[REG_PC] == CGBA_CS_HCOPY_LOOP ||
        reg[REG_PC] == CGBA_CS_WFILL_LOOP || reg[REG_PC] == CGBA_CS_HFILL_LOOP)) {
     /* Re-entry at a canonical CpuSet chunk top (ISR returned mid-copy/fill). */
@@ -5787,31 +5789,31 @@ u32 cgba_sh4_bios_fallback(u32 cycles)
     if (r != CGBA_FS_DECLINE)
       return r;
   }
-  if (!CGBA_SH4_DIFF_ACTIVE() && reg[CPU_MODE] == MODE_SYSTEM &&
+  if (reg[CPU_MODE] == MODE_SYSTEM &&
       reg[REG_PC] == CGBA_BA_LOOP) {
     u32 r = cgba_swi_bgaffine_engine((s32)cycles);
     if (r != CGBA_FS_DECLINE)
       return r;
   }
-  if (!CGBA_SH4_DIFF_ACTIVE() && reg[CPU_MODE] == MODE_SYSTEM &&
+  if (reg[CPU_MODE] == MODE_SYSTEM &&
       reg[REG_PC] == CGBA_OA_LOOP) {
     u32 r = cgba_swi_objaffine_engine((s32)cycles);
     if (r != CGBA_FS_DECLINE)
       return r;
   }
-  if (!CGBA_SH4_DIFF_ACTIVE() && reg[CPU_MODE] == MODE_SYSTEM &&
+  if (reg[CPU_MODE] == MODE_SYSTEM &&
       (reg[REG_PC] == CGBA_LZ8_LOOP || reg[REG_PC] == CGBA_LZ16_LOOP)) {
     u32 r = cgba_swi_lz77_engine((s32)cycles);
     if (r != CGBA_FS_DECLINE)
       return r;
   }
-  if (!CGBA_SH4_DIFF_ACTIVE() && reg[CPU_MODE] == MODE_SYSTEM &&
+  if (reg[CPU_MODE] == MODE_SYSTEM &&
       (reg[REG_PC] == CGBA_RL8_LOOP || reg[REG_PC] == CGBA_RL16_LOOP)) {
     u32 r = cgba_swi_rl_engine((s32)cycles);
     if (r != CGBA_FS_DECLINE)
       return r;
   }
-  if (!CGBA_SH4_DIFF_ACTIVE() && reg[CPU_MODE] == MODE_IRQ) {
+  if (reg[CPU_MODE] == MODE_IRQ) {
     if (reg[REG_PC] == 0x00000018u) {
       if (cgba_hle_bios_irq_entry() != 0)
         return cycles;
@@ -5831,6 +5833,7 @@ u32 cgba_sh4_bios_fallback(u32 cycles)
         return cycles;
       /* odd handler: fall through and interpret from the vector */
     }
+  }
   }
   /* Interpret ONLY while the PC is inside the BIOS (region-exit stop mode,
    * cpu.cc CGBA_DIFF_STOP_CHECK): the instant execution reaches game code

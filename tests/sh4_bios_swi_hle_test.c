@@ -89,9 +89,19 @@ static void test_bgaffine_and_bios_layout(void)
   check(fread(bios, 1, sizeof(bios), f) == sizeof(bios), "read 16 KiB BIOS");
   fclose(f);
 
-  /* Verify parked/resumable open-BIOS entry & loop PCs relied on by HLE. */
+  /* Verify parked/resumable open-BIOS entry & loop PCs relied on by HLE,
+   * plus the SWI bounds-check trampoline (0x0070 -> 0x3EB0) and Nintendo-BIOS
+   * register convention in swi_IntrWait (r12 = 0x04000000, r2 = 0x208). */
+  memcpy(&w, bios + 0x0070u, 4); check(w == 0xEA000F8Eu, "SWI 0x0070 b 0x3EB0");
+  memcpy(&w, bios + 0x3EB0u, 4); check(w == 0xE35C002Bu, "SWI tramp cmp ip, #0x2B");
+  memcpy(&w, bios + 0x3EB4u, 4); check(w == 0x2AFFF07Bu, "SWI tramp bcs 0x00A8");
+  memcpy(&w, bios + 0x3EB8u, 4); check(w == 0xE79BC10Cu, "SWI tramp ldr ip, [fp, ip, lsl #2]");
+  memcpy(&w, bios + 0x3EBCu, 4); check(w == 0xEAFFF06Cu, "SWI tramp b 0x0074");
   memcpy(&w, bios + 0x03E4u, 4); check(w == 0xE12FFF1Eu, "Halt 0x03E4 bx lr");
-  memcpy(&w, bios + 0x0480u, 4); check(w == 0xE18230BCu, "IntrWait 0x0480 IME=0");
+  memcpy(&w, bios + 0x0434u, 4); check(w == 0xE3A0C301u, "IntrWait 0x0434 mov ip, #0x04000000");
+  memcpy(&w, bios + 0x0438u, 4); check(w == 0xE3A02F82u, "IntrWait 0x0438 mov r2, #0x208");
+  memcpy(&w, bios + 0x047Cu, 4); check(w == 0xE5CC3301u, "IntrWait 0x047C HALTCNT via ip");
+  memcpy(&w, bios + 0x0480u, 4); check(w == 0xE18C30B2u, "IntrWait 0x0480 IME=0 via [ip, r2]");
   memcpy(&w, bios + 0x07FCu, 4); check(w == 0xE150C0B4u, "BgAffine 0x07FC loop top");
   memcpy(&w, bios + 0x0F48u, 4); check(w == 0xE5D04000u, "RL8 0x0F48 loop top");
   memcpy(&w, bios + 0x1000u, 4); check(w == 0xE5D67000u, "RL16 0x1000 loop top");

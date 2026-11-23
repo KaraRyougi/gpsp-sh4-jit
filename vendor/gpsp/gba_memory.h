@@ -295,6 +295,7 @@ extern u8 cgba_hblank_dma_mask;
 extern u8 cgba_dma_bg2_fast_mask;
 
 extern u8 open_gba_bios_rom[1024*16];
+extern bool cgba_using_external_bios;
 extern u16 palette_ram[512];
 extern u16 oam_ram[512];
 extern u16 palette_ram_converted[512];

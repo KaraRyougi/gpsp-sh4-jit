@@ -3469,15 +3469,16 @@ u8 function_cc *block_lookup_address_arm(u32 pc)
    * end) and would mis-bank an IRQ taken right after the branch. */
   reg[REG_PC] = pc;
   /* BIOS IRQ wrapper HLE (sh4_interp_helpers.c): dispatch the vector and the
-   * epilogue natively instead of two interpreter round-trips per IRQ. */
+   * epilogue natively instead of two interpreter round-trips per IRQ.
+   * Only valid for the bundled open_gba_bios.bin (fixed 0x18..0x34 layout). */
   if(pc == 0x00000018u && reg[CPU_MODE] == MODE_IRQ &&
-     !CGBA_SH4_DIFF_ACTIVE()) {
+     !CGBA_SH4_DIFF_ACTIVE() && !cgba_using_external_bios) {
     u32 handler = cgba_hle_bios_irq_entry();
     if(handler != 0)
       pc = handler;                /* resolve the game handler directly */
   }
   else if(pc == 0x00000030u && reg[CPU_MODE] == MODE_IRQ &&
-          !CGBA_SH4_DIFF_ACTIVE()) {
+          !CGBA_SH4_DIFF_ACTIVE() && !cgba_using_external_bios) {
     u32 np = cgba_hle_bios_irq_exit();
     if(np == 0x00000018u)          /* pending IRQ re-entry */
       np = cgba_hle_bios_irq_entry();

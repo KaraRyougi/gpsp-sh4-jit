@@ -72,9 +72,14 @@ swi_vector:
 	stmdb sp!, { r11, r12, lr }
 	
 	@ Load comment from SWI instruction, which indicates which SWI
-	@ to use.
+	@ to use. Guard against out-of-range SWIs (>= 0x2B) so games that
+	@ execute undefined SWI numbers never read past swi_branch_table; in
+	@ the shipped open_gba_bios.bin 0x0070 branches to a trampoline at
+	@ 0x3EB0 so downstream addresses stay fixed.
 	ldrb r12, [lr,#-2]
 	adr r11, swi_branch_table
+	cmp r12, #0x2b
+	bcs swi_return
 	ldr r12, [r11,r12,lsl#2]
 	
 	@ get SPSR and enter system mode, interrupts on
@@ -110,6 +115,7 @@ swi_complete:
 	msr spsr_cf, r11
 	
 	@ Restore stuff we saved
+swi_return:
 	ldmfd sp!, {r11,r12,lr}
 	
 	@ Return from exception handler

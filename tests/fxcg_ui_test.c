@@ -141,9 +141,16 @@ uint32_t fxcg100_rom_source_added_order(uint32_t index)
 	return index < 12 ? game_added_order[index] : 0;
 }
 
+static int fake_external_bios;
+
 int fxcg100_savestate_exists(uint32_t slot)
 {
 	return (fake_savestate_mask & (1u << (slot % 10u))) != 0;
+}
+
+int fxcg100_external_bios_available(void)
+{
+	return fake_external_bios;
 }
 
 int fxcg100_config_load(fxcg100_menu_state *state)
@@ -689,9 +696,27 @@ static void test_settings(void)
 	press(FXCG100_APPKEY_LEFT);
 	press(FXCG100_APPKEY_LEFT);
 	CHECK(st.fast_forward_speed == FXCG100_FF_SPEED_UNLIMITED, "FF speed back");
+	press(FXCG100_APPKEY_DOWN); /* GBA BIOS */
+	CHECK(selected_row(&ui_main)->id == ID_BIOS, "BIOS row: %d",
+		selected_row(&ui_main)->id);
+	CHECK(st.bios_mode == FXCG100_BIOS_AUTO, "BIOS default Auto");
+	CHECK(!strcmp(selected_row(&ui_main)->value, "Auto (built-in)"),
+		"BIOS auto label without file: %s", selected_row(&ui_main)->value);
+	press(FXCG100_APPKEY_RIGHT);
+	CHECK(st.bios_mode == FXCG100_BIOS_BUILTIN, "BIOS Built-in");
+	press(FXCG100_APPKEY_RIGHT);
+	CHECK(st.bios_mode == FXCG100_BIOS_EXTERNAL, "BIOS External");
+	CHECK(!strcmp(selected_row(&ui_main)->value, "Ext (missing)"),
+		"BIOS external missing label: %s", selected_row(&ui_main)->value);
+	fake_external_bios = 1;
+	press(FXCG100_APPKEY_RIGHT);
+	CHECK(st.bios_mode == FXCG100_BIOS_AUTO, "BIOS wraps to Auto");
+	CHECK(!strcmp(selected_row(&ui_main)->value, "Auto (ext)"),
+		"BIOS auto label with file: %s", selected_row(&ui_main)->value);
+	fake_external_bios = 0;
 
 	/* Held down: one move, then repeats after 400 ms every 80 ms. */
-	for (i = 0; i < 11; i++)
+	for (i = 0; i < 12; i++)
 		press(FXCG100_APPKEY_UP);
 	CHECK(selected_row(&ui_main)->id == ID_SIZE, "back at the top");
 	held_app = FXCG100_APPKEY_DOWN;
@@ -715,7 +740,7 @@ static void test_settings(void)
 		selected_row(&ui_main)->id);
 	held_app = 0;
 	step();
-	for (i = 0; i < 12; i++)
+	for (i = 0; i < 13; i++)
 		press(FXCG100_APPKEY_UP);
 	CHECK(selected_row(&ui_main)->id == ID_SIZE, "back up: %d",
 		selected_row(&ui_main)->id);

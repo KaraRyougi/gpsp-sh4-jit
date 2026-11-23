@@ -48,6 +48,8 @@ void cgba_save_timing_text(char *dst, size_t size);
 const char *cgba_gpsp_rom_name(unsigned rom_id);
 unsigned cgba_gpsp_rom_count(void);
 unsigned cgba_gpsp_refresh_roms(void);
+void cgba_gpsp_set_bios_mode(uint32_t mode);
+int cgba_gpsp_using_external_bios(void);
 int cgba_gpsp_init(uint16_t *framebuffer, unsigned rom_id);
 const char *cgba_gpsp_last_error(void);
 /* Revalidate the active ROM's Fugue/NOR mappings after any storage mutation.

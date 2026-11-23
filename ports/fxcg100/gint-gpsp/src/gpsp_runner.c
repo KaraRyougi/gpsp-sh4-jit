@@ -549,17 +549,117 @@ static const uint16_t cgba_rom_meta_path[] = {
 };
 #endif
 
+static uint32_t cgba_bios_mode = FXCG100_BIOS_AUTO;
+static int cgba_external_bios_probed;
+static int cgba_external_bios_found;
+static const uint16_t *cgba_external_bios_path;
+
+static const uint16_t cgba_bios_path_root_lower[] = {
+	'\\', '\\', 'f', 'l', 's', '0', '\\',
+	'g', 'b', 'a', '_', 'b', 'i', 'o', 's', '.', 'b', 'i', 'n', 0
+};
+static const uint16_t cgba_bios_path_root_upper[] = {
+	'\\', '\\', 'f', 'l', 's', '0', '\\',
+	'G', 'B', 'A', '_', 'B', 'I', 'O', 'S', '.', 'B', 'I', 'N', 0
+};
+static const uint16_t cgba_bios_path_bios_dir[] = {
+	'\\', '\\', 'f', 'l', 's', '0', '\\',
+	'B', 'I', 'O', 'S', '\\',
+	'g', 'b', 'a', '_', 'b', 'i', 'o', 's', '.', 'b', 'i', 'n', 0
+};
+static const uint16_t cgba_bios_path_gba_dir[] = {
+	'\\', '\\', 'f', 'l', 's', '0', '\\',
+	'G', 'B', 'A', '\\',
+	'g', 'b', 'a', '_', 'b', 'i', 'o', 's', '.', 'b', 'i', 'n', 0
+};
+
+static void probe_external_bios(void)
+{
+	if(cgba_external_bios_probed)
+		return;
+	cgba_external_bios_probed = 1;
+	cgba_external_bios_found = 0;
+	cgba_external_bios_path = NULL;
+#ifndef CGBA_GPSP_DISABLE_STORAGE
+	{
+		static const uint16_t *const candidates[] = {
+			cgba_bios_path_root_lower,
+			cgba_bios_path_root_upper,
+			cgba_bios_path_bios_dir,
+			cgba_bios_path_gba_dir,
+		};
+		for(size_t i = 0; i < sizeof(candidates) / sizeof(candidates[0]); i++) {
+			if(fxcg100_storage_blob_size(candidates[i]) == (int)sizeof(bios_rom)) {
+				cgba_external_bios_found = 1;
+				cgba_external_bios_path = candidates[i];
+				return;
+			}
+		}
+	}
+#endif
+}
+
+static int external_bios_image_plausible(const u8 *buf, size_t len)
+{
+	size_t i;
+	u8 first;
+
+	if(!buf || len == 0)
+		return 0;
+	first = buf[0];
+	for(i = 1; i < len; i++) {
+		if(buf[i] != first)
+			return 1;
+	}
+	return 0;
+}
+
+static void load_active_bios(void)
+{
+	int want_external = (cgba_bios_mode == FXCG100_BIOS_AUTO ||
+		cgba_bios_mode == FXCG100_BIOS_EXTERNAL);
+
+	probe_external_bios();
+	if(want_external && cgba_external_bios_found && cgba_external_bios_path &&
+			fxcg100_storage_read_blob(cgba_external_bios_path, bios_rom,
+				sizeof(bios_rom)) &&
+			external_bios_image_plausible(bios_rom, sizeof(bios_rom))) {
+		cgba_using_external_bios = true;
+		return;
+	}
+	memcpy(bios_rom, open_gba_bios_rom, sizeof(bios_rom));
+	cgba_using_external_bios = false;
+}
+
+int fxcg100_external_bios_available(void)
+{
+	return cgba_external_bios_found;
+}
+
+void cgba_gpsp_set_bios_mode(uint32_t mode)
+{
+	cgba_bios_mode = mode < FXCG100_BIOS_MODE_COUNT
+		? mode : (uint32_t)FXCG100_BIOS_AUTO;
+}
+
+int cgba_gpsp_using_external_bios(void)
+{
+	return cgba_using_external_bios ? 1 : 0;
+}
+
 unsigned cgba_gpsp_refresh_roms(void)
 {
 #ifdef CGBA_GPSP_DISABLE_STORAGE
 	memset(&cgba_storage_roms, 0, sizeof(cgba_storage_roms));
 	cgba_rom_meta_reset(&cgba_rom_meta);
 	cgba_storage_roms_scanned = 1;
+	probe_external_bios();
 	return 0;
 #else
 	unsigned count;
 
 	cgba_storage_roms_scanned = 1;
+	probe_external_bios();
 	count = cgba_nor_rom_scan_gba(&cgba_storage_roms);
 #ifndef CGBA_GPSP_HEADLESS_TEST
 	if (!fxcg100_storage_read_blob(cgba_rom_meta_path, &cgba_rom_meta,
@@ -651,7 +751,7 @@ int cgba_gpsp_init(uint16_t *framebuffer, unsigned rom_id)
 
 	init_gamepak_buffer();
 	init_sound();
-	memcpy(bios_rom, open_gba_bios_rom, sizeof(bios_rom));
+	load_active_bios();
 
 	cgba_gamepak_bind_fragment_table(NULL);
 	cgba_nor_rom_close(&cgba_current_nor_rom);
@@ -1580,7 +1680,8 @@ void cgba_gpsp_debug_menu(fxcg100_debug_info *debug, unsigned frame,
 		/* Interpreter-fallback residency: n calls / guest kilocycles in the
 		 * window. All-zero JIT lines + big BIOS numbers = interpreted BIOS
 		 * (soft-reset boot screen, IntrWait) — not a JIT stall. */
-		debug_line(debug, "H BIOS n%lu kc%lu",
+		debug_line(debug, "H BIOS %s n%lu kc%lu",
+			cgba_using_external_bios ? "EXT" : "OPEN",
 			WV(cgba_sh4_bios_fallback_call_count),
 			(unsigned long)(WV(cgba_sh4_bios_fallback_cycle_count) / 1024u));
 	}

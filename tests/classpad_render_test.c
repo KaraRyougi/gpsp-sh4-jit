@@ -175,6 +175,7 @@ static const uint32_t fake_added_order[12] = {
 };
 static uint32_t fake_game_count = 12;
 static uint32_t fake_savestate_mask;
+static int fake_external_bios;
 static int config_saves;
 
 uint32_t fxcg100_rom_source_count(void) { return fake_game_count; }
@@ -184,6 +185,10 @@ uint32_t fxcg100_rom_source_added_order(uint32_t i) { return fake_added_order[i 
 int fxcg100_savestate_exists(uint32_t slot)
 {
 	return (fake_savestate_mask & (1u << (slot % 10u))) != 0;
+}
+int fxcg100_external_bios_available(void)
+{
+	return fake_external_bios;
 }
 /* What a saved configuration would put in the view, if not negative. */
 static int fake_saved_view = -1;

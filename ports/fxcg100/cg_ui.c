@@ -122,7 +122,7 @@ enum {
 	ID_EXIT,
 	ID_SIZE, ID_FILTER, ID_VSYNC, ID_REFRESH, ID_BACKLIGHT, ID_COLOUR, ID_DARK_MODE,
 	ID_FRAMESKIP, ID_SKIP_N, ID_SKIP_PATTERN,
-	ID_LIMIT, ID_SHOW_FPS, ID_FF_MODE, ID_FF_SPEED, ID_KEYMAP, ID_DEBUG,
+	ID_LIMIT, ID_SHOW_FPS, ID_FF_MODE, ID_FF_SPEED, ID_BIOS, ID_KEYMAP, ID_DEBUG,
 	ID_RESET_KEYS,
 	ID_BIND0,                  /* + binding index */
 	ID_LINE0 = ID_BIND0 + 20   /* + debug line */
@@ -681,6 +681,20 @@ static const char *const ff_speed_names[FXCG100_FF_SPEED_COUNT] = {
 	"Unlimited", "1.5x", "2x", "3x", "4x"
 };
 
+static const char *bios_mode_label(uint32_t mode)
+{
+	int ext = fxcg100_external_bios_available();
+
+	switch (mode) {
+	case FXCG100_BIOS_BUILTIN:
+		return "Built-in";
+	case FXCG100_BIOS_EXTERNAL:
+		return ext ? "External" : "Ext (missing)";
+	default:
+		return ext ? "Auto (ext)" : "Auto (built-in)";
+	}
+}
+
 static const char *pick(const char *const *names, uint32_t count,
 	uint32_t value)
 {
@@ -729,6 +743,8 @@ static void rows_settings(cg_ui *ui)
 		FXCG100_FF_MODE_COUNT, st->fast_forward_mode));
 	add_value(ui, ID_FF_SPEED, "Fast forward speed", pick(ff_speed_names,
 		FXCG100_FF_SPEED_COUNT, st->fast_forward_speed));
+	add_row(ui, RK_SECTION, ID_NONE, "System");
+	add_value(ui, ID_BIOS, "GBA BIOS", bios_mode_label(st->bios_mode));
 	add_row(ui, RK_SECTION, ID_NONE, "Keys");
 	add_row(ui, RK_SUB, ID_KEYMAP, "Key mapping");
 #if CGBA_DEBUG_MENU
@@ -1774,6 +1790,10 @@ static void change_setting(cg_ui *ui, int id, int delta)
 		st->fast_forward_speed = cycle(st->fast_forward_speed,
 			FXCG100_FF_SPEED_COUNT, delta);
 		break;
+	case ID_BIOS:
+		st->bios_mode = cycle(st->bios_mode,
+			FXCG100_BIOS_MODE_COUNT, delta);
+		break;
 	default:
 		return;
 	}
@@ -2428,6 +2448,8 @@ static void cg_ui_begin(cg_ui *ui, fxcg100_menu_state *state, int in_game,
 		state->fast_forward_mode = FXCG100_FF_MODE_HOLD;
 	if (state->fast_forward_speed >= FXCG100_FF_SPEED_COUNT)
 		state->fast_forward_speed = FXCG100_FF_SPEED_UNLIMITED;
+	if (state->bios_mode >= FXCG100_BIOS_MODE_COUNT)
+		state->bios_mode = FXCG100_BIOS_AUTO;
 	if (resume) {
 		ui->message_t0 = rtc_ticks();
 	} else {
@@ -2451,6 +2473,8 @@ static void cg_ui_begin(cg_ui *ui, fxcg100_menu_state *state, int in_game,
 		state->fast_forward_mode = FXCG100_FF_MODE_HOLD;
 	if (state->fast_forward_speed >= FXCG100_FF_SPEED_COUNT)
 		state->fast_forward_speed = FXCG100_FF_SPEED_UNLIMITED;
+	if (state->bios_mode >= FXCG100_BIOS_MODE_COUNT)
+		state->bios_mode = FXCG100_BIOS_AUTO;
 	if (ui->txt_direct)
 		open_txt_reader_page(ui);
 	/* Whatever opened the menu is still held: do not let it act here. */
@@ -2657,6 +2681,8 @@ void fxcg100_menu_init(fxcg100_menu_state *state)
 		state->fast_forward_mode = FXCG100_FF_MODE_HOLD;
 	if (state->fast_forward_speed >= FXCG100_FF_SPEED_COUNT)
 		state->fast_forward_speed = FXCG100_FF_SPEED_UNLIMITED;
+	if (state->bios_mode >= FXCG100_BIOS_MODE_COUNT)
+		state->bios_mode = FXCG100_BIOS_AUTO;
 	memset(&ui_main, 0, sizeof(ui_main));
 	open_reader_direct = 0;
 	txt_reader_init(txt_reader_global());
