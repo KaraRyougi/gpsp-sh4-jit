@@ -115,6 +115,9 @@ SH4G_NOINLINE int sh4g_arm_rmw_block4_ldrsb_mla_skip(u8 **tp, const u32 *ops,
   int ng = 0;
 
   if ((pc >> 24) != 0x03 || reps < 1 || reps > 2) return 0;
+#ifdef CGBA_SH4_DIFF_ACTIVE
+  if (CGBA_SH4_DIFF_ACTIVE()) return 0;
+#endif
   if (reps == 2) {
     for (i = 0; i < 10u; i++) {
       if (ops[10 + i] != ops[i]) return 0;
@@ -222,6 +225,10 @@ SH4G_NOINLINE int sh4g_arm_interp_rmw_mla_skip(u8 **tp, const u32 *ops,
 
   if ((pc >> 24) != 0x03 || count < 1 || count > 4)
     return 0;
+#ifdef CGBA_SH4_DIFF_ACTIVE
+  if (CGBA_SH4_DIFF_ACTIVE())
+    return 0;
+#endif
 
   for (u = 1; u < count; u++) {
     for (j = 0; j < 12; j++) {

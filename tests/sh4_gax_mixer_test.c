@@ -164,6 +164,14 @@ static void test_vv_and_eurocom(void)
         "Eurocom non-looping channel ends");
   check(done == 16u && cur == 0x08100000u && frac == 0u,
         "Eurocom ended channel leaves cur/frac untouched");
+
+  /* Eurocom ARM w[14] mask (0xFFFF0FFF) when step=0xEFFF stays < 0x10000 */
+  cur = 0x08100000u; endp = 0x08200000u; frac = 0x0FFFu;
+  check(cgba_sh4_eurocom_advance_fwd(&cur, &endp, &frac, 0xEFFFu,
+                                     0u, 0u, &done) == 0,
+        "Eurocom high-step active");
+  check(done == 128u && cur == 0x08100000u + 128u * 15u && frac == 0x0F7Fu,
+        "Eurocom high-step exact");
 }
 
 static void test_4ch_mixers(void)

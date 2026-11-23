@@ -30,7 +30,7 @@ enum {
   CGBA_SH4_AUDIO_MIXER_VV_A           = 3, /* 76 words (G0216_AJCE) */
   CGBA_SH4_AUDIO_MIXER_VV_B           = 4, /* 55 words (G0131_ACUJ) */
   CGBA_SH4_AUDIO_MIXER_EUROCOM_INTERP = 5, /* 64 words forward path (G0148_A7HJ) */
-  CGBA_SH4_AUDIO_MIXER_EUROCOM_RAW    = 6, /* 55 words forward path (G0046_ADNJ) */
+  CGBA_SH4_AUDIO_MIXER_EUROCOM_RAW    = 6, /* 56 words forward path (G0046_ADNJ) */
   CGBA_SH4_AUDIO_MIXER_4CH_SUM1       = 7, /* 8 words: 1-ch byte sum + LUT clamp */
   CGBA_SH4_AUDIO_MIXER_4CH_SUM2       = 8, /* 10 words: 2-ch byte sum + LUT clamp */
   CGBA_SH4_AUDIO_MIXER_4CH_SUM3       = 9, /* 12 words: 3-ch byte sum + LUT clamp */
@@ -552,7 +552,7 @@ static inline int cgba_sh4_eurocom_advance_fwd(
     r11 += lr;
     if (r11 >= 0x1000u) {
       r2 += (r11 >> 12);
-      r11 &= 0x0FFFu;
+      r11 &= 0xFFFF0FFFu; /* matches ARM w[14]: mvn r8, #0xF000; and r11, r11, r8 */
       if (r2 >= r10) {
         if (loop_start == 0u) {
           if (samples_done_out) *samples_done_out = 129u - rem;

@@ -346,8 +346,15 @@ typedef struct
   u8 *branch_source;
 } block_exit_type;
 
-// Div (6) and DivArm (7)
+// Div (6) and DivArm (7) — open_gba_bios HLE only (bypassed under external BIOS
+// or single-block differential testing so SWI 6/7 enter the real BIOS vector).
+#ifdef SH4_ARCH
+#define is_div_swi(swinum) \
+  (!cgba_using_external_bios && !CGBA_SH4_DIFF_ACTIVE() && \
+   (((swinum) & 0xFE) == 0x06))
+#else
 #define is_div_swi(swinum) (((swinum) & 0xFE) == 0x06)
+#endif
 
 #ifdef SH4_ARCH
 /* The SH4 backend is validated against cpu.cc's interpreter cycle model. That
@@ -2128,13 +2135,13 @@ void translate_icache_sync() {
     case 0xF0 ... 0xFF:                                                       \
     {                                                                         \
       u32 swinum = (opcode >> 16) & 0xFF;                                     \
-      if (swinum == 6) {                                                      \
+      if (is_div_swi(swinum)) {                                               \
         cycle_count += ARM_THREAD_HLE_DIV_CYCLES;                             \
-        arm_hle_div(arm);                                                     \
-      }                                                                       \
-      else if (swinum == 7) {                                                 \
-        cycle_count += ARM_THREAD_HLE_DIV_CYCLES;                             \
-        arm_hle_div_arm(arm);                                                 \
+        if (swinum == 6) {                                                    \
+          arm_hle_div(arm);                                                   \
+        } else {                                                              \
+          arm_hle_div_arm(arm);                                               \
+        }                                                                     \
       }                                                                       \
       else {                                                                  \
         arm_swi();                                                            \
@@ -2829,13 +2836,13 @@ void translate_icache_sync() {
     case 0xDF:                                                                \
     {                                                                         \
       u32 swinum = opcode & 0xFF;                                             \
-      if (swinum == 6) {                                                      \
+      if (is_div_swi(swinum)) {                                               \
         cycle_count += ARM_THREAD_HLE_DIV_CYCLES;                             \
-        arm_hle_div(thumb);                                                   \
-      }                                                                       \
-      else if (swinum == 7) {                                                 \
-        cycle_count += ARM_THREAD_HLE_DIV_CYCLES;                             \
-        arm_hle_div_arm(thumb);                                               \
+        if (swinum == 6) {                                                    \
+          arm_hle_div(thumb);                                                 \
+        } else {                                                              \
+          arm_hle_div_arm(thumb);                                             \
+        }                                                                     \
       }                                                                       \
       else {                                                                  \
         thumb_swi();                                                          \
@@ -3485,7 +3492,8 @@ u8 function_cc *block_lookup_address_arm(u32 pc)
     if(np >= 0x00004000u) {
       if(reg[REG_CPSR] & 0x20)     /* interrupted code was Thumb */
         return block_lookup_address_thumb(np & ~1u);
-      pc = np;
+      pc = np & ~3u;
+      reg[REG_PC] = pc;
     } else {
       pc = reg[REG_PC];            /* odd handler: interpreter path */
     }

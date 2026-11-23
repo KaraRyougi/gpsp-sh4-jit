@@ -18,6 +18,7 @@
 
 #include "vendor/gpsp/common.h"
 #include "vendor/gpsp/cpu.h"
+#include "ports/fxcg100/sh4/sh4_open_bios_layout.h"
 #include "ports/fxcg100/sh4/sh4_swi_overlap.h"
 #ifdef CGBA_SH4_SWI_OAM_BULK
 #include "ports/fxcg100/sh4/sh4_swi_oam.h"
@@ -1662,6 +1663,12 @@ int cgba_sh4_arm_pcm_clamp_loop_try(u32 unused, u32 pc)
 #include "ports/fxcg100/sh4/sh4_ea_mixer.h"
 #include "ports/fxcg100/sh4/sh4_gax_mixer.h"
 
+/* Return from a skipped soundless audio mixer via lr.
+ *
+ * Intentionally caps the cycle debit to the current event slice (budget) and
+ * returns 2 (block exit -> update_gba) when est_cycles >= budget: multi-slice
+ * stepping inside a soundless mixer skip would fire HBlank/timer IRQs with
+ * post-mixer PC/registers and shift frame timing/hashes tuned on CACHESIM. */
 static inline int cgba_sh4_return_via_lr(u32 lr, u32 est_cycles, s32 budget)
 {
   if (lr & 1u) {
@@ -1829,6 +1836,10 @@ static inline int cgba_sh4_mixer_ram_struct(u32 addr, u32 size,
 static inline int cgba_sh4_mixer_src_region_ok(u32 addr)
 {
   u32 r = addr >> 24;
+  /* Exclude 0x0D when EEPROM backup is active so speculative metadata reads
+   * never trigger read_eeprom() state-machine side effects. */
+  if (r == 0x0Du && backup_type == BACKUP_EEPROM)
+    return 0;
   return r == 0x02u || r == 0x03u || (r >= 0x08u && r <= 0x0Du);
 }
 
@@ -2012,11 +2023,8 @@ int cgba_sh4_audio_mixer_try(u32 kind, u32 pc)
       return 0;
     if ((r1 & 1u) != 0u || ((r1 >> 24) != 0x03u && (r1 >> 24) != 0x02u))
       return 0;
-    if ((r0 >> 24) == (r1 >> 24)) {
-      u32 r1_off = r1 & ((r1 >> 24) == 0x03u ? 0x7FFFu : 0x3FFFFu);
-      if (!(r1_off + 512u <= soff || soff + 28u <= r1_off))
-        return 0;
-    }
+    if (cgba_sh4_mixer_ram_overlaps(r0, 28u, r1, 512u))
+      return 0;
     if (cgba_smc_tags_nonzero(stags + soff, 28u))
       return 0;
     cur = readaddress32(sdata, soff + 4u);
@@ -2030,6 +2038,8 @@ int cgba_sh4_audio_mixer_try(u32 kind, u32 pc)
     loop_len   = readaddress32(sdata, soff + 16u);
     step       = readaddress16(sdata, soff + 20u);
     frac       = readaddress16(sdata, soff + 22u);
+    if (step >= 0xF000u)
+      return 0; /* ARM mvn r8, #0xF000 mask edge case: fall back to native */
 
     ended = cgba_sh4_eurocom_advance_fwd(&cur, &end_p, &frac, step,
                                          loop_start, loop_len, &samples_done);
@@ -2067,6 +2077,23 @@ int cgba_sh4_audio_mixer_try(u32 kind, u32 pc)
         (nch >= 3u && !cgba_sh4_mixer_src_region_ok(s2)) ||
         (nch >= 4u && !cgba_sh4_mixer_src_region_ok(s3)))
       return 0;
+    /* Reject dst overlapping the pushed lr slot [sp-4, sp) or input streams. */
+    if (cgba_sh4_mixer_ram_overlaps(dst, n, reg[13] - 4u, 4u) ||
+        cgba_sh4_mixer_ram_overlaps(dst, n, s0, n) ||
+        (nch >= 2u && cgba_sh4_mixer_ram_overlaps(dst, n, s1, n)) ||
+        (nch >= 3u && cgba_sh4_mixer_ram_overlaps(dst, n, s2, n)) ||
+        (nch >= 4u && cgba_sh4_mixer_ram_overlaps(dst, n, s3, n)))
+      return 0;
+    {
+      u32 last_off = n - 1u;
+      s32 sum;
+      cgba_sh4_begin_mem_helper(pc, 4);
+      sum = (s32)(s8)read_memory8(s0 + last_off);
+      if (nch >= 2u) sum += (s32)(s8)read_memory8(s1 + last_off);
+      if (nch >= 3u) sum += (s32)(s8)read_memory8(s2 + last_off);
+      if (nch >= 4u) sum += (s32)(s8)read_memory8(s3 + last_off);
+      reg[0] = (u32)(u8)read_memory8(lut + (u32)sum);
+    }
     per_s = 6u + 2u * nch + (u32)ws_cyc_nseq[s0 >> 24][0] +
             (u32)ws_cyc_nseq[lut >> 24][0] + (u32)ws_cyc_nseq[dst >> 24][0];
     if (nch >= 2u) per_s += (u32)ws_cyc_nseq[s1 >> 24][0];
@@ -2156,6 +2183,7 @@ int cgba_sh4_audio_mixer_try(u32 kind, u32 pc)
           if (may_hit_end) {
             if ((inst_ptr & 3u) != 0u || !cgba_sh4_mixer_src_region_ok(inst_ptr))
               return 0;
+            cgba_sh4_begin_mem_helper(pc, 4);
             loop_flag[ci] = (uint8_t)read_memory8(inst_ptr + 0x16u);
             if (loop_flag[ci] != 0u) {
               loop_start[ci] = (uint32_t)read_memory32(inst_ptr + 0x0Cu);
@@ -2178,10 +2206,11 @@ int cgba_sh4_audio_mixer_try(u32 kind, u32 pc)
         address32(cdata[ci], coff[ci] + 0x04u) = eswap32((u32)src[ci]);
         address32(cdata[ci], coff[ci] + 0x08u) = eswap32((u32)end[ci]);
         address32(cdata[ci], coff[ci] + 0x0Cu) = eswap32((u32)pos[ci]);
-        if (ci >= 2u)
-          address32(cdata[ci], coff[ci] + 0x10u) = eswap32((u32)step[ci]);
-        if (active[ci] != old_active)
+        if (active[ci] != old_active) {
+          if (ci >= 2u)
+            address32(cdata[ci], coff[ci] + 0x10u) = eswap32((u32)step[ci]);
           address16(cdata[ci], coff[ci] + 0x16u) = eswap16((u16)active[ci]);
+        }
       }
     }
     reg[REG_CPSR] = (reg[REG_CPSR] & ~0xF0000000u) | 0x60000000u;
@@ -2329,11 +2358,57 @@ int cgba_sh4_thumb_udiv_loop_try(u32 unused, u32 pc)
 }
 #endif
 
+#define CGBA_WS_S(reg_, w_) ((u32)ws_cyc_seq[(reg_) & 0xF][(w_)])
+#define CGBA_WS_N(reg_, w_) ((u32)ws_cyc_nseq[(reg_) & 0xF][(w_)])
+
+/* Dispatcher entry + return halves, common to every SWI the open BIOS serves.
+ * Entry: 17 BIOS fetches (13 in core.s plus the 4-insn bounds-check trampoline
+ * at 0x3EB0 branched to from 0x0070), B+B+table+B+BX nseq (5*N0),
+ * {r11,r12,lr}+{spsr} pushes on the SVC stack (region 3), {r2,r3,lr} push on
+ * the caller stack, and LDRB [lr,#-2] (works identically for ARM and Thumb
+ * callers in LE memory).
+ * Return: 6 BIOS fetches, {r2,r3,lr} pop (caller stack), {spsr}+{r11,r12,lr}
+ * pops (SVC stack); MOVS pc,lr adds 0 for Thumb or S(lr,1) for ARM callers. */
+static inline u32 cgba_swi_dispatch_entry_cycles(u32 sp_region, u32 lr_region)
+{
+  u32 S0 = CGBA_WS_S(0, 1), N0 = CGBA_WS_N(0, 1);
+  return 17u * S0 + 5u * N0 + 4u * CGBA_WS_S(3, 1) +
+         3u * CGBA_WS_S(sp_region, 1) + CGBA_WS_N(lr_region, 0);
+}
+
+static inline u32 cgba_swi_dispatch_return_cycles(u32 sp_region, u32 lr_region,
+                                                  int thumb)
+{
+  u32 S0 = CGBA_WS_S(0, 1);
+  u32 c = 6u * S0 + 4u * CGBA_WS_S(3, 1) + 3u * CGBA_WS_S(sp_region, 1);
+  if (!thumb)
+    c += CGBA_WS_S(lr_region, 1);              /* MOVS pc tail (ARM caller) */
+  return c;
+}
+
+static inline u32 cgba_swi_dispatch_cycles(u32 sp_region, u32 lr_region,
+                                           int thumb)
+{
+  return cgba_swi_dispatch_entry_cycles(sp_region, lr_region) +
+         cgba_swi_dispatch_return_cycles(sp_region, lr_region, thumb);
+}
+
 void cgba_sh4_hle_div(u32 divarm, u32 pc)
 {
   CGBA_SH4_HELPER_HIT(hle_div);
   s32 num = divarm ? (s32)reg[1] : (s32)reg[0];
   s32 den = divarm ? (s32)reg[0] : (s32)reg[1];
+  int thumb = (reg[REG_CPSR] & 0x20u) != 0;
+  /* Open BIOS switches to SYSTEM mode before pushing {r2,r3,lr} and calling
+   * the Div wrapper, so sp_r is always the SYSTEM/USER bank's SP region. */
+  u32 sp_r = (((reg[CPU_MODE] == MODE_USER || reg[CPU_MODE] == MODE_SYSTEM)
+               ? reg[REG_SP] : REG_MODE(MODE_SYSTEM)[5]) >> 24) & 0xFu;
+  u32 lr_r = ((pc + (thumb ? 2u : 4u)) >> 24) & 0xFu;
+  u32 disp_c = cgba_swi_dispatch_cycles(sp_r, lr_r, thumb) +
+               CGBA_WS_N(sp_r, 1) + (divarm ? 5u : 0u);
+
+  /* Match canonical SWI post-return BIOS open-bus value (cpu.cc / sh4_swi_handler). */
+  reg[REG_BUS_VALUE] = 0xe3a02004u;
 
   if (__builtin_expect(den == 0, 0)) {
 #if defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS)
@@ -2343,7 +2418,7 @@ void cgba_sh4_hle_div(u32 divarm, u32 pc)
     reg[0] = (num < 0) ? (u32)-1 : 1u;
     reg[1] = (u32)num;
     reg[3] = 1u;
-    cgba_sh4_extra_cycles = 64;
+    cgba_sh4_extra_cycles = (int)(disp_c + 24u);
     return;
   }
 
@@ -2393,25 +2468,9 @@ void cgba_sh4_hle_div(u32 divarm, u32 pc)
     }
   }
 
-  /* Open-BIOS SWI dispatcher + r3 wrapper + Div body 17A8..17FC cycle model.
-   * BIOS (region 0) and IWRAM (region 3) waitstates are hardware-fixed at 1:
-   *   dispatch: 19+3+8 = 30 + 6*S(sp) + N16(lr) + (!thumb ? S32(lr) : 0)
-   *   divarm:   +5; r3 wrapper: +5 + N32(sp); Div body: 22 + 12*align - 1. */
-  {
-    int thumb = (reg[REG_CPSR] & 0x20u) != 0;
-    u32 sp_r = (reg[REG_SP] >> 24) & 0xFu;
-    u32 lr_r = ((pc + (thumb ? 2u : 4u)) >> 24) & 0xFu;
-    u32 cycles = 56u + 12u * align + (u32)ws_cyc_nseq[lr_r][0];
-    if (__builtin_expect(sp_r == 3u, 1))
-      cycles += 7u;
-    else
-      cycles += 6u * (u32)ws_cyc_seq[sp_r][1] + (u32)ws_cyc_nseq[sp_r][1];
-    if (__builtin_expect(!thumb, 0))
-      cycles += (u32)ws_cyc_seq[lr_r][1];
-    if (__builtin_expect(divarm != 0u, 0))
-      cycles += 5u;
-    cgba_sh4_extra_cycles = (int)cycles;
-  }
+  /* Open-BIOS SWI dispatcher + r3 wrapper (+5 + N32(sp)) + Div body
+   * 17A8..17FC (21 + 12*align) + optional DivArm swap (+5). */
+  cgba_sh4_extra_cycles = (int)(disp_c + 26u + 12u * align);
 
   {
     u32 q_neg = (u32)(num ^ den) >> 31;
@@ -2473,24 +2532,27 @@ u32 cgba_bios_hle_irq_in;
  *   0x30: ldmia sp!,{r0-r3,r12,lr}
  *   0x34: subs pc,lr,#4          ; CPSR = SPSR_irq
  *
- * Timing: the handful of BIOS fetch cycles per stub are NOT debited (the
- * budget register is not reachable from the resolver); the data accesses
- * charge normally via execute_load/store. ~10 uncharged cycles per IRQ is
- * within the port's accepted approximate-timing envelope. */
+ * Timing: neither block_lookup_address_arm nor cgba_sh4_bios_fallback debits
+ * cgba_sh4_extra_cycles (the budget register is not reachable from the lookup
+ * resolver, while parked SWIs debit the exact 0x18..0x2C cost explicitly in
+ * cgba_parked_swi_irq_exit). Save/restore cgba_sh4_extra_cycles so these stubs
+ * never pollute a subsequent helper's extra-cycle counter. */
 u32 cgba_hle_bios_irq_entry(void)
 {
+  int saved_extra = cgba_sh4_extra_cycles;
   u32 handler = execute_load_u32(0x03007FFCu);
   u32 sp;
 
-  if ((handler & 3) || handler < 0x02000000u || handler >= 0x0E000000u)
+  if ((handler & 3) || handler < 0x02000000u || handler >= 0x0E000000u) {
+    cgba_sh4_extra_cycles = saved_extra;
     return 0;                      /* odd/garbage handler: interpreter path */
+  }
 
   sp = reg[REG_SP] - 24;
   {
     /* The IRQ stack is linear RAM (0x03007Fxx by BIOS convention): push the
-     * six registers with direct host stores and one bulk charge instead of
-     * six charged accessor calls — 138 IRQs/frame in AW. Semantics match
-     * the per-word path exactly (same total charge, same SMC contract). */
+     * six registers with direct host stores instead of six accessor calls —
+     * 138 IRQs/frame in AW. Same SMC contract as the per-word path. */
     u8 *tags = NULL;
     u8 *h = ((sp & 3) == 0) ? cgba_bulk_ram_host(sp, 24, &tags) : NULL;
     if (h) {
@@ -2500,9 +2562,6 @@ u32 cgba_hle_bios_irq_entry(void)
       cgba_le32_write(h + 12, reg[3]);
       cgba_le32_write(h + 16, reg[12]);
       cgba_le32_write(h + 20, reg[REG_LR]);
-      cgba_sh4_extra_cycles += 6 *
-        (cgba_sh4_mem_cycle_seq ? ws_cyc_seq[sp >> 24][1]
-                                : ws_cyc_nseq[sp >> 24][1]);
       if (cgba_smc_tags_nonzero(tags, 24))
         flush_translation_cache_ram();
     } else {
@@ -2520,8 +2579,9 @@ u32 cgba_hle_bios_irq_entry(void)
       }
     }
   }
+  cgba_sh4_extra_cycles = saved_extra;
   reg[REG_SP] = sp;
-  reg[REG_LR] = 0x00000030u;
+  reg[REG_LR] = CGBA_BIOS_IRQ_RET;
   reg[0] = 0x04000000u;
   reg[REG_PC] = handler;
 #if defined(CGBA_GPSP_HEADLESS_TEST) || CGBA_SH4_SWI_HLE_VERIFY
@@ -2532,6 +2592,7 @@ u32 cgba_hle_bios_irq_entry(void)
 
 u32 cgba_hle_bios_irq_exit(void)
 {
+  int saved_extra = cgba_sh4_extra_cycles;
   u32 sp = reg[REG_SP];
   u32 spsr_v, ret_pc;
 
@@ -2544,9 +2605,6 @@ u32 cgba_hle_bios_irq_exit(void)
       reg[3]      = cgba_le32_read(h + 12);
       reg[12]     = cgba_le32_read(h + 16);
       reg[REG_LR] = cgba_le32_read(h + 20);
-      cgba_sh4_extra_cycles += 6 *
-        (cgba_sh4_mem_cycle_seq ? ws_cyc_seq[sp >> 24][1]
-                                : ws_cyc_nseq[sp >> 24][1]);
     } else {
       reg[0]       = execute_load_u32(sp +  0);
       reg[1]       = execute_load_u32(sp +  4);
@@ -2556,10 +2614,11 @@ u32 cgba_hle_bios_irq_exit(void)
       reg[REG_LR]  = execute_load_u32(sp + 20);
     }
   }
+  cgba_sh4_extra_cycles = saved_extra;
   reg[REG_SP]  = sp + 24;
 
-  ret_pc = reg[REG_LR] - 4;
   spsr_v = REG_SPSR(MODE_IRQ);
+  ret_pc = (reg[REG_LR] - 4u) & ((spsr_v & 0x20u) ? ~1u : ~3u);
   reg[REG_BUS_VALUE] = 0xe55ec002u;
   reg[REG_CPSR] = spsr_v;
   set_cpu_mode(cpu_modes[spsr_v & 0xF]);
@@ -2573,7 +2632,7 @@ u32 cgba_hle_bios_irq_exit(void)
     REG_MODE(MODE_IRQ)[6] = ret_pc + 4;
     REG_SPSR(MODE_IRQ) = reg[REG_CPSR];
     reg[REG_CPSR] = 0xD2;
-    reg[REG_PC] = 0x00000018u;
+    reg[REG_PC] = CGBA_BIOS_IRQ_VEC;
     set_cpu_mode(MODE_IRQ);
   }
 #ifdef CGBA_GPSP_HEADLESS_TEST
@@ -2757,41 +2816,8 @@ struct cgba_swi_pred {
   int r0_from_last_word;   /* word-copy: r0 = last source word */
 };
 
-/* Charge units. */
-#define CGBA_WS_S(reg_, w_) ((u32)ws_cyc_seq[(reg_) & 0xF][(w_)])
-#define CGBA_WS_N(reg_, w_) ((u32)ws_cyc_nseq[(reg_) & 0xF][(w_)])
-
-/* Dispatcher entry + return halves, common to every SWI the open BIOS serves.
- * Entry: 17 BIOS fetches (13 in core.s plus the 4-insn bounds-check trampoline
- * at 0x3EB0 branched to from 0x0070), B+B+table+B+BX nseq (5*N0),
- * {r11,r12,lr}+{spsr} pushes on the SVC stack (region 3), {r2,r3,lr} push on
- * the caller stack, and LDRB [lr,#-2] (works identically for ARM and Thumb
- * callers in LE memory).
- * Return: 6 BIOS fetches, {r2,r3,lr} pop (caller stack), {spsr}+{r11,r12,lr}
- * pops (SVC stack); MOVS pc,lr adds 0 for Thumb or S(lr,1) for ARM callers. */
-static inline u32 cgba_swi_dispatch_entry_cycles(u32 sp_region, u32 lr_region)
-{
-  u32 S0 = CGBA_WS_S(0, 1), N0 = CGBA_WS_N(0, 1);
-  return 17u * S0 + 5u * N0 + 4u * CGBA_WS_S(3, 1) +
-         3u * CGBA_WS_S(sp_region, 1) + CGBA_WS_N(lr_region, 0);
-}
-
-static inline u32 cgba_swi_dispatch_return_cycles(u32 sp_region, u32 lr_region,
-                                                  int thumb)
-{
-  u32 S0 = CGBA_WS_S(0, 1);
-  u32 c = 6u * S0 + 4u * CGBA_WS_S(3, 1) + 3u * CGBA_WS_S(sp_region, 1);
-  if (!thumb)
-    c += CGBA_WS_S(lr_region, 1);              /* MOVS pc tail (ARM caller) */
-  return c;
-}
-
-static inline u32 cgba_swi_dispatch_cycles(u32 sp_region, u32 lr_region,
-                                           int thumb)
-{
-  return cgba_swi_dispatch_entry_cycles(sp_region, lr_region) +
-         cgba_swi_dispatch_return_cycles(sp_region, lr_region, thumb);
-}
+/* Waitstate & SWI dispatcher helpers (CGBA_WS_S/N, cgba_swi_dispatch_*) live
+ * above cgba_sh4_hle_div so Div/DivArm and SWI HLE share one exact model. */
 
 static inline int cgba_swi_range_in_region(u32 addr, u32 len)
 {
@@ -3028,9 +3054,9 @@ static int cgba_swi_cpufastset_predict(u32 src, u32 dst, u32 cnt,
 extern u32 cgba_bios_hle_swi_count;
 #endif
 
-#define CGBA_FS_COPY_LOOP 0x000007A4u
-#define CGBA_FS_FILL_LOOP 0x00000770u
 #define CGBA_FS_DECLINE   0xFFFFFFFFu
+
+static u32 cgba_parked_swi_finish(s32 remaining);
 
 static inline void cgba_parked_swi_drain_store_alert(void)
 {
@@ -3132,10 +3158,11 @@ static u32 cgba_parked_swi_leave(u32 n_extra, u32 *disp_ret_cycles_out)
 
 /* Shared IRQ-entry exit for parked SWI engines: mirrors execute_arm's
  * 0x18..0x2C cycle cost so IRQs firing inside a parked SWI stay cycle-locked
- * to the interpreter. */
+ * to the interpreter. Always exits via cgba_parked_swi_finish() so negative
+ * remaining budgets can never leak bit-31 to sh4_stub.S (frame-complete). */
 static u32 cgba_parked_swi_irq_exit(s32 remaining, u32 S0, u32 N0)
 {
-  if (reg[REG_PC] == 0x00000018u && reg[CPU_MODE] == MODE_IRQ) {
+  if (reg[REG_PC] == CGBA_BIOS_IRQ_VEC && reg[CPU_MODE] == MODE_IRQ) {
     int saved_extra = cgba_sh4_extra_cycles;
     u32 irq_sp_r = reg[REG_SP] >> 24;
     u32 handler = cgba_hle_bios_irq_entry();
@@ -3144,13 +3171,9 @@ static u32 cgba_parked_swi_irq_exit(s32 remaining, u32 S0, u32 N0)
       remaining -= (s32)(4 * S0 + N0 + 6 * CGBA_WS_S(irq_sp_r, 1)
                          + CGBA_WS_N(3, 1)
                          + CGBA_WS_S(handler >> 24, 1));
-      if (remaining <= 0) {
-        u32 ret2 = update_gba(remaining);
-        return completed_frame(ret2) ? ret2 : cycles_to_run(ret2);
-      }
     }
   }
-  return (u32)remaining;
+  return cgba_parked_swi_finish(remaining);
 }
 
 /* Shared mid-loop park / event-interleave step for parked SWI engines.
@@ -3172,12 +3195,29 @@ static int cgba_parked_swi_park(s32 *remaining, u32 loop_pc, u32 S0, u32 N0,
   return 0;
 }
 
-/* Shared post-epilogue fallback return contract for parked SWI engines. */
+/* Shared post-epilogue fallback return contract for parked SWI engines.
+ * Carries overshoot past update_gba()'s -64 clamp so heavy final runs (e.g.
+ * LZ77/RL tokens) never drop guest cycles, and guarantees return is either
+ * 0x80000000 (frame complete) or a strictly non-negative remaining budget. */
 static u32 cgba_parked_swi_finish(s32 remaining)
 {
-  if (remaining <= 0) {
-    u32 ret = update_gba(remaining);
-    return completed_frame(ret) ? ret : cycles_to_run(ret);
+  u32 S0 = CGBA_WS_S(0, 1), N0 = CGBA_WS_N(0, 1);
+  u32 ret_pc = reg[REG_PC];
+  while (remaining <= 0) {
+    s32 carry = 0;
+    s32 pass = remaining;
+    u32 ret;
+    if (pass < -64) {
+      carry = -pass;
+      pass = 0;
+    }
+    ret = update_gba(pass);
+    if (completed_frame(ret))
+      return 0x80000000u;
+    if (reg[REG_PC] != ret_pc &&
+        reg[REG_PC] == CGBA_BIOS_IRQ_VEC && reg[CPU_MODE] == MODE_IRQ)
+      return cgba_parked_swi_irq_exit((s32)cycles_to_run(ret), S0, N0);
+    remaining = (s32)cycles_to_run(ret) - carry;
   }
   return (u32)remaining;
 }
@@ -3224,32 +3264,43 @@ static u32 cgba_swi_fastset_engine(s32 remaining)
   int fill = (reg[REG_PC] == CGBA_FS_FILL_LOOP);
   u32 loop_pc = fill ? CGBA_FS_FILL_LOOP : CGBA_FS_COPY_LOOP;
   u32 S0 = CGBA_WS_S(0, 1), N0 = CGBA_WS_N(0, 1);
-  u32 src, dst, chunk_c;
+  u32 src, dst, chunk_c, total_bytes;
+  const u8 *src_full = NULL;
   s32 words;
 
-  remaining -= (s32)cgba_fs_entry_cost;
-  cgba_fs_entry_cost = 0;
-
   words = (s32)reg[4];
-  if (words <= 0)
+  if (words <= 0 || words > 0x200000)
     return CGBA_FS_DECLINE;                    /* not a mid-copy state */
+  total_bytes = (((u32)words + 7u) / 8u) * 32u;
   if (fill) {
-    if (reg[12] != 0x00000720u)
+    if (reg[12] != CGBA_BIOS_FASTSET_ENTRY)
       return CGBA_FS_DECLINE;
     src = reg[3];                              /* unused; kept canonical */
     dst = reg[1];
+    if ((dst & 3u) != 0u || !cgba_swi_range_in_region(dst, total_bytes))
+      return CGBA_FS_DECLINE;
     chunk_c = 28 * S0 + 8 * CGBA_WS_N(dst >> 24, 1) + 7 * N0 + N0;
   } else {
     if (reg[12] != 0x0EFFFFFFu)
       return CGBA_FS_DECLINE;
     src = reg[3];
     dst = reg[3] + reg[1];
+    if (((src | dst) & 3u) != 0u ||
+        !cgba_swi_range_in_region(dst, total_bytes) ||
+        !cgba_swi_copy_overlap_ok(src, dst, total_bytes))
+      return CGBA_FS_DECLINE;
+    /* Validate the entire source span BEFORE debiting entry_cost or running
+     * any chunk so the engine never declines mid-copy on fragmented NOR. */
+    src_full = cgba_swi_exact_src_host(src, total_bytes);
+    if (!src_full)
+      return CGBA_FS_DECLINE;
     chunk_c = 60 * S0
             + 8 * (CGBA_WS_N(src >> 24, 1) + CGBA_WS_N(dst >> 24, 1))
             + 7 * N0 + N0;
   }
-  if ((dst >> 24) >= 0x0F || (dst & 3))
-    return CGBA_FS_DECLINE;
+
+  remaining -= (s32)cgba_fs_entry_cost;
+  cgba_fs_entry_cost = 0;
 
   while (1) {
     if (words <= 0) {
@@ -3299,15 +3350,15 @@ static u32 cgba_swi_fastset_engine(s32 remaining)
         reg[1] = dst;
         reg[3] = dst;                          /* chunk-top canonical */
       } else {
-        const u8 *sh = cgba_bulk_src_host(src, bytes);
-        if (!sh)
-          return CGBA_FS_DECLINE;              /* state stays canonical */
+        const u8 *sh = src_full;
+        u32 last_word = cgba_le32_read(sh + bytes - 4);
         if (dh) {
           int smc_changed;
 #if CGBA_SH4_SWI_FORWARD_OVERLAP
           if (cgba_sh4_swi_is_forward_overlap(dh, sh, bytes)) {
             smc_changed = cgba_smc_tags_nonzero(tags, bytes);
             cgba_sh4_swi_copy_forward(dh, sh, bytes, 4);
+            last_word = cgba_le32_read(dh + bytes - 4);
           } else
 #endif
           {
@@ -3338,11 +3389,12 @@ static u32 cgba_swi_fastset_engine(s32 remaining)
           cgba_sh4_extra_cycles = saved;
           cgba_parked_swi_drain_store_alert();
         }
+        src_full += bytes;
         src += bytes;
         dst += bytes;
         reg[3] = src;
         reg[0] = src;                          /* chunk-top canonical */
-        reg[2] = cgba_le32_read(sh + bytes - 4);
+        reg[2] = last_word;
       }
       words -= (s32)(k * 8u);
       reg[4] = (u32)words;
@@ -3367,11 +3419,6 @@ static u32 cgba_swi_fastset_engine(s32 remaining)
  *     r3=dst END (escapes: r0=src unchanged, r1=dst END).
  *   word fill top 0x708: r0=src unchanged, r1=dst cursor, r2=fill32,
  *     r3=count left (escapes: r0=src unchanged, r1=dst END). */
-#define CGBA_CS_WCOPY_LOOP 0x000006ACu
-#define CGBA_CS_HCOPY_LOOP 0x00000668u
-#define CGBA_CS_HFILL_LOOP 0x000006E4u
-#define CGBA_CS_WFILL_LOOP 0x00000708u
-
 static u32 cgba_cs_entry_cost;
 
 static void cgba_swi_cpuset_materialize(int half, int fill)
@@ -3537,14 +3584,12 @@ static u32 cgba_swi_cpuset_engine(s32 remaining)
   int fill = (loop_pc == CGBA_CS_WFILL_LOOP || loop_pc == CGBA_CS_HFILL_LOOP);
   int half = (loop_pc == CGBA_CS_HCOPY_LOOP || loop_pc == CGBA_CS_HFILL_LOOP);
   u32 S0 = CGBA_WS_S(0, 1), N0 = CGBA_WS_N(0, 1);
-  u32 src = 0, dst, per_elem, width;
+  u32 src = 0, dst, per_elem, width, total_bytes;
+  const u8 *src_full = NULL;
   s32 count;
 
-  remaining -= (s32)cgba_cs_entry_cost;
-  cgba_cs_entry_cost = 0;
-
   if (fill) {
-    if (reg[12] != 0x00000614u)
+    if (reg[12] != CGBA_BIOS_CPUSET_ENTRY)
       return CGBA_FS_DECLINE;
     dst = reg[1];
     if (half) {
@@ -3559,20 +3604,30 @@ static u32 cgba_swi_cpuset_engine(s32 remaining)
       width = 4;
       per_elem = 3 * S0 + CGBA_WS_N(dst >> 24, 1) + N0;
     }
-    if (count <= 0)
+    if (count <= 0 || count > 0x200000)
       return CGBA_FS_DECLINE;
-    if ((dst >> 24) >= 0x0F || (half ? ((dst & 1) != 0) : ((dst & 3) != 0)) ||
-        ((dst + (u32)count * width - 1u) >> 24) != (dst >> 24))
+    total_bytes = (u32)count * width;
+    if ((half ? ((dst & 1u) != 0u) : ((dst & 3u) != 0u)) ||
+        !cgba_swi_range_in_region(dst, total_bytes))
       return CGBA_FS_DECLINE;
   } else if (half) {
     if (reg[4] != 0x0EFFFFFFu)
       return CGBA_FS_DECLINE;
     src = reg[2];
-    count = (s32)((reg[3] - reg[2]) >> 1);           /* (src_end - src)/2 */
+    if (reg[3] <= src || ((reg[3] - src) & 1u) != 0u)
+      return CGBA_FS_DECLINE;
+    count = (s32)((reg[3] - src) >> 1);              /* (src_end - src)/2 */
     width = 2;
-    dst = reg[1] + reg[2];
+    dst = reg[1] + src;
     per_elem = 7 * S0 + CGBA_WS_N(src >> 24, 0) + CGBA_WS_N(dst >> 24, 0) + N0;
-    if (count <= 0 || (dst >> 24) >= 0x0F || ((dst | src) & 1) != 0)
+    if (count <= 0 || count > 0x200000 || ((dst | src) & 1u) != 0u)
+      return CGBA_FS_DECLINE;
+    total_bytes = (u32)count * 2u;
+    if (!cgba_swi_range_in_region(dst, total_bytes) ||
+        !cgba_swi_copy_overlap_ok(src, dst, total_bytes))
+      return CGBA_FS_DECLINE;
+    src_full = cgba_swi_exact_src_host(src, total_bytes);
+    if (!src_full)
       return CGBA_FS_DECLINE;
   } else {
     if (reg[12] != 0x0EFFFFFFu)
@@ -3580,11 +3635,21 @@ static u32 cgba_swi_cpuset_engine(s32 remaining)
     src = reg[2];
     count = (s32)reg[3];
     width = 4;
-    dst = reg[1] + reg[2];
+    dst = reg[1] + src;
     per_elem = 7 * S0 + CGBA_WS_N(src >> 24, 1) + CGBA_WS_N(dst >> 24, 1) + N0;
-    if (count <= 0 || (dst >> 24) >= 0x0F || ((dst | src) & 3) != 0)
+    if (count <= 0 || count > 0x200000 || ((dst | src) & 3u) != 0u)
+      return CGBA_FS_DECLINE;
+    total_bytes = (u32)count * 4u;
+    if (!cgba_swi_range_in_region(dst, total_bytes) ||
+        !cgba_swi_copy_overlap_ok(src, dst, total_bytes))
+      return CGBA_FS_DECLINE;
+    src_full = cgba_swi_exact_src_host(src, total_bytes);
+    if (!src_full)
       return CGBA_FS_DECLINE;
   }
+
+  remaining -= (s32)cgba_cs_entry_cost;
+  cgba_cs_entry_cost = 0;
 
   while (1) {
     if (count <= 0) {
@@ -3655,9 +3720,10 @@ static u32 cgba_swi_cpuset_engine(s32 remaining)
         continue;
       }
       {
-        const u8 *sh = cgba_bulk_src_host(src, bytes);
-        if (!sh)
-          return CGBA_FS_DECLINE;
+        const u8 *sh = src_full;
+        u32 last_val = half
+          ? ((u32)sh[bytes - 2] | ((u32)sh[bytes - 1] << 8))
+          : cgba_le32_read(sh + bytes - 4);
         dh = cgba_bulk_ram_host(dst, bytes, &tags);
         if (dh) {
           int smc_changed;
@@ -3665,6 +3731,9 @@ static u32 cgba_swi_cpuset_engine(s32 remaining)
           if (cgba_sh4_swi_is_forward_overlap(dh, sh, bytes)) {
             smc_changed = cgba_smc_tags_nonzero(tags, bytes);
             cgba_sh4_swi_copy_forward(dh, sh, bytes, width);
+            last_val = half
+              ? ((u32)dh[bytes - 2] | ((u32)dh[bytes - 1] << 8))
+              : cgba_le32_read(dh + bytes - 4);
           } else
 #endif
           {
@@ -3706,15 +3775,16 @@ static u32 cgba_swi_cpuset_engine(s32 remaining)
           cgba_sh4_extra_cycles = saved;    /* per_elem is the exact charge */
           cgba_parked_swi_drain_store_alert();
         }
+        src_full += bytes;
         src += bytes;
         dst += bytes;
         count -= (s32)k;
         reg[2] = src;                       /* src cursor (canonical) */
         if (half) {
-          reg[12] = (u32)sh[bytes - 2] | ((u32)sh[bytes - 1] << 8);
+          reg[12] = last_val;
         } else {
           reg[3] = (u32)count;              /* count remaining */
-          reg[0] = cgba_le32_read(sh + bytes - 4);   /* last word (escapes) */
+          reg[0] = last_val;                /* last word (escapes) */
         }
         remaining -= (s32)(k * per_elem);
       }
@@ -3731,8 +3801,6 @@ static u32 cgba_swi_cpuset_engine(s32 remaining)
  *   loop top 0x0904: 29 ARM insns + 3*N(src,0) + 2*N(0,0) + 4*N(dst,0) + N0.
  *   epilogue 0x0978..0x097C: pop {r4-r10}; bx lr (-> 0x94 dispatcher return).
  *   Escapes: r0 = src_orig + (count+1)*8, r1 = dst_orig + count*offset*4. */
-#define CGBA_OA_LOOP 0x00000904u
-
 static u32 cgba_oa_entry_cost;
 
 static inline void cgba_swi_objaffine_step(const u8 *sh, const u8 *sin_tbl,
@@ -3797,10 +3865,7 @@ static u32 cgba_swi_objaffine_engine(s32 remaining)
   const u8 *sh;
   const u8 *sin_tbl = bios_rom + 0x2150u;
 
-  remaining -= (s32)cgba_oa_entry_cost;
-  cgba_oa_entry_cost = 0;
-
-  if (reg[10] != 0x00002150u || reg[REG_LR] != 0x00000094u ||
+  if (reg[10] != CGBA_BIOS_SIN_TABLE || reg[REG_LR] != CGBA_BIOS_SWI_RET ||
       rem_count == 0u || rem_count > 1024u ||
       (reg[7] & 1u) != 0u || reg[8] != (reg[7] << 1) || offset > 256u ||
       reg[3] != reg[1] + offset)
@@ -3814,6 +3879,9 @@ static u32 cgba_swi_objaffine_engine(s32 remaining)
   sh = cgba_swi_exact_src_host(src, rem_count * 8u);
   if (!sh)
     return CGBA_FS_DECLINE;
+
+  remaining -= (s32)cgba_oa_entry_cost;
+  cgba_oa_entry_cost = 0;
 
   per_elem = 29 * S0
            + 3 * CGBA_WS_N(src >> 24, 0)
@@ -3915,9 +3983,6 @@ static u32 cgba_swi_objaffine_engine(s32 remaining)
  *     r4=byteCount(0/1), r5=len>0, r12=byteShift(0/8).
  * Parks cleanly at outer flag-byte boundaries (<= ~600 cycles per flag byte),
  * charging exact instruction/branch/waitstate cycles and yielding to IRQs. */
-#define CGBA_LZ8_LOOP  0x00000A74u
-#define CGBA_LZ16_LOOP 0x00000BA4u
-
 static u32 cgba_lz_entry_cost;
 
 static inline const u8 *cgba_lz_src_page(u32 addr, u32 *avail_out)
@@ -4047,10 +4112,7 @@ static u32 cgba_swi_lz77_engine(s32 remaining)
   const u8 *sp = NULL;
   u32 s_avail = 0;
 
-  remaining -= (s32)cgba_lz_entry_cost;
-  cgba_lz_entry_cost = 0;
-
-  if (reg[REG_LR] != 0x00000094u || len == 0u)
+  if (reg[REG_LR] != CGBA_BIOS_SWI_RET || len == 0u)
     return CGBA_FS_DECLINE;
   if (vram_mode && ((dst & 1u) != 0u || bcnt > 1u || bshf != (bcnt << 3)))
     return CGBA_FS_DECLINE;
@@ -4059,6 +4121,9 @@ static u32 cgba_swi_lz77_engine(s32 remaining)
     return CGBA_FS_DECLINE;
   if (vram_mode && dst_off + ((len + bcnt) & ~1u) > dst_sz)
     return CGBA_FS_DECLINE;
+
+  remaining -= (s32)cgba_lz_entry_cost;
+  cgba_lz_entry_cost = 0;
 
   sp = cgba_lz_src_page(src, &s_avail);
   if (!sp)
@@ -4419,25 +4484,7 @@ static u32 cgba_swi_lz77_engine(s32 remaining)
     }
   }
 
-  {
-    u32 ret_pc = reg[REG_PC];
-    while (remaining <= 0) {
-      s32 carry = 0;
-      s32 pass = remaining;
-      u32 ret;
-      if (pass < -64) {
-        carry = -pass;
-        pass = 0;
-      }
-      ret = update_gba(pass);
-      if (completed_frame(ret))
-        return 0x80000000u;
-      if (reg[REG_PC] != ret_pc)
-        return cgba_parked_swi_irq_exit((s32)cycles_to_run(ret), S0, N0);
-      remaining = (s32)cycles_to_run(ret) - carry;
-    }
-  }
-  return (u32)remaining;
+  return cgba_parked_swi_finish(remaining);
 }
 
 #if CGBA_SH4_SWI_HLE_VERIFY
@@ -4561,6 +4608,20 @@ u32 cgba_bios_other_pc[8];
  * everywhere; incremented only under CGBA_SH4_DIAG_COUNTERS. */
 unsigned long cgba_swi_interp_n[32];
 unsigned long cgba_swi_interp_words[32];   /* CpuSet/FastSet/UnComp payload */
+
+enum cgba_swi_hle_action {
+  CGBA_SWI_ACT_NONE      = 0,  /* fall through to interpreter */
+  CGBA_SWI_ACT_FASTSET   = 3,
+  CGBA_SWI_ACT_CPUSET    = 4,
+  CGBA_SWI_ACT_OBJAFFINE = 5,
+  CGBA_SWI_ACT_LZ77      = 6,
+  CGBA_SWI_ACT_ATOMIC    = 7,  /* result committed; remaining in cgba_swi_arctan_rem */
+  CGBA_SWI_ACT_HALT      = 8,
+  CGBA_SWI_ACT_INTRWAIT  = 9,
+  CGBA_SWI_ACT_VBLANKIW  = 10,
+  CGBA_SWI_ACT_BGAFFINE  = 11,
+  CGBA_SWI_ACT_RL        = 12
+};
 
 static int cgba_hle_bios_swi_num(u32 num, u32 budget);
 
@@ -4807,9 +4868,7 @@ static int cgba_swi_arctan_try(u32 num, u32 budget)
  * wake up 160-228 times/frame inside Halt (0x03E4) or IntrWait (0x0480).
  * Keeping the halt/IFBIOS loop in native C (with canonical open-BIOS stacks
  * and registers) eliminates 20k-45k execute_arm() entries per 240 frames. */
-#define CGBA_HALT_RESUME     0x000003E4u
-#define CGBA_INTRWAIT_RESUME 0x00000480u
-
+/* Halt/IntrWait resume PCs live in sh4_open_bios_layout.h. */
 static u32 cgba_swi_halt_resume(s32 remaining)
 {
   u32 S0 = CGBA_WS_S(0, 1), N0 = CGBA_WS_N(0, 1);
@@ -4995,8 +5054,6 @@ static u32 cgba_swi_intrwait_enter(int vblank_wait, s32 remaining)
  *   loop top 0x07FC: 54 ARM insns + 5*N(src,0) + 2*N(src,1) + 2*N(0,1) +
  *     2*N(0,0) + 4*N(dst,0) + 2*S(dst,1) + N0. Only r0/r1/r2 live across iters.
  *   epilogue 0x08D4..0x08D8: pop {r4-r11}; bx lr (-> 0x94). */
-#define CGBA_BA_LOOP 0x000007FCu
-
 static u32 cgba_ba_entry_cost;
 
 static inline void cgba_swi_bgaffine_step(const u8 *sh, const u8 *sin_tbl,
@@ -5060,10 +5117,7 @@ static u32 cgba_swi_bgaffine_engine(s32 remaining)
   const u8 *sh;
   const u8 *sin_tbl = bios_rom + 0x2150u;
 
-  remaining -= (s32)cgba_ba_entry_cost;
-  cgba_ba_entry_cost = 0u;
-
-  if (reg[REG_LR] != 0x00000094u)
+  if (reg[REG_LR] != CGBA_BIOS_SWI_RET)
     return CGBA_FS_DECLINE;
   rem_count = reg[2] + 1u;
   if (rem_count == 0u || rem_count > 512u)
@@ -5075,6 +5129,9 @@ static u32 cgba_swi_bgaffine_engine(s32 remaining)
   sh = cgba_swi_exact_src_host(src, rem_count * 20u);
   if (!sh)
     return CGBA_FS_DECLINE;
+
+  remaining -= (s32)cgba_ba_entry_cost;
+  cgba_ba_entry_cost = 0u;
 
   per_elem = 54u * S0
            + 5u * CGBA_WS_N(src >> 24, 0) + 2u * CGBA_WS_N(src >> 24, 1)
@@ -5157,9 +5214,6 @@ static u32 cgba_swi_bgaffine_engine(s32 remaining)
  *   SWI 0x15 (0x0FBC..0x10BC): push {r4-r8,r10} (6 words, skips r9!), outer
  *     loop 0x1000; r0 = len > 0, r1 = dst (even), r2 = byteShift (0/8),
  *     r3 = writeVal, r4 = byteCount (0/1), r6 = src. */
-#define CGBA_RL8_LOOP  0x00000F48u
-#define CGBA_RL16_LOOP 0x00001000u
-
 static u32 cgba_rl_entry_cost;
 
 static int cgba_swi_rl_can_enter(int vram_mode, u32 *len_out)
@@ -5257,13 +5311,11 @@ static u32 cgba_swi_rl_engine(s32 remaining)
   u8 *dh_base;
   u32 src_r = src >> 24, dst_r = dst >> 24;
   u32 Nsrc, Ndst, slice_dst_start;
+  u32 exit_r0 = src, exit_r1 = dst;
   const u8 *sp = NULL;
   u32 s_avail = 0u;
 
-  remaining -= (s32)cgba_rl_entry_cost;
-  cgba_rl_entry_cost = 0u;
-
-  if (reg[REG_LR] != 0x00000094u || len == 0u)
+  if (reg[REG_LR] != CGBA_BIOS_SWI_RET || len == 0u)
     return CGBA_FS_DECLINE;
   if (vram_mode && ((dst & 1u) != 0u || bcnt > 1u || bshf != (bcnt << 3)))
     return CGBA_FS_DECLINE;
@@ -5272,6 +5324,9 @@ static u32 cgba_swi_rl_engine(s32 remaining)
     return CGBA_FS_DECLINE;
   if (vram_mode && dst_off + ((len + bcnt) & ~1u) > dst_sz)
     return CGBA_FS_DECLINE;
+
+  remaining -= (s32)cgba_rl_entry_cost;
+  cgba_rl_entry_cost = 0u;
 
   sp = cgba_lz_src_page(src, &s_avail);
   if (!sp)
@@ -5310,8 +5365,8 @@ static u32 cgba_swi_rl_engine(s32 remaining)
         remaining -= (s32)(disp_ret_c + 2u * S0 + N0 + 6u * CGBA_WS_S(sp_r, 1));
       } else {
         u32 disp_ret_c = 0u, sp_r;
-        reg[0] = src;
-        reg[1] = dst;
+        reg[0] = exit_r0;
+        reg[1] = exit_r1;
         sp_r = cgba_parked_swi_leave(2u, &disp_ret_c);
         remaining -= (s32)(disp_ret_c + 2u * S0 + N0 + 2u * CGBA_WS_S(sp_r, 1));
       }
@@ -5364,10 +5419,17 @@ static u32 cgba_swi_rl_engine(s32 remaining)
 
     /* Decode one RLE token (compressed or raw run). */
     {
+      u32 run_start_src = src;
+      u32 run_start_dst = dst;
+      u32 old_bcnt = bcnt;
       u8 d;
       if (s_avail == 0u) {
         sp = cgba_lz_src_page(src, &s_avail);
         if (!sp) s_avail = 0u;
+        if ((src >> 24) != src_r) {
+          src_r = src >> 24;
+          Nsrc = CGBA_WS_N(src_r, 0);
+        }
       }
       d = s_avail ? (s_avail--, *sp++) : cgba_lz_read_u8(src);
       src++;
@@ -5379,6 +5441,10 @@ static u32 cgba_swi_rl_engine(s32 remaining)
         if (s_avail == 0u) {
           sp = cgba_lz_src_page(src, &s_avail);
           if (!sp) s_avail = 0u;
+          if ((src >> 24) != src_r) {
+            src_r = src >> 24;
+            Nsrc = CGBA_WS_N(src_r, 0);
+          }
         }
         val = s_avail ? (s_avail--, *sp++) : cgba_lz_read_u8(src);
         src++;
@@ -5387,6 +5453,10 @@ static u32 cgba_swi_rl_engine(s32 remaining)
           dst_off += cnt;
           dst += cnt;
           len -= cnt;
+          if (len == 0u) {
+            exit_r0 = run_start_src;
+            exit_r1 = run_start_dst;
+          }
           remaining -= (s32)(11u * S0 + 2u * Nsrc + cnt * (6u * S0 + Ndst + N0));
         } else {
           u32 k = cnt;
@@ -5411,7 +5481,7 @@ static u32 cgba_swi_rl_engine(s32 remaining)
           }
           len -= cnt;
           remaining -= (s32)(14u * S0 + 2u * Nsrc + cnt * (12u * S0 + N0) +
-                             ((cnt + 1u) >> 1) * Ndst);
+                             ((cnt + old_bcnt) >> 1) * Ndst);
         }
       } else {
         u32 run = (u32)(d & 0x7Fu) + 1u;
@@ -5421,6 +5491,10 @@ static u32 cgba_swi_rl_engine(s32 remaining)
           if (s_avail == 0u) {
             sp = cgba_lz_src_page(src, &s_avail);
             if (!sp) s_avail = 0u;
+            if ((src >> 24) != src_r) {
+              src_r = src >> 24;
+              Nsrc = CGBA_WS_N(src_r, 0);
+            }
           }
           if (!vram_mode && s_avail > 0u) {
             u32 chunk = (rem_b < s_avail) ? rem_b : s_avail;
@@ -5457,11 +5531,16 @@ static u32 cgba_swi_rl_engine(s32 remaining)
           }
         }
         len -= cnt;
-        if (!vram_mode)
+        if (!vram_mode) {
+          if (len == 0u) {
+            exit_r0 = cnt;
+            exit_r1 = run_start_dst;
+          }
           remaining -= (s32)(9u * S0 + Nsrc + cnt * (7u * S0 + Nsrc + Ndst + N0));
-        else
+        } else {
           remaining -= (s32)(10u * S0 + Nsrc + cnt * (12u * S0 + Nsrc + N0) +
-                             ((cnt + 1u) >> 1) * Ndst);
+                             ((cnt + old_bcnt) >> 1) * Ndst);
+        }
       }
     }
   }
@@ -5577,13 +5656,13 @@ static int cgba_hle_bios_swi_num(u32 num, u32 budget)
 #if !CGBA_SH4_SWI_HLE_VERIFY
   case 0x02:
     if (budget > 0 && reg[CPU_HALT_STATE] == CPU_ACTIVE)
-      return 8;
-    return 0;
+      return CGBA_SWI_ACT_HALT;
+    return CGBA_SWI_ACT_NONE;
   case 0x04:
   case 0x05:
     if (budget > 0 && reg[CPU_HALT_STATE] == CPU_ACTIVE)
-      return (num == 0x05) ? 10 : 9;
-    return 0;
+      return (num == 0x05) ? CGBA_SWI_ACT_VBLANKIW : CGBA_SWI_ACT_INTRWAIT;
+    return CGBA_SWI_ACT_NONE;
 #endif
   case 0x08:
   case 0x09:
@@ -5593,15 +5672,15 @@ static int cgba_hle_bios_swi_num(u32 num, u32 budget)
   case 0x0E:
     if (budget > 0 && cgba_swi_bgaffine_can_enter(reg[0], reg[1], reg[2])) {
       cgba_swi_bgaffine_materialize();
-      return 11;
+      return CGBA_SWI_ACT_BGAFFINE;
     }
-    return 0;
+    return CGBA_SWI_ACT_NONE;
   case 0x0F:
     if (budget > 0 && cgba_swi_objaffine_can_enter(reg[0], reg[1], reg[2], reg[3])) {
       cgba_swi_objaffine_materialize();
-      return 5;
+      return CGBA_SWI_ACT_OBJAFFINE;
     }
-    return 0;
+    return CGBA_SWI_ACT_NONE;
   case 0x10:
     return cgba_swi_bitunpack_try(budget);
 #endif
@@ -5612,9 +5691,9 @@ static int cgba_hle_bios_swi_num(u32 num, u32 budget)
     int vram_mode = (num == 0x12);
     if (budget > 0 && cgba_swi_lz77_can_enter(vram_mode, &lz_len)) {
       cgba_swi_lz77_materialize(vram_mode, lz_len);
-      return 6;
+      return CGBA_SWI_ACT_LZ77;
     }
-    return 0;
+    return CGBA_SWI_ACT_NONE;
   }
   case 0x14:
   case 0x15: {
@@ -5622,34 +5701,26 @@ static int cgba_hle_bios_swi_num(u32 num, u32 budget)
     int vram_mode = (num == 0x15);
     if (budget > 0 && cgba_swi_rl_can_enter(vram_mode, &rl_len)) {
       cgba_swi_rl_materialize(vram_mode, rl_len);
-      return 12;
+      return CGBA_SWI_ACT_RL;
     }
-    return 0;
+    return CGBA_SWI_ACT_NONE;
   }
 #endif
 #if CGBA_SH4_SWI_CPUSET_FAITHFUL
   case 0x0B:
   case 0x0C: {
     /* Register- and cycle-faithful fast path; anything unmodeled falls back
-       to the interpreted BIOS below (return 0). */
+       to the interpreted BIOS below (return CGBA_SWI_ACT_NONE). */
     struct cgba_swi_pred pred;
     int ok = (num == 0x0B)
       ? cgba_swi_cpuset_predict(reg[0], reg[1], reg[2], &pred)
       : cgba_swi_cpufastset_predict(reg[0], reg[1], reg[2], &pred);
     if (!ok)
-      return 0;
-    /* Only take the fast path when the whole SWI fits the CURRENT event
-       slice: larger ones span update_gba windows, where the interpreter
-       interleaves events (and can vector IRQs) MID-COPY — atomically
-       debiting the total would move those guest-visible events after the
-       copy. Big copies stay on the interpreter until the parked/resumable
-       variant exists (chunked per-word debit with IRQ exits, IntrWait-
-       style park state). */
+      return CGBA_SWI_ACT_NONE;
     if (pred.cycles + 64u > budget) {
 #if !CGBA_SH4_SWI_HLE_VERIFY
-      /* Oversized copies: parked/resumable chunked execution, canonical at
-       * every pause point so IRQs vector exactly as the interpreter would.
-       * Fills stay interpreted (rare). */
+      /* Oversized copies & fills: parked/resumable chunked execution,
+       * canonical at every pause point so IRQs vector exactly as interpreted. */
       u32 cnt = reg[2] & 0x1FFFFFu, fill = (reg[2] >> 24) & 1;
       if ((num == 0x0C || num == 0x0B) && budget > 0 && cnt != 0) {
         u32 src0 = reg[0];
@@ -5657,14 +5728,14 @@ static int cgba_hle_bios_swi_num(u32 num, u32 budget)
         if ((src0 & 0x0E000000u) && (end0 & 0x0E000000u)) {
           if (num == 0x0C) {
             cgba_swi_fastset_materialize(fill);
-            return 3;                    /* caller runs the FastSet engine */
+            return CGBA_SWI_ACT_FASTSET;
           }
           cgba_swi_cpuset_materialize(((reg[2] >> 26) & 1) ? 0 : 1, (int)fill);
-          return 4;                      /* caller runs the CpuSet engine */
+          return CGBA_SWI_ACT_CPUSET;
         }
       }
 #endif
-      return 0;
+      return CGBA_SWI_ACT_NONE;
     }
 #if CGBA_SH4_SWI_HLE_VERIFY
     if (pred.r0_from_last_word) {
@@ -5672,14 +5743,14 @@ static int cgba_hle_bios_swi_num(u32 num, u32 budget)
       u32 wi = cn - 1u;
       const u8 *sp2 = cgba_bulk_src_host(wsrc, cn * 4);
       if (!sp2)
-        return 0;
+        return CGBA_SWI_ACT_NONE;
 #if CGBA_SH4_SWI_FORWARD_OVERLAP
       {
         u32 wdst = reg[1] & ~3u;
         if (wdst > wsrc && wdst - wsrc < cn * 4u) {
           u32 delta_words = (wdst - wsrc) >> 2;
           if (!delta_words)
-            return 0;
+            return CGBA_SWI_ACT_NONE;
           wi %= delta_words;                   /* earlier stores feed this load */
         }
       }
@@ -5694,10 +5765,10 @@ static int cgba_hle_bios_swi_num(u32 num, u32 budget)
     cgba_swi_verify.irq_in0 = cgba_bios_hle_irq_in;
     cgba_swi_verify.a0 = reg[0]; cgba_swi_verify.a1 = reg[1];
     cgba_swi_verify.a2 = reg[2];
-    return 0;                          /* run the real BIOS; compare after */
+    return CGBA_SWI_ACT_NONE;          /* run the real BIOS; compare after */
 #else
     if (!cgba_swi_apply_faithful(reg[0], reg[1], reg[2], num == 0x0C, &pred))
-      return 0;
+      return CGBA_SWI_ACT_NONE;
     cgba_swi_arctan_rem = (s32)budget - (s32)pred.cycles;
     break;                             /* handled -> common HLE tail */
 #endif
@@ -5707,7 +5778,7 @@ static int cgba_hle_bios_swi_num(u32 num, u32 budget)
 #ifdef CGBA_GPSP_HEADLESS_TEST
     if (num < 48) cgba_swi_miss[num]++;
 #endif
-    return 0;
+    return CGBA_SWI_ACT_NONE;
   }
 
   if (cgba_store_alert) {
@@ -5722,7 +5793,7 @@ static int cgba_hle_bios_swi_num(u32 num, u32 budget)
 #ifdef CGBA_GPSP_HEADLESS_TEST
   cgba_bios_hle_swi_count++;
 #endif
-  return 7;
+  return CGBA_SWI_ACT_ATOMIC;
 }
 
 u32 cgba_sh4_bios_fallback(u32 cycles)
@@ -5734,32 +5805,26 @@ u32 cgba_sh4_bios_fallback(u32 cycles)
    * open_gba_bios.bin. When an external BIOS is loaded, bypass HLE and
    * interpret the BIOS image directly (stopping immediately on PC >= 0x4000). */
   if (!CGBA_SH4_DIFF_ACTIVE() && !cgba_using_external_bios) {
-  if (reg[REG_PC] == 0x00000008u &&
+  if (reg[REG_PC] == CGBA_BIOS_SWI_VEC &&
       reg[CPU_MODE] == MODE_SUPERVISOR) {
     int h = cgba_hle_bios_swi(cycles);
-    if (h == 3)
-      return cgba_swi_fastset_engine((s32)cycles);
-    if (h == 4)
-      return cgba_swi_cpuset_engine((s32)cycles);
-    if (h == 5)
-      return cgba_swi_objaffine_engine((s32)cycles);
-    if (h == 6)
-      return cgba_swi_lz77_engine((s32)cycles);
-    if (h == 7)
-      return (u32)cgba_swi_arctan_rem;
-    if (h == 8)
-      return cgba_swi_halt_enter((s32)cycles);
-    if (h == 9 || h == 10) {
-      u32 r = cgba_swi_intrwait_enter(h == 10, (s32)cycles);
-      if (r != CGBA_FS_DECLINE)
-        return r;
+    u32 r = CGBA_FS_DECLINE;
+    switch (h) {
+    case CGBA_SWI_ACT_NONE:      break;
+    case CGBA_SWI_ACT_ATOMIC:    return (u32)cgba_swi_arctan_rem;
+    case CGBA_SWI_ACT_FASTSET:   r = cgba_swi_fastset_engine((s32)cycles); break;
+    case CGBA_SWI_ACT_CPUSET:    r = cgba_swi_cpuset_engine((s32)cycles); break;
+    case CGBA_SWI_ACT_OBJAFFINE: r = cgba_swi_objaffine_engine((s32)cycles); break;
+    case CGBA_SWI_ACT_LZ77:      r = cgba_swi_lz77_engine((s32)cycles); break;
+    case CGBA_SWI_ACT_HALT:      r = cgba_swi_halt_enter((s32)cycles); break;
+    case CGBA_SWI_ACT_INTRWAIT:  r = cgba_swi_intrwait_enter(0, (s32)cycles); break;
+    case CGBA_SWI_ACT_VBLANKIW:  r = cgba_swi_intrwait_enter(1, (s32)cycles); break;
+    case CGBA_SWI_ACT_BGAFFINE:  r = cgba_swi_bgaffine_engine((s32)cycles); break;
+    case CGBA_SWI_ACT_RL:        r = cgba_swi_rl_engine((s32)cycles); break;
+    default:                     return cycles;
     }
-    if (h == 11)
-      return cgba_swi_bgaffine_engine((s32)cycles);
-    if (h == 12)
-      return cgba_swi_rl_engine((s32)cycles);
-    if (h && h != 9 && h != 10)
-      return cycles;                 /* PC/mode restored; stub redispatches */
+    if (r != CGBA_FS_DECLINE)
+      return r;
   }
   if (reg[CPU_MODE] == MODE_SYSTEM) {
     if (reg[REG_PC] == CGBA_HALT_RESUME) {

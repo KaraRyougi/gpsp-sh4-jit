@@ -7,6 +7,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "ports/fxcg100/sh4/sh4_open_bios_layout.h"
+
 static unsigned checks;
 
 static void check(int ok, const char *what)
@@ -89,26 +91,27 @@ static void test_bgaffine_and_bios_layout(void)
   check(fread(bios, 1, sizeof(bios), f) == sizeof(bios), "read 16 KiB BIOS");
   fclose(f);
 
-  /* Verify parked/resumable open-BIOS entry & loop PCs relied on by HLE,
+  /* Verify parked/resumable open-BIOS entry & loop PCs from sh4_open_bios_layout.h,
    * plus the SWI bounds-check trampoline (0x0070 -> 0x3EB0) and Nintendo-BIOS
    * register convention in swi_IntrWait (r12 = 0x04000000, r2 = 0x208). */
-  memcpy(&w, bios + 0x0070u, 4); check(w == 0xEA000F8Eu, "SWI 0x0070 b 0x3EB0");
-  memcpy(&w, bios + 0x3EB0u, 4); check(w == 0xE35C002Bu, "SWI tramp cmp ip, #0x2B");
-  memcpy(&w, bios + 0x3EB4u, 4); check(w == 0x2AFFF07Bu, "SWI tramp bcs 0x00A8");
-  memcpy(&w, bios + 0x3EB8u, 4); check(w == 0xE79BC10Cu, "SWI tramp ldr ip, [fp, ip, lsl #2]");
-  memcpy(&w, bios + 0x3EBCu, 4); check(w == 0xEAFFF06Cu, "SWI tramp b 0x0074");
-  memcpy(&w, bios + 0x03E4u, 4); check(w == 0xE12FFF1Eu, "Halt 0x03E4 bx lr");
-  memcpy(&w, bios + 0x0434u, 4); check(w == 0xE3A0C301u, "IntrWait 0x0434 mov ip, #0x04000000");
-  memcpy(&w, bios + 0x0438u, 4); check(w == 0xE3A02F82u, "IntrWait 0x0438 mov r2, #0x208");
-  memcpy(&w, bios + 0x047Cu, 4); check(w == 0xE5CC3301u, "IntrWait 0x047C HALTCNT via ip");
-  memcpy(&w, bios + 0x0480u, 4); check(w == 0xE18C30B2u, "IntrWait 0x0480 IME=0 via [ip, r2]");
-  memcpy(&w, bios + 0x07FCu, 4); check(w == 0xE150C0B4u, "BgAffine 0x07FC loop top");
-  memcpy(&w, bios + 0x0F48u, 4); check(w == 0xE5D04000u, "RL8 0x0F48 loop top");
-  memcpy(&w, bios + 0x1000u, 4); check(w == 0xE5D67000u, "RL16 0x1000 loop top");
-  memcpy(&w, bios + 0x0FBCu, 4); check(w == 0xE92D05F0u, "RL16 0x0FBC push {r4-r8,r10}");
+  memcpy(&w, bios + CGBA_BIOS_SWI_DISPATCH_B, 4); check(w == 0xEA000F8Eu, "SWI 0x0070 b 0x3EB0");
+  memcpy(&w, bios + CGBA_BIOS_SWI_TRAMP,      4); check(w == 0xE35C002Bu, "SWI tramp cmp ip, #0x2B");
+  memcpy(&w, bios + CGBA_BIOS_SWI_TRAMP + 4u, 4); check(w == 0x2AFFF07Bu, "SWI tramp bcs 0x00A8");
+  memcpy(&w, bios + CGBA_BIOS_SWI_TRAMP + 8u, 4); check(w == 0xE79BC10Cu, "SWI tramp ldr ip, [fp, ip, lsl #2]");
+  memcpy(&w, bios + CGBA_BIOS_SWI_TRAMP + 12u,4); check(w == 0xEAFFF06Cu, "SWI tramp b 0x0074");
+  memcpy(&w, bios + CGBA_HALT_RESUME,         4); check(w == 0xE12FFF1Eu, "Halt 0x03E4 bx lr");
+  memcpy(&w, bios + CGBA_BIOS_INTRWAIT_ENTRY, 4); check(w == 0xE3A0C301u, "IntrWait 0x0434 mov ip, #0x04000000");
+  memcpy(&w, bios + CGBA_BIOS_INTRWAIT_ENTRY + 4u, 4); check(w == 0xE3A02F82u, "IntrWait 0x0438 mov r2, #0x208");
+  memcpy(&w, bios + CGBA_BIOS_INTRWAIT_HALT + 4u,  4); check(w == 0xE5CC3301u, "IntrWait 0x047C HALTCNT via ip");
+  memcpy(&w, bios + CGBA_INTRWAIT_RESUME,     4); check(w == 0xE18C30B2u, "IntrWait 0x0480 IME=0 via [ip, r2]");
+  memcpy(&w, bios + CGBA_BIOS_INTRWAIT_BX,    4); check(w == 0xE12FFF1Eu, "IntrWait 0x04A4 bx lr");
+  memcpy(&w, bios + CGBA_BA_LOOP,             4); check(w == 0xE150C0B4u, "BgAffine 0x07FC loop top");
+  memcpy(&w, bios + CGBA_RL8_LOOP,            4); check(w == 0xE5D04000u, "RL8 0x0F48 loop top");
+  memcpy(&w, bios + CGBA_RL16_LOOP,           4); check(w == 0xE5D67000u, "RL16 0x1000 loop top");
+  memcpy(&w, bios + CGBA_BIOS_RL16_ENTRY,     4); check(w == 0xE92D05F0u, "RL16 0x0FBC push {r4-r8,r10}");
 
-  /* Cross-check BgAffineSet arithmetic with BIOS sine table at 0x2150. */
-  const uint8_t *sin_tbl = bios + 0x2150u;
+  /* Cross-check BgAffineSet arithmetic with BIOS sine table at CGBA_BIOS_SIN_TABLE. */
+  const uint8_t *sin_tbl = bios + CGBA_BIOS_SIN_TABLE;
   for (i = 0; i < 1000; i++) {
     int32_t cx = (int32_t)rnd32(), cy = (int32_t)rnd32();
     int16_t dispx = (int16_t)rnd32(), dispy = (int16_t)rnd32();
