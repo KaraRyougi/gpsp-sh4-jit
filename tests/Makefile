@@ -336,10 +336,19 @@ jit-ram-flush: $(ROOT)/tests/sh4_ram_flush_test.c \
 	  -o $(BIN)-jit-ram-flush
 	$(BIN)-jit-ram-flush
 
+SH4_INTERP_HELPER_INCS := \
+	$(ROOT)/ports/fxcg100/sh4/sh4_mem_helpers.inc.h \
+	$(ROOT)/ports/fxcg100/sh4/sh4_arm_thumb_helpers.inc.h \
+	$(ROOT)/ports/fxcg100/sh4/sh4_audio_fastpaths.inc.h \
+	$(ROOT)/ports/fxcg100/sh4/sh4_bios_hle.inc.h \
+	$(ROOT)/ports/fxcg100/sh4/sh4_cold_interp.inc.h \
+	$(ROOT)/ports/fxcg100/sh4/sh4_open_bios_layout.h
+
 # Production SH4 memory fallbacks must publish the interpreter-form PC before
 # gpSP's BIOS-protection and open-bus paths inspect reg[REG_PC].
 memory-pc: $(ROOT)/tests/sh4_memory_pc_test.c \
-	$(ROOT)/ports/fxcg100/sh4/sh4_interp_helpers.c
+	$(ROOT)/ports/fxcg100/sh4/sh4_interp_helpers.c \
+	$(SH4_INTERP_HELPER_INCS)
 	$(CC) $(CFLAGS) -Wno-unused-function \
 	  -ffunction-sections -fdata-sections -I$(ROOT) \
 	  -I$(ROOT)/vendor/gpsp/libretro \
@@ -376,6 +385,7 @@ udiv: $(ROOT)/tests/sh4_udiv_fastpath_test.c \
 udiv-emitter: $(ROOT)/tests/sh4_udiv_emitter_test.c \
 	$(ROOT)/ports/fxcg100/sh4/sh4_thumb_udiv.h \
 	$(ROOT)/ports/fxcg100/sh4/sh4_interp_helpers.c \
+	$(SH4_INTERP_HELPER_INCS) \
 	$(ROOT)/vendor/gpsp/sh4/sh4_emit.h
 	$(CC) $(CFLAGS) -Wno-unused-function \
 	  -DCGBA_SH4_THUMB_UDIV_FASTPATH=1 \

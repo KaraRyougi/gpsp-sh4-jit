@@ -1,3 +1,5 @@
+#include "cgba_hash.h"
+#include "gpsp_diag_counters.h"
 #include "gpsp_runner.h"
 
 #include <stdarg.h>
@@ -30,81 +32,6 @@ extern s32 video_count;
 extern u32 instruction_count;
 #ifdef CGBA_DYNAREC
 extern u32 rom_cache_watermark;
-#endif
-#if defined(CGBA_DYNAREC) && \
-	(defined(CGBA_GPSP_HEADLESS_TEST) || defined(CGBA_SH4_PROFILE_COUNTERS))
-extern uint32_t cgba_dynarec_rom_flush_count;
-extern uint32_t cgba_dynarec_ram_flush_count;
-extern uint32_t cgba_dynarec_arm_translate_count;
-extern uint32_t cgba_dynarec_thumb_translate_count;
-extern uint32_t cgba_dynarec_lookup_arm_count;
-extern uint32_t cgba_dynarec_lookup_thumb_count;
-extern uint32_t cgba_dynarec_lookup_dual_count;
-extern uint32_t cgba_dynarec_icache_sync_count;
-extern uint32_t cgba_dynarec_icache_sync_bytes;
-extern uint32_t cgba_dynarec_patch_sync_count;
-extern uint32_t cgba_dynarec_patch_sync_bytes;
-extern uint32_t cgba_dynarec_ibh_arm_hit_count;
-extern uint32_t cgba_dynarec_ibh_arm_slow_count;
-extern uint32_t cgba_dynarec_ibh_arm_hot_count;
-extern uint32_t cgba_dynarec_ibh_thumb_hit_count;
-extern uint32_t cgba_dynarec_ibh_thumb_slow_count;
-extern uint32_t cgba_dynarec_ibh_thumb_hot_count;
-extern uint32_t cgba_dynarec_ibh_dual_arm_hit_count;
-extern uint32_t cgba_dynarec_ibh_dual_thumb_hit_count;
-extern uint32_t cgba_dynarec_ibh_dual_slow_count;
-extern uint32_t cgba_dynarec_ibh_dual_hot_arm_count;
-extern uint32_t cgba_dynarec_ibh_dual_hot_thumb_count;
-struct cgba_sh4_prof_row {
-	uint32_t key;
-	uint32_t count;
-};
-extern uint32_t cgba_sh4_prof_entry_count;
-extern uint32_t cgba_sh4_prof_overflow_count;
-extern unsigned cgba_sh4_prof_top(struct cgba_sh4_prof_row *out, unsigned max);
-extern uint32_t cgba_sh4_helper_thumb_ldst_count;
-extern uint32_t cgba_sh4_helper_thumb_block_count;
-extern uint32_t cgba_sh4_helper_thumb_shift_count;
-extern uint32_t cgba_sh4_helper_thumb_dp_count;
-extern uint32_t cgba_sh4_helper_arm_ldst_count;
-extern uint32_t cgba_sh4_helper_arm_block_count;
-extern uint32_t cgba_sh4_helper_arm_dp_count;
-extern uint32_t cgba_sh4_helper_arm_mul_count;
-extern uint32_t cgba_sh4_helper_arm_psr_count;
-extern uint32_t cgba_sh4_helper_arm_swap_count;
-extern uint32_t cgba_sh4_helper_hle_div_count;
-extern uint32_t cgba_sh4_helper_arm_ldst_load_count;
-extern uint32_t cgba_sh4_helper_arm_ldst_store_count;
-extern uint32_t cgba_sh4_helper_arm_ldst_ram_count;
-extern uint32_t cgba_sh4_helper_arm_ldst_io_count;
-extern uint32_t cgba_sh4_helper_arm_ldst_video_count;
-extern uint32_t cgba_sh4_helper_arm_ldst_rom_count;
-extern uint32_t cgba_sh4_helper_arm_ldst_other_count;
-extern uint32_t cgba_sh4_helper_arm_block_load_count;
-extern uint32_t cgba_sh4_helper_arm_block_store_count;
-extern uint32_t cgba_sh4_helper_thumb_ldst_load_count;
-extern uint32_t cgba_sh4_helper_thumb_ldst_store_count;
-extern uint32_t cgba_sh4_helper_thumb_ldst_ram_count;
-extern uint32_t cgba_sh4_helper_thumb_ldst_io_count;
-extern uint32_t cgba_sh4_helper_thumb_ldst_video_count;
-extern uint32_t cgba_sh4_helper_thumb_ldst_rom_count;
-extern uint32_t cgba_sh4_helper_thumb_ldst_other_count;
-extern uint32_t cgba_sh4_helper_thumb_ldst_unmapped_count;
-extern uint32_t cgba_sh4_helper_thumb_ldst_guest_unaligned_count;
-extern uint32_t cgba_sh4_helper_thumb_ldst_host_unaligned_count;
-extern uint32_t cgba_sh4_helper_thumb_ldst_unsafe_region_count;
-extern uint32_t cgba_sh4_helper_thumb_ldst_smc_count;
-extern uint32_t cgba_sh4_helper_thumb_ldst_native_ready_count;
-extern uint32_t cgba_sh4_helper_thumb_ldst_word_count;
-extern uint32_t cgba_sh4_helper_thumb_ldst_byte_count;
-extern uint32_t cgba_sh4_helper_thumb_ldst_half_count;
-extern uint32_t cgba_sh4_helper_thumb_ldst_pc_count;
-extern uint32_t cgba_sh4_helper_thumb_ldst_sp_count;
-extern uint32_t cgba_sh4_helper_thumb_ldst_reg_count;
-extern uint32_t cgba_sh4_helper_thumb_ldst_imm_count;
-extern uint32_t cgba_sh4_native_thumb_const_io_count;
-extern uint32_t cgba_sh4_bios_fallback_call_count;
-extern uint32_t cgba_sh4_bios_fallback_cycle_count;
 #endif
 
 #if defined(CGBA_DYNAREC) && \
@@ -822,30 +749,12 @@ const char *cgba_gpsp_last_error(void)
 #ifdef CGBA_GPSP_HEADLESS_TEST
 static uint32_t cgba_fnv1a32(const void *data, uint32_t bytes)
 {
-	const uint8_t *p = (const uint8_t *)data;
-	uint32_t h = 2166136261u;
-
-	for(uint32_t i = 0; i < bytes; i++) {
-		h ^= p[i];
-		h *= 16777619u;
-	}
-	return h;
+	return cgba_fnv1a32_bytes(data, bytes);
 }
 
 static uint32_t cgba_fnv1a16_pixels(const uint16_t *data, uint32_t pixels)
 {
-	uint32_t h = 2166136261u;
-
-	if(!data)
-		return 0;
-	for(uint32_t i = 0; i < pixels; i++) {
-		uint16_t px = data[i];
-		h ^= (uint8_t)(px >> 8);
-		h *= 16777619u;
-		h ^= (uint8_t)px;
-		h *= 16777619u;
-	}
-	return h;
+	return cgba_fnv1a32_rgb565(data, pixels);
 }
 
 unsigned cgba_gpsp_state_lines(unsigned frame, const char *phase,
@@ -1444,17 +1353,7 @@ uint32_t cgba_gpsp_keyinput(void)
 
 uint32_t cgba_gpsp_frame_hash(const uint16_t *pixels)
 {
-	uint32_t hash = 2166136261u;
-
-	for(unsigned i = 0; i < CGBA_GBA_WIDTH * CGBA_GBA_HEIGHT; i++) {
-		uint16_t px = pixels[i];
-		hash ^= (uint8_t)(px >> 8);
-		hash *= 16777619u;
-		hash ^= (uint8_t)px;
-		hash *= 16777619u;
-	}
-
-	return hash;
+	return cgba_fnv1a32_rgb565(pixels, CGBA_GBA_WIDTH * CGBA_GBA_HEIGHT);
 }
 
 static uint32_t mode_sp(uint32_t mode)

@@ -1,4 +1,5 @@
 #include "fxcg100_platform.h"
+#include "ui_common.h"
 
 #include <stddef.h>
 #include <stdio.h>
@@ -792,6 +793,7 @@ void fxcg100_menu_init(fxcg100_menu_state *state)
   fxcg100_hotkey_defaults(state->hotkey_map);
   state->random_lfsr = 0x00c6ba5eu;
   fxcg100_config_load(state);
+  fxcg100_state_clamp_platform(state, 3u, 0u, 6u, 0u);
 }
 
 fxcg100_menu_result fxcg100_menu_run(fxcg100_menu_state *state,
@@ -849,16 +851,5 @@ fxcg100_menu_result fxcg100_menu_run(fxcg100_menu_state *state,
 
 int fxcg100_menu_should_blit(fxcg100_menu_state *state, uint32_t frame)
 {
-  uint32_t period;
-
-  if (state->frameskip_type == 2 || state->frameskip_value == 0)
-    return 1;
-
-  period = state->frameskip_value + 1;
-  if (state->frameskip_variation) {
-    state->random_lfsr = state->random_lfsr * 1664525u + 1013904223u;
-    return (state->random_lfsr % period) == 0;
-  }
-
-  return (frame % period) == 1;
+  return cgba_ui_menu_should_blit(state, frame);
 }

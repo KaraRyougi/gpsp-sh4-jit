@@ -62,6 +62,7 @@ endif
 
 PORT_S := \
   start.S \
+  sh4/sh4_mem_ops.S \
   sh4/sh4_stub.S
 
 ifeq ($(CGBA_FULL_GPSP),1)

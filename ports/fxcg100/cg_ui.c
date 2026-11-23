@@ -32,6 +32,7 @@
 #include "classpad_gfx.h"
 #include "classpad_theme.h"
 #include "txt_reader.h"
+#include "ui_common.h"
 
 #include <gint/display.h>
 #include <gint/rtc.h>
@@ -639,14 +640,7 @@ static ui_row *add_value(cg_ui *ui, int id, const char *label,
 
 static void game_title(char *dst, size_t size, uint32_t index)
 {
-	size_t len;
-
-	snprintf(dst, size, "%s", fxcg100_rom_source_label(index));
-	len = strlen(dst);
-	if (len > 4 && dst[len - 4] == '.' &&
-			(dst[len - 3] | 0x20) == 'g' && (dst[len - 2] | 0x20) == 'b' &&
-			(dst[len - 1] | 0x20) == 'a')
-		dst[len - 4] = 0;
+	cgba_ui_game_title(dst, size, index);
 }
 
 static void rows_pause(cg_ui *ui)
@@ -755,32 +749,13 @@ static void rows_settings(cg_ui *ui)
 
 /* The functions a key can be given, in the order of the key-mapping page:
  * the GBA buttons, then the shortcuts (both can be cleared to None via DEL). */
-#define BINDING_COUNT 16
-#define GBA_BINDINGS 10
-
-static const struct {
-	const char *name;
-	int hotkey;
-	int index;
-} bindings[BINDING_COUNT] = {
-	{ "Up", 0, FXCG100_GBA_KEY_UP },       { "Down", 0, FXCG100_GBA_KEY_DOWN },
-	{ "Left", 0, FXCG100_GBA_KEY_LEFT },   { "Right", 0, FXCG100_GBA_KEY_RIGHT },
-	{ "A", 0, FXCG100_GBA_KEY_A },         { "B", 0, FXCG100_GBA_KEY_B },
-	{ "L", 0, FXCG100_GBA_KEY_L },         { "R", 0, FXCG100_GBA_KEY_R },
-	{ "Start", 0, FXCG100_GBA_KEY_START },
-	{ "Select", 0, FXCG100_GBA_KEY_SELECT },
-	{ "Fast forward", 1, FXCG100_HOTKEY_FAST_FORWARD },
-	{ "Save state", 1, FXCG100_HOTKEY_SAVE_STATE },
-	{ "Load state", 1, FXCG100_HOTKEY_LOAD_STATE },
-	{ "Show frame rate", 1, FXCG100_HOTKEY_DISPLAY_FPS },
-	{ "TXT reader", 1, FXCG100_HOTKEY_TXT_READER },
-	{ "Save & exit", 1, FXCG100_HOTKEY_SAVE_EXIT },
-};
+#define BINDING_COUNT CGBA_UI_BINDING_COUNT
+#define GBA_BINDINGS  CGBA_UI_GBA_BINDINGS
+#define bindings      cgba_ui_bindings
 
 static uint16_t *binding_slot(cg_ui *ui, int i)
 {
-	return bindings[i].hotkey ? &ui->state->hotkey_map[bindings[i].index]
-		: &ui->state->keymap[bindings[i].index];
+	return cgba_ui_binding_slot(ui->state, i);
 }
 
 static void rows_keys(cg_ui *ui)
@@ -2043,14 +2018,12 @@ static fxcg100_menu_result input_txt_reader(cg_ui *ui)
 			want(ui, REDRAW_FULL);
 		}
 	} else if (e & FXCG100_APPKEY_SORT) {
-		int rc = txt_reader_add_bookmark(r);
+		int is_err = 0;
+		const char *msg = cgba_ui_txt_bookmark_status(
+			txt_reader_add_bookmark(r), &is_err);
 
-		if (rc == TXT_BM_ADDED)
-			message(ui, 0, "Bookmark added", NULL, NULL);
-		else if (rc == TXT_BM_EXISTS)
-			message(ui, 0, "Already bookmarked", NULL, NULL);
-		else if (rc == TXT_BM_FULL)
-			message(ui, 1, "Bookmarks full (32 max)", NULL, NULL);
+		if (msg)
+			message(ui, is_err, msg, NULL, NULL);
 		want(ui, REDRAW_FULL);
 	} else if (e & FXCG100_APPKEY_EXE) {
 		ui->txt_opt_jump = txt_reader_percent(r);
@@ -2181,15 +2154,13 @@ static fxcg100_menu_result input_txt_bookmarks(cg_ui *ui)
 			message(ui, 0, "Jumped to %s (DEL to undo)", pct_str, NULL);
 			want(ui, REDRAW_FULL);
 		} else {
-			int rc = txt_reader_add_bookmark(r);
+			int is_err = 0;
+			const char *msg = cgba_ui_txt_bookmark_status(
+				txt_reader_add_bookmark(r), &is_err);
 
 			ui->dialog = DIALOG_NONE;
-			if (rc == TXT_BM_ADDED)
-				message(ui, 0, "Bookmark added", NULL, NULL);
-			else if (rc == TXT_BM_EXISTS)
-				message(ui, 0, "Already bookmarked", NULL, NULL);
-			else if (rc == TXT_BM_FULL)
-				message(ui, 1, "Bookmarks full (32 max)", NULL, NULL);
+			if (msg)
+				message(ui, is_err, msg, NULL, NULL);
 			want(ui, REDRAW_FULL);
 		}
 	}
@@ -2443,16 +2414,7 @@ static void cg_ui_begin(cg_ui *ui, fxcg100_menu_state *state, int in_game,
 	ui->resume = 0;
 	ui->txt_direct = direct && in_game;
 	ui->txt_hotkey_armed = 0;
-	if (state->game_sort >= FXCG100_GAME_SORT_COUNT)
-		state->game_sort = FXCG100_GAME_SORT_NAME;
-	if (state->backlight > 16)
-		state->backlight = 0;
-	if (state->fast_forward_mode >= FXCG100_FF_MODE_COUNT)
-		state->fast_forward_mode = FXCG100_FF_MODE_HOLD;
-	if (state->fast_forward_speed >= FXCG100_FF_SPEED_COUNT)
-		state->fast_forward_speed = FXCG100_FF_SPEED_UNLIMITED;
-	if (state->bios_mode >= FXCG100_BIOS_MODE_COUNT)
-		state->bios_mode = FXCG100_BIOS_AUTO;
+	fxcg100_state_clamp_platform(state, 3u, 0u, 6u, CP_THEME_COUNT);
 	if (resume) {
 		ui->message_t0 = rtc_ticks();
 	} else {
@@ -2466,18 +2428,6 @@ static void cg_ui_begin(cg_ui *ui, fxcg100_menu_state *state, int in_game,
 		ui->game_first = 0;
 		library_reveal(ui);
 	}
-	if (state->theme >= CP_THEME_COUNT)
-		state->theme = 0;
-	if (state->game_sort >= FXCG100_GAME_SORT_COUNT)
-		state->game_sort = FXCG100_GAME_SORT_NAME;
-	if (state->backlight > 16)
-		state->backlight = 0;
-	if (state->fast_forward_mode >= FXCG100_FF_MODE_COUNT)
-		state->fast_forward_mode = FXCG100_FF_MODE_HOLD;
-	if (state->fast_forward_speed >= FXCG100_FF_SPEED_COUNT)
-		state->fast_forward_speed = FXCG100_FF_SPEED_UNLIMITED;
-	if (state->bios_mode >= FXCG100_BIOS_MODE_COUNT)
-		state->bios_mode = FXCG100_BIOS_AUTO;
 	if (ui->txt_direct)
 		open_txt_reader_page(ui);
 	/* Whatever opened the menu is still held: do not let it act here. */
@@ -2670,22 +2620,7 @@ void fxcg100_menu_init(fxcg100_menu_state *state)
 	fxcg100_hotkey_defaults(state->hotkey_map);
 	state->random_lfsr = 0x00c6ba5eu;
 	fxcg100_config_load(state);
-	if (state->screen_scale > 2)
-		state->screen_scale = 0;
-	if (state->screen_filter > 2)
-		state->screen_filter = 0;
-	if (state->theme >= CP_THEME_COUNT)
-		state->theme = 0;
-	if (state->game_sort >= FXCG100_GAME_SORT_COUNT)
-		state->game_sort = FXCG100_GAME_SORT_NAME;
-	if (state->backlight > 16)
-		state->backlight = 0;
-	if (state->fast_forward_mode >= FXCG100_FF_MODE_COUNT)
-		state->fast_forward_mode = FXCG100_FF_MODE_HOLD;
-	if (state->fast_forward_speed >= FXCG100_FF_SPEED_COUNT)
-		state->fast_forward_speed = FXCG100_FF_SPEED_UNLIMITED;
-	if (state->bios_mode >= FXCG100_BIOS_MODE_COUNT)
-		state->bios_mode = FXCG100_BIOS_AUTO;
+	fxcg100_state_clamp_platform(state, 3u, 0u, 6u, CP_THEME_COUNT);
 	memset(&ui_main, 0, sizeof(ui_main));
 	open_reader_direct = 0;
 	txt_reader_init(txt_reader_global());
@@ -2711,14 +2646,5 @@ fxcg100_menu_result fxcg100_menu_run(fxcg100_menu_state *state,
 
 int fxcg100_menu_should_blit(fxcg100_menu_state *state, uint32_t frame)
 {
-	uint32_t period;
-
-	if (state->frameskip_type == 2 || state->frameskip_value == 0)
-		return 1;
-	period = state->frameskip_value + 1;
-	if (state->frameskip_variation) {
-		state->random_lfsr = state->random_lfsr * 1664525u + 1013904223u;
-		return (state->random_lfsr % period) == 0;
-	}
-	return (frame % period) == 1;
+	return cgba_ui_menu_should_blit(state, frame);
 }

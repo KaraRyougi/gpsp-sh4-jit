@@ -2462,7 +2462,7 @@ static u8 *dma_bulk_span(u32 addr, u32 bytes, bool dest, u8 **tags)
   }
 }
 
-#if defined(CGBA_SH4_ASM_4BPP) && defined(__sh__)
+#ifdef __sh__
 extern void cgba_dma_copy_movca_sh4(void *dst, const void *src, u32 nbytes);
 extern void cgba_dma_fill32_movca_sh4(void *dst, u32 val, u32 nbytes);
 

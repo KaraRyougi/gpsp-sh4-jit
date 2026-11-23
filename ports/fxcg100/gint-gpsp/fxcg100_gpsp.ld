@@ -66,6 +66,7 @@ SECTIONS
 		*(.text.cgba.hot .text.cgba.hot.*)
 		*sh4_stub.S.obj(.text .text.*)
 		*gpsp/main.c.obj(.text .text.*)
+		*sh4_mem_ops.S.obj(.text .text.*)
 		*sh4_video_4bpp.S.obj(.text .text.*)
 		*sh4_scale.S.obj(.text .text.*)
 		*sh4_interp_helpers.c.obj(.text .text.*)

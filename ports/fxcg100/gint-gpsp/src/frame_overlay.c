@@ -4,6 +4,7 @@
  * independent of the panel and of how the frame reaches it.
  */
 
+#include "cgba_hash.h"
 #include "fxcg100_platform.h"
 
 #include <stdio.h>
@@ -14,17 +15,7 @@
 
 uint32_t fxcg100_frame_hash(const uint16_t *pixels)
 {
-	uint32_t hash = 2166136261u;
-
-	for(unsigned i = 0; i < GBA_W * GBA_H; i++) {
-		uint16_t px = pixels[i];
-		hash ^= (uint8_t)(px >> 8);
-		hash *= 16777619u;
-		hash ^= (uint8_t)px;
-		hash *= 16777619u;
-	}
-
-	return hash;
+	return cgba_fnv1a32_rgb565(pixels, GBA_W * GBA_H);
 }
 
 /*

@@ -82,10 +82,10 @@ SECTIONS
 		/* Everything except the gameplay working set, which goes to the
 		   arena below. Same object list as the fx-CG50 hot text. */
 		*(EXCLUDE_FILE (*cpu_threaded.c.obj *cpu.cc.obj *gpsp/main.c.obj
-			*gba_memory.c.obj *video.cc.obj *sh4_video_4bpp.S.obj *sh4_scale.S.obj
+			*gba_memory.c.obj *video.cc.obj *sh4_mem_ops.S.obj *sh4_video_4bpp.S.obj *sh4_scale.S.obj
 			*sh4_interp_helpers.c.obj *sh4_stub.S.obj) .text)
 		*(EXCLUDE_FILE (*cpu_threaded.c.obj *cpu.cc.obj *gpsp/main.c.obj
-			*gba_memory.c.obj *video.cc.obj *sh4_video_4bpp.S.obj *sh4_scale.S.obj
+			*gba_memory.c.obj *video.cc.obj *sh4_mem_ops.S.obj *sh4_video_4bpp.S.obj *sh4_scale.S.obj
 			*sh4_interp_helpers.c.obj *sh4_stub.S.obj) .text.*)
 		*(.hh3* .eram*)
 	} > ram :low
@@ -201,6 +201,7 @@ SECTIONS
 		*(.text.cgba.hot .text.cgba.hot.*)
 		*sh4_stub.S.obj(.text .text.*)
 		*gpsp/main.c.obj(.text .text.*)
+		*sh4_mem_ops.S.obj(.text .text.*)
 		*sh4_video_4bpp.S.obj(.text .text.*)
 		*sh4_scale.S.obj(.text .text.*)
 		*sh4_interp_helpers.c.obj(.text .text.*)

@@ -193,6 +193,7 @@ set(GPSP_CXX_SOURCES
 
 set(GPSP_ASM_SOURCES
   ${GPSP}/bios_data.S
+  ${FXCG100}/sh4/sh4_mem_ops.S
   ${FXCG100}/sh4/sh4_video_4bpp.S
   ${FXCG100}/sh4/sh4_scale.S
 )
@@ -558,6 +559,7 @@ if(CGBA_GPSP_HEADLESS_TEST AND NOT CGBA_SH4_DIFF_HARNESS AND
     "Headless diff/throughput diagnostics require -DCGBA_SH4_DIFF_HARNESS=ON (emulator only)")
 endif()
 if(CGBA_GPSP_HEADLESS_TEST)
+  target_sources(cgba-gint-gpsp PRIVATE src/headless_test.c)
   target_compile_definitions(cgba-gint-gpsp PRIVATE
     CGBA_GPSP_HEADLESS_TEST=1
     CGBA_GPSP_HEADLESS_FRAMES=${CGBA_GPSP_HEADLESS_FRAMES}
