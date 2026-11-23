@@ -1135,10 +1135,21 @@ cpu_alert_type function_cc write_io_register16(u32 address, u32 value)
     // Interrupt flag, clears the bits it tries to write
     case REG_IF:
       write_ioreg(REG_IF, read_ioreg(REG_IF) & (~value));
+#if defined(CGBA_SILENT_TIMERS) && CGBA_SILENT_TIMERS
+      if (__builtin_expect((value & cgba_timer_uncapped_irq_mask) != 0u, 0))
+        return CPU_ALERT_RESLICE;
+#endif
       break;
 
     // Register writes with side-effects, can raise an IRQ
     case REG_IE:
+      write_ioreg(ioreg, value);
+#if defined(CGBA_SILENT_TIMERS) && CGBA_SILENT_TIMERS
+      if (__builtin_expect((value & cgba_timer_uncapped_irq_mask) != 0u, 0))
+        return check_interrupt() | CPU_ALERT_RESLICE;
+#endif
+      return check_interrupt();
+
     case REG_IME:
       write_ioreg(ioreg, value);
       return check_interrupt();
@@ -3196,6 +3207,7 @@ void init_memory(void)
   memset(io_registers, 0, sizeof(io_registers));
   memset(oam_ram, 0, sizeof(oam_ram));
   memset(palette_ram, 0, sizeof(palette_ram));
+  memset(palette_ram_converted, 0, sizeof(palette_ram_converted));
   mark_palette_ram_dirty();
   memset(iwram, 0, sizeof(iwram));
   memset(ewram, 0, sizeof(ewram));
@@ -3294,13 +3306,14 @@ bool memory_check_savestate(const u8 *src)
 
   for (i = 0; i < DMA_CHAN_CNT; i++)
   {
+    u32 j;
     char tname[2] = {'0' + i, 0};
     const u8 *dmastr = bson_find_key(dmadoc, tname);
     if (!dmastr)
       return false;
 
-    for (i = 0; i < sizeof(dmavars32)/sizeof(dmavars32[0]); i++)
-      if (!bson_contains_key(dmastr, dmavars32[i], BSON_TYPE_INT32))
+    for (j = 0; j < sizeof(dmavars32)/sizeof(dmavars32[0]); j++)
+      if (!bson_contains_key(dmastr, dmavars32[j], BSON_TYPE_INT32))
         return false;
   }
   return true;

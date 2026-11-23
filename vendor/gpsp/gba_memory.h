@@ -500,6 +500,13 @@ static inline int cgba_smc_scalar_changes_tagged(
   return 0;
 }
 extern u16 io_registers[512];
+#if defined(CGBA_SILENT_TIMERS) && CGBA_SILENT_TIMERS
+/* GBA IRQ bitmask (subset of IRQ_TIMER0..IRQ_TIMER3 = 0x0078) of timers whose
+ * slice cap was skipped in the current slice because they were masked in IE
+ * and already latched in IF. Clearing IF or enabling IE for any set bit must
+ * reslice via CPU_ALERT_RESLICE so subsequent overflows are not delayed. */
+extern volatile u32 cgba_timer_uncapped_irq_mask;
+#endif
 extern u8 vram[1024 * 96];
 extern u8 bios_rom[1024 * 16];
 // Double buffer used for SMC detection

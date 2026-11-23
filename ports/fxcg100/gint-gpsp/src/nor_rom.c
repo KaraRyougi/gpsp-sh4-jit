@@ -977,10 +977,12 @@ int cgba_nor_rom_refresh_path(cgba_nor_rom *rom, const uint16_t *path)
 #ifdef CGBA_CLASSPAD
 	if(os_bfile_size(rom->fd) != (int)rom->size)
 		return -2;
+#if CGBA_FXCG100_STORAGE
 	/* RAM-pool copies are private: writing other files cannot move or
 	 * invalidate them. Flash addresses are queried again like on the fx-CG. */
 	if(!cp_direct_nor)
 		return 0;
+#endif
 #endif
 	total = rom->page_count * CGBA_FLASH_BLOCKS_PER_PAGE;
 	if(total > CGBA_NOR_ROM_MAX_BLOCKS)

@@ -96,8 +96,11 @@ static inline unsigned cgba_state_compress_lz4(const uint8_t *raw,
       /* Emit literals from anchor..ip. */
       lit_len = (unsigned)(ip - anchor);
       token = op;
-      if (op + 1u + lit_len + (lit_len / 255u) + 3u > oend)
-        return 0u;
+      {
+        unsigned extra_lit = (lit_len >= 15u) ? (1u + (lit_len - 15u) / 255u) : 0u;
+        if ((unsigned)(oend - op) < 1u + extra_lit + lit_len + 2u)
+          return 0u;
+      }
       op++;
       if (lit_len >= 15u) {
         unsigned rem = lit_len - 15u;
@@ -130,7 +133,7 @@ static inline unsigned cgba_state_compress_lz4(const uint8_t *raw,
       if (match_len >= 15u) {
         unsigned rem = match_len - 15u;
         *token |= 0x0fu;
-        if (op + (rem / 255u) + 1u > oend)
+        if ((unsigned)(oend - op) < (rem / 255u) + 1u)
           return 0u;
         while (rem >= 255u) {
           *op++ = 255u;
@@ -154,7 +157,8 @@ static inline unsigned cgba_state_compress_lz4(const uint8_t *raw,
 emit_last_literals:
   {
     unsigned lit_len = (unsigned)(iend - anchor);
-    if (op + 1u + lit_len + (lit_len / 255u) > oend)
+    unsigned extra_lit = (lit_len >= 15u) ? (1u + (lit_len - 15u) / 255u) : 0u;
+    if ((unsigned)(oend - op) < 1u + extra_lit + lit_len)
       return 0u;
     if (lit_len >= 15u) {
       unsigned rem = lit_len - 15u;

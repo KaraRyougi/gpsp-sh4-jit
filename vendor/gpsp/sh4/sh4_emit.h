@@ -33,7 +33,7 @@
 #ifdef CGBA_GBA_OVER_AZLE_IDLE
 #include "ports/fxcg100/sh4/sh4_idle_signature.h"
 #endif
-#ifdef CGBA_SH4_M4A_MIX_SKIP
+#if defined(CGBA_SH4_M4A_MIX_SKIP) && CGBA_SH4_M4A_MIX_SKIP
 #include "ports/fxcg100/sh4/sh4_m4a_skip.h"
 #include "ports/fxcg100/sh4/sh4_ea_mixer.h"
 #include "ports/fxcg100/sh4/sh4_gax_mixer.h"
@@ -269,7 +269,7 @@ static inline void sh4g_arm_pcm_clamp_entry(u8 **tp, const u8 *map, u32 pc)
 }
 #endif /* CGBA_SH4_ARM_MIXER_FASTPATH */
 
-#ifdef CGBA_SH4_M4A_MIX_SKIP
+#if defined(CGBA_SH4_M4A_MIX_SKIP) && CGBA_SH4_M4A_MIX_SKIP
 /* See sh4_m4a_skip.h.  Structural loop-level matcher: every self-contained
  * MP2K/m4a ARM inner loop (reverb, fixed-rate main/tail, interpolating Flavor A
  * and Flavor B, with any stereo buffer stride) is re-verified against live RAM
@@ -544,17 +544,17 @@ static inline void sh4g_m4a_loop_entry(u8 **tp, const cgba_sh4_m4a_match *m,
 #define SH4_M4A_SKIP_BLOCK_VARS
 #endif /* CGBA_SH4_M4A_MIX_SKIP */
 
-#if defined(CGBA_SH4_M4A_MIX_SKIP) || defined(CGBA_SH4_M4A_LOOP_FOLD) || \
-    defined(CGBA_SH4_ARM_MIXER_FASTPATH)
+#if (defined(CGBA_SH4_M4A_MIX_SKIP) && CGBA_SH4_M4A_MIX_SKIP) ||             \
+    defined(CGBA_SH4_M4A_LOOP_FOLD) || defined(CGBA_SH4_ARM_MIXER_FASTPATH)
 static inline void sh4g_arm_seam_fastpaths(u8 **tp, const u8 *map, u32 pc,
-#ifdef CGBA_SH4_M4A_MIX_SKIP
+#if defined(CGBA_SH4_M4A_MIX_SKIP) && CGBA_SH4_M4A_MIX_SKIP
                                            cgba_sh4_m4a_match *m4a_match,
 #else
                                            void *m4a_match,
 #endif
                                            u32 pos, int update_cycles)
 {
-#ifdef CGBA_SH4_M4A_MIX_SKIP
+#if defined(CGBA_SH4_M4A_MIX_SKIP) && CGBA_SH4_M4A_MIX_SKIP
   sh4g_m4a_skip_step(m4a_match, map, pc, pos);
 #ifdef CGBA_SH4_M4A_LOOP_FOLD
   sh4g_m4a_loop_entry(tp, m4a_match, pc, pos == 0u || update_cycles);
@@ -575,7 +575,7 @@ static inline void sh4g_arm_seam_fastpaths(u8 **tp, const u8 *map, u32 pc,
   (void)tp; (void)map; (void)pc; (void)pos; (void)update_cycles;
 #endif
 }
-#ifdef CGBA_SH4_M4A_MIX_SKIP
+#if defined(CGBA_SH4_M4A_MIX_SKIP) && CGBA_SH4_M4A_MIX_SKIP
 #define SH4_M4A_SKIP_MATCH_ARG (&sh4_m4a_cur_match)
 #else
 #define SH4_M4A_SKIP_MATCH_ARG ((void *)0)
@@ -1124,7 +1124,7 @@ SH4G_NOINLINE u8 *sh4g_generate_branch_taken(
 #define arm_conditional_block_header()                                        \
   do {                                                                        \
     int _acbh_single =                                                        \
-      (block_data_position + 1 >= (s32)num_insns) ||                          \
+      (block_data_position + 1 >= (s32)total_insns) ||                        \
       block_data[block_data_position + 1].update_cycles ||                    \
       (((pc + 4) >> 12) == pc_region &&                                       \
        (readaddress32(pc_address_block, (pc + 4) & 0x0FFFu) >> 28) !=         \

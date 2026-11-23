@@ -125,6 +125,10 @@ static inline int sh4g_arm_psr_native(u8 **tp, u32 opcode, u32 pc, int cycles)
       if (!cgba_sh4_psr_rebank_routine)  /* dynarec init not run yet */
         return 0;
 
+      /* Keep the open disp8 BT/BF branches (to_slow[], to_store[]) free of
+       * inline literal-pool flushes. */
+      sh4g_litseg_reserve_bytes(tp, 6, 160u);
+
       if (is_imm) sh4g_const(tp, val, SH4_REG_ARG3);     /* R7 = value */
       else        sh4g_load_greg(tp, rm, SH4_REG_ARG3);
 

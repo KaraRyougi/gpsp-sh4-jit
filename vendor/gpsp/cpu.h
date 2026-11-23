@@ -57,6 +57,10 @@ typedef u8 cpu_alert_type;
  * The writer has already flushed the caches; translated callers must leave
  * the current block before any instruction using the old timing can run. */
 #define CPU_ALERT_TIMING (1 << 3)
+/* Re-enter update_gba() immediately to recompute execute_cycles (e.g., when
+ * clearing IF or unmasking IE re-exposes a timer whose slice cap was skipped
+ * while masked and already latched). */
+#define CPU_ALERT_RESLICE (1 << 4)
 
 typedef u16 irq_type;
 
@@ -173,6 +177,9 @@ void flush_translation_cache_ram(void);
 void dump_translation_cache(void);
 void init_dynarec_caches(void);
 void flush_dynarec_caches(void);
+#ifdef SH4_ARCH
+void cgba_sh4_reset_hle_state(void);
+#endif
 void init_emitter(bool);
 void init_bios_hooks(void);
 

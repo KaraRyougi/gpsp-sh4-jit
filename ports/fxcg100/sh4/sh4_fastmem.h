@@ -83,6 +83,9 @@ extern u8 *memory_map_read[];
 extern u32 gamepak_size;
 extern const u8 * const *cgba_gamepak_fragment_blocks;
 extern u16 io_registers[512];          /* eswap16'd (LE-layout) halfwords */
+#if defined(CGBA_SILENT_TIMERS) && CGBA_SILENT_TIMERS
+extern volatile u32 cgba_timer_uncapped_irq_mask;
+#endif
 extern u16 palette_ram[512];
 extern u16 palette_ram_converted[512];
 #ifdef CGBA_PALETTE_DIRTY_ACTIVE

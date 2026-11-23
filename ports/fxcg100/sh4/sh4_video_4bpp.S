@@ -6832,8 +6832,8 @@ _cgba_render_8bpp_strip_blend_sh4:
 	mov     r6, r8                      /* r8 = r_dst */
 	mov.l   @(0, r15), r9               /* r9 = k */
 	tst     #0x04, r0                   /* T = !hflip */
-	bt      .L8bl_row_nf
-	bra     .L8bl_row_hf
+	bt      .L8bl_nf_row
+	bra     .L8bl_hf_row
 	nop
 
 	.balign 4
@@ -6954,13 +6954,11 @@ _cgba_render_8bpp_strip_blend_sh4:
 	nop
 .endm
 
-.L8bl_row_nf:
 	CGBA_8BPP_BLEND_ROW_LOOP .L8bl_nf, 0, .L8bl_stride_nf
 	.balign 2
 .L8bl_stride_nf: .word 480
 
 	/* ---- hflip 8-bpp blend row loop ---- */
-.L8bl_row_hf:
 	CGBA_8BPP_BLEND_ROW_LOOP .L8bl_hf, 1, .L8bl_stride
 	.purgem CGBA_8BPP_BLEND_HALF
 	.purgem CGBA_8BPP_BLEND_ROW_LOOP

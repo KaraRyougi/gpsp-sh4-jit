@@ -4257,13 +4257,17 @@ static void cgba_sh4_register_rom_seam_aliases(u8 **tp_p,
  * checks if up to 6 straight-line, unconditional, non-store, non-LDM/STM,
  * non-branch ARM instructions starting at `target_pc` (immutable Game Pak ROM)
  * overwrite all flags in `need_kill` before any flag read. Returns 1 if killed
- * at step 0 (cycles > 0 suffices), 2 if killed at step 1..5 (cycles > 96), or 0. */
+ * at step 0 (cycles > 0 suffices), 2 if killed at step 1..5 with worst-case
+ * intervening cycle cost < 96 (so the runtime cycles > 96 guard guarantees no
+ * mid-block gate or cold-interp stop before the killer), or 0. */
 static inline int sh4_arm_flags_dead_at_rom_pc(u32 target_pc, u32 need_kill,
                                                u32 cheat_hook)
 {
   u32 region;
   const u8 *page;
   u32 killed = 0u;
+  u32 fetch_c;
+  u32 max_cyc = 0u;
   int step;
 
   if (target_pc < 0x08000000u || target_pc >= 0x0E000000u || (target_pc & 3u))
@@ -4272,11 +4276,13 @@ static inline int sh4_arm_flags_dead_at_rom_pc(u32 target_pc, u32 need_kill,
   if (!page)
     return 0;
   region = target_pc >> 12;
+  fetch_c = (u32)ws_cyc_seq[target_pc >> 24][1];
 
   for (step = 0; step < 6; step++) {
     u32 cur_pc = target_pc + (u32)(step * 4);
     u32 op, op28, fclass;
     u32 req = 0u, must_kill = 0u;
+    u32 step_cyc = fetch_c;
     if ((cur_pc >> 12) != region || cur_pc == cheat_hook)
       return 0;
     op = readaddress32(page, cur_pc & 0x0FFFu);
@@ -4293,11 +4299,13 @@ static inline int sh4_arm_flags_dead_at_rom_pc(u32 target_pc, u32 need_kill,
           return 0;
         if (op28 & 0x00100000u)
           must_kill = 0xCu;                        /* N, Z */
+        step_cyc += 5u;
       } else if ((op28 & 0x0FB00FF0u) == 0x01000090u) {
         return 0;                                  /* SWP */
       } else if (fclass == 0u && (op28 & 0x90u) == 0x90u) {
         if (!(op28 & 0x00100000u) || ((op28 >> 12) & 0xFu) == 15u)
           return 0;                                /* halfword store or Rd==PC */
+        step_cyc += 20u;                           /* worst-case load waitstate */
       } else if ((op28 & 0x0D900000u) == 0x01000000u) {
         return 0;                                  /* MRS/MSR */
       } else {
@@ -4321,10 +4329,14 @@ static inline int sh4_arm_flags_dead_at_rom_pc(u32 target_pc, u32 need_kill,
         return 0;                                  /* store or LDR pc */
       if ((op28 & 0x02000000u) && ((op28 >> 4) & 0xFFu) == 0x06u)
         req |= 0x2u;                               /* [Rn, Rm, RRX] reads C */
+      step_cyc += 20u;                             /* worst-case 32-bit load */
     } else {
       return 0;                                    /* LDM/STM, B/BL, SWI, coproc */
     }
     if (req & ~killed)
+      return 0;
+    max_cyc += step_cyc;
+    if (step > 0 && max_cyc >= 96u)
       return 0;
     killed |= must_kill;
     if ((killed & need_kill) == need_kill)
@@ -4404,9 +4416,8 @@ bool translate_block_arm(u32 pc, bool ram_region)
   s32 num_insns = block_data_position;
   s32 total_insns = (s32)((block_end_pc - block_start_pc) /
                           arm_instruction_width);
-  for(i = 0; i < num_insns; i++)
+  for(i = 0; i < total_insns; i++)
     block_data[i].raw_flag_data = block_data[i].flag_data;
-  (void)total_insns;
 #endif
 
   cgba_mark_internal_seams(block_start_pc, block_end_pc, block_exit_position,
@@ -4490,7 +4501,7 @@ bool translate_block_arm(u32 pc, bool ram_region)
           !block_data[block_data_position + 1].update_cycles &&
           (pc + 4) != cheat_master_hook &&
           ((pc + 4) >> 12) == pc_region
-#ifdef CGBA_SH4_M4A_MIX_SKIP
+#if defined(CGBA_SH4_M4A_MIX_SKIP) && CGBA_SH4_M4A_MIX_SKIP
           && !sh4_m4a_skip_active()
 #endif
           ) {
@@ -5057,8 +5068,8 @@ bool translate_block_arm(u32 pc, bool ram_region)
 #ifdef SH4_ARCH
   sh4_greg_forward_reset();
   if ((last_condition & 0x0F) != 0x0E) {
-    sh4g_litseg_end(&translation_ptr);
     generate_branch_patch_conditional(backpatch_address, translation_ptr);
+    sh4g_litseg_end(&translation_ptr);
     last_condition = 0x0E;
     ended_uncond = 0;   /* the open conditional's skip target IS the gate */
   } else if (chain_existing_target == NULL) {
@@ -5127,14 +5138,17 @@ bool translate_block_arm(u32 pc, bool ram_region)
  * non-store, non-LDM, non-branch Thumb instructions starting at `target_pc`
  * (immutable Game Pak ROM) overwrite all flags in `need_kill` before any
  * flag read. Returns 1 if killed at step 0 (cycles > 0 suffices), 2 if killed
- * at step 1..5 (cycles > 96 guarantees no gate or cold-interp stop before the
- * killer), or 0 otherwise. */
+ * at step 1..5 with worst-case intervening cycle cost < 96 (so the runtime
+ * cycles > 96 guard guarantees no gate or cold-interp stop before the killer),
+ * or 0 otherwise. */
 static inline int sh4_thumb_flags_dead_at_rom_pc(u32 target_pc, u32 need_kill,
                                                  u32 cheat_hook)
 {
   u32 region;
   const u8 *page;
   u32 killed = 0u;
+  u32 fetch_c;
+  u32 max_cyc = 0u;
   int step;
 
   if (target_pc < 0x08000000u || target_pc >= 0x0E000000u || (target_pc & 1u))
@@ -5143,12 +5157,14 @@ static inline int sh4_thumb_flags_dead_at_rom_pc(u32 target_pc, u32 need_kill,
   if (!page)
     return 0;
   region = target_pc >> 12;
+  fetch_c = (u32)ws_cyc_seq[target_pc >> 24][0];
 
   for (step = 0; step < 6; step++) {
     u32 cur_pc = target_pc + (u32)(step * 2);
     u32 op, hi;
     u16 info;
     u32 req;
+    u32 step_cyc = fetch_c;
     if ((cur_pc >> 12) != region || cur_pc == cheat_hook)
       return 0;
     op = readaddress16(page, cur_pc & 0x0FFFu);
@@ -5168,8 +5184,20 @@ static inline int sh4_thumb_flags_dead_at_rom_pc(u32 target_pc, u32 need_kill,
         (hi >= 0x90u && hi <= 0x97u) ||
         (hi >= 0xB1u && hi <= 0xCFu))
       return 0;
+    if ((hi >= 0x48u && hi <= 0x4Fu) ||
+        (hi >= 0x56u && hi <= 0x5Fu) ||
+        (hi >= 0x68u && hi <= 0x6Fu) ||
+        (hi >= 0x78u && hi <= 0x7Fu) ||
+        (hi >= 0x88u && hi <= 0x8Fu) ||
+        (hi >= 0x98u && hi <= 0x9Fu))
+      step_cyc += 20u;                             /* worst-case load waitstate */
+    else if ((op & 0xFFC0u) == 0x4340u)
+      step_cyc += 5u;                              /* MUL */
     req = (info >> 8) & 0x0Fu;
     if (req & ~killed)
+      return 0;
+    max_cyc += step_cyc;
+    if (step > 0 && max_cyc >= 96u)
       return 0;
     killed |= (info >> 4) & 0x0Fu;
     if ((killed & need_kill) == need_kill)
@@ -6568,6 +6596,7 @@ void init_dynarec_caches(void)
   cgba_cold_pending = 0;
   cgba_sp_non_iwram_disable = 0;
   cgba_sp_non_iwram_deopts = 0;
+  cgba_sh4_reset_hle_state();
 #endif
 #ifdef SH4_ARCH
   cgba_sh4_scan_caps_reset(&cgba_ram_block_scan_cap,

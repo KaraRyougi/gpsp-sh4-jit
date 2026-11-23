@@ -167,11 +167,54 @@ static void test_bucketing_policy(void)
 		"rounded >= raw falls back to raw");
 }
 
+static void test_lz4_trailing_capacity_bounds(void)
+{
+	/* Incompressible lengths 15 and 270 exercise the exact literal-length
+	 * extension boundaries (15 => +1 extra len byte; 270 => +2 extra len
+	 * bytes).  Verify cap == exact succeeds, cap == exact - 1 fails cleanly,
+	 * and neither writes past out[cap - 1]. */
+	static const unsigned lens[] = { 15u, 270u };
+
+	for (unsigned k = 0; k < 2; k++) {
+		unsigned n = lens[k];
+		uint8_t src[300];
+		uint8_t out[320];
+		uint8_t dec[300];
+		uint32_t s = 0x13579BDFu + k * 0x10101u;
+		for (unsigned i = 0; i < n; i++) {
+			s = s * 1664525u + 1013904223u;
+			src[i] = (uint8_t)(s >> 24);
+		}
+		unsigned exact = cgba_state_compress_lz4(src, n, out, sizeof(out), hash_tab);
+		CHECK(exact > CGBA_STATE_LZ4_HDR_SZ,
+			"exact compressed size valid for trailing boundary len=%u", n);
+
+		/* Tight exact capacity must succeed without touching canary at out[exact]. */
+		memset(out, 0xCC, sizeof(out));
+		unsigned got_exact = cgba_state_compress_lz4(src, n, out, exact, hash_tab);
+		CHECK(got_exact == exact, "exact cap=%u succeeds for len=%u (got %u)",
+			exact, n, got_exact);
+		CHECK(out[exact] == 0xCC, "canary intact at exact cap for len=%u", n);
+		CHECK(cgba_state_decompress_any(out, got_exact, dec, n) == 1 &&
+			memcmp(src, dec, n) == 0,
+			"roundtrip exact cap for len=%u", n);
+
+		/* One byte short must fail cleanly without writing out[exact - 1]. */
+		memset(out, 0xCC, sizeof(out));
+		unsigned got_short = cgba_state_compress_lz4(src, n, out, exact - 1u, hash_tab);
+		CHECK(got_short == 0u, "cap-1=%u must reject len=%u (got %u)",
+			exact - 1u, n, got_short);
+		CHECK(out[exact - 1u] == 0xCC && out[exact] == 0xCC,
+			"no OOB write at cap-1 for len=%u", n);
+	}
+}
+
 int main(void)
 {
 	test_lz4_patterns();
 	test_corruption_and_legacy_czs1();
 	test_bucketing_policy();
+	test_lz4_trailing_capacity_bounds();
 
 	if (failures)
 		return 1;

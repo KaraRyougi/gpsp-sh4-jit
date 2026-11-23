@@ -1531,7 +1531,7 @@ static __attribute__((noinline)) void render_scanline_text_mosaic(u32 layer,
   // Iterate pixel by pixel, loading data every N pixels to honor mosaic effect
   u8 pval = 0;
   u32 mctr = 0;
-  for (u32 i = 0; start < end; start++, i++, dest_ptr++) {
+  for (; start < end; start++, dest_ptr++) {
     u16 tile = eswap16(*map_ptr);
 
     // Counter-based mosaic (see render_affine_background for rationale).
@@ -1875,7 +1875,7 @@ static inline u32 cgba_sort_vis_layers(
   return cnt;
 }
 
-#if defined(CGBA_SH4_ASM_4BPP) || (defined(CGBA_VIDEO_DIRTY_SCANLINE) && CGBA_VIDEO_DIRTY_SCANLINE)
+#if defined(CGBA_VIDEO_DIRTY_SCANLINE) && CGBA_VIDEO_DIRTY_SCANLINE
 /* Per-charblock 8-bpp affine tile classification (256 B per CBB, invalidated
  * on BG VRAM writes to that charblock): 0 = all-zero, 1 = solid non-zero,
  * 2 = mixed (has transparent pixels), 3 = opaque textured (all 64 bytes
@@ -2019,6 +2019,25 @@ static inline const cgba_aff_bbox *cgba_aff_bbox_get(
                        cgba_aff_bbox_cache[1].key == key, 0))
     return &cgba_aff_bbox_cache[1];
   return cgba_aff_bbox_scan(key, cbb, sbb, map_size, map_base, tile_base, tkind);
+}
+#elif defined(CGBA_SH4_ASM_4BPP)
+/* Without CGBA_VIDEO_DIRTY_SCANLINE there is no VRAM dirty tracking to
+ * invalidate per-CBB tile classification caches; classify every tile as
+ * mixed (2) so the SH-4 affine overlay kernel always decodes live VRAM. */
+static inline const u8 *cgba_aff_tile_kind_get(u32 cbb)
+{
+  static const u8 all_mixed[256] = {
+    2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2, 2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+    2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2, 2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+    2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2, 2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+    2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2, 2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+    2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2, 2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+    2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2, 2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+    2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2, 2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+    2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2, 2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2
+  };
+  (void)cbb;
+  return all_mixed;
 }
 #endif
 
@@ -2308,15 +2327,23 @@ static inline void render_affine_background(
           }
           return;
         } else {
+          s32 lo = 0;
+#if defined(CGBA_VIDEO_DIRTY_SCANLINE) && CGBA_VIDEO_DIRTY_SCANLINE
           const u32 sbb = (u32)(map_base - vram) >> 11;
           const cgba_aff_bbox *bb = cgba_aff_bbox_get(
             cbb, sbb, map_size, map_base, tile_base, tkind);
-          s32 lo = 0;
           s32 hi = (bb->max_x > bb->min_x) ? ((s32)cnt - 1) : -1;
           if (lo <= hi)
             cgba_affine_clip_axis(source_x - bb->min_x, dx, bb->max_x - bb->min_x, lo, hi);
           if (lo <= hi)
             cgba_affine_clip_axis(source_y - bb->min_y, dy, bb->max_y - bb->min_y, lo, hi);
+#else
+          s32 hi = (s32)cnt - 1;
+          s32 limit = (s32)(width_height << 8);
+          cgba_affine_clip_axis(source_x, dx, limit, lo, hi);
+          if (lo <= hi)
+            cgba_affine_clip_axis(source_y, dy, limit, lo, hi);
+#endif
           if (lo > hi) {
             if (isbase)
               cgba_fill_u16_fast((u16 *)dst_ptr, cnt, pal[0]);
@@ -2343,6 +2370,7 @@ static inline void render_affine_background(
           return;
         }
       }
+#if defined(CGBA_VIDEO_DIRTY_SCANLINE) && CGBA_VIDEO_DIRTY_SCANLINE
       if (!wrap) {
         const u32 cbb = (u32)(tile_base - vram) >> 14;
         const u32 sbb = (u32)(map_base - vram) >> 11;
@@ -2355,6 +2383,7 @@ static inline void render_affine_background(
           return;
         }
       }
+#endif
       cgba_aff_bg_params p = {
         (void *)dst_ptr, map_base, tile_base, pal,
         source_x, source_y, dx, dy, cnt, width_height, map_size + 4u,
@@ -2425,7 +2454,7 @@ static inline void render_affine_background(
     u8 pval = 0;
     u32 mctr = 0;
     if (rotate) {
-      for (u32 i = 0; cnt; i++, cnt--) {
+      for (; cnt; cnt--) {
         u32 pix_x = (u32)(source_x >> 8) & (width_height-1);
         u32 pix_y = (u32)(source_y >> 8) & (width_height-1);
 
@@ -2450,7 +2479,7 @@ static inline void render_affine_background(
       const u8 *tile_row_base = tile_base + ((pix_y & 7u) << 3);
       u32 cur_tx = 0xFFFFFFFFu;
       const u8 *cur_tile_row = tile_row_base;
-      for (u32 i = 0; cnt; i++, cnt--) {
+      for (; cnt; cnt--) {
         u32 pix_x = (u32)(source_x >> 8) & (width_height-1);
         if (!mosaic || !mctr) {
           u32 tx = pix_x >> 3;
@@ -2490,7 +2519,7 @@ static inline void render_affine_background(
       // Draw background pixels by looking them up in the map
       u8 pval = 0;
       u32 mctr = 0;
-      for (u32 i = 0; cnt; i++, cnt--) {
+      for (; cnt; cnt--) {
         u32 pix_x = (u32)(source_x >> 8), pix_y = (u32)(source_y >> 8);
 
         // Check if we run out of background pixels, stop drawing.
@@ -2532,7 +2561,7 @@ static inline void render_affine_background(
         u32 mctr = 0;
         u32 cur_tx = 0xFFFFFFFFu;
         const u8 *cur_tile_row = tile_row_base;
-        for (u32 i = 0; cnt; i++, cnt--) {
+        for (; cnt; cnt--) {
           u32 pix_x = (u32)(source_x >> 8);
           if (pix_x >= width_height)
             break;
@@ -2688,7 +2717,7 @@ static inline void render_scanline_bitmap(
 #endif
     pixfmt val = 0;
     u32 mctr = 0;
-    for (u32 i = 0; pixcnt; i++, pixcnt--, valptr++) {
+    for (; pixcnt; pixcnt--, valptr++) {
       // Pretty much pixel copier (counter-based mosaic: see render_affine_background)
       if (!mosaic || !mctr) {
         val = sizeof(pixfmt) == 2 ? eswap16(*valptr) : *valptr;
@@ -2715,7 +2744,7 @@ static inline void render_scanline_bitmap(
     u32 cnt = end - start;
     pixfmt val = 0;
     u32 mctr = 0;
-    for (u32 i = 0; cnt; i++, cnt--) {
+    for (; cnt; cnt--) {
       u32 pixel_x = (u32)(source_x >> 8);
       if (pixel_x >= width)
         break;  // We reached the end of the bitmap
@@ -2743,7 +2772,7 @@ static inline void render_scanline_bitmap(
 
     pixfmt val = 0;
     u32 mctr = 0;
-    for (u32 i = 0; start < end; start++, i++) {
+    for (; start < end; start++) {
       u32 pixel_x = (u32)(source_x >> 8), pixel_y = (u32)(source_y >> 8);
 
       // Check if we run out of background pixels, stop drawing.
@@ -5139,7 +5168,8 @@ static inline bool cgba_text_bg_strip_is_opaque(u32 layer, u32 y0, u32 y_end)
   return true;
 }
 
-#if defined(CGBA_SH4_ASM_4BPP) && !defined(USE_XBGR1555_FORMAT)
+#if defined(CGBA_SH4_ASM_4BPP) && !defined(USE_XBGR1555_FORMAT) && \
+    defined(CGBA_VIDEO_DIRTY_SCANLINE) && CGBA_VIDEO_DIRTY_SCANLINE
 /* Prove no RGB565 channel can overflow during additive evb==16 affine blend
  * across all layers strictly below cand (including lower OBJs and 8bpp/affine
  * BGs via conservative full palette scans, and 4bpp text BGs via cached
@@ -5270,14 +5300,15 @@ static __attribute__((noinline)) void cgba_render_scanline_affine_blend_raw(
   const u32 cbb = (u32)(tile_base - vram) >> 14;
   const u8 *tkind = tile_kind ? tile_kind : cgba_aff_tile_kind_get(cbb);
 #endif
-#if !defined(CGBA_SH4_ASM_4BPP) || defined(USE_XBGR1555_FORMAT)
+#if !defined(CGBA_SH4_ASM_4BPP) || defined(USE_XBGR1555_FORMAT) || \
+    !(defined(CGBA_VIDEO_DIRTY_SCANLINE) && CGBA_VIDEO_DIRTY_SCANLINE)
   u32 width_height = 128u << map_size;
 #endif
 
   if (!wrap) {
     s32 lo = 0;
     s32 hi = (s32)cnt - 1;
-#if defined(CGBA_SH4_ASM_4BPP) || (defined(CGBA_VIDEO_DIRTY_SCANLINE) && CGBA_VIDEO_DIRTY_SCANLINE)
+#if defined(CGBA_VIDEO_DIRTY_SCANLINE) && CGBA_VIDEO_DIRTY_SCANLINE
     const u32 sbb = (u32)(map_base - vram) >> 11;
     const cgba_aff_bbox *bb = cgba_aff_bbox_get(cbb, sbb, map_size, map_base, tile_base, tkind);
     if (bb->max_x <= bb->min_x)
@@ -5547,7 +5578,8 @@ static bool try_render_direct_single_bg_blend(
       const u8 *tkind = NULL;
       u32 no_sat = 0u;
       bool aff_empty = false;
-#if defined(CGBA_SH4_ASM_4BPP) && !defined(USE_XBGR1555_FORMAT)
+#if defined(CGBA_SH4_ASM_4BPP) && !defined(USE_XBGR1555_FORMAT) && \
+    defined(CGBA_VIDEO_DIRTY_SCANLINE) && CGBA_VIDEO_DIRTY_SCANLINE
       if (evb == 16u && eva != 0u) {
         tkind = cgba_aff_tile_kind_get(cbb);
         const cgba_aff_bbox *bb = cgba_aff_bbox_get(
@@ -7212,12 +7244,16 @@ static __attribute__((noinline)) void cgba_rebuild_bg_plans(u32 video_mode, u16 
     used_sbs |= layer_sbs;
   }
   if (opaque_cover_bg < 4u && blend_bg < 4u) {
+    static const u32 oc_cbb_sb_mask[4] = {
+      0x0000FFFFu, 0x00FFFF00u, 0xFFFF0000u, 0xFF000000u
+    };
     u32 oc_cnt = read_ioreg(REG_BGxCNT(opaque_cover_bg));
     u32 oc_cbb = (oc_cnt >> 2) & 3u;
     u32 oc_sbb = (oc_cnt >> 8) & 0x1Fu;
     u32 oc_msize = (oc_cnt >> 14) & 3u;
     u32 oc_nsb = (oc_msize == 0u) ? 1u : ((oc_msize == 3u) ? 4u : 2u);
-    used_sbs |= (0xFFu << (oc_cbb * 8u));
+    /* 4-bpp 10-bit tile IDs 0..1023 span 32 KiB = 16 screenblocks (oc_cbb and oc_cbb+1). */
+    used_sbs |= oc_cbb_sb_mask[oc_cbb];
     for (u32 s = 0u; s < oc_nsb && (oc_sbb + s) < 32u; s++)
       used_sbs |= (1u << (oc_sbb + s));
   }
@@ -8121,10 +8157,11 @@ static inline void render_mode0_bg_unaligned_sh4(
     palette_ram_converted, backdrop_shadow_palette,
     (const u32 *)&pair_palette[0][0][0]);
 #else
+  const u16 *base_pal = get_backdrop_shadow_palette();
+  const u32 *pair_lut = pair_palette_get_all_u32();
   render_mode0_bg_unaligned_sh4_pal(
     p, vcount, screen_offset, base_done,
-    palette_ram_converted, get_backdrop_shadow_palette(),
-    pair_palette_get_all_u32());
+    palette_ram_converted, base_pal, pair_lut);
 #endif
 }
 #endif
@@ -8143,6 +8180,7 @@ static __attribute__((noinline)) void render_mode0_fullcolor_scanline(
 #endif
 #else
 #if defined(CGBA_SH4_ASM_4BPP) && defined(CGBA_VIDEO_PAIR_PALETTE)
+  (void)get_backdrop_shadow_palette();
   const u32 *const pair_lut = pair_palette_get_all_u32();
 #else
   const u16 *const base_pal = get_backdrop_shadow_palette();
@@ -11869,6 +11907,11 @@ static __attribute__((noinline)) bool cgba_try_render_mode1_batch(
 #ifdef CGBA_SH4_ASM_4BPP
           if (__builtin_expect(dy != 0, 1)) {
             const bool is_folded = (rpal != pal_conv);
+#if defined(CGBA_VIDEO_BACKDROP_SHADOW_PALETTE) && defined(CGBA_VIDEO_PAIR_PALETTE)
+            const u32 fpal_ver = is_folded ? cgba_m1_fpal_ver : 0u;
+#else
+            const u32 fpal_ver = 0u;
+#endif
             if (bg2_wrap) {
               if (isbase) {
                 cgba_dispatch_affine_rot_base_sh4(
@@ -11877,7 +11920,7 @@ static __attribute__((noinline)) bool cgba_try_render_mode1_batch(
                   is_folded,
                   is_folded ? rpal : signed_bg_pal,
                   is_folded ? NULL : signed_bg_pal_dup,
-                  is_folded ? cgba_m1_fpal_ver : 0u);
+                  fpal_ver);
               } else {
                 cgba_dispatch_affine_rot_over_sh4(
                   dst_row + 240u, bg2_map_base, bg2_tile_base, rpal,
@@ -11906,7 +11949,7 @@ static __attribute__((noinline)) bool cgba_try_render_mode1_batch(
                     is_folded,
                     is_folded ? rpal : signed_bg_pal,
                     is_folded ? NULL : signed_bg_pal_dup,
-                    is_folded ? cgba_m1_fpal_ver : 0u);
+                    fpal_ver);
                 } else {
                   cgba_dispatch_affine_rot_over_sh4(
                     dst_row + (u_lo + run_cnt), bg2_map_base, bg2_tile_base, rpal,

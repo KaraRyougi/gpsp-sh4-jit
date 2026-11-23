@@ -35,6 +35,7 @@ SECTIONS
     _sbss = .;
     *(.bss .bss.*)
     *(.sbss .sbss.*)
+    *(.cgba.highbss .cgba.highbss.*)
     *(COMMON)
     . = ALIGN(4);
     _ebss = .;

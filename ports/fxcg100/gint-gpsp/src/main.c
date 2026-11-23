@@ -1006,7 +1006,6 @@ static int headless_save_checkpoint(unsigned frame)
 }
 
 #ifdef CGBA_DYNAREC
-unsigned cgba_state_compress(const u8 *raw, unsigned rawsz, u8 *out, unsigned cap);
 int cgba_state_decompress(const u8 *in, unsigned insz, u8 *raw, unsigned rawsz);
 void flush_translation_cache_rom(void);
 #endif
@@ -2198,7 +2197,7 @@ static int cgba_headless_test(uint16_t *framebuffer)
 		(unsigned long)cgba_sh4_helper_arm_block_store_count);
 	hputs_dbg(buf);
 	#endif
-	#ifdef CGBA_SH4_M4A_MIX_SKIP
+	#if defined(CGBA_SH4_M4A_MIX_SKIP) && CGBA_SH4_M4A_MIX_SKIP
 	{
 		extern uint32_t cgba_sh4_m4a_skip_drop_count;
 		extern uint32_t cgba_sh4_m4a_skip_mem_count;
@@ -2569,6 +2568,12 @@ static int gpsp_main(void)
 			 * reg[] and the switch lands on a frame boundary (PC committed),
 			 * which is exactly how the diff harness alternates them. */
 			dynarec_enable = !dynarec_enable;
+			if(dynarec_enable) {
+				extern void flush_translation_cache_ram(void);
+				/* The interpreter does not invalidate translated RAM blocks
+				 * on SMC stores while dynarec_enable == 0. */
+				flush_translation_cache_ram();
+			}
 			draw_status("core switched",
 				dynarec_enable ? "JIT (dynarec)" : "INTERPRETER");
 			wait_status();

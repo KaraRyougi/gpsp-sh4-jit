@@ -937,6 +937,50 @@ static bool run_tests(void)
     memset(vram + 0x07Fu * 32u, 0, 32u);
     cgba_tile4_invalidate_all();
 
+    /* Opaque-cover BG (under alpha-blended BG0 with tgt2=BG1 only, no backdrop)
+     * using tile IDs >= 512 (living in oc_cbb + 1): modifying oc_cbb + 1 must
+     * invalidate cgba_bg_plan_valid so exposed backdrop no longer uses stale blend plan. */
+    {
+      u32 sb_bg0 = 28u;
+      u32 sb_bg1 = 29u;
+      u16 *m_bg0 = (u16 *)(void *)(vram + sb_bg0 * 2048u);
+      u16 *m_bg1 = (u16 *)(void *)(vram + sb_bg1 * 2048u);
+      /* Tile 0x200 with cbb=0 lives at VRAM offset 0x4000 (screenblock 8). */
+      memset(vram + 0x4000u, 0x33u, 32u); /* opaque BG1 cover tile */
+      memset(vram + 0x0080u * 32u, 0x77u, 32u); /* BG0 blended tile */
+      for (u32 idx = 0; idx < 1024u; idx++) {
+        m_bg0[idx] = eswap16(0x0080u);
+        m_bg1[idx] = eswap16(0x0200u);
+      }
+      write_ioreg(REG_DISPCNT, 0x0300u); /* Mode 0, BG0 + BG1 */
+      write_ioreg(REG_BG0CNT, (u16)((sb_bg0 << 8) | 0u)); /* cbb=0, prio=0 */
+      write_ioreg(REG_BG1CNT, (u16)((sb_bg1 << 8) | 1u)); /* cbb=0, prio=1 */
+      write_ioreg(REG_BG0HOFS, 0u);
+      write_ioreg(REG_BG0VOFS, 0u);
+      write_ioreg(REG_BG1HOFS, 0u);
+      write_ioreg(REG_BG1VOFS, 0u);
+      write_ioreg(REG_BLDCNT, 0x0241u); /* alpha: tgt1=BG0, tgt2=BG1 only (no BD) */
+      write_ioreg(REG_BLDALPHA, 0x0808u);
+      cgba_vram_dirty = CGBA_VRAM_DIRTY_ALL;
+      cgba_vram_sb_dirty = 0u;
+      cgba_video_io_dirty = 1u;
+      video_invalidate_scanline_cache(0, 160);
+      CHECK(verify_frame("mode0-opaque-cover-upper-cbb-initial"));
+      CHECK(cgba_m0.blend_bg_layer == 0u);
+      CHECK((cgba_m0.used_sb_mask & (1u << 8)) != 0u);
+
+      /* Punch a transparent pixel into tile 0x200 (SB 8 = oc_cbb + 1). */
+      vram[0x4000u] = 0x00u;
+      cgba_vram_dirty = CGBA_VRAM_DIRTY_BG;
+      cgba_vram_sb_dirty = (1u << 8);
+      cgba_bg_vram_invalidate();
+      CHECK(!cgba_bg_plan_valid);
+      CHECK(verify_frame("mode0-opaque-cover-upper-cbb-invalidated"));
+      CHECK(cgba_m0.blend_bg_layer >= 4u);
+      write_ioreg(REG_BLDCNT, 0u);
+      write_ioreg(REG_BLDALPHA, 0u);
+    }
+
     /* Exhaustive 27-case (cls0, cls1, cls2) truth-table test for try_merge_2/3,
      * covering both same_h and mismatched seg1, thoff=0 (30) and thoff!=0 (31),
      * with HFLIP/VFLIP/palette bits preserved. */

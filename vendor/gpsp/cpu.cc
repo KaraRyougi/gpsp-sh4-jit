@@ -24,8 +24,17 @@ extern "C" {
 
 /* Interpreter guard for a PC outside the 256MB GBA bus. The 4 KiB resolver
  * rejects anything above 0x0fffffff before consulting memory_map_read[]. The
- * port supplies a noreturn panic that reports the wild guest PC. */
+ * calculator ports supply a noreturn panic that reports the wild guest PC;
+ * other targets fall back to a weak abort() implementation. */
+#if defined(CGBA_FXCG100) || defined(CGBA_FXCG50) || defined(CGBA_CLASSPAD)
 extern "C" __attribute__((noreturn)) void cgba_wild_pc_trap(u32 pc);
+#else
+extern "C" __attribute__((weak, noreturn)) void cgba_wild_pc_trap(u32 pc)
+{
+  (void)pc;
+  abort();
+}
+#endif
 
 #ifdef CGBA_GBA_OVER_AZLE_IDLE
 #include "ports/fxcg100/sh4/sh4_idle_signature.h"
@@ -1670,6 +1679,7 @@ u32 cgba_diff_stop_pc;
 int cgba_diff_stop_active;
 int cgba_diff_stop_skip_initial;
 s32 cgba_diff_stop_cycles_remaining;
+int cgba_diff_stop_reslice;
 /* Region-exit mode (the dynarec's BIOS fallback, sh4_interp_helpers.c):
  * instead of one watch PC, stop the instant the interpreter is about to
  * execute OUTSIDE the BIOS (PC >= 0x4000) — i.e. hand game code back to the
@@ -3445,6 +3455,14 @@ skip_instruction:
 #endif
             ) && cycles_remaining > 0) cycles_remaining = 0;
 
+       if (cpu_alert & CPU_ALERT_RESLICE) {
+#if defined(CGBA_DYNAREC)
+         if (cgba_diff_stop_active && cgba_diff_stop_on_budget)
+           cgba_diff_stop_reslice = 1;
+#endif
+         break;
+       }
+
        if (cpu_alert & (CPU_ALERT_HALT | CPU_ALERT_IRQ))
          goto alert;
 
@@ -3949,6 +3967,14 @@ thumb_loop:
             || reg[REG_PC] == cgba_detected_idle_pc
 #endif
             ) && cycles_remaining > 0) cycles_remaining = 0;
+
+       if (cpu_alert & CPU_ALERT_RESLICE) {
+#if defined(CGBA_DYNAREC)
+         if (cgba_diff_stop_active && cgba_diff_stop_on_budget)
+           cgba_diff_stop_reslice = 1;
+#endif
+         break;
+       }
 
        if (cpu_alert & (CPU_ALERT_HALT | CPU_ALERT_IRQ))
           goto alert;

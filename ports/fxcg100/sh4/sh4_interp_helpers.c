@@ -46,6 +46,7 @@ extern u32 cgba_diff_stop_pc;
 extern int cgba_diff_stop_active;
 extern int cgba_diff_stop_skip_initial;
 extern s32 cgba_diff_stop_cycles_remaining;
+extern int cgba_diff_stop_reslice;
 extern int cgba_diff_stop_on_budget;
 
 /* Cold-code gate: ROM blocks are only translated once dispatched this many
@@ -1831,6 +1832,20 @@ static inline int cgba_sh4_mixer_src_region_ok(u32 addr)
   return r == 0x02u || r == 0x03u || (r >= 0x08u && r <= 0x0Du);
 }
 
+static inline int cgba_sh4_mixer_ram_overlaps(u32 a, u32 alen, u32 b, u32 blen)
+{
+  u32 ra = a >> 24, rb = b >> 24;
+  u32 mask, oa, ob;
+  if (ra != rb || (ra != 0x02u && ra != 0x03u))
+    return 0;
+  mask = (ra == 0x03u) ? 0x7FFFu : 0x3FFFFu;
+  oa = a & mask;
+  ob = b & mask;
+  if (oa + alen > mask + 1u || ob + blen > mask + 1u)
+    return 1;
+  return !(oa + alen <= ob || ob + blen <= oa);
+}
+
 int __attribute__((noinline)) cgba_sh4_4ch_resample_match_iwram(u32 off)
 {
   uint32_t wbuf[CGBA_SH4_4CH_RESAMPLE_WORDS];
@@ -1874,6 +1889,7 @@ int cgba_sh4_audio_mixer_try(u32 kind, u32 pc)
   if (kind == CGBA_SH4_AUDIO_MIXER_GAX_STD ||
       kind == CGBA_SH4_AUDIO_MIXER_GAX_PINGPONG) {
     uint32_t r1, r2, r3, r4, r5, r7, n_iters, est_c;
+    u32 r1_reg, r3_before, r3_after, nzcv;
     if (!cgba_sh4_mixer_ram_struct(r0, 28u, &sdata, &stags, &soff))
       return 0;
     r1 = readaddress32(sdata, soff + 0u);
@@ -1887,12 +1903,15 @@ int cgba_sh4_audio_mixer_try(u32 kind, u32 pc)
     if (!cgba_sh4_mixer_src_region_ok(r1) ||
         ((r2 >> 24) != 0x03u && (r2 >> 24) != 0x02u))
       return 0;
+    if (cgba_sh4_mixer_ram_overlaps(r0, 28u, r2, ((r3 + 3u) >> 2) << 3))
+      return 0;
     if (cgba_smc_tags_nonzero(stags + soff, 28u))
       return 0;
+    r1_reg = r1 >> 24;
     if (kind == CGBA_SH4_AUDIO_MIXER_GAX_STD) {
       n_iters = cgba_sh4_gax_std_advance(&r4, r5, r7, r3);
       address32(sdata, soff + 12u) = eswap32((u32)r4);
-      est_c = 20u + n_iters * (26u + 4u * (u32)ws_cyc_nseq[r1 >> 24][0] +
+      est_c = 20u + n_iters * (26u + 4u * (u32)ws_cyc_nseq[r1_reg][0] +
                                4u * (u32)ws_cyc_seq[r2 >> 24][1]);
     } else {
       uint32_t bounces = 0u;
@@ -1901,12 +1920,20 @@ int cgba_sh4_audio_mixer_try(u32 kind, u32 pc)
       address32(sdata, soff + 12u) = eswap32((u32)r4);
       address32(sdata, soff + 24u) = eswap32((u32)r7);
       est_c = 36u + bounces * 16u +
-              n_iters * (27u + 4u * (u32)ws_cyc_nseq[r1 >> 24][0] +
+              n_iters * (27u + 4u * (u32)ws_cyc_nseq[r1_reg][0] +
                          4u * (u32)ws_cyc_seq[r2 >> 24][1]);
     }
+    r3_before = (u32)(r3 - ((n_iters - 1u) << 2));
+    r3_after = r3_before - 4u;
+    nzcv = ((r3_after & 0x80000000u) ? 0x80000000u : 0u) |
+           ((r3_after == 0u)         ? 0x40000000u : 0u) |
+           ((r3_before >= 4u)        ? 0x20000000u : 0u) |
+           ((((r3_before ^ 4u) & (r3_before ^ r3_after)) & 0x80000000u)
+              ? 0x10000000u : 0u);
+    reg[REG_CPSR] = (reg[REG_CPSR] & ~0xF0000000u) | nzcv;
     reg[1] = (u32)r1;
     reg[2] = (u32)(r2 + (n_iters << 3));
-    reg[3] = (u32)(r3 - (n_iters << 2));
+    reg[3] = r3_after;
     return cgba_sh4_return_via_lr(lr, (u32)est_c, budget);
   }
 
@@ -1936,6 +1963,10 @@ int cgba_sh4_audio_mixer_try(u32 kind, u32 pc)
     if (!cgba_sh4_mixer_src_region_ok(src) ||
         ((dst >> 24) != 0x03u && (dst >> 24) != 0x02u))
       return 0;
+    if (cgba_sh4_mixer_ram_overlaps(
+          r0, 40u, dst + (written << 1),
+          ((written < count ? (count - written) : 1u) + (mode == 2u ? 1u : 0u)) << 1))
+      return 0;
     if (cgba_smc_tags_nonzero(stags + soff, 40u))
       return 0;
     if (mode <= 1u) {
@@ -1959,6 +1990,8 @@ int cgba_sh4_audio_mixer_try(u32 kind, u32 pc)
     address32(sdata, soff + 0x08u) = eswap32((u32)pos);
     address32(sdata, soff + 0x14u) = eswap32((u32)written);
     reg[0] = lr;
+    reg[1] = (kind == CGBA_SH4_AUDIO_MIXER_VV_A) ? (u32)dst
+                                                 : (u32)(dst + (written << 1));
     reg[2] = (u32)pos;
     reg[3] = (u32)written;
     est_c = 28u + iters * ((mode == 0u ? 13u : (mode == 1u ? 16u : 22u)) +
@@ -1971,6 +2004,7 @@ int cgba_sh4_audio_mixer_try(u32 kind, u32 pc)
       kind == CGBA_SH4_AUDIO_MIXER_EUROCOM_RAW) {
     u32 r1 = reg[1];
     uint32_t cur, end_p, loop_start, loop_len, samples_done = 0u, est_c;
+    u32 cur_reg;
     uint16_t frac, step;
     int ended;
 
@@ -1991,6 +2025,7 @@ int cgba_sh4_audio_mixer_try(u32 kind, u32 pc)
       return 0; /* reverse playback: fall back to native ARM code */
     if (!cgba_sh4_mixer_src_region_ok(cur))
       return 0;
+    cur_reg = cur >> 24;
     loop_start = readaddress32(sdata, soff + 12u);
     loop_len   = readaddress32(sdata, soff + 16u);
     step       = readaddress16(sdata, soff + 20u);
@@ -2006,9 +2041,9 @@ int cgba_sh4_audio_mixer_try(u32 kind, u32 pc)
     reg[0] = (u32)ended;
     {
       u32 per_s = (kind == CGBA_SH4_AUDIO_MIXER_EUROCOM_INTERP)
-                    ? (28u + 2u * (u32)ws_cyc_nseq[cur >> 24][0] +
+                    ? (28u + 2u * (u32)ws_cyc_nseq[cur_reg][0] +
                        4u * (u32)ws_cyc_nseq[r1 >> 24][0])
-                    : (19u + (u32)ws_cyc_nseq[cur >> 24][0] +
+                    : (19u + (u32)ws_cyc_nseq[cur_reg][0] +
                        4u * (u32)ws_cyc_nseq[r1 >> 24][0]);
       est_c = 28u + samples_done * per_s;
     }
@@ -2081,11 +2116,18 @@ int cgba_sh4_audio_mixer_try(u32 kind, u32 pc)
     if (((pcm_buf >> 24) != 0x03u && (pcm_buf >> 24) != 0x02u) ||
         ((mix_buf >> 24) != 0x03u && (mix_buf >> 24) != 0x02u))
       return 0;
+    if (cgba_sh4_mixer_ram_overlaps(mix_buf, n_samples * 4u, flag_addr, 4u) ||
+        cgba_sh4_mixer_ram_overlaps(mix_buf, n_samples * 4u, reg[11], 0x4Cu) ||
+        cgba_sh4_mixer_ram_overlaps(pcm_buf, n_samples, flag_addr, 4u) ||
+        cgba_sh4_mixer_ram_overlaps(pcm_buf, n_samples, reg[11], 0x4Cu))
+      return 0;
     for (ci = 0u; ci < 4u; ci++) {
       if (!cgba_sh4_mixer_ram_struct(ch_ptrs[ci], 0x34u,
                                      &cdata[ci], &ctags[ci], &coff[ci]) ||
           cgba_smc_tags_nonzero(ctags[ci] + coff[ci], 0x34u) ||
-          (fdata == cdata[ci] && foff + 4u > coff[ci] && foff < coff[ci] + 0x34u))
+          (fdata == cdata[ci] && foff + 4u > coff[ci] && foff < coff[ci] + 0x34u) ||
+          cgba_sh4_mixer_ram_overlaps(mix_buf, n_samples * 4u, ch_ptrs[ci], 0x34u) ||
+          cgba_sh4_mixer_ram_overlaps(pcm_buf, n_samples, ch_ptrs[ci], 0x34u))
         return 0;
     }
 
@@ -2112,7 +2154,7 @@ int cgba_sh4_audio_mixer_try(u32 kind, u32 pc)
              ((uint64_t)pos[ci] + (uint64_t)(n_samples - 1u) * (uint64_t)eff_step >=
               (uint64_t)end[ci]));
           if (may_hit_end) {
-            if (!cgba_sh4_mixer_src_region_ok(inst_ptr))
+            if ((inst_ptr & 3u) != 0u || !cgba_sh4_mixer_src_region_ok(inst_ptr))
               return 0;
             loop_flag[ci] = (uint8_t)read_memory8(inst_ptr + 0x16u);
             if (loop_flag[ci] != 0u) {
@@ -2406,7 +2448,10 @@ void sh4_swi_handler(void)
 
 #ifdef CGBA_GPSP_HEADLESS_TEST
 u32 cgba_bios_entry_swi, cgba_bios_entry_irq, cgba_bios_entry_other;
-u32 cgba_bios_hle_irq_in, cgba_bios_hle_irq_out;
+u32 cgba_bios_hle_irq_out;
+#endif
+#if defined(CGBA_GPSP_HEADLESS_TEST) || CGBA_SH4_SWI_HLE_VERIFY
+u32 cgba_bios_hle_irq_in;
 #endif
 
 /* ---- BIOS IRQ wrapper HLE --------------------------------------------------
@@ -2479,7 +2524,7 @@ u32 cgba_hle_bios_irq_entry(void)
   reg[REG_LR] = 0x00000030u;
   reg[0] = 0x04000000u;
   reg[REG_PC] = handler;
-#ifdef CGBA_GPSP_HEADLESS_TEST
+#if defined(CGBA_GPSP_HEADLESS_TEST) || CGBA_SH4_SWI_HLE_VERIFY
   cgba_bios_hle_irq_in++;
 #endif
   return handler;
@@ -2985,6 +3030,16 @@ extern u32 cgba_bios_hle_swi_count;
 #define CGBA_FS_FILL_LOOP 0x00000770u
 #define CGBA_FS_DECLINE   0xFFFFFFFFu
 
+static inline void cgba_parked_swi_drain_store_alert(void)
+{
+  if (__builtin_expect(cgba_store_alert != CPU_ALERT_NONE, 0)) {
+    cpu_alert_type a = cgba_store_alert;
+    cgba_store_alert = CPU_ALERT_NONE;
+    if (a & CPU_ALERT_SMC)
+      flush_translation_cache_ram();
+  }
+}
+
 /* Shared prologue for all parked SWI engines (FastSet/CpuSet/ObjAffine/LZ77):
  * mirrors open-BIOS dispatcher 0x64..0x90 (SVC push {spsr,r11,r12,lr}, switch
  * to SYSTEM mode, user push {r2,r3,lr_usr}, then routine push {r4..r(3+n_extra)}).
@@ -3023,6 +3078,7 @@ static u32 cgba_parked_swi_enter(u32 n_extra, u32 *lr_r_out)
   }
   reg[REG_SP] = sp_usr - (12u + n_extra * 4u);
   cgba_sh4_extra_cycles = saved_extra;
+  cgba_parked_swi_drain_store_alert();
   reg[REG_LR] = 0x00000094u;
   return sp_usr >> 24;
 }
@@ -3235,6 +3291,7 @@ static u32 cgba_swi_fastset_engine(s32 remaining)
           for (i = 0; i < bytes; i += 4)
             execute_store_u32(dst + i, reg[2]);
           cgba_sh4_extra_cycles = saved;
+          cgba_parked_swi_drain_store_alert();
         }
         dst += bytes;
         reg[1] = dst;
@@ -3277,6 +3334,7 @@ static u32 cgba_swi_fastset_engine(s32 remaining)
           for (i = 0; i < bytes; i += 4)
             execute_store_u32(dst + i, cgba_le32_read(sh + i));
           cgba_sh4_extra_cycles = saved;
+          cgba_parked_swi_drain_store_alert();
         }
         src += bytes;
         dst += bytes;
@@ -3584,6 +3642,7 @@ static u32 cgba_swi_cpuset_engine(s32 remaining)
               execute_store_u32(dst + i, fv);
           }
           cgba_sh4_extra_cycles = saved;
+          cgba_parked_swi_drain_store_alert();
         }
         dst += bytes;
         count -= (s32)k;
@@ -3643,6 +3702,7 @@ static u32 cgba_swi_cpuset_engine(s32 remaining)
               execute_store_u32(dst + i, cgba_le32_read(sh + i));
           }
           cgba_sh4_extra_cycles = saved;    /* per_elem is the exact charge */
+          cgba_parked_swi_drain_store_alert();
         }
         src += bytes;
         dst += bytes;
@@ -3824,6 +3884,7 @@ static u32 cgba_swi_objaffine_engine(s32 remaining)
           sh += 8;
         }
         cgba_sh4_extra_cycles = saved_extra;
+        cgba_parked_swi_drain_store_alert();
       }
       src += k * 8u;
       dst += k * offset * 4u;
@@ -4479,7 +4540,6 @@ static int cgba_swi_apply_faithful(u32 src, u32 dst, u32 cnt, int fastset,
     reg[0] = pred->r0;
   }
   reg[1] = pred->r1;
-  cgba_sh4_extra_cycles += (int)pred->cycles;
   return 1;
 }
 
@@ -4559,20 +4619,6 @@ static s32 cgba_bios_arctan_poly(s32 r0)
 
 static s32 cgba_swi_arctan_rem;
 
-static int cgba_swi_arctan_dma_safe(const dma_transfer_type *d)
-{
-  u32 dreg;
-  if (d->irq)
-    return 0;
-  dreg = d->dest_address >> 24;
-  /* Decline straddle if DMA could trigger RAM SMC or WAITCNT timing alert. */
-  if (dreg == 2u || dreg == 3u)
-    return 0;
-  if (dreg == 4u && (d->dest_address & 0xFFFFu) >= 0x200u)
-    return 0;
-  return 1;
-}
-
 static int cgba_swi_arctan_try(u32 num, u32 budget)
 {
   u32 spsr_v = REG_SPSR(MODE_SUPERVISOR);
@@ -4583,6 +4629,7 @@ static int cgba_swi_arctan_try(u32 num, u32 budget)
   u32 base_c = cgba_swi_dispatch_cycles(sp_r, lr_r, thumb);
   u32 total_c, out_r0, out_r1;
   s32 rem;
+  int straddled_frame_done = 0;
 
   if (num == 0x08u) {
     /* SWI 0x08: Sqrt (open_gba_bios.bin 0x04E0 -> 0x0290..0x03C8, branchless).
@@ -4669,8 +4716,8 @@ static int cgba_swi_arctan_try(u32 num, u32 budget)
   if ((s32)budget > (s32)total_c) {
     rem = (s32)budget - (s32)total_c;
   } else {
-    /* Pure-math SWI straddling a single IRQ-free video event boundary:
-     * verify no timer/serial/IRQ/DMA-alert/frame-end can trigger at the
+    /* Pure-math SWI straddling a single IRQ-free, DMA-free video event
+     * boundary: verify no timer/serial/IRQ/DMA/frame-end can trigger at the
      * boundary, step update_gba(0) cleanly, and charge remaining cycles. */
     extern u32 serial_irq_cycles;
     extern int serial_mode;
@@ -4697,8 +4744,7 @@ static int cgba_swi_arctan_try(u32 num, u32 budget)
         while (m) {
           u32 ch = (u32)__builtin_ctz(m);
           m &= m - 1u;
-          if (dma[ch].start_type == DMA_START_HBLANK &&
-              !cgba_swi_arctan_dma_safe(&dma[ch])) {
+          if (dma[ch].start_type == DMA_START_HBLANK) {
             safe = 0;
             break;
           }
@@ -4714,8 +4760,7 @@ static int cgba_swi_arctan_try(u32 num, u32 budget)
       if (safe && next_vc == 160u) {
         u32 ch;
         for (ch = 0u; ch < 4u; ch++) {
-          if (dma[ch].start_type == DMA_START_VBLANK &&
-              !cgba_swi_arctan_dma_safe(&dma[ch])) {
+          if (dma[ch].start_type == DMA_START_VBLANK) {
             safe = 0;
             break;
           }
@@ -4725,18 +4770,30 @@ static int cgba_swi_arctan_try(u32 num, u32 budget)
     if (!safe)
       return 0;
     uret = update_gba(0);
-    new_bud = (s32)cycles_to_run(uret);
-    rem = new_bud - ((s32)total_c - (s32)budget);
-    if (completed_frame(uret) || (uret & 0x40000000u) || rem <= 0)
-      return 0;
+    if (completed_frame(uret)) {
+      straddled_frame_done = 1;
+      rem = 0;
+    } else {
+      new_bud = (s32)cycles_to_run(uret);
+      rem = new_bud - ((s32)total_c - (s32)budget);
+    }
   }
 
+  /* Once update_gba(0) has stepped hardware state, never decline back to the
+   * interpreter with the stale pre-step cycle budget: commit the pure-math
+   * result and forward frame completion or any remaining overrun via
+   * cgba_parked_swi_finish(). */
   reg[0] = out_r0;
   reg[1] = out_r1;
-  reg[REG_PC] = lr;
+  reg[REG_PC] = lr & (thumb ? ~1u : ~3u);
   reg[REG_CPSR] = spsr_v;
   set_cpu_mode(cpu_modes[spsr_v & 0xF]);
-  cgba_swi_arctan_rem = rem;
+  if (straddled_frame_done)
+    cgba_swi_arctan_rem = (s32)0x80000000u;
+  else if (rem <= 0)
+    cgba_swi_arctan_rem = (s32)cgba_parked_swi_finish(rem);
+  else
+    cgba_swi_arctan_rem = rem;
 #ifdef CGBA_GPSP_HEADLESS_TEST
   cgba_bios_hle_swi_count++;
 #endif
@@ -4790,6 +4847,24 @@ static u32 cgba_swi_halt_enter(s32 remaining)
   return (u32)remaining;
 }
 
+static u32 cgba_swi_intrwait_finish(s32 remaining, u32 S0, u32 N0,
+                                    u32 pre_bx_cycles)
+{
+  u32 disp_ret_c = 0u;
+
+  write_ioreg(REG_IME, 1);
+  if ((read_ioreg(REG_IE) & read_ioreg(REG_IF)) && !(reg[REG_CPSR] & 0x80u)) {
+    reg[3] = 1u;
+    reg[REG_PC] = 0x000004A4u;
+    remaining -= (s32)pre_bx_cycles;
+    if (check_and_raise_interrupts())
+      return cgba_parked_swi_irq_exit(remaining, S0, N0);
+  }
+  cgba_parked_swi_leave(0u, &disp_ret_c);
+  remaining -= (s32)(disp_ret_c + pre_bx_cycles + S0 + N0);
+  return cgba_parked_swi_finish(remaining);
+}
+
 static u32 cgba_swi_intrwait_loop(s32 remaining)
 {
   u32 S0 = CGBA_WS_S(0, 1), N0 = CGBA_WS_N(0, 1);
@@ -4799,10 +4874,12 @@ static u32 cgba_swi_intrwait_loop(s32 remaining)
     write_ioreg(REG_IME, 1);
     if ((read_ioreg(REG_IE) & read_ioreg(REG_IF)) && !(reg[REG_CPSR] & 0x80u)) {
       /* Rare: an IRQ is already pending when IME becomes 1 (before HALTCNT).
-       * Publish exact canonical state at 0x0478 and let interpreter vector. */
+       * Publish exact canonical state at 0x0478 and vector immediately. */
       reg[3] = 1u;
       reg[REG_PC] = 0x00000478u;
-      return CGBA_FS_DECLINE;
+      remaining -= (s32)(2u * S0 + CGBA_WS_N(4, 0));
+      if (check_and_raise_interrupts())
+        return cgba_parked_swi_irq_exit(remaining, S0, N0);
     }
     /* 0x0478..0x047C: mov r3, #0; strb r3, [r2, #0x301] (HALTCNT = 0) */
     reg[3] = 0u;
@@ -4835,14 +4912,9 @@ static u32 cgba_swi_intrwait_loop(s32 remaining)
       /* 0x0490..0x04A4: clear matched IFBIOS bits, r0 = hit, REG_IME = 1, bx lr */
       address16(iwram + 0x8000u, 0x7FF8u) = eswap16((u16)(ifbios & (u16)~hit));
       reg[0] = (u32)hit;
-      write_ioreg(REG_IME, 1);
-      {
-        u32 disp_ret_c = 0u;
-        cgba_parked_swi_leave(0u, &disp_ret_c);
-        remaining -= (s32)(disp_ret_c + 10u * S0 + N0 +
-                           2u * CGBA_WS_N(4, 0) + 2u * CGBA_WS_N(3, 0));
-      }
-      return cgba_parked_swi_finish(remaining);
+      return cgba_swi_intrwait_finish(
+        remaining, S0, N0,
+        9u * S0 + 2u * CGBA_WS_N(4, 0) + 2u * CGBA_WS_N(3, 0));
     }
   }
 }
@@ -4868,14 +4940,9 @@ static u32 cgba_swi_intrwait_resume(s32 remaining)
   }
   address16(iwram + 0x8000u, 0x7FF8u) = eswap16((u16)(ifbios & (u16)~hit));
   reg[0] = (u32)hit;
-  write_ioreg(REG_IME, 1);
-  {
-    u32 disp_ret_c = 0u;
-    cgba_parked_swi_leave(0u, &disp_ret_c);
-    remaining -= (s32)(disp_ret_c + 10u * S0 + N0 +
-                       2u * CGBA_WS_N(4, 0) + 2u * CGBA_WS_N(3, 0));
-  }
-  return cgba_parked_swi_finish(remaining);
+  return cgba_swi_intrwait_finish(
+    remaining, S0, N0,
+    9u * S0 + 2u * CGBA_WS_N(4, 0) + 2u * CGBA_WS_N(3, 0));
 }
 
 static u32 cgba_swi_intrwait_enter(int vblank_wait, s32 remaining)
@@ -4911,12 +4978,9 @@ static u32 cgba_swi_intrwait_enter(int vblank_wait, s32 remaining)
   /* 0x0458..0x046C: clear matched IFBIOS bits; if discard==0 return now! */
   address16(iwram + 0x8000u, 0x7FF8u) = eswap16((u16)(ifbios & (u16)~hit));
   if (discard == 0u) {
-    u32 disp_ret_c = 0u;
-    write_ioreg(REG_IME, 1);
-    cgba_parked_swi_leave(0u, &disp_ret_c);
-    remaining -= (s32)(disp_ret_c + 18u * S0 + 2u * N0 +
-                       2u * CGBA_WS_N(4, 0) + 3u * CGBA_WS_N(3, 0));
-    return cgba_parked_swi_finish(remaining);
+    return cgba_swi_intrwait_finish(
+      remaining, S0, N0,
+      17u * S0 + N0 + 2u * CGBA_WS_N(4, 0) + 3u * CGBA_WS_N(3, 0));
   }
   remaining -= (s32)(15u * S0 + CGBA_WS_N(4, 0) + 3u * CGBA_WS_N(3, 0));
   return cgba_swi_intrwait_loop(remaining);
@@ -5070,6 +5134,7 @@ static u32 cgba_swi_bgaffine_engine(s32 remaining)
           sh += 20;
         }
         cgba_sh4_extra_cycles = saved_extra;
+        cgba_parked_swi_drain_store_alert();
       }
       src += k * 20u;
       dst += k * 16u;
@@ -5148,6 +5213,7 @@ static void cgba_swi_rl_materialize(int vram_mode, u32 len)
     execute_store_u32(sp_usr - 24, reg[4]);
     reg[REG_SP] = sp_usr - 24u;
     cgba_sh4_extra_cycles = saved_extra;
+    cgba_parked_swi_drain_store_alert();
 
     reg[0] = len;
     reg[1] = dst0;
@@ -5356,7 +5422,15 @@ static u32 cgba_swi_rl_engine(s32 remaining)
           }
           if (!vram_mode && s_avail > 0u) {
             u32 chunk = (rem_b < s_avail) ? rem_b : s_avail;
-            memcpy(dh_base + dst_off, sp, chunk);
+            u8 *dp = dh_base + dst_off;
+            if ((uintptr_t)sp >= (uintptr_t)dp + chunk ||
+                (uintptr_t)dp >= (uintptr_t)sp + chunk) {
+              memcpy(dp, sp, chunk);
+            } else {
+              u32 bi;
+              for (bi = 0u; bi < chunk; bi++)
+                dp[bi] = sp[bi];
+            }
             sp += chunk; s_avail -= chunk;
             src += chunk; dst += chunk; dst_off += chunk;
             rem_b -= chunk;
@@ -5622,6 +5696,7 @@ static int cgba_hle_bios_swi_num(u32 num, u32 budget)
 #else
     if (!cgba_swi_apply_faithful(reg[0], reg[1], reg[2], num == 0x0C, &pred))
       return 0;
+    cgba_swi_arctan_rem = (s32)budget - (s32)pred.cycles;
     break;                             /* handled -> common HLE tail */
 #endif
   }
@@ -5645,7 +5720,7 @@ static int cgba_hle_bios_swi_num(u32 num, u32 budget)
 #ifdef CGBA_GPSP_HEADLESS_TEST
   cgba_bios_hle_swi_count++;
 #endif
-  return 1;
+  return 7;
 }
 
 u32 cgba_sh4_bios_fallback(u32 cycles)
@@ -5897,6 +5972,7 @@ u32 cgba_sh4_cold_interp(u32 cycles)
   cgba_diff_stop_on_budget = 1;
   cgba_diff_stop_active = 1;
   cgba_diff_stop_skip_initial = 0;
+  cgba_diff_stop_reslice = 0;
   cgba_diff_stop_cycles_remaining = sentinel;
   execute_arm((u32)chunk);
   cgba_diff_stop_active = 0;
@@ -5917,11 +5993,29 @@ u32 cgba_sh4_cold_interp(u32 cycles)
       return ret;
     budget = (s32)cycles_to_run(ret);
   }
-  if (budget <= 0) {
+  if (cgba_diff_stop_reslice || budget <= 0) {
+    cgba_diff_stop_reslice = 0;
     u32 ret = update_gba(budget);
     return completed_frame(ret) ? ret : cycles_to_run(ret);
   }
   return (u32)budget;
+}
+
+void cgba_sh4_reset_hle_state(void)
+{
+  cgba_store_alert = CPU_ALERT_NONE;
+  cgba_sh4_extra_cycles = 0;
+  cgba_sh4_mem_cycle_seq = 0;
+  cgba_fs_entry_cost = 0u;
+  cgba_cs_entry_cost = 0u;
+  cgba_oa_entry_cost = 0u;
+  cgba_lz_entry_cost = 0u;
+  cgba_ba_entry_cost = 0u;
+  cgba_rl_entry_cost = 0u;
+  cgba_swi_arctan_rem = 0;
+#if CGBA_SH4_SWI_HLE_VERIFY
+  cgba_swi_verify.pending = 0;
+#endif
 }
 
 /* Host-emitter init hook (main.c calls this under HAVE_DYNAREC). The MIPS/x86

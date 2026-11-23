@@ -111,7 +111,10 @@ enum {
   SH4G_VEC_iwram_data,
   SH4G_VEC_ewram_data,
 #if defined(CGBA_VIDEO_BACKDROP_SHADOW_PALETTE) || \
-    (defined(CGBA_VIDEO_DIRTY_SCANLINE) && CGBA_VIDEO_DIRTY_SCANLINE)
+    (defined(CGBA_VIDEO_DIRTY_SCANLINE) && CGBA_VIDEO_DIRTY_SCANLINE) || \
+    (defined(CGBA_VIDEO_TEXT_FAST4BPP) && CGBA_VIDEO_TEXT_FAST4BPP && \
+     (defined(__SH4__) || defined(__SH4_NOFPU__) || defined(__SH4A__) || \
+      defined(__sh__)) && defined(MSB_FIRST))
   SH4G_VEC_palette_dirty,
 #endif
 #if defined(CGBA_VIDEO_DIRTY_SCANLINE) && CGBA_VIDEO_DIRTY_SCANLINE

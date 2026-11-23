@@ -584,9 +584,65 @@ static void test_palette_cache_notifications(void)
   CHECK(palette_ram_dirty == CGBA_PALETTE_DIRTY_ACTIVE, "palette DMA cache notification");
 }
 
+static void test_init_memory_clears_converted_palette(void)
+{
+  for (unsigned i = 0; i < 512; i++)
+    palette_ram_converted[i] = 0xBEEFu;
+  init_memory();
+  for (unsigned i = 0; i < 512; i++) {
+    if (palette_ram_converted[i] != 0) {
+      CHECK(0, "init_memory left stale palette_ram_converted[%u]=0x%04X",
+            i, palette_ram_converted[i]);
+      break;
+    }
+  }
+}
+
+static void test_masked_latched_timer_reslice(void)
+{
+  reset_fixture();
+  /* Timer 0 active with IRQ bit set, reload 64 cycles (much shorter than 960),
+   * but masked in REG_IE and already latched in REG_IF. */
+  write_ioreg(REG_IE, 0);
+  write_ioreg(REG_IF, IRQ_TIMER0);
+  write_ioreg(REG_IME, 1);
+  write_memory16(0x04000100, (u16)(0x10000 - 64)); /* TM0D reload = 64 */
+  write_memory16(0x04000102, 0x00C0);              /* TM0CNT enable + IRQ, prescale 1 */
+
+  video_count = 960;
+  execute_cycles = 960;
+  u32 ret = update_gba(0);
+  /* Slice should NOT be capped to 64 cycles, and uncapped_irq_mask must track TM0. */
+  CHECK(cycles_to_run(ret) > 64u,
+        "masked+latched TM0 should skip slice cap, got %u", cycles_to_run(ret));
+  CHECK((cgba_timer_uncapped_irq_mask & IRQ_TIMER0) != 0u,
+        "cgba_timer_uncapped_irq_mask missing IRQ_TIMER0 (0x%X)",
+        (unsigned)cgba_timer_uncapped_irq_mask);
+
+  /* Clearing REG_IF or unmasking REG_IE for TM0 mid-slice must request reslice. */
+  cpu_alert_type a_if = write_memory16(0x04000202, IRQ_TIMER0); /* REG_IF */
+  CHECK((a_if & CPU_ALERT_RESLICE) != 0,
+        "REG_IF clear on uncapped TM0 must return CPU_ALERT_RESLICE (got %u)",
+        (unsigned)a_if);
+
+  write_ioreg(REG_IF, IRQ_TIMER0);
+  cpu_alert_type a_ie = write_memory16(0x04000200, IRQ_TIMER0); /* REG_IE */
+  CHECK((a_ie & CPU_ALERT_RESLICE) != 0,
+        "REG_IE unmask on uncapped TM0 must return CPU_ALERT_RESLICE (got %u)",
+        (unsigned)a_ie);
+
+  /* Unrelated IRQ bits must NOT spuriously trigger reslice. */
+  cpu_alert_type a_other = write_memory16(0x04000202, IRQ_VBLANK); /* REG_IF */
+  CHECK((a_other & CPU_ALERT_RESLICE) == 0,
+        "unrelated REG_IF write should not trigger CPU_ALERT_RESLICE (got %u)",
+        (unsigned)a_other);
+}
+
 int main(void)
 {
   test_palette_cache_notifications();
+  test_init_memory_clears_converted_palette();
+  test_masked_latched_timer_reslice();
   test_silent_timer_batch();
   test_bulk_dma_equivalence();
   test_waitcnt_invalidation();

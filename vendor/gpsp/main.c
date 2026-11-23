@@ -213,8 +213,6 @@ static __attribute__((noinline)) s32 cgba_fast_timer_refill_slow(s32 cnt, u32 pe
 
 /* Index (0..3) of the sole active silent prescale=1 non-IRQ timer, or -1. */
 static s32 cgba_fast_timer_idx = -1;
-/* Bitmask of prescaled timers feeding a TIMER_CASCADE child (bits 0..2). */
-static u32 cgba_timer_cascade_src_mask = 0;
 /* Non-zero if any timer (1..3) is in TIMER_CASCADE mode. */
 static u32 cgba_timer_cascade_any = 0;
 
@@ -283,6 +281,9 @@ void init_main(void)
 
   timer[0].direct_sound_channels = TIMER_DS_CHANNEL_BOTH;
   timer[1].direct_sound_channels = TIMER_DS_CHANNEL_NONE;
+#if defined(CGBA_SILENT_TIMERS) && CGBA_SILENT_TIMERS
+  cgba_timer_uncapped_irq_mask = 0u;
+#endif
   cgba_recompute_timer_cap_mask();
 
   frame_counter = 0;
@@ -317,6 +318,9 @@ static u32 cgba_fwd_idle_ticks;
  * pure sound-clock configurations (AW), skipping the per-slice scan. */
 u32 cgba_timer_cap_mask;
 u32 cgba_timer_active_mask;
+#if defined(CGBA_SILENT_TIMERS) && CGBA_SILENT_TIMERS
+volatile u32 cgba_timer_uncapped_irq_mask;
+#endif
 u32 rfu_comstate;
 
 void cgba_recompute_timer_cap_mask(void)
@@ -325,7 +329,6 @@ void cgba_recompute_timer_cap_mask(void)
   u32 m = 0;
   u32 active = 0;
 #if defined(CGBA_SILENT_TIMERS) && CGBA_SILENT_TIMERS
-  u32 casc_src = 0;
   u32 casc_any = 0;
 #endif
   for (i = 0; i < 4; i++)
@@ -346,7 +349,6 @@ void cgba_recompute_timer_cap_mask(void)
       if (i != 3 && timer[i + 1].status == TIMER_CASCADE)
       {
         unsigned j;
-        casc_src |= 1u << i;
         for (j = i + 1; j < 4 && timer[j].status == TIMER_CASCADE; j++)
         {
           if (timer[j].irq)
@@ -368,7 +370,6 @@ void cgba_recompute_timer_cap_mask(void)
   cgba_timer_cap_mask = m;
   cgba_timer_active_mask = active;
 #if defined(CGBA_SILENT_TIMERS) && CGBA_SILENT_TIMERS
-  cgba_timer_cascade_src_mask = casc_src;
   cgba_timer_cascade_any = casc_any;
   {
     s32 fast_idx = -1;
@@ -483,6 +484,7 @@ static __attribute__((noinline)) void cgba_ugba_timer_cap(void)
   unsigned i;
 #if defined(CGBA_SILENT_TIMERS) && CGBA_SILENT_TIMERS
   u32 ie = 0u, ifr = 0u;
+  u32 uncapped = 0u;
   int have_irq_regs = 0;
   for (i = 0; i < 4; i++)
   {
@@ -497,12 +499,15 @@ static __attribute__((noinline)) void cgba_ugba_timer_cap(void)
         have_irq_regs = 1;
       }
       /* Masked in IE and already latched in IF -> overflow has no observable
-       * IRQ or IF side effect. */
+       * IRQ or IF side effect while IE stays 0 and IF stays 1. Track bit in
+       * cgba_timer_uncapped_irq_mask so clearing IF or enabling IE reslices. */
       if ((ie & bit) != 0u || (ifr & bit) == 0u) {
         execute_cycles = (u32)timer[i].count;
 #if defined(CGBA_GPSP_HEADLESS_TEST) && defined(CGBA_SH4_DIAG_COUNTERS)
         { extern u32 cgba_cap_src[8]; cgba_cap_src[2 + i]++; }
 #endif
+      } else {
+        uncapped |= bit;
       }
     }
     if (i != 3 && timer[i + 1].status == TIMER_CASCADE)
@@ -536,11 +541,15 @@ static __attribute__((noinline)) void cgba_ugba_timer_cap(void)
 #if defined(CGBA_GPSP_HEADLESS_TEST) && defined(CGBA_SH4_DIAG_COUNTERS)
             { extern u32 cgba_cap_src[8]; cgba_cap_src[2 + i]++; }
 #endif
+          } else {
+            uncapped |= bit1;
           }
         }
       }
     }
   }
+  if (cgba_timer_uncapped_irq_mask != uncapped)
+    cgba_timer_uncapped_irq_mask = uncapped;
 #else
   for (i = 0; i < 4; i++)
   {
@@ -950,6 +959,10 @@ static __attribute__((noinline)) u32 cgba_update_gba_slow(int remaining_cycles)
        overflow; sound-clock timers batch (update_timers loops). */
     if (__builtin_expect(cgba_timer_cap_mask != 0, 0))
       cgba_ugba_timer_cap();
+#if defined(CGBA_SILENT_TIMERS) && CGBA_SILENT_TIMERS
+    else if (__builtin_expect(cgba_timer_uncapped_irq_mask != 0u, 0))
+      cgba_timer_uncapped_irq_mask = 0u;
+#endif
 #if defined(CGBA_GPSP_HEADLESS_TEST) && defined(CGBA_SH4_DIAG_COUNTERS)
     { extern u32 cgba_cap_src[8]; cgba_cap_src[6] += execute_cycles;
       if (execute_cycles < 192) cgba_cap_src[7]++; }
@@ -989,6 +1002,8 @@ static __attribute__((noinline)) u32 cgba_ugba_finish_cold_dma(
   cgba_step_cpu_dma_sleep(completed_cycles);
   if (cgba_timer_cap_mask != 0)
     cgba_ugba_timer_cap();
+  else if (__builtin_expect(cgba_timer_uncapped_irq_mask != 0u, 0))
+    cgba_timer_uncapped_irq_mask = 0u;
   if (reg[CPU_HALT_STATE] != CPU_ACTIVE && !frame_complete) {
     u32 tail = cgba_update_gba_slow(execute_cycles);
     return tail | changed_pc | frame_complete;
@@ -1018,12 +1033,14 @@ CGBA_HOT_TEXT u32 function_cc update_gba(int remaining_cycles)
     extern int serial_mode;
     s32 fast_tidx = cgba_fast_timer_idx;
     u32 cap_mask = cgba_timer_cap_mask;
+    u32 uncapped_irq = 0u;
     unsigned completed_cycles = execute_cycles - remaining_cycles;
     if (__builtin_expect(cap_mask != 0u && !cgba_timer_cascade_any &&
                          completed_cycles <= 4096u, 0)) {
       /* Clear timers from cap_mask that cannot overflow in this slice AND
        * cannot cap the next video slice (<= 960 cycles).  Also clear timers
-       * whose IRQ is masked in IE and already latched in IF. */
+       * whose IRQ is masked in IE and already latched in IF, recording them
+       * in uncapped_irq so clearing IF or enabling IE reslices immediately. */
       s32 safe_thresh = (s32)(completed_cycles + 960u);
       u32 rem = cap_mask;
       if ((rem & 1u) && timer[0].count > safe_thresh) rem &= ~1u;
@@ -1032,6 +1049,7 @@ CGBA_HOT_TEXT u32 function_cc update_gba(int remaining_cycles)
       if ((rem & 8u) && timer[3].count > safe_thresh) rem &= ~8u;
       if (rem != 0u) {
         u32 masked_latched = (~(u32)read_ioreg(REG_IE) & (u32)read_ioreg(REG_IF)) >> 3;
+        uncapped_irq = (rem & masked_latched) << 3;
         rem &= ~masked_latched;
       }
       cap_mask = rem;
@@ -1130,6 +1148,8 @@ CGBA_HOT_TEXT u32 function_cc update_gba(int remaining_cycles)
 
     u32 ec = (vc > 0) ? (u32)vc : 0u;
     execute_cycles = ec;
+    if (__builtin_expect(cgba_timer_uncapped_irq_mask != uncapped_irq, 0))
+      cgba_timer_uncapped_irq_mask = uncapped_irq;
 #if defined(CGBA_GPSP_HEADLESS_TEST) && defined(CGBA_SH4_DIAG_COUNTERS)
     { extern u32 cgba_cap_src[8]; cgba_cap_src[0]++;
       cgba_cap_src[6] += ec;
@@ -1149,6 +1169,10 @@ void reset_gba(void)
   init_main();
   init_cpu();
   reset_sound();
+  serial_set_irq_cycles(0);
+  serialproto_reset();
+  rfu_reset();
+  video_reload_counters();
   cgba_discard_pending_scanlines();
   video_invalidate_scanline_cache(0, 160);
 }
@@ -1201,7 +1225,6 @@ bool main_check_savestate(const u8 *src)
       return false;
   }
 
-  cgba_recompute_timer_cap_mask();
   return true;
 }
 
@@ -1302,6 +1325,9 @@ void main_finalize_savestate_load(void)
     shift = timer[i].status == TIMER_CASCADE ? 0 : timer[i].prescale;
     write_ioreg(REG_TMXD(i), -(timer[i].count >> shift));
   }
+#if defined(CGBA_SILENT_TIMERS) && CGBA_SILENT_TIMERS
+  cgba_timer_uncapped_irq_mask = 0u;
+#endif
   cgba_recompute_timer_cap_mask();
 }
 

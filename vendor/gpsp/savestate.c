@@ -167,6 +167,9 @@ bool gba_load_state(const void* src)
 #ifdef HAVE_DYNAREC
   if (dynarec_enable)
     flush_dynarec_caches();
+#ifdef SH4_ARCH
+  cgba_sh4_reset_hle_state();
+#endif
 #endif
 
   instruction_count = 0;

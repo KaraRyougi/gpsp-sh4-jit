@@ -161,6 +161,7 @@ u32 umul3232H32(u32 val, u32 val2);
 /*-----------------------------------------------------------------
   Assembly method declarations
 -----------------------------------------------------------------*/
+extern void swi_IntrWait(bool discard, u32 waitFlags);
 extern int swi_Div(u32 a, u32 b); //Returns result
 
 /*-----------------------------------------------------------------
@@ -204,44 +205,15 @@ void swi_Stop() {
 }
 
 /*-----------------------------------------------------------------
-  Used by the IntrWait functions
------------------------------------------------------------------*/
-u16 CheckInterrupts(u32 waitFlags)
-{
-	REG_IME = 0; //Disable interrupts
-	u16 intFlags = *(vu16*)(0x04000000-8); //Get current flags
-	u16 flags = intFlags & waitFlags;
-	if(flags)
-	{
-		intFlags = (flags) ^ intFlags;
-		*(vu16*)(0x04000000-8) = intFlags;
-	}
-	REG_IME = 1; //Enable interrupts
-	
-	return flags;
-}
-
-/*-----------------------------------------------------------------
 0x04 - IntrWait
   Continues to wait in Halt state until one (or more) of the specified interrupt(s) do occur.
   The function forcefully sets IME=1. When using multiple interrupts at the same time,
   this function is having less overhead than repeatedly calling the Halt function
 -----------------------------------------------------------------*/
-void swi_IntrWait(bool discard, u32 waitFlags)
+/*void swi_IntrWait(bool discard, u32 waitFlags)
 {
-	if(discard)
-	{
-		CheckInterrupts(waitFlags);
-	}
-	
-	u32 val = 0;
-	do
-	{
-		HALTCNT = 0;
-		val = CheckInterrupts(waitFlags);
-	}
-	while(!val);
-}
+	// Implemented in assembly (source/intrwait.s)
+}*/
 
 /*-----------------------------------------------------------------
 0x05 - VBlankIntrWait

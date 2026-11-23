@@ -258,8 +258,11 @@ static inline u8 *sh4g_fastmem_emit_io16_store(u8 **tp)
 {
   u8 *entry = *tp;
   const void *const slow_tramp = (const void *)sh4_fastmem_compact8_tramp;
-  u8 *io_check, *store_tail, *video_store_tail, *not_if, *not_ie, *not_ime;
+  u8 *io_check, *store_tail, *video_store_tail, *if_ie_tail, *not_if, *not_ie, *not_ime;
   u8 *fail_odd, *fail_ie, *fail_ime, *fail_range, *hit_a, *hit_b, *slow_label;
+#if defined(CGBA_SILENT_TIMERS) && CGBA_SILENT_TIMERS
+  u8 *fail_uncapped;
+#endif
 #ifdef CGBA_VIDEO_DEFERRED_ACTIVE
   u8 *fail_pending;
 #endif
@@ -279,6 +282,23 @@ static inline u8 *sh4g_fastmem_emit_io16_store(u8 **tp)
     sh4g_patch_bra(b, store_tail); }
 #else
   video_store_tail = store_tail;
+#endif
+#if defined(CGBA_SILENT_TIMERS) && CGBA_SILENT_TIMERS
+  /* If clearing IF or enabling IE touches a timer whose slice cap was skipped
+   * while masked and latched, defer to slow_tramp -> CPU_ALERT_RESLICE. */
+  if_ie_tail = *tp;
+  sh4g_const(tp, (u32)(uintptr_t)&cgba_timer_uncapped_irq_mask, SH4_REG_T2);
+  { sh4_codegen cg = sh4g_open(tp);
+    sh4_emit_mov_l_load(&cg, SH4_REG_T2, SH4_REG_T2);
+    sh4_emit_tst(&cg, SH4_REG_ARG1, SH4_REG_T2);   /* T=1: no uncapped timer */
+    sh4g_close(tp, &cg); }
+  { u8 *sk = sh4g_emit_bf_placeholder(tp);
+    u8 *b = sh4g_emit_bra_placeholder(tp);
+    sh4g_patch_bra(b, store_tail);
+    sh4g_patch_cond(sk, *tp); }
+  fail_uncapped = sh4g_emit_bra_placeholder(tp);
+#else
+  if_ie_tail = store_tail;
 #endif
 
   sh4g_patch_bra(io_check, *tp);
@@ -316,7 +336,7 @@ static inline u8 *sh4g_fastmem_emit_io16_store(u8 **tp)
     sh4_emit_mov_w_store(&cg, SH4_REG_ARG0, SH4_REG_T2);
     sh4g_close(tp, &cg); }
   { u8 *b = sh4g_emit_bra_placeholder(tp);
-    sh4g_patch_bra(b, store_tail); }
+    sh4g_patch_bra(b, if_ie_tail); }
 
   sh4g_patch_cond(not_if, *tp);
   sh4g_const(tp, 0x04000200u, SH4_REG_T1);
@@ -338,7 +358,7 @@ static inline u8 *sh4g_fastmem_emit_io16_store(u8 **tp)
     sh4g_close(tp, &cg); }
   { u8 *sk = sh4g_emit_bf_placeholder(tp);
     u8 *b = sh4g_emit_bra_placeholder(tp);
-    sh4g_patch_bra(b, store_tail);
+    sh4g_patch_bra(b, if_ie_tail);
     sh4g_patch_cond(sk, *tp); }
   { sh4_codegen cg = sh4g_open(tp);
     sh4_emit_add_imm(&cg, 6, SH4_REG_T2);
@@ -348,7 +368,7 @@ static inline u8 *sh4g_fastmem_emit_io16_store(u8 **tp)
     sh4g_close(tp, &cg); }
   { u8 *sk = sh4g_emit_bf_placeholder(tp);
     u8 *b = sh4g_emit_bra_placeholder(tp);
-    sh4g_patch_bra(b, store_tail);
+    sh4g_patch_bra(b, if_ie_tail);
     sh4g_patch_cond(sk, *tp); }
   { sh4_codegen cg = sh4g_open(tp);
     sh4_emit_mov_reg(&cg, SH4_REG_CPSR, SH4_REG_RET);
@@ -356,7 +376,7 @@ static inline u8 *sh4g_fastmem_emit_io16_store(u8 **tp)
     sh4g_close(tp, &cg); }
   { u8 *sk = sh4g_emit_bt_placeholder(tp);
     u8 *b = sh4g_emit_bra_placeholder(tp);
-    sh4g_patch_bra(b, store_tail);
+    sh4g_patch_bra(b, if_ie_tail);
     sh4g_patch_cond(sk, *tp); }
   fail_ie = sh4g_emit_bra_placeholder(tp);
 
@@ -470,6 +490,9 @@ static inline u8 *sh4g_fastmem_emit_io16_store(u8 **tp)
   sh4g_patch_bra(fail_odd, slow_label);
   sh4g_patch_bra(fail_ie, slow_label);
   sh4g_patch_bra(fail_ime, slow_label);
+#if defined(CGBA_SILENT_TIMERS) && CGBA_SILENT_TIMERS
+  sh4g_patch_bra(fail_uncapped, slow_label);
+#endif
 #ifdef CGBA_VIDEO_DEFERRED_ACTIVE
   sh4g_patch_bra(fail_pending, slow_label);
 #endif

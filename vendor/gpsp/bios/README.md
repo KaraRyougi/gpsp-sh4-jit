@@ -14,9 +14,9 @@ dynarec's BIOS cycle models depend on):
    that avoids infinite loops on division by zero and `INT_MIN` (0x80000000)
    and preserves the numerator's sign on the remainder in r1.
 3. `swi_IntrWait` at 0x0434..0x04D3 is replaced in-place with an assembly
-   routine that uses only `r0-r3, r12` (never keeping live state in `r4-r7`
-   across `HALTCNT`/IRQ, matching Nintendo's BIOS so game IRQ handlers that
-   clobber `r4` in SYS mode such as Harobots / `AHQJ` do not hang), tests the
-   full 16-bit IRQ mask (fixing `bool CheckInterrupts` truncating bits 8..13),
-   and returns immediately without halting when `discard == 0` and a matching
-   flag is already pending in `IFBIOS`.
+   routine (`source/intrwait.s`) that uses only `r0-r3, r12` (never keeping
+   live state in `r4-r7` across `HALTCNT`/IRQ, matching Nintendo's BIOS so
+   game IRQ handlers that clobber `r4` in SYS mode such as Harobots / `AHQJ`
+   do not hang), tests the full 16-bit IRQ mask (fixing `bool CheckInterrupts`
+   truncating bits 8..13), and returns immediately without halting when
+   `discard == 0` and a matching flag is already pending in `IFBIOS`.

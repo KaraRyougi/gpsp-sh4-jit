@@ -65,11 +65,14 @@ static u32 get_serial_mode(u16 siocnt, u16 rcnt) {
 }
 
 uint16_t serial_mul_siocnt() {
-  // When serial link is disabled (or auto with no connected netplay peers),
-  // report SD=0 (no link cable / peers ready) so games polling SIO_MULTI at
-  // boot (e.g. Konami's 0xEDED link check) do not deadlock waiting for peers.
+  // When serial link is disabled, using a non-multiplayer accessory (GBP/RFU),
+  // or has no connected netplay peers, report SD=0 (no link cable / peers
+  // ready) so games polling SIO_MULTI at boot (e.g. Konami's 0xEDED link
+  // check) do not deadlock waiting for peers.
   if (serial_mode == SERIAL_MODE_DISABLED ||
-      (serial_mode == SERIAL_MODE_AUTO && netplay_num_clients == 0))
+      serial_mode == SERIAL_MODE_GBP ||
+      serial_mode == SERIAL_MODE_RFU ||
+      netplay_num_clients == 0)
     return 0;
 
   // Calculate parent/child, ID and some other fields.
@@ -85,6 +88,9 @@ cpu_alert_type write_rcnt(u16 value) {
   u16 siocnt = read_ioreg(REG_SIOCNT);
   u32 pvmode = get_serial_mode(siocnt, oldval);
   u32 nwmode = get_serial_mode(siocnt, value);
+
+  if (pvmode != nwmode)
+    serial_irq_cycles = 0;
 
   write_ioreg(REG_RCNT, value);
 
@@ -117,6 +123,9 @@ cpu_alert_type write_siocnt(u16 value) {
   u16 newval = (value & 0x7F8B) | (oldval & 0x0004);
   u32 pvmode = get_serial_mode(oldval, read_ioreg(REG_RCNT));
   u32 nwmode = get_serial_mode(newval, read_ioreg(REG_RCNT));
+
+  if (pvmode != nwmode)
+    serial_irq_cycles = 0;
 
   switch (nwmode) {
   case SERIAL_MODE_NORMAL:
@@ -182,9 +191,10 @@ cpu_alert_type write_siocnt(u16 value) {
         CLOCK_CYC_57600_16BIT, CLOCK_CYC_115200_16BIT };
       serial_irq_cycles = tim[newval & 0x3] * (netplay_num_clients + 1);
 
-      if (serial_mode == SERIAL_MODE_SERIAL_POKE)
+      if (netplay_num_clients > 0 && serial_mode == SERIAL_MODE_SERIAL_POKE)
         serialpoke_master_send();
-      else if (serial_mode == SERIAL_MODE_SERIAL_AW1 || serial_mode == SERIAL_MODE_SERIAL_AW2)
+      else if (netplay_num_clients > 0 &&
+               (serial_mode == SERIAL_MODE_SERIAL_AW1 || serial_mode == SERIAL_MODE_SERIAL_AW2))
         serialaw_master_send();
       else {
         // Standalone GBA in multiplayer mode: parent receives its own
