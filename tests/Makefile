@@ -160,13 +160,17 @@ classpad: $(ROOT)/tests/classpad_render_test.c $(ROOT)/tests/classpad_elf_test.c
 	$(CC) $(CFLAGS) -I$(ROOT) $(ROOT)/tests/classpad_hhk_test.c \
 	  -o $(BIN)-classpad-hhk
 	$(BIN)-classpad-hhk $(CLASSPAD_OS_DUMP)
-# The built-in Ptune 4 F5 profile must not downclock a faster launcher clock.
+# The built-in overclock profile (F5 on fx-CG100, F4 on fx-CG50) must not
+# downclock a faster launcher clock.
 overclock: $(ROOT)/tests/overclock_policy_test.c \
 	   $(ROOT)/ports/fxcg100/gint-gpsp/src/overclock.c \
 	   $(ROOT)/tests/stubs/gint/clock.h
 	$(CC) $(CFLAGS) -I$(ROOT)/tests/stubs -I$(ROOT) \
 	  $(ROOT)/tests/overclock_policy_test.c -o $(BIN)-overclock
 	$(BIN)-overclock
+	$(CC) $(CFLAGS) -DCGBA_FXCG50=1 -I$(ROOT)/tests/stubs -I$(ROOT) \
+	  $(ROOT)/tests/overclock_policy_test.c -o $(BIN)-overclock-cg50
+	$(BIN)-overclock-cg50
 
 # fx-CG50 / fx-CG100 keypad interface (cg_ui.c) on a simulated panel: what
 # each key does, that partial pushes leave nothing behind, baselines.

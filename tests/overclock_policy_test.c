@@ -50,16 +50,19 @@ static struct cpg_overclock_setting launcher(uint32_t fllfrq, uint32_t frq)
 	return s;
 }
 
-/* Returns 1 when cgba_overclock_init() switched the hardware to Ptune 4 F5. */
-static int boots_into_f5(struct cpg_overclock_setting start)
+/* Returns 1 when cgba_overclock_init() switched the hardware to the expected
+ * default profile for this target (F5 on fx-CG100, F4 on fx-CG50). */
+static int boots_into_default(struct cpg_overclock_setting start)
 {
+	struct cpg_overclock_setting const *expected =
+		cgba_default_overclock_profile();
 	hardware = start;
 	set_calls = 0;
 	cgba_overclock_init();
 	if(set_calls == 0)
 		return memcmp(&hardware, &start, sizeof start) == 0 ? 0 : -1;
 	return set_calls == 1
-		&& memcmp(&hardware, &ptune4_f5, sizeof hardware) == 0;
+		&& memcmp(&hardware, expected, sizeof hardware) == 0;
 }
 
 int main(void)
@@ -69,34 +72,60 @@ int main(void)
 	check(f5.shway == 117964800u, "F5 SuperHyway is 117.96 MHz");
 	check(f5.bus == 117964800u, "F5 bus is 117.96 MHz");
 
+	cgba_cpg_rates f4 = cgba_cpg_rates_of(&cg50_f4);
+	check(f4.cpu == 235929600u, "F4 CPU is 235.93 MHz");
+	check(f4.shway == 117964800u, "F4 SuperHyway is 117.96 MHz");
+	check(f4.bus == 58982400u, "F4 bus is 58.98 MHz");
+
+#ifdef CGBA_FXCG50
+	check(cgba_default_overclock_profile() == &cg50_f4,
+		"fx-CG50 defaults to F4");
+	/* fx-CG50 OS default (gint F1): 117.96 MHz CPU, 58.98 MHz bus. */
+	check(boots_into_default(launcher(0x4384, 0x0f011112)) == 1,
+		"stock clock is overclocked to F4 on fx-CG50");
+	/* Launcher already at F4 keeps/applies F4 timings. */
+	check(boots_into_default(cg50_f4) == 1,
+		"launcher already at F4 keeps F4");
+	check(boots_into_default(launcher(0x4384, cg50_f4.FRQCR)) == 1,
+		"equal clocks still apply the tested F4 timings");
+	/* User manually launched Ptune F5 (118 MHz bus): must not downclock. */
+	check(boots_into_default(ptune4_f5) == 0,
+		"faster F5 launcher profile is kept on fx-CG50");
+	/* PLL 36x with F4's dividers: 265.42 MHz CPU, 66.36 MHz bus. */
+	check(boots_into_default(launcher(0x4384, frqcr(36, 0, 1, 2, 3))) == 0,
+		"faster PLL profile is kept on fx-CG50");
+#else
+	check(cgba_default_overclock_profile() == &ptune4_f5,
+		"fx-CG100 defaults to F5");
 	/* fx-CG50/fx-CG100 OS default (gint F1): 117.96 MHz CPU. */
-	check(boots_into_f5(launcher(0x4384, 0x0f011112)) == 1,
+	check(boots_into_default(launcher(0x4384, 0x0f011112)) == 1,
 		"stock clock is overclocked to F5");
 	/* gint F4: same CPU as F5 but a 58.98 MHz bus. */
-	check(boots_into_f5(launcher(0x4384, frqcr(32, 0, 1, 2, 3))) == 1,
+	check(boots_into_default(launcher(0x4384, frqcr(32, 0, 1, 2, 3))) == 1,
 		"slower-bus profile is replaced by F5");
-	check(boots_into_f5(ptune4_f5) == 1,
+	check(boots_into_default(ptune4_f5) == 1,
 		"launcher already at F5 keeps F5");
 	/* Same frequencies with different memory waits are not faster. */
-	check(boots_into_f5(launcher(0x4384, ptune4_f5.FRQCR)) == 1,
+	check(boots_into_default(launcher(0x4384, ptune4_f5.FRQCR)) == 1,
 		"equal clocks still apply the tested F5 timings");
 	/* SELXM=0 with half the FLL ratio is the same 235.93 MHz. */
-	check(boots_into_f5(launcher(0x01c2, ptune4_f5.FRQCR)) == 1,
+	check(boots_into_default(launcher(0x01c2, ptune4_f5.FRQCR)) == 1,
 		"SELXM halving is accounted for");
 
 	/* PLL 36x with F5's dividers: 265.42 MHz CPU, 132.71 MHz bus. */
-	check(boots_into_f5(launcher(0x4384, frqcr(36, 0, 1, 1, 3))) == 0,
+	check(boots_into_default(launcher(0x4384, frqcr(36, 0, 1, 1, 3))) == 0,
 		"faster PLL profile is kept");
 	/* SELXM=0 doubles the FLL output: 471.86 MHz CPU. */
-	check(boots_into_f5(launcher(0x0384, ptune4_f5.FRQCR)) == 0,
+	check(boots_into_default(launcher(0x0384, ptune4_f5.FRQCR)) == 0,
 		"faster FLL profile is kept");
 	/* Same CPU, bus at 1/2: only the bus is faster. */
-	check(boots_into_f5(launcher(0x4384, frqcr(32, 0, 1, 0, 3))) == 0,
+	check(boots_into_default(launcher(0x4384, frqcr(32, 0, 1, 0, 3))) == 0,
 		"faster-bus profile with equal CPU is kept");
 
 	/* PLL 36x, bus 1/8: faster CPU but a 66.36 MHz bus is a trade-off. */
-	check(boots_into_f5(launcher(0x4384, frqcr(36, 0, 1, 2, 3))) == 1,
+	check(boots_into_default(launcher(0x4384, frqcr(36, 0, 1, 2, 3))) == 1,
 		"faster CPU with slower bus is replaced by F5");
+#endif
 
 	if(failures)
 		return 1;
