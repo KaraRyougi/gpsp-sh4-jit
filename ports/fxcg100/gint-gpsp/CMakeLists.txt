@@ -651,6 +651,6 @@ if(CGBA_CLASSPAD)
       "$<TARGET_FILE:cgba-gint-gpsp>")
 else()
   generate_g3a(TARGET cgba-gint-gpsp OUTPUT "gpSP.g3a"
-    NAME "gpSP" VERSION "01.12.1119"
+    NAME "gpSP" VERSION "01.14.1125"
     ICONS icon-uns.png icon-sel.png)
 endif()

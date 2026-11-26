@@ -22,7 +22,7 @@
 HHK_NAME("gpSP")
 HHK_DESCRIPTION("Game Boy Advance emulator with an SH4 JIT")
 HHK_AUTHOR("KaraRyougi")
-HHK_VERSION("v01.12.1119")
+HHK_VERSION("v01.14.1125")
 #elif defined(CGBA_FXCG50)
 extern int cgba_hottext_init(void);
 #endif
